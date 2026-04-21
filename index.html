@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>PsDesign</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app" class="app">
+      <header class="toolbar">
+        <h1>PsDesign</h1>
+        <div class="tool-group size-group" role="group" aria-label="文字サイズ">
+          <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
+          <input id="size-input" class="size-input" type="number" min="6" max="400" step="1" value="24" />
+          <span class="size-unit">pt</span>
+          <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
+        </div>
+        <div class="tool-group page-nav" role="group" aria-label="ページ">
+          <button id="page-prev-btn" class="page-nav-btn" type="button" title="前のページ (←)">◀</button>
+          <span id="page-indicator" class="page-indicator">0 / 0</span>
+          <button id="page-next-btn" class="page-nav-btn" type="button" title="次のページ (→)">▶</button>
+        </div>
+        <div class="toolbar-actions">
+          <button id="open-folder-btn" class="icon-btn" title="フォルダを開く" aria-label="フォルダを開く">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+          <button id="save-btn" class="icon-btn" disabled title="Photoshop で保存" aria-label="Photoshop で保存">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+              <polyline points="17 21 17 13 7 13 7 21"/>
+              <polyline points="7 3 7 8 15 8"/>
+            </svg>
+          </button>
+        </div>
+      </header>
+      <main class="workspace">
+        <section class="spreads-container" id="spreads-container"></section>
+        <nav class="side-toolbar" role="group" aria-label="ツール">
+          <button id="tool-move" class="tool-btn icon-btn side-tool-btn" data-tool="move" title="選択ツール (V)" aria-label="選択ツール">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="5 9 2 12 5 15"/>
+              <polyline points="9 5 12 2 15 5"/>
+              <polyline points="15 19 12 22 9 19"/>
+              <polyline points="19 9 22 12 19 15"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <line x1="12" y1="2" x2="12" y2="22"/>
+            </svg>
+          </button>
+          <button id="tool-text" class="tool-btn icon-btn side-tool-btn" data-tool="text" title="テキストツール (T)" aria-label="テキストツール">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="4 7 4 4 20 4 20 7"/>
+              <line x1="9" y1="20" x2="15" y2="20"/>
+              <line x1="12" y1="4" x2="12" y2="20"/>
+            </svg>
+          </button>
+        </nav>
+        <aside class="side-panel">
+          <section class="txt-source" id="txt-source">
+            <h2>原稿 TXT</h2>
+            <div class="txt-source-actions">
+              <button id="open-txt-btn">TXTを開く</button>
+              <button id="clear-txt-btn" hidden>クリア</button>
+              <span id="txt-source-name" class="txt-source-name"></span>
+            </div>
+            <div id="txt-source-dropzone" class="txt-source-dropzone">
+              <div id="txt-source-viewer" class="txt-source-viewer" hidden></div>
+              <div id="txt-source-empty" class="txt-source-empty">
+                TXTファイルを選択、またはここにドロップ
+              </div>
+            </div>
+            <div id="txt-source-hint" class="txt-source-hint" hidden>
+              ブロック選択中：キャンバスをクリックで配置
+            </div>
+          </section>
+          <h2>テキストレイヤー</h2>
+          <ul id="layer-list" class="layer-list"></ul>
+          <div id="editor" class="editor" hidden>
+            <h3>編集</h3>
+            <label>
+              内容
+              <textarea id="edit-contents" rows="3"></textarea>
+            </label>
+            <label>
+              フォント
+              <select id="edit-font"></select>
+            </label>
+            <label>
+              サイズ (pt)
+              <input id="edit-size" type="number" step="0.5" min="1" />
+            </label>
+            <button id="delete-new-layer-btn" class="danger-btn" hidden>新規レイヤーを削除</button>
+          </div>
+        </aside>
+      </main>
+    </div>
+    <div class="progress-modal" id="progress-modal" hidden>
+      <div class="progress-card" role="dialog" aria-live="polite" aria-busy="true">
+        <div class="progress-title" id="progress-title">読込中</div>
+        <div class="progress-detail" id="progress-detail"></div>
+        <div class="progress-track">
+          <div class="progress-fill" id="progress-fill"></div>
+        </div>
+        <div class="progress-count" id="progress-count"></div>
+      </div>
+    </div>
+    <div class="toast-container" id="toast-container" aria-live="polite"></div>
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
