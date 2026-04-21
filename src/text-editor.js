@@ -18,7 +18,6 @@ const listEl = () => document.getElementById("layer-list");
 const editorEl = () => document.getElementById("editor");
 const contentsEl = () => document.getElementById("edit-contents");
 const fontEl = () => document.getElementById("edit-font");
-const sizeEl = () => document.getElementById("edit-size");
 
 export function rebuildLayerList() {
   const ul = listEl();
@@ -125,14 +124,12 @@ function populateEditor() {
     const edit = getEdit(page.path, layer.id) ?? {};
     contentsEl().value = edit.contents ?? layer.text ?? "";
     effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
-    sizeEl().value = effectiveSize ?? "";
     rebuildFontOptions(edit.fontPostScriptName ?? layer.font);
     if (deleteBtn) deleteBtn.hidden = true;
   } else {
     const { newLayer } = resolved;
     contentsEl().value = newLayer.contents ?? "";
     effectiveSize = newLayer.sizePt ?? null;
-    sizeEl().value = effectiveSize ?? "";
     rebuildFontOptions(newLayer.fontPostScriptName ?? "");
     if (deleteBtn) deleteBtn.hidden = false;
   }
@@ -159,10 +156,6 @@ function rebuildFontOptions(currentValue) {
 export function bindEditorEvents() {
   contentsEl().addEventListener("input", () => commitField("contents", contentsEl().value));
   fontEl().addEventListener("change", () => commitField("fontPostScriptName", fontEl().value));
-  sizeEl().addEventListener("input", () => {
-    const v = parseFloat(sizeEl().value);
-    if (!Number.isNaN(v)) commitField("sizePt", v);
-  });
   const deleteBtn = document.getElementById("delete-new-layer-btn");
   if (deleteBtn) {
     deleteBtn.addEventListener("click", () => {

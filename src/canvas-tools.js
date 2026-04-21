@@ -79,7 +79,8 @@ function renderOverlay(ctx) {
     const ptInPsdPx = sizePt * (dpi / 72);
     const previewText = edit.contents ?? layer.text ?? "";
     const chars = Math.max(1, longestLine(previewText));
-    const fallbackThick = ptInPsdPx * 1.4;
+    const lineCount = Math.max(1, countLines(previewText));
+    const fallbackThick = ptInPsdPx * 1.4 * lineCount;
     const fallbackLong = ptInPsdPx * 1.1 * chars;
     const minThick = Math.max(ptInPsdPx * 1.2, 20);
     const minLong = Math.max(ptInPsdPx * 2, 48);
@@ -122,8 +123,10 @@ function renderOverlay(ctx) {
     const isVertical = nl.direction !== "horizontal";
     const sizePt = nl.sizePt ?? 24;
     const ptInPsdPx = sizePt * (dpi / 72);
-    const chars = Math.max(1, (nl.contents ?? "").length);
-    const thick = Math.max(24, ptInPsdPx * 1.4);
+    const contents = nl.contents ?? "";
+    const chars = Math.max(1, longestLine(contents));
+    const lineCount = Math.max(1, countLines(contents));
+    const thick = Math.max(24, ptInPsdPx * 1.4 * lineCount);
     const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.1 * chars);
     const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
     const long = Math.min(longRaw, maxLong);
@@ -157,6 +160,11 @@ function longestLine(s) {
   return max;
 }
 
+function countLines(s) {
+  if (!s) return 0;
+  return String(s).split(/\r?\n/).length;
+}
+
 function createBox(page, left, top, width, height, kind) {
   const el = document.createElement("div");
   el.className = `layer-box layer-box-${kind}`;
@@ -178,16 +186,17 @@ function canvasCoordsFromEvent(e, ctx) {
 
 function onCanvasMouseDown(e, ctx) {
   const tool = getTool();
-  const txtSel = getActiveTxtSelection();
-  if (txtSel) {
-    const { x, y } = canvasCoordsFromEvent(e, ctx);
-    placeTxtSelectionAt(ctx, x, y, txtSel);
-    return;
-  }
   if (tool === "text") {
     const { x, y } = canvasCoordsFromEvent(e, ctx);
-    startTextInput(ctx, x, y);
-  } else if (tool === "move") {
+    const txtSel = getActiveTxtSelection();
+    if (txtSel) {
+      placeTxtSelectionAt(ctx, x, y, txtSel);
+    } else {
+      startTextInput(ctx, x, y);
+    }
+    return;
+  }
+  if (tool === "move") {
     setSelectedLayer(null);
     renderOverlay(ctx);
     rebuildLayerList();

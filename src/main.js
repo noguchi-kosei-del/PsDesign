@@ -7,6 +7,7 @@ import {
   rebuildLayerList,
 } from "./text-editor.js";
 import { initTxtSource } from "./txt-source.js";
+import { initPagebar, renderPagebar } from "./pagebar.js";
 import {
   hideProgress,
   showProgress,
@@ -67,7 +68,7 @@ async function handleOpenFolder() {
   clearPages();
   renderAllSpreads();
   rebuildLayerList();
-  refreshPageIndicator();
+  renderPagebar();
 
   const failures = [];
   for (let i = 0; i < files.length; i++) {
@@ -82,7 +83,7 @@ async function handleOpenFolder() {
       addPage(page);
       renderAllSpreads();
       rebuildLayerList();
-      refreshPageIndicator();
+      renderPagebar();
     } catch (e) {
       console.error(e);
       failures.push({ path, error: e });
@@ -183,30 +184,12 @@ function bindTools() {
   });
 }
 
-let refreshPageIndicator = () => {};
-
-function bindPageNav() {
-  const prev = document.getElementById("page-prev-btn");
-  const next = document.getElementById("page-next-btn");
-  const indicator = document.getElementById("page-indicator");
-  if (!prev || !next || !indicator) return;
-
-  refreshPageIndicator = () => {
-    const total = getPages().length;
-    const idx = getCurrentPageIndex();
-    indicator.textContent = total === 0 ? "0 / 0" : `${idx + 1} / ${total}`;
-    prev.disabled = total === 0 || idx <= 0;
-    next.disabled = total === 0 || idx >= total - 1;
-  };
-
-  prev.addEventListener("click", () => setCurrentPageIndex(getCurrentPageIndex() - 1));
-  next.addEventListener("click", () => setCurrentPageIndex(getCurrentPageIndex() + 1));
+function bindPageChange() {
   onPageIndexChange(() => {
     renderAllSpreads();
     rebuildLayerList();
-    refreshPageIndicator();
+    renderPagebar();
   });
-  refreshPageIndicator();
 }
 
 function applyTextSize(n) {
@@ -243,15 +226,32 @@ function bindSizeTool() {
   inc.addEventListener("click", (e) => adjustTextSize(+(e.shiftKey ? 10 : 2)));
 }
 
+function bindWindowControls() {
+  const min = document.getElementById("window-min-btn");
+  const max = document.getElementById("window-max-btn");
+  const close = document.getElementById("window-close-btn");
+  if (!min || !max || !close) return;
+  const getWin = async () => {
+    const mod = await import("@tauri-apps/api/window");
+    return mod.getCurrentWindow();
+  };
+  min.addEventListener("click", async () => { (await getWin()).minimize(); });
+  max.addEventListener("click", async () => { (await getWin()).toggleMaximize(); });
+  close.addEventListener("click", async () => { (await getWin()).close(); });
+}
+
 function init() {
   document.getElementById("open-folder-btn").addEventListener("click", handleOpenFolder);
   document.getElementById("save-btn").addEventListener("click", handleSave);
   bindTools();
   bindSizeTool();
-  bindPageNav();
+  bindPageChange();
   bindEditorEvents();
+  bindWindowControls();
   initTxtSource();
+  initPagebar();
   renderAllSpreads();
+  renderPagebar();
   loadFontsFromBackend();
 }
 

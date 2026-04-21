@@ -107,6 +107,11 @@ function blackColor() {
   return c;
 }
 
+function normalizeLineBreaks(s) {
+  if (typeof s !== "string") return s;
+  return s.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+}
+
 function findLayerById(doc, id) {
   function walk(parent) {
     for (var i = 0; i < parent.layers.length; i++) {
@@ -143,7 +148,7 @@ function applyToPsd(psdPath, edits, newLayers) {
           else if (e.direction === "horizontal") ti.direction = Direction.HORIZONTAL;
         } catch (eDirEx) {}
       }
-      if (typeof e.contents === "string") ti.contents = e.contents;
+      if (typeof e.contents === "string") ti.contents = normalizeLineBreaks(e.contents);
       if (typeof e.font === "string" && e.font.length > 0) ti.font = e.font;
       if (typeof e.size === "number") ti.size = new UnitValue(e.size, "pt");
       if (typeof e.dx === "number" || typeof e.dy === "number") {
@@ -165,7 +170,7 @@ function applyToPsd(psdPath, edits, newLayers) {
         } else if (nl.direction === "horizontal") {
           try { nti.direction = Direction.HORIZONTAL; } catch (eDir2) {}
         }
-        nti.contents = nl.contents;
+        nti.contents = normalizeLineBreaks(nl.contents);
         if (typeof nl.font === "string" && nl.font.length > 0) {
           try { nti.font = nl.font; } catch (eFont) {}
         }

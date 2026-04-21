@@ -8,23 +8,21 @@
   </head>
   <body>
     <div id="app" class="app">
-      <header class="toolbar">
-        <h1>PsDesign</h1>
-        <div class="tool-group size-group" role="group" aria-label="文字サイズ">
-          <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
-          <input id="size-input" class="size-input" type="number" min="6" max="400" step="1" value="24" />
-          <span class="size-unit">pt</span>
-          <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
-        </div>
-        <div class="tool-group page-nav" role="group" aria-label="ページ">
-          <button id="page-prev-btn" class="page-nav-btn" type="button" title="前のページ (←)">◀</button>
-          <span id="page-indicator" class="page-indicator">0 / 0</span>
-          <button id="page-next-btn" class="page-nav-btn" type="button" title="次のページ (→)">▶</button>
-        </div>
+      <header class="toolbar" data-tauri-drag-region>
+        <h1 data-tauri-drag-region>PsDesign</h1>
         <div class="toolbar-actions">
           <button id="open-folder-btn" class="icon-btn" title="フォルダを開く" aria-label="フォルダを開く">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+            </svg>
+          </button>
+          <button id="open-txt-toolbar-btn" class="icon-btn" title="TXTを開く" aria-label="TXTを開く">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="8" y1="13" x2="16" y2="13"/>
+              <line x1="8" y1="17" x2="16" y2="17"/>
+              <line x1="8" y1="9" x2="11" y2="9"/>
             </svg>
           </button>
           <button id="save-btn" class="icon-btn" disabled title="Photoshop で保存" aria-label="Photoshop で保存">
@@ -35,9 +33,44 @@
             </svg>
           </button>
         </div>
+        <div class="window-controls" role="group" aria-label="ウインドウ操作">
+          <button id="window-min-btn" class="window-ctrl-btn" type="button" title="最小化" aria-label="最小化">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <rect x="2" y="6" width="8" height="1" fill="currentColor"/>
+            </svg>
+          </button>
+          <button id="window-max-btn" class="window-ctrl-btn" type="button" title="最大化/元に戻す" aria-label="最大化/元に戻す">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <rect x="2.5" y="2.5" width="7" height="7" fill="none" stroke="currentColor" stroke-width="1"/>
+            </svg>
+          </button>
+          <button id="window-close-btn" class="window-ctrl-btn window-ctrl-close" type="button" title="閉じる" aria-label="閉じる">
+            <svg width="12" height="12" viewBox="0 0 12 12" aria-hidden="true">
+              <line x1="2.5" y1="2.5" x2="9.5" y2="9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+              <line x1="9.5" y1="2.5" x2="2.5" y2="9.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round"/>
+            </svg>
+          </button>
+        </div>
       </header>
       <main class="workspace">
-        <section class="spreads-container" id="spreads-container"></section>
+        <section class="spreads-container" id="spreads-container">
+          <div id="spreads-stage" class="spreads-stage"></div>
+        </section>
+        <div id="pagebar" class="pagebar">
+          <button id="toggle-pagebar-btn" class="pagebar-toggle-btn" type="button" title="ページバーを折り畳む" aria-label="ページバーを折り畳む">
+            <svg class="icon-collapse" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="9 18 15 12 9 6"/>
+            </svg>
+            <svg class="icon-expand" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="15 18 9 12 15 6"/>
+            </svg>
+          </button>
+          <div id="spread-nav-track" class="spread-nav-track">
+            <div id="spread-nav-handle" class="spread-nav-handle">
+              <span id="spread-nav-label" class="spread-nav-handle-label"></span>
+            </div>
+          </div>
+        </div>
         <nav class="side-toolbar" role="group" aria-label="ツール">
           <button id="tool-move" class="tool-btn icon-btn side-tool-btn" data-tool="move" title="選択ツール (V)" aria-label="選択ツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -60,23 +93,27 @@
         <aside class="side-panel">
           <section class="txt-source" id="txt-source">
             <h2>原稿 TXT</h2>
-            <div class="txt-source-actions">
-              <button id="open-txt-btn">TXTを開く</button>
+            <div id="txt-source-actions" class="txt-source-actions" hidden>
               <button id="clear-txt-btn" hidden>クリア</button>
               <span id="txt-source-name" class="txt-source-name"></span>
             </div>
             <div id="txt-source-dropzone" class="txt-source-dropzone">
               <div id="txt-source-viewer" class="txt-source-viewer" hidden></div>
               <div id="txt-source-empty" class="txt-source-empty">
-                TXTファイルを選択、またはここにドロップ
+                <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="8" y1="13" x2="16" y2="13"/>
+                  <line x1="8" y1="17" x2="16" y2="17"/>
+                  <line x1="8" y1="9" x2="11" y2="9"/>
+                </svg>
+                <p class="txt-source-empty-text">TXTファイルを選択、またはここにドロップ</p>
               </div>
             </div>
             <div id="txt-source-hint" class="txt-source-hint" hidden>
               ブロック選択中：キャンバスをクリックで配置
             </div>
           </section>
-          <h2>テキストレイヤー</h2>
-          <ul id="layer-list" class="layer-list"></ul>
           <div id="editor" class="editor" hidden>
             <h3>編集</h3>
             <label>
@@ -88,11 +125,18 @@
               <select id="edit-font"></select>
             </label>
             <label>
-              サイズ (pt)
-              <input id="edit-size" type="number" step="0.5" min="1" />
+              サイズ
+              <div class="size-group" role="group" aria-label="文字サイズ">
+                <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
+                <input id="size-input" class="size-input" type="number" min="6" max="400" step="1" value="24" />
+                <span class="size-unit">pt</span>
+                <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
+              </div>
             </label>
             <button id="delete-new-layer-btn" class="danger-btn" hidden>新規レイヤーを削除</button>
           </div>
+          <h2>テキストレイヤー</h2>
+          <ul id="layer-list" class="layer-list"></ul>
         </aside>
       </main>
     </div>

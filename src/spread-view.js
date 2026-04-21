@@ -1,7 +1,7 @@
 import { getCurrentPageIndex, getPages } from "./state.js";
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 
-const container = () => document.getElementById("spreads-container");
+const container = () => document.getElementById("spreads-stage");
 const pageResizeObservers = new Set();
 
 const MAX_CANVAS_SIDE = 16384;
@@ -17,7 +17,12 @@ export function renderAllSpreads() {
   if (pages.length === 0) {
     const empty = document.createElement("div");
     empty.className = "spreads-empty";
-    empty.textContent = "「フォルダを開く」で PSD フォルダを選択してください。";
+    empty.innerHTML = `
+      <svg class="spreads-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+      </svg>
+      <p class="spreads-empty-text">「フォルダを開く」で PSD フォルダを選択してください。</p>
+    `;
     root.appendChild(empty);
     return;
   }

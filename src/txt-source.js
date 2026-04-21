@@ -31,7 +31,11 @@ function decodeBytes(bytes) {
 }
 
 function splitBlocks(content) {
-  return content.replace(/\r\n?/g, "\n").split("\n");
+  const normalized = content.replace(/\r\n?/g, "\n");
+  return normalized
+    .split(/\n\s*\n/)
+    .map((p) => p.replace(/^\n+|\n+$/g, ""))
+    .filter((p) => p.length > 0);
 }
 
 function renderViewer() {
@@ -41,6 +45,7 @@ function renderViewer() {
   const name = $("txt-source-name");
   const clearBtn = $("clear-txt-btn");
   const hint = $("txt-source-hint");
+  const actions = $("txt-source-actions");
 
   viewer.innerHTML = "";
 
@@ -50,6 +55,7 @@ function renderViewer() {
     name.textContent = "";
     clearBtn.hidden = true;
     hint.hidden = true;
+    if (actions) actions.hidden = true;
     return;
   }
 
@@ -58,23 +64,17 @@ function renderViewer() {
   name.textContent = source.name;
   clearBtn.hidden = false;
   hint.hidden = false;
+  if (actions) actions.hidden = false;
 
   const blocks = splitBlocks(source.content);
   const selectedIdx = getTxtSelectedBlockIndex();
-  blocks.forEach((line, idx) => {
-    const trimmed = line.trim();
-    if (trimmed === "") {
-      const spacer = document.createElement("div");
-      spacer.className = "txt-block-spacer";
-      viewer.appendChild(spacer);
-      return;
-    }
+  blocks.forEach((paragraph, idx) => {
     const el = document.createElement("div");
     el.className = "txt-block";
     el.dataset.blockIndex = String(idx);
-    el.textContent = line;
+    el.textContent = paragraph;
     if (idx === selectedIdx) el.classList.add("selected");
-    el.addEventListener("click", () => selectBlock(idx, line));
+    el.addEventListener("click", () => selectBlock(idx, paragraph));
     viewer.appendChild(el);
   });
 }
@@ -178,7 +178,7 @@ function bindDropzone() {
 }
 
 export function initTxtSource() {
-  $("open-txt-btn").addEventListener("click", handleOpenBtn);
+  $("open-txt-toolbar-btn").addEventListener("click", handleOpenBtn);
   $("clear-txt-btn").addEventListener("click", () => {
     clearTxtSource();
     renderViewer();
