@@ -11,11 +11,18 @@ const state = {
   txtSource: null,
   txtSelection: "",
   txtSelectedBlockIndex: null,
-  textSize: 24,
+  textSize: 12,
   textSizeListeners: new Set(),
+  currentFontPostScriptName: null,
+  currentFontListeners: new Set(),
   currentPageIndex: 0,
   pageIndexListeners: new Set(),
+  zoom: 1,
+  zoomListeners: new Set(),
 };
+
+export const ZOOM_MIN = 0.1;
+export const ZOOM_MAX = 8;
 
 export function getState() { return state; }
 
@@ -96,9 +103,15 @@ export function getSelectedLayer() { return state.selectedLayer; }
 export function setFonts(fonts) { state.fonts = fonts; }
 export function getFonts() { return state.fonts; }
 
+export function getFontDisplayName(psName) {
+  if (!psName) return null;
+  const hit = state.fonts.find((f) => f.postScriptName === psName);
+  return hit?.name ?? psName;
+}
+
 export function getTool() { return state.tool; }
 export function setTool(tool) {
-  if (tool !== "move" && tool !== "text") return;
+  if (tool !== "move" && tool !== "text" && tool !== "pan") return;
   if (state.tool === tool) return;
   state.tool = tool;
   for (const fn of state.toolListeners) fn(tool);
@@ -185,7 +198,8 @@ export function getTextSize() { return state.textSize; }
 export function setTextSize(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) return;
-  const clamped = Math.max(6, Math.min(400, Math.round(v)));
+  const rounded = Math.round(v * 10) / 10;
+  const clamped = Math.max(6, Math.min(400, rounded));
   if (state.textSize === clamped) return;
   state.textSize = clamped;
   for (const fn of state.textSizeListeners) fn(clamped);
@@ -193,4 +207,31 @@ export function setTextSize(n) {
 export function onTextSizeChange(fn) {
   state.textSizeListeners.add(fn);
   return () => state.textSizeListeners.delete(fn);
+}
+
+export function getZoom() { return state.zoom; }
+export function setZoom(z) {
+  const v = Number(z);
+  if (!Number.isFinite(v)) return;
+  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, v));
+  const rounded = Math.round(clamped * 1000) / 1000;
+  if (state.zoom === rounded) return;
+  state.zoom = rounded;
+  for (const fn of state.zoomListeners) fn(rounded);
+}
+export function onZoomChange(fn) {
+  state.zoomListeners.add(fn);
+  return () => state.zoomListeners.delete(fn);
+}
+
+export function getCurrentFont() { return state.currentFontPostScriptName; }
+export function setCurrentFont(psName) {
+  const v = psName || null;
+  if (state.currentFontPostScriptName === v) return;
+  state.currentFontPostScriptName = v;
+  for (const fn of state.currentFontListeners) fn(v);
+}
+export function onCurrentFontChange(fn) {
+  state.currentFontListeners.add(fn);
+  return () => state.currentFontListeners.delete(fn);
 }

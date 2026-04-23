@@ -175,6 +175,8 @@ function applyToPsd(psdPath, edits, newLayers) {
           try { nti.font = nl.font; } catch (eFont) {}
         }
         nti.size = new UnitValue((typeof nl.size === "number") ? nl.size : 24, "pt");
+        try { nti.autoLeadingAmount = 125; } catch (eAutoLeadPct) {}
+        try { nti.useAutoLeading = true; } catch (eAutoLead) {}
         try { nti.color = blackColor(); } catch (eColor) {}
         nti.position = [new UnitValue(nl.x, "px"), new UnitValue(nl.y, "px")];
         try {

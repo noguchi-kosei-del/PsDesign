@@ -9,7 +9,34 @@
   <body>
     <div id="app" class="app">
       <header class="toolbar" data-tauri-drag-region>
-        <h1 data-tauri-drag-region>PsDesign</h1>
+        <h1 data-tauri-drag-region class="app-logo" aria-label="PsDesign" title="PsDesign">
+          <span class="app-logo-icon" aria-hidden="true">Pd</span>
+        </h1>
+        <button id="hamburger-btn" class="icon-btn hamburger-btn" type="button" title="メニュー" aria-label="メニュー">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="3" y1="6" x2="21" y2="6"/>
+            <line x1="3" y1="12" x2="21" y2="12"/>
+            <line x1="3" y1="18" x2="21" y2="18"/>
+          </svg>
+        </button>
+        <div class="toolbar-zoom" role="group" aria-label="ズーム">
+          <button id="zoom-out-btn" class="icon-btn zoom-btn" type="button" title="ズームアウト (Alt+スクロール)" aria-label="ズームアウト">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              <line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+          </button>
+          <button id="zoom-level-btn" class="zoom-level-btn" type="button" title="100% にリセット">100%</button>
+          <button id="zoom-in-btn" class="icon-btn zoom-btn" type="button" title="ズームイン (Alt+スクロール)" aria-label="ズームイン">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8"/>
+              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+              <line x1="11" y1="8" x2="11" y2="14"/>
+              <line x1="8" y1="11" x2="14" y2="11"/>
+            </svg>
+          </button>
+        </div>
         <div class="toolbar-actions">
           <button id="open-folder-btn" class="icon-btn" title="フォルダを開く" aria-label="フォルダを開く">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -67,6 +94,7 @@
           </button>
           <div id="spread-nav-track" class="spread-nav-track">
             <div id="spread-nav-handle" class="spread-nav-handle">
+              <span class="spread-nav-handle-grip"></span>
               <span id="spread-nav-label" class="spread-nav-handle-label"></span>
             </div>
           </div>
@@ -89,13 +117,29 @@
               <line x1="12" y1="4" x2="12" y2="20"/>
             </svg>
           </button>
+          <button id="tool-pan" class="tool-btn icon-btn side-tool-btn" data-tool="pan" title="パンツール (Space長押し)" aria-label="パンツール">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M18 11V6a2 2 0 0 0-4 0v5"/>
+              <path d="M14 10V4a2 2 0 0 0-4 0v6"/>
+              <path d="M10 10.5V6a2 2 0 0 0-4 0v8"/>
+              <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
+            </svg>
+          </button>
         </nav>
         <aside class="side-panel">
           <section class="txt-source" id="txt-source">
             <h2>原稿 TXT</h2>
             <div id="txt-source-actions" class="txt-source-actions" hidden>
-              <button id="clear-txt-btn" hidden>クリア</button>
               <span id="txt-source-name" class="txt-source-name"></span>
+              <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="TXTをクリア" aria-label="TXTをクリア" hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/>
+                  <path d="M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </button>
             </div>
             <div id="txt-source-dropzone" class="txt-source-dropzone">
               <div id="txt-source-viewer" class="txt-source-viewer" hidden></div>
@@ -110,29 +154,30 @@
                 <p class="txt-source-empty-text">TXTファイルを選択、またはここにドロップ</p>
               </div>
             </div>
-            <div id="txt-source-hint" class="txt-source-hint" hidden>
-              ブロック選択中：キャンバスをクリックで配置
-            </div>
           </section>
+          <h2>編集</h2>
           <div id="editor" class="editor" hidden>
-            <h3>編集</h3>
             <label>
               内容
               <textarea id="edit-contents" rows="3"></textarea>
             </label>
             <label>
               フォント
-              <select id="edit-font"></select>
+              <div class="font-combobox" id="edit-font-combobox">
+                <input id="edit-font" class="font-input" type="text" autocomplete="off" placeholder="フォント名で検索..." />
+                <button type="button" id="edit-font-toggle" class="font-combobox-toggle" aria-label="フォント一覧" tabindex="-1">▾</button>
+                <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
+              </div>
             </label>
-            <label>
-              サイズ
+            <div class="size-field">
+              <span class="size-field-label">サイズ</span>
               <div class="size-group" role="group" aria-label="文字サイズ">
                 <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
-                <input id="size-input" class="size-input" type="number" min="6" max="400" step="1" value="24" />
+                <input id="size-input" class="size-input" type="number" min="6" max="400" step="0.1" value="12" aria-label="サイズ" />
                 <span class="size-unit">pt</span>
                 <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
               </div>
-            </label>
+            </div>
             <button id="delete-new-layer-btn" class="danger-btn" hidden>新規レイヤーを削除</button>
           </div>
           <h2>テキストレイヤー</h2>
@@ -148,6 +193,62 @@
           <div class="progress-fill" id="progress-fill"></div>
         </div>
         <div class="progress-count" id="progress-count"></div>
+      </div>
+    </div>
+    <div class="hamburger-overlay" id="hamburger-overlay" hidden></div>
+    <aside class="hamburger-menu" id="hamburger-menu" hidden aria-label="メニュー">
+      <div class="hamburger-menu-header">
+        <span class="hamburger-menu-title">メニュー</span>
+        <button id="hamburger-close-btn" class="icon-btn" type="button" title="閉じる" aria-label="閉じる">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+      <div class="hamburger-menu-body"></div>
+      <div class="hamburger-menu-footer">
+        <button id="sidebar-toggle-btn" class="menu-icon-btn" type="button" title="サイドバーを切替" aria-label="サイドバーを切替">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="3" y="4" width="18" height="16" rx="1.5"/>
+            <line x1="15" y1="4" x2="15" y2="20"/>
+          </svg>
+        </button>
+        <button id="theme-toggle-btn" class="menu-icon-btn" type="button" title="テーマ切替" aria-label="テーマ切替">
+          <svg class="theme-icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
+          </svg>
+          <svg class="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="12" cy="12" r="4"/>
+            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
+          </svg>
+        </button>
+        <button id="home-btn" class="menu-icon-btn" type="button" title="ホームに戻る" aria-label="ホームに戻る">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2h-4a1 1 0 0 1-1-1v-6h-4v6a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2z"/>
+          </svg>
+        </button>
+      </div>
+    </aside>
+    <div class="progress-modal" id="confirm-modal" hidden>
+      <div class="progress-card" role="dialog" aria-modal="true">
+        <div class="progress-title" id="confirm-modal-title">確認</div>
+        <div class="confirm-modal-message" id="confirm-modal-message"></div>
+        <div class="page-jump-actions">
+          <button type="button" id="confirm-modal-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="confirm-modal-ok" class="page-jump-btn page-jump-btn-primary">OK</button>
+        </div>
+      </div>
+    </div>
+    <div class="progress-modal" id="page-jump-modal" hidden>
+      <div class="progress-card" role="dialog" aria-label="ページにジャンプ">
+        <div class="progress-title">ページにジャンプ</div>
+        <input id="page-jump-input" class="page-jump-input" type="number" min="1" step="1" />
+        <div class="page-jump-hint" id="page-jump-hint"></div>
+        <div class="page-jump-actions">
+          <button type="button" id="page-jump-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="page-jump-ok" class="page-jump-btn page-jump-btn-primary">ジャンプ</button>
+        </div>
       </div>
     </div>
     <div class="toast-container" id="toast-container" aria-live="polite"></div>

@@ -1,13 +1,15 @@
 import {
   clearTxtSource,
+  getCurrentPageIndex,
   getTxtSelectedBlockIndex,
   getTxtSelection,
   getTxtSource,
+  onPageIndexChange,
   setTxtSelectedBlockIndex,
   setTxtSelection,
   setTxtSource,
 } from "./state.js";
-import { toast } from "./ui-feedback.js";
+import { confirmDialog, toast } from "./ui-feedback.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,12 +32,66 @@ function decodeBytes(bytes) {
   }
 }
 
-function splitBlocks(content) {
-  const normalized = content.replace(/\r\n?/g, "\n");
-  return normalized
+const PAGE_MARKER_RE = /<<\s*([0-9０-９]+)\s*Page\s*>>/gi;
+
+function splitBlocksRaw(s) {
+  return s
     .split(/\n\s*\n/)
     .map((p) => p.replace(/^\n+|\n+$/g, ""))
     .filter((p) => p.length > 0);
+}
+
+function toHalfWidthInt(s) {
+  const normalized = String(s).replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
+  const n = parseInt(normalized, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parsePages(content) {
+  const normalized = (content ?? "").replace(/\r\n?/g, "\n");
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  const byPage = new Map();
+  let lastIndex = 0;
+  let currentPage = null;
+  let match;
+  let hasMarkers = false;
+
+  const pushBlocks = (page, text) => {
+    if (page == null) return;
+    const blocks = splitBlocksRaw(text);
+    if (!blocks.length) return;
+    if (!byPage.has(page)) byPage.set(page, []);
+    const arr = byPage.get(page);
+    for (const b of blocks) arr.push(b);
+  };
+
+  while ((match = re.exec(normalized)) !== null) {
+    hasMarkers = true;
+    const before = normalized.slice(lastIndex, match.index);
+    pushBlocks(currentPage, before);
+    currentPage = toHalfWidthInt(match[1]);
+    lastIndex = match.index + match[0].length;
+  }
+  if (hasMarkers) {
+    pushBlocks(currentPage, normalized.slice(lastIndex));
+    return { hasMarkers: true, all: [], byPage };
+  }
+  return { hasMarkers: false, all: splitBlocksRaw(normalized), byPage };
+}
+
+function getVisibleBlocks() {
+  const source = getTxtSource();
+  if (!source) return { blocks: [], hasMarkers: false, pageNumber: null };
+  const parsed = parsePages(source.content);
+  if (!parsed.hasMarkers) {
+    return { blocks: parsed.all, hasMarkers: false, pageNumber: null };
+  }
+  const pageNumber = getCurrentPageIndex() + 1;
+  return {
+    blocks: parsed.byPage.get(pageNumber) ?? [],
+    hasMarkers: true,
+    pageNumber,
+  };
 }
 
 function renderViewer() {
@@ -44,7 +100,6 @@ function renderViewer() {
   const empty = $("txt-source-empty");
   const name = $("txt-source-name");
   const clearBtn = $("clear-txt-btn");
-  const hint = $("txt-source-hint");
   const actions = $("txt-source-actions");
 
   viewer.innerHTML = "";
@@ -54,7 +109,6 @@ function renderViewer() {
     empty.hidden = false;
     name.textContent = "";
     clearBtn.hidden = true;
-    hint.hidden = true;
     if (actions) actions.hidden = true;
     return;
   }
@@ -63,10 +117,18 @@ function renderViewer() {
   empty.hidden = true;
   name.textContent = source.name;
   clearBtn.hidden = false;
-  hint.hidden = false;
   if (actions) actions.hidden = false;
 
-  const blocks = splitBlocks(source.content);
+  const { blocks, hasMarkers, pageNumber } = getVisibleBlocks();
+
+  if (hasMarkers && blocks.length === 0) {
+    const info = document.createElement("div");
+    info.className = "txt-block-empty-hint";
+    info.textContent = `ページ ${pageNumber} のテキストはありません`;
+    viewer.appendChild(info);
+    return;
+  }
+
   const selectedIdx = getTxtSelectedBlockIndex();
   blocks.forEach((paragraph, idx) => {
     const el = document.createElement("div");
@@ -112,10 +174,18 @@ async function handleOpenBtn() {
   try {
     const path = await pickTxtPath();
     if (!path) return;
+    await loadTxtFromPath(path);
+  } catch (e) {
+    console.error(e);
+    toast(`TXT読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
+  }
+}
+
+export async function loadTxtFromPath(path) {
+  try {
     const content = await readTxtFromPath(path);
     setTxtSource({ name: baseName(path), content });
     renderViewer();
-    toast(`TXT読込: ${baseName(path)} (${content.length}文字)`, { kind: "success" });
   } catch (e) {
     console.error(e);
     toast(`TXT読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
@@ -128,7 +198,6 @@ async function handleFileDropped(file) {
     const content = decodeBytes(new Uint8Array(buf));
     setTxtSource({ name: file.name, content });
     renderViewer();
-    toast(`TXT読込: ${file.name} (${content.length}文字)`, { kind: "success" });
   } catch (e) {
     console.error(e);
     toast(`TXT読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
@@ -179,7 +248,19 @@ function bindDropzone() {
 
 export function initTxtSource() {
   $("open-txt-toolbar-btn").addEventListener("click", handleOpenBtn);
-  $("clear-txt-btn").addEventListener("click", () => {
+  onPageIndexChange(() => {
+    setTxtSelectedBlockIndex(null);
+    setTxtSelection("");
+    renderViewer();
+  });
+  $("clear-txt-btn").addEventListener("click", async () => {
+    if (!getTxtSource()) return;
+    const ok = await confirmDialog({
+      title: "テキストのクリア",
+      message: "読み込んだテキストをリセットします。よろしいですか？",
+      confirmLabel: "クリア",
+    });
+    if (!ok) return;
     clearTxtSource();
     renderViewer();
     toast("TXTをクリアしました", { kind: "info", duration: 1500 });
@@ -191,4 +272,35 @@ export function initTxtSource() {
 export function getActiveTxtSelection() {
   if (!getTxtSource()) return "";
   return getTxtSelection();
+}
+
+export function advanceTxtSelection() {
+  const source = getTxtSource();
+  if (!source) return false;
+  const { blocks } = getVisibleBlocks();
+  const cur = getTxtSelectedBlockIndex();
+  if (cur == null) return false;
+  const next = cur + 1;
+  if (next >= blocks.length) {
+    setTxtSelectedBlockIndex(null);
+    setTxtSelection("");
+    const viewer = $("txt-source-viewer");
+    if (viewer) {
+      for (const el of viewer.querySelectorAll(".txt-block")) {
+        el.classList.remove("selected");
+      }
+    }
+    return false;
+  }
+  setTxtSelectedBlockIndex(next);
+  setTxtSelection(blocks[next]);
+  const viewer = $("txt-source-viewer");
+  if (viewer) {
+    for (const el of viewer.querySelectorAll(".txt-block")) {
+      el.classList.toggle("selected", el.dataset.blockIndex === String(next));
+    }
+    const nextEl = viewer.querySelector(`.txt-block[data-block-index="${next}"]`);
+    if (nextEl) nextEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+  return true;
 }

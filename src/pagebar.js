@@ -6,7 +6,7 @@ import {
 } from "./state.js";
 
 const STORAGE_KEY = "psdesign_pagebar_visible";
-const HANDLE_LENGTH = 16;
+const HANDLE_LENGTH = 30;
 
 let bar = null;
 let track = null;

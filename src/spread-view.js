@@ -1,16 +1,25 @@
-import { getCurrentPageIndex, getPages } from "./state.js";
+import { getCurrentPageIndex, getPages, getZoom, onZoomChange } from "./state.js";
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 
 const container = () => document.getElementById("spreads-stage");
 const pageResizeObservers = new Set();
+const pageRedraws = new Set();
+let zoomSubscribed = false;
 
 const MAX_CANVAS_SIDE = 16384;
 
 export function renderAllSpreads() {
   const root = container();
   if (!root) return;
+  if (!zoomSubscribed) {
+    zoomSubscribed = true;
+    onZoomChange(() => {
+      for (const fn of pageRedraws) fn();
+    });
+  }
   for (const ro of pageResizeObservers) ro.disconnect();
   pageResizeObservers.clear();
+  pageRedraws.clear();
   root.innerHTML = "";
   unmountAll();
   const pages = getPages();
@@ -21,7 +30,7 @@ export function renderAllSpreads() {
       <svg class="spreads-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
       </svg>
-      <p class="spreads-empty-text">「フォルダを開く」で PSD フォルダを選択してください。</p>
+      <p class="spreads-empty-text">「フォルダを開く」で PSDを格納しているフォルダを選択、またはドロップしてください。</p>
     `;
     root.appendChild(empty);
     return;
@@ -72,6 +81,10 @@ function buildPage(page, pageIndex, root) {
       cssW = availH * pageAR;
     }
 
+    const zoom = getZoom();
+    cssW *= zoom;
+    cssH *= zoom;
+
     let dpr = window.devicePixelRatio || 1;
     const maxDpr = Math.min(
       MAX_CANVAS_SIDE / Math.max(1, cssW),
@@ -110,6 +123,7 @@ function buildPage(page, pageIndex, root) {
     ro.observe(root);
     pageResizeObservers.add(ro);
   }
+  pageRedraws.add(redraw);
 
   queueMicrotask(redraw);
 

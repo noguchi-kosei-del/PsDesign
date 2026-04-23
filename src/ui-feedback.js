@@ -34,6 +34,51 @@ export function hideProgress() {
   $("progress-count").textContent = "";
 }
 
+export function confirmDialog({
+  title = "確認",
+  message = "",
+  confirmLabel = "OK",
+  cancelLabel = "キャンセル",
+} = {}) {
+  return new Promise((resolve) => {
+    const modal = $("confirm-modal");
+    const titleEl = $("confirm-modal-title");
+    const msgEl = $("confirm-modal-message");
+    const okBtn = $("confirm-modal-ok");
+    const cancelBtn = $("confirm-modal-cancel");
+    if (!modal || !okBtn || !cancelBtn || !msgEl) {
+      resolve(false);
+      return;
+    }
+    if (titleEl) titleEl.textContent = title;
+    msgEl.textContent = message;
+    okBtn.textContent = confirmLabel;
+    cancelBtn.textContent = cancelLabel;
+    modal.hidden = false;
+
+    const cleanup = (result) => {
+      modal.hidden = true;
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      modal.removeEventListener("mousedown", onOverlay);
+      document.removeEventListener("keydown", onKey);
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onOverlay = (e) => { if (e.target === modal) cleanup(false); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); cleanup(false); }
+      else if (e.key === "Enter") { e.preventDefault(); cleanup(true); }
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    modal.addEventListener("mousedown", onOverlay);
+    document.addEventListener("keydown", onKey);
+    requestAnimationFrame(() => okBtn.focus());
+  });
+}
+
 export function toast(message, { kind = "info", duration = 2800 } = {}) {
   const container = $("toast-container");
   if (!container) return;

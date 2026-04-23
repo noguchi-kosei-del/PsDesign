@@ -6,8 +6,9 @@ import {
   hasSelection,
   rebuildLayerList,
 } from "./text-editor.js";
-import { initTxtSource } from "./txt-source.js";
+import { initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { initPagebar, renderPagebar } from "./pagebar.js";
+import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   hideProgress,
   showProgress,
@@ -22,15 +23,18 @@ import {
   getPages,
   getTextSize,
   getTool,
+  getZoom,
   hasEdits,
   onPageIndexChange,
   onTextSizeChange,
   onToolChange,
+  onZoomChange,
   setCurrentPageIndex,
   setFolder,
   setFonts,
   setTextSize,
   setTool,
+  setZoom,
 } from "./state.js";
 
 async function pickFolder() {
@@ -46,6 +50,11 @@ async function listPsdFiles(folder) {
 
 async function handleOpenFolder() {
   const folder = await pickFolder();
+  if (!folder) return;
+  await loadFolderByPath(folder);
+}
+
+async function loadFolderByPath(folder) {
   if (!folder) return;
   setFolder(folder);
 
@@ -146,6 +155,9 @@ function baseName(p) {
   return m ? m[1] : p;
 }
 
+let panPreviousTool = null;
+let panSpaceActive = false;
+
 function bindTools() {
   const buttons = document.querySelectorAll(".tool-btn");
   for (const btn of buttons) {
@@ -157,10 +169,62 @@ function bindTools() {
       btn.classList.toggle("active", btn.dataset.tool === current);
     }
   };
-  onToolChange(applyActive);
+  onToolChange((tool) => {
+    applyActive();
+    if (panSpaceActive && tool !== "pan") {
+      panPreviousTool = null;
+      panSpaceActive = false;
+    }
+  });
   applyActive();
 
   window.addEventListener("keydown", (e) => {
+    if (e.code === "Space" && !e.repeat) {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (!panSpaceActive) {
+        panSpaceActive = true;
+        if (getTool() !== "pan") {
+          panPreviousTool = getTool();
+          setTool("pan");
+        } else {
+          panPreviousTool = null;
+        }
+        e.preventDefault();
+      }
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      if (e.code === "Equal" || e.code === "NumpadAdd" || e.key === "+" || e.key === ";") {
+        e.preventDefault();
+        setZoom(getZoom() * 1.15);
+        return;
+      }
+      if (e.code === "Minus" || e.code === "NumpadSubtract" || e.key === "-") {
+        e.preventDefault();
+        setZoom(getZoom() / 1.15);
+        return;
+      }
+      if (e.code === "Digit0" || e.code === "Numpad0") {
+        e.preventDefault();
+        setZoom(1);
+        return;
+      }
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "j" || e.key === "J")) {
+      e.preventDefault();
+      openPageJumpDialog();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+      const t = e.target;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      const total = getPages().length;
+      if (total === 0) return;
+      e.preventDefault();
+      setCurrentPageIndex(e.key === "ArrowLeft" ? 0 : total - 1);
+      return;
+    }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
     const target = e.target;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
@@ -180,6 +244,26 @@ function bindTools() {
     } else if (e.key === "ArrowRight") {
       e.preventDefault();
       setCurrentPageIndex(getCurrentPageIndex() + 1);
+    }
+  });
+
+  window.addEventListener("keyup", (e) => {
+    if (e.code === "Space" && panSpaceActive) {
+      panSpaceActive = false;
+      if (panPreviousTool) {
+        setTool(panPreviousTool);
+        panPreviousTool = null;
+      }
+    }
+  });
+
+  window.addEventListener("blur", () => {
+    if (panSpaceActive) {
+      panSpaceActive = false;
+      if (panPreviousTool) {
+        setTool(panPreviousTool);
+        panPreviousTool = null;
+      }
     }
   });
 }
@@ -222,8 +306,147 @@ function bindSizeTool() {
   input.addEventListener("blur", () => {
     input.value = String(getTextSize());
   });
-  dec.addEventListener("click", (e) => adjustTextSize(-(e.shiftKey ? 10 : 2)));
-  inc.addEventListener("click", (e) => adjustTextSize(+(e.shiftKey ? 10 : 2)));
+  dec.addEventListener("click", () => adjustTextSize(-1));
+  inc.addEventListener("click", () => adjustTextSize(+1));
+}
+
+async function handleDroppedPaths(paths) {
+  if (!paths || paths.length === 0) return;
+  for (const p of paths) {
+    if (/\.txt$/i.test(p)) {
+      await loadTxtFromPath(p);
+    } else {
+      await loadFolderByPath(p);
+    }
+  }
+}
+
+async function setupTauriDragDrop() {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen("tauri://drag-drop", (e) => {
+      const paths = Array.isArray(e.payload?.paths) ? e.payload.paths : [];
+      handleDroppedPaths(paths).catch((err) => console.error(err));
+    });
+  } catch (e) {
+    console.warn("drag-drop listener failed:", e);
+  }
+}
+
+function bindZoomTool() {
+  const out = document.getElementById("zoom-out-btn");
+  const inn = document.getElementById("zoom-in-btn");
+  const level = document.getElementById("zoom-level-btn");
+  const stage = document.getElementById("spreads-container");
+  if (!out || !inn || !level) return;
+
+  const updateLevel = () => {
+    level.textContent = `${Math.round(getZoom() * 100)}%`;
+  };
+  updateLevel();
+  onZoomChange(updateLevel);
+
+  const step = (dir) => {
+    const cur = getZoom();
+    const factor = 1.15;
+    setZoom(dir > 0 ? cur * factor : cur / factor);
+  };
+  out.addEventListener("click", () => step(-1));
+  inn.addEventListener("click", () => step(+1));
+  level.addEventListener("click", () => setZoom(1));
+
+  if (stage) {
+    stage.addEventListener(
+      "wheel",
+      (e) => {
+        if (!e.altKey) return;
+        e.preventDefault();
+        const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1;
+        setZoom(getZoom() * factor);
+      },
+      { passive: false },
+    );
+  }
+
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      let handled = false;
+      if (e.code === "Equal" || e.code === "NumpadAdd" || e.key === "+" || e.key === ";") {
+        setZoom(getZoom() * 1.15);
+        handled = true;
+      } else if (e.code === "Minus" || e.code === "NumpadSubtract" || e.key === "-") {
+        setZoom(getZoom() / 1.15);
+        handled = true;
+      } else if (e.code === "Digit0" || e.code === "Numpad0") {
+        setZoom(1);
+        handled = true;
+      }
+      if (handled) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    { capture: true },
+  );
+}
+
+function openPageJumpDialog() {
+  const total = getPages().length;
+  if (total === 0) {
+    toast("ページが読み込まれていません", { kind: "info", duration: 1800 });
+    return;
+  }
+  const modal = document.getElementById("page-jump-modal");
+  const input = document.getElementById("page-jump-input");
+  const hint = document.getElementById("page-jump-hint");
+  if (!modal || !input) return;
+  input.max = String(total);
+  input.value = String(getCurrentPageIndex() + 1);
+  if (hint) hint.textContent = `1 〜 ${total} のページ番号を入力してください`;
+  modal.hidden = false;
+  requestAnimationFrame(() => {
+    input.focus();
+    input.select();
+  });
+}
+
+function closePageJumpDialog() {
+  const modal = document.getElementById("page-jump-modal");
+  if (modal) modal.hidden = true;
+}
+
+function commitPageJump() {
+  const input = document.getElementById("page-jump-input");
+  if (!input) return;
+  const v = parseInt(input.value, 10);
+  if (Number.isFinite(v)) {
+    setCurrentPageIndex(v - 1);
+  }
+  closePageJumpDialog();
+}
+
+function bindPageJumpDialog() {
+  const modal = document.getElementById("page-jump-modal");
+  const ok = document.getElementById("page-jump-ok");
+  const cancel = document.getElementById("page-jump-cancel");
+  const input = document.getElementById("page-jump-input");
+  if (!modal || !ok || !cancel || !input) return;
+  ok.addEventListener("click", commitPageJump);
+  cancel.addEventListener("click", closePageJumpDialog);
+  modal.addEventListener("mousedown", (e) => {
+    if (e.target === modal) closePageJumpDialog();
+  });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitPageJump();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closePageJumpDialog();
+    }
+  });
 }
 
 function bindWindowControls() {
@@ -243,13 +466,17 @@ function bindWindowControls() {
 function init() {
   document.getElementById("open-folder-btn").addEventListener("click", handleOpenFolder);
   document.getElementById("save-btn").addEventListener("click", handleSave);
+  initHamburgerMenu();
   bindTools();
   bindSizeTool();
+  bindZoomTool();
   bindPageChange();
   bindEditorEvents();
   bindWindowControls();
+  bindPageJumpDialog();
   initTxtSource();
   initPagebar();
+  setupTauriDragDrop();
   renderAllSpreads();
   renderPagebar();
   loadFontsFromBackend();

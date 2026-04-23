@@ -1,7 +1,9 @@
 import {
   addEditOffset,
   addNewLayer,
+  getCurrentFont,
   getEdit,
+  getFontDisplayName,
   getNewLayersForPsd,
   getSelectedLayer,
   getTextSize,
@@ -11,7 +13,7 @@ import {
   updateNewLayer,
 } from "./state.js";
 import { rebuildLayerList } from "./text-editor.js";
-import { getActiveTxtSelection } from "./txt-source.js";
+import { advanceTxtSelection, getActiveTxtSelection } from "./txt-source.js";
 
 const mounts = new Map();
 const resizeObservers = new Set();
@@ -54,7 +56,9 @@ export function refreshAllOverlays() {
 function applyToolAttrs(ctx) {
   const tool = getTool();
   ctx.overlay.dataset.tool = tool;
-  ctx.canvas.style.cursor = tool === "text" ? "text" : "default";
+  ctx.canvas.style.cursor =
+    tool === "text" ? "text" :
+    tool === "pan" ? "grab" : "default";
 }
 
 function renderOverlay(ctx) {
@@ -109,6 +113,8 @@ function renderOverlay(ctx) {
       inner.style.fontSize = `${ptInPsdPx * pxPerPsd}px`;
       inner.style.lineHeight = "1.05";
     }
+    const existingFontCss = cssFontFamily(edit.fontPostScriptName ?? layer.font);
+    if (existingFontCss) inner.style.fontFamily = existingFontCss;
     box.appendChild(inner);
 
     if (selOnThisPage && selOnThisPage.layerId === layer.id) {
@@ -126,7 +132,7 @@ function renderOverlay(ctx) {
     const contents = nl.contents ?? "";
     const chars = Math.max(1, longestLine(contents));
     const lineCount = Math.max(1, countLines(contents));
-    const thick = Math.max(24, ptInPsdPx * 1.4 * lineCount);
+    const thick = Math.max(24, ptInPsdPx * 1.25 * lineCount);
     const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.1 * chars);
     const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
     const long = Math.min(longRaw, maxLong);
@@ -141,8 +147,10 @@ function renderOverlay(ctx) {
     inner.textContent = nl.contents;
     if (pxPerPsd > 0) {
       inner.style.fontSize = `${ptInPsdPx * pxPerPsd}px`;
-      inner.style.lineHeight = "1.05";
+      inner.style.lineHeight = "1.25";
     }
+    const newFontCss = cssFontFamily(nl.fontPostScriptName);
+    if (newFontCss) inner.style.fontFamily = newFontCss;
     box.appendChild(inner);
     if (selOnThisPage && selOnThisPage.layerId === nl.tempId) {
       box.classList.add("selected");
@@ -150,6 +158,25 @@ function renderOverlay(ctx) {
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
     overlay.appendChild(box);
   }
+}
+
+function quoteFontFamily(name) {
+  if (!name) return null;
+  const needsQuote = /[\s,'"()]/.test(name);
+  const escaped = String(name).replace(/["\\]/g, "\\$&");
+  return needsQuote ? `"${escaped}"` : escaped;
+}
+
+function cssFontFamily(psName) {
+  if (!psName) return null;
+  const display = getFontDisplayName(psName);
+  const parts = [];
+  const q1 = quoteFontFamily(display);
+  const q2 = quoteFontFamily(psName);
+  if (q1) parts.push(q1);
+  if (q2 && q2 !== q1) parts.push(q2);
+  parts.push("sans-serif");
+  return parts.join(", ");
 }
 
 function longestLine(s) {
@@ -186,6 +213,11 @@ function canvasCoordsFromEvent(e, ctx) {
 
 function onCanvasMouseDown(e, ctx) {
   const tool = getTool();
+  if (tool === "pan") {
+    e.preventDefault();
+    beginPan(e, ctx);
+    return;
+  }
   if (tool === "text") {
     const { x, y } = canvasCoordsFromEvent(e, ctx);
     const txtSel = getActiveTxtSelection();
@@ -210,12 +242,14 @@ function placeTxtSelectionAt(ctx, x, y, text) {
     x,
     y,
     contents: text,
+    fontPostScriptName: getCurrentFont(),
     sizePt: getTextSize(),
     direction: "vertical",
   });
   setSelectedLayer(pageIndex, created.tempId);
   refreshAllOverlays();
   rebuildLayerList();
+  advanceTxtSelection();
 }
 
 function onExistingLayerMouseDown(e, ctx, layer) {
@@ -266,6 +300,31 @@ function onNewLayerMouseDown(e, ctx, nl) {
   });
 }
 
+function beginPan(e, ctx) {
+  const scroller = document.getElementById("spreads-container");
+  if (!scroller) return;
+  const startClientX = e.clientX;
+  const startClientY = e.clientY;
+  const startScrollX = scroller.scrollLeft;
+  const startScrollY = scroller.scrollTop;
+  ctx.canvas.style.cursor = "grabbing";
+  const prevUserSelect = document.body.style.userSelect;
+  document.body.style.userSelect = "none";
+
+  const onMove = (ev) => {
+    scroller.scrollLeft = startScrollX - (ev.clientX - startClientX);
+    scroller.scrollTop = startScrollY - (ev.clientY - startClientY);
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    document.body.style.userSelect = prevUserSelect;
+    if (getTool() === "pan") ctx.canvas.style.cursor = "grab";
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
+}
+
 function beginDrag(e, ctx, onDelta) {
   const startClientX = e.clientX;
   const startClientY = e.clientY;
@@ -313,6 +372,7 @@ function startTextInput(ctx, x, y) {
         x,
         y,
         contents: value,
+        fontPostScriptName: getCurrentFont(),
         sizePt: getTextSize(),
         direction: "vertical",
       });
