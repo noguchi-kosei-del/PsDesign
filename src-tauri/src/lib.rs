@@ -47,6 +47,10 @@ pub struct PsdEdits {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct EditPayload {
     pub edits: Vec<PsdEdits>,
+    #[serde(rename = "saveMode", default)]
+    pub save_mode: Option<String>,
+    #[serde(rename = "targetDir", default)]
+    pub target_dir: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -58,6 +62,14 @@ pub struct FontEntry {
 
 #[tauri::command]
 async fn apply_edits_via_photoshop(payload: EditPayload) -> Result<String, String> {
+    if payload.save_mode.as_deref() == Some("saveAs") {
+        if let Some(dir) = payload.target_dir.as_deref() {
+            if !dir.is_empty() {
+                std::fs::create_dir_all(dir)
+                    .map_err(|e| format!("保存先フォルダの作成に失敗: {}: {}", dir, e))?;
+            }
+        }
+    }
     photoshop::apply_edits(&payload).map_err(|e| e.to_string())
 }
 

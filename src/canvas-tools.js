@@ -9,6 +9,7 @@ import {
   getTextSize,
   getTool,
   onToolChange,
+  setEdit,
   setSelectedLayer,
   updateNewLayer,
 } from "./state.js";
@@ -85,7 +86,7 @@ function renderOverlay(ctx) {
     const chars = Math.max(1, longestLine(previewText));
     const lineCount = Math.max(1, countLines(previewText));
     const fallbackThick = ptInPsdPx * 1.4 * lineCount;
-    const fallbackLong = ptInPsdPx * 1.1 * chars;
+    const fallbackLong = ptInPsdPx * 1.05 * chars;
     const minThick = Math.max(ptInPsdPx * 1.2, 20);
     const minLong = Math.max(ptInPsdPx * 2, 48);
 
@@ -133,7 +134,7 @@ function renderOverlay(ctx) {
     const chars = Math.max(1, longestLine(contents));
     const lineCount = Math.max(1, countLines(contents));
     const thick = Math.max(24, ptInPsdPx * 1.25 * lineCount);
-    const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.1 * chars);
+    const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.05 * chars);
     const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
     const long = Math.min(longRaw, maxLong);
     const width = isVertical ? thick : long;
@@ -254,6 +255,15 @@ function placeTxtSelectionAt(ctx, x, y, text) {
 
 function onExistingLayerMouseDown(e, ctx, layer) {
   const tool = getTool();
+  if (tool === "text") {
+    e.stopPropagation();
+    e.preventDefault();
+    setSelectedLayer(ctx.pageIndex, layer.id);
+    renderOverlay(ctx);
+    rebuildLayerList();
+    startInPlaceEdit(ctx, { kind: "existing", layer });
+    return;
+  }
   if (tool !== "move") return;
   e.stopPropagation();
   e.preventDefault();
@@ -280,6 +290,15 @@ function onExistingLayerMouseDown(e, ctx, layer) {
 
 function onNewLayerMouseDown(e, ctx, nl) {
   const tool = getTool();
+  if (tool === "text") {
+    e.stopPropagation();
+    e.preventDefault();
+    setSelectedLayer(ctx.pageIndex, nl.tempId);
+    renderOverlay(ctx);
+    rebuildLayerList();
+    startInPlaceEdit(ctx, { kind: "new", nl });
+    return;
+  }
   if (tool !== "move") return;
   e.stopPropagation();
   e.preventDefault();
@@ -348,13 +367,78 @@ function beginDrag(e, ctx, onDelta) {
   window.addEventListener("mouseup", onUp);
 }
 
+function startInPlaceEdit(ctx, target) {
+  const { page } = ctx;
+  let initialText = "";
+  let x = 0;
+  let y = 0;
+  let direction = "vertical";
+
+  if (target.kind === "existing") {
+    const layer = target.layer;
+    const edit = getEdit(page.path, layer.id) ?? {};
+    initialText = edit.contents ?? layer.text ?? "";
+    x = (layer.left ?? 0) + (edit.dx ?? 0);
+    y = (layer.top ?? 0) + (edit.dy ?? 0);
+    direction = edit.direction ?? layer.direction ?? "horizontal";
+  } else {
+    const nl = target.nl;
+    initialText = nl.contents ?? "";
+    x = nl.x;
+    y = nl.y;
+    direction = nl.direction ?? "vertical";
+  }
+
+  const existing = ctx.overlay.querySelector(".text-input-floater");
+  if (existing) existing.remove();
+
+  const input = document.createElement("textarea");
+  input.className = "text-input-floater";
+  input.dataset.direction = direction === "vertical" ? "vertical" : "horizontal";
+  input.value = initialText;
+  input.placeholder = direction === "vertical"
+    ? "テキスト（縦書き）：Ctrl+Enterで確定 / Escで破棄"
+    : "テキスト（横書き）：Ctrl+Enterで確定 / Escで破棄";
+  input.style.left = `${(x / page.width) * 100}%`;
+  input.style.top = `${(y / page.height) * 100}%`;
+  ctx.overlay.appendChild(input);
+  input.focus();
+  input.select();
+
+  let finished = false;
+  const finalize = (commit) => {
+    if (finished) return;
+    finished = true;
+    const value = input.value.replace(/\s+$/, "");
+    input.remove();
+    if (!commit) return;
+    if (target.kind === "existing") {
+      setEdit(page.path, target.layer.id, { contents: value });
+    } else {
+      updateNewLayer(target.nl.tempId, { contents: value });
+    }
+    refreshAllOverlays();
+    rebuildLayerList();
+  };
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      finalize(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finalize(false);
+    }
+  });
+  input.addEventListener("blur", () => finalize(true));
+}
+
 function startTextInput(ctx, x, y) {
   const { page } = ctx;
   const input = document.createElement("textarea");
   input.className = "text-input-floater";
   input.dataset.direction = "vertical";
   input.rows = 1;
-  input.placeholder = "テキスト（縦書き）：Enterで確定 / Escで破棄";
+  input.placeholder = "テキスト（縦書き）：Ctrl+Enterで確定 / Escで破棄";
   input.style.left = `${(x / page.width) * 100}%`;
   input.style.top = `${(y / page.height) * 100}%`;
   ctx.overlay.appendChild(input);
@@ -382,7 +466,7 @@ function startTextInput(ctx, x, y) {
     }
   };
   input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       finalize(true);
     } else if (e.key === "Escape") {

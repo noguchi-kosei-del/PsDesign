@@ -20,6 +20,7 @@ import {
   clearPages,
   exportEdits,
   getCurrentPageIndex,
+  getFolder,
   getPages,
   getTextSize,
   getTool,
@@ -57,6 +58,7 @@ async function handleOpenFolder() {
 async function loadFolderByPath(folder) {
   if (!folder) return;
   setFolder(folder);
+  hasSavedThisSession = false;
 
   showProgress({ title: "PSD を読み込み中", detail: "ファイル一覧を取得中..." });
 
@@ -121,23 +123,140 @@ function updateSaveButton() {
   btn.disabled = getPages().length === 0;
 }
 
-async function handleSave() {
+let hasSavedThisSession = false;
+let saveMenuOpen = false;
+
+async function pickSaveParentDir() {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    directory: true,
+    multiple: false,
+    title: "別名で保存：親フォルダを選択（この中に新規フォルダを作成します）",
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
+function generateSaveFolderName() {
+  const src = getFolder();
+  const base = src ? baseName(src) : "PsDesign";
+  const now = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  const ts =
+    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
+    `_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `${base}_${ts}`;
+}
+
+function joinPath(parent, child) {
+  if (!parent) return child;
+  const sep = /[\\/]$/.test(parent) ? "" : "/";
+  return `${parent}${sep}${child}`;
+}
+
+async function runSaveWithMode({ saveMode, targetDir }) {
   if (!hasEdits()) {
     toast("編集内容がありません", { kind: "info" });
     return;
   }
-  const payload = exportEdits();
+  const base = exportEdits();
+  const payload = {
+    ...base,
+    saveMode,
+    targetDir: targetDir ?? null,
+  };
   showProgress({ title: "Photoshop に反映中", detail: "スクリプトを実行しています..." });
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const result = await invoke("apply_edits_via_photoshop", { payload });
     hideProgress();
-    toast(`保存完了: ${result}`, { kind: "success", duration: 3500 });
+    const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
+    toast(`保存完了: ${result}${suffix}`, { kind: "success", duration: 3500 });
+    hasSavedThisSession = true;
   } catch (e) {
     console.error(e);
     hideProgress();
     toast(`保存失敗: ${e.message ?? e}`, { kind: "error", duration: 5000 });
   }
+}
+
+async function handleOverwriteSave() {
+  if (getPages().length === 0) return;
+  if (!hasSavedThisSession) {
+    await handleSaveAs();
+    return;
+  }
+  await runSaveWithMode({ saveMode: "overwrite" });
+}
+
+async function handleExplicitOverwrite() {
+  if (getPages().length === 0) return;
+  await runSaveWithMode({ saveMode: "overwrite" });
+}
+
+async function handleSaveAs() {
+  if (getPages().length === 0) return;
+  const parent = await pickSaveParentDir();
+  if (!parent) return;
+  const targetDir = joinPath(parent, generateSaveFolderName());
+  await runSaveWithMode({ saveMode: "saveAs", targetDir });
+}
+
+function openSaveMenu() {
+  const menu = document.getElementById("save-menu");
+  const btn = document.getElementById("save-btn");
+  if (!menu || !btn) return;
+  if (btn.disabled) return;
+  menu.hidden = false;
+  btn.setAttribute("aria-expanded", "true");
+  saveMenuOpen = true;
+}
+
+function closeSaveMenu() {
+  if (!saveMenuOpen) return;
+  const menu = document.getElementById("save-menu");
+  const btn = document.getElementById("save-btn");
+  if (menu) menu.hidden = true;
+  if (btn) btn.setAttribute("aria-expanded", "false");
+  saveMenuOpen = false;
+}
+
+function toggleSaveMenu() {
+  if (saveMenuOpen) closeSaveMenu();
+  else openSaveMenu();
+}
+
+function bindSaveMenu() {
+  const btn = document.getElementById("save-btn");
+  const overwrite = document.getElementById("save-overwrite-btn");
+  const saveAs = document.getElementById("save-as-btn");
+  const container = document.getElementById("save-container");
+  if (!btn || !overwrite || !saveAs || !container) return;
+
+  btn.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleSaveMenu();
+  });
+  overwrite.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeSaveMenu();
+    handleExplicitOverwrite();
+  });
+  saveAs.addEventListener("click", (e) => {
+    e.stopPropagation();
+    closeSaveMenu();
+    handleSaveAs();
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!saveMenuOpen) return;
+    if (container.contains(e.target)) return;
+    closeSaveMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && saveMenuOpen) {
+      e.preventDefault();
+      closeSaveMenu();
+    }
+  });
 }
 
 async function loadFontsFromBackend() {
@@ -214,6 +333,16 @@ function bindTools() {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "j" || e.key === "J")) {
       e.preventDefault();
       openPageJumpDialog();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      handleOverwriteSave();
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && (e.key === "s" || e.key === "S")) {
+      e.preventDefault();
+      handleSaveAs();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
@@ -465,7 +594,7 @@ function bindWindowControls() {
 
 function init() {
   document.getElementById("open-folder-btn").addEventListener("click", handleOpenFolder);
-  document.getElementById("save-btn").addEventListener("click", handleSave);
+  bindSaveMenu();
   initHamburgerMenu();
   bindTools();
   bindSizeTool();

@@ -96,7 +96,12 @@ async function goHome() {
   renderPagebar();
   rebuildLayerList();
   const saveBtn = document.getElementById("save-btn");
-  if (saveBtn) saveBtn.disabled = true;
+  if (saveBtn) {
+    saveBtn.disabled = true;
+    saveBtn.setAttribute("aria-expanded", "false");
+  }
+  const saveMenu = document.getElementById("save-menu");
+  if (saveMenu) saveMenu.hidden = true;
   closeMenu();
 }
 

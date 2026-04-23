@@ -52,13 +52,38 @@
               <line x1="8" y1="9" x2="11" y2="9"/>
             </svg>
           </button>
-          <button id="save-btn" class="icon-btn" disabled title="Photoshop で保存" aria-label="Photoshop で保存">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-              <polyline points="17 21 17 13 7 13 7 21"/>
-              <polyline points="7 3 7 8 15 8"/>
-            </svg>
-          </button>
+          <div class="save-container" id="save-container">
+            <button id="save-btn" class="icon-btn" disabled title="Photoshop で保存" aria-label="Photoshop で保存" aria-haspopup="menu" aria-expanded="false">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                <polyline points="17 21 17 13 7 13 7 21"/>
+                <polyline points="7 3 7 8 15 8"/>
+              </svg>
+            </button>
+            <div class="save-menu" id="save-menu" role="menu" hidden>
+              <div class="save-menu-header">保存</div>
+              <button class="save-menu-item" id="save-overwrite-btn" type="button" role="menuitem">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                </svg>
+                <span class="save-menu-label">上書き保存</span>
+                <span class="save-menu-shortcut">Ctrl+S</span>
+              </button>
+              <button class="save-menu-item" id="save-as-btn" type="button" role="menuitem">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                  <polyline points="17 21 17 13 7 13 7 21"/>
+                  <polyline points="7 3 7 8 15 8"/>
+                  <line x1="12" y1="18" x2="12" y2="11"/>
+                  <polyline points="9 14 12 11 15 14"/>
+                </svg>
+                <span class="save-menu-label">別名で保存</span>
+                <span class="save-menu-shortcut">Ctrl+Shift+S</span>
+              </button>
+            </div>
+          </div>
         </div>
         <div class="window-controls" role="group" aria-label="ウインドウ操作">
           <button id="window-min-btn" class="window-ctrl-btn" type="button" title="最小化" aria-label="最小化">

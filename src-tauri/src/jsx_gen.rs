@@ -10,7 +10,24 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
     ));
     out.push_str("try {\n");
 
+    let save_as = payload.save_mode.as_deref() == Some("saveAs");
+    let target_dir = payload.target_dir.as_deref().unwrap_or("");
+
     for psd in &payload.edits {
+        let save_path = if save_as && !target_dir.is_empty() {
+            let name = std::path::Path::new(&psd.psd_path)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("output.psd");
+            let sep = if target_dir.ends_with('/') || target_dir.ends_with('\\') {
+                ""
+            } else {
+                "/"
+            };
+            format!("{}{}{}", target_dir, sep, name)
+        } else {
+            String::new()
+        };
         out.push_str(&format!(
             "applyToPsd({path}, [\n",
             path = js_string(&psd.psd_path)
@@ -54,7 +71,7 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             }
             out.push_str("},\n");
         }
-        out.push_str("]);\n\n");
+        out.push_str(&format!("], {});\n\n", js_string(&save_path)));
     }
 
     out.push_str("  writeSentinel(\"OK\");\n");
@@ -127,7 +144,7 @@ function findLayerById(doc, id) {
   return walk(doc);
 }
 
-function applyToPsd(psdPath, edits, newLayers) {
+function applyToPsd(psdPath, edits, newLayers, savePath) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[PsDesign] skip missing: " + psdPath); return; }
   var prevUnits = app.preferences.rulerUnits;
@@ -185,7 +202,25 @@ function applyToPsd(psdPath, edits, newLayers) {
         } catch (eBounds) {}
       }
     }
-    doc.save();
+    if (typeof savePath === "string" && savePath.length > 0) {
+      var outFile = new File(savePath);
+      try {
+        var outFolder = outFile.parent;
+        if (outFolder && !outFolder.exists) outFolder.create();
+      } catch (eMk) {}
+      var opts = new PhotoshopSaveOptions();
+      try { opts.embedColorProfile = true; } catch (eOpt1) {}
+      try { opts.alphaChannels = true; } catch (eOpt2) {}
+      try { opts.layers = true; } catch (eOpt3) {}
+      try { opts.spotColors = true; } catch (eOpt4) {}
+      try {
+        doc.saveAs(outFile, opts, true, Extension.LOWERCASE);
+      } catch (eSaveAs) {
+        doc.saveAs(outFile, opts, true);
+      }
+    } else {
+      doc.save();
+    }
   } finally {
     doc.close(SaveOptions.DONOTSAVECHANGES);
     app.preferences.rulerUnits = prevUnits;
