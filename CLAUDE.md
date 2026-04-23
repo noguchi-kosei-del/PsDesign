@@ -26,12 +26,12 @@ ver_1.0/
 ├── index.html                # メイン HTML（カスタムタイトルバー + ツールバー + 縦ページバー + サイドパネル）
 ├── src/
 │   ├── main.js               # 初期化、ツールバー/ショートカット束ね、ウインドウコントロール、Tauri drag-drop listener、ズーム配線、保存ドロップダウン（`bindSaveMenu`）
-│   ├── state.js              # アプリ状態とリスナー（tool, textSize, currentFontPostScriptName, zoom, currentPageIndex, txt…）
+│   ├── state.js              # アプリ状態とリスナー（tool, textSize, currentFontPostScriptName, zoom, currentPageIndex, selectedLayers 配列, txt…）
 │   ├── psd-loader.js         # ag-psd で PSD をパースして textLayers + dpi を取り出す
 │   ├── spread-view.js        # キャンバス描画（DPR 対応の高品質ダウンサンプル、zoom 反映、pageRedraws 管理）
-│   ├── canvas-tools.js       # オーバーレイ/選択/ドラッグ/テキスト配置/パン/T ツールの in-place テキスト編集（`startInPlaceEdit`）
+│   ├── canvas-tools.js       # オーバーレイ/選択/ドラッグ/テキスト配置/パン/T ツールの in-place 編集 + V ツールのマーキー選択・多レイヤー同時ドラッグ
 │   ├── pagebar.js            # 縦ページバー（MojiQ 風カプセル型ハンドル + グリップ、>>トグルで折畳）
-│   ├── text-editor.js        # 右パネルのレイヤーリスト & エディタ（フォント検索コンボボックス内蔵）
+│   ├── text-editor.js        # 右パネルのレイヤーリスト & エディタ（多選択対応・フォント検索コンボボックス・組方向トグル）
 │   ├── txt-source.js         # 原稿 TXT の読込・段落ブロック選択・ページマーカー解析・自動送り
 │   ├── hamburger-menu.js     # 左スライドインメニュー（テーマ切替 / サイドバー切替 / ホームに戻る）
 │   ├── ui-feedback.js        # 中央プログレスモーダル + 右上トースト + `confirmDialog`（カスタム確認）
@@ -63,20 +63,31 @@ ver_1.0/
 - **選択ツール（V）** では配置できない（配置＝ T 専用）。
 
 ### 3. ツール別役割の明確化
-- **V（選択ツール）**: 既存/新規テキストレイヤーのクリック選択＋ドラッグ移動。空白クリックで選択解除。
+- **V（選択ツール）**:
+  - 既存／新規テキストレイヤーのクリック選択＋ドラッグ移動。未選択レイヤーをクリックすると選択を置換し、既に選択中のレイヤーをドラッグすると**選択中の全レイヤーを同じデルタで同時移動**（`beginMultiLayerDrag`）。
+  - **空キャンバスをドラッグで矩形（マーキー）選択**：`startMarquee` → `layerRectForExisting` / `layerRectForNew` と `rectsIntersect` で交差判定し、該当レイヤーを一括選択。`.marquee-rect` の破線矩形がオーバーレイに描画される。
+  - **Shift 修飾キー**：Shift+マーキーは既存選択に加算、Shift+レイヤークリックは選択トグル。
+  - 空クリック（ドラッグ距離ほぼゼロ）で選択解除（Shift 付きなら維持）。
 - **T（テキストツール）**:
   - 原稿 TXT ブロック選択中 → キャンバスクリックで段落配置 + 次段落自動選択。
   - ブロック未選択 → 手入力 textarea を開き、**Enter で改行 / Ctrl+Enter で確定 / Esc で破棄 / 外クリックで確定**。
   - **既存 / 新規レイヤーをクリックすると in-place 編集**：`startInPlaceEdit` が現テキスト初期値の textarea をレイヤー位置に開く。既存レイヤーは `setEdit({contents})`、新規は `updateNewLayer({contents})` でコミット。縦書きは `writing-mode: vertical-rl`。
   - CSS `.page-overlay[data-tool="text"] .layer-box` は `pointer-events: auto`（クリックを受ける）、`cursor: text`。
-- **パン（手のひら）ツール**: キャンバス上をドラッグで `#spreads-container` を scrollLeft/Top 直接書換。ズーム非依存。カーソルは `grab`/`grabbing`。
-  - **Space キー押下中のみ一時切替**（MojiQ 互換）。Space で直前ツールを記憶 → `pan` へ、離したら復元。`window.blur` でも復元。Space 保持中にボタンで別ツールを選んだら記憶をクリア。input/textarea 内では無効。
+- **パン（手のひら）ツール**: **MojiQ 流**のパン実装。canvas 自身に `mousedown/mousemove/mouseup` を常設リスナーで張り、毎イベントで `preventDefault + stopPropagation` を呼び親要素へのバブリングを抑止。左クリック（`e.button === 0`）以外は無視。`#spreads-container` の scrollLeft/Top を直接書換、ズーム非依存。カーソルは `grab`/`grabbing`。`window` の mouseup / blur をセーフティネットに `endPan()`。
+  - **Space キー押下中のみ一時切替**（MojiQ 互換）。Space keydown は `!e.repeat` ではなく**毎回（リピート含む）`preventDefault`** を呼び、ブラウザ既定の「Space で 1 画面分下スクロール」を完全に抑止。初回のみ `panPreviousTool` を記憶 → `setTool("pan")`。keyup で元に戻す。`window.blur` でも復元。input/textarea 内では無効。
+  - **ツールバーのアクティブ表示は Space 中でも直前ツールのまま**：`applyActive()` が `panSpaceActive && panPreviousTool ? panPreviousTool : getTool()` を参照し、Space 一時切替で V/T のハイライトが外れないようにする。
 
 ### 4. 文字サイズ編集（エディタ内 size-input）
 - 右パネルのレイヤーエディタ内、フォント検索欄の下に − / size-input / pt / ＋ の行。
 - **デフォルト 12pt**。ボタンは ±1pt、キーボード `[`/`]` は ±2pt（Shift で ±10pt）、size-input は直接入力で **0.1pt 単位**（`step="0.1"`）。
 - `state.textSize` で「選択中レイヤーのサイズ」＋「次に配置する既定サイズ」を双方向同期。
 - キャンバスの新規/既存レイヤーのプレビューは `sizePt × dpi/72 × 画面倍率` で実寸相当、複数行は 125% の行送りで計算。
+
+### 4b. 組方向（縦／横）トグル
+- サイズ入力の右に**セグメント型トグル**（`縦` / `横`）を配置。`.size-field` を `[label] → .size-row[.size-group | .direction-toggle]` 構造に再編。アクティブ側は `--accent` 塗り、ボタン間は 1px 枠線仕切り。
+- 選択中レイヤーの `direction` を即時切替：`commitField("direction", "vertical" | "horizontal")` で既存は `setEdit`、新規は `updateNewLayer` に書き込み、`rebuildLayerList` + `refreshAllOverlays` が自動で走るのでオーバーレイ枠の縦横寸法（`layerRectForExisting` / `layerRectForNew`）と `writing-mode: vertical-rl` が同時更新。
+- `populateEditor` 内で選択レイヤーから有効 direction を算出（既存: `edit.direction ?? layer.direction ?? "horizontal"` ／ 新規: `newLayer.direction ?? "vertical"`）→ `syncDirectionToggle(direction)` でアクティブボタンを同期。
+- スコープ：トグルは「選択済みレイヤーの切替」用。T ツールの新規配置デフォルトは `"vertical"` ハードコードのまま。
 
 ### 5. フォント選択
 - エディタ内は **カスタムコンボボックス**（検索入力 + `▾` トグル + 絞込みドロップダウン）。
@@ -87,7 +98,7 @@ ver_1.0/
 - 保存時は JSX の `ti.font = postScriptName` で Photoshop に書き戻し、`nti.useAutoLeading = true; nti.autoLeadingAmount = 125;` で行送りも明示。
 
 ### 6. ズーム
-- ツールバー左（Pd ロゴ右）に **ズームアウト / パーセント表示 / ズームイン**。パーセントクリックで 100% リセット。
+- ツールバー左（Pd ロゴ右）に左から **ズームイン ＋ / パーセント表示 / ズームアウト −** の順で配置。パーセントクリックで 100% リセット。
 - `#spreads-container` を `overflow: auto` にして canvas の `cssW / cssH` を zoom 倍して描画、はみ出た部分はスクロールで閲覧。
 - **`Alt + ホイール`** でも拡縮（`passive: false` で preventDefault）。
 - ショートカット: `Ctrl+=` / `Ctrl++` / `Ctrl+テンキー+` でズームイン、`Ctrl+-` / テンキー `-` でズームアウト、`Ctrl+0` / テンキー `0` で 100% リセット。capture フェーズで確実に先取り + `preventDefault/stopPropagation`。
@@ -118,7 +129,7 @@ ver_1.0/
 ### 10. UI
 
 - **カスタムタイトルバー**（`decorations: false`）:
-  - 左: **Pd 紫バッジロゴ**（`#2a0a4a` bg / `#c4a6ff` 文字、暫定アイコン）と **ハンバーガー `≡`**。続いて **ズーム群**（− / % / ＋）、**ツールバーアクション**（フォルダ / TXT / 保存ドロップダウン）。`data-tauri-drag-region` で空白をドラッグしてウインドウ移動。
+  - 左: **Pd 紫バッジロゴ**（`#2a0a4a` bg / `#c4a6ff` 文字、暫定アイコン）と **ハンバーガー `≡`**。続いて **ズーム群**（＋ / % / −）、**ツールバーアクション**（フォルダ / TXT / 保存ドロップダウン）。`data-tauri-drag-region` で空白をドラッグしてウインドウ移動。
   - **保存ドロップダウン**（`#save-container` > `#save-btn` + `#save-menu`）: クリックで開閉。メニュー右端にショートカット表記（`Ctrl+S` / `Ctrl+Shift+S`）を表示。ホームに戻る時 / 保存ボタン disabled 時はメニューを自動で閉じる。
   - 右: `window-controls`（最小化 / 最大化トグル / 閉じる）。close ホバーは `#e81123`。
 - **ハンバーガーメニュー**（左スライドイン 280px）:
@@ -132,8 +143,9 @@ ver_1.0/
 - **サイドツールバー**: V（選択） / T（テキスト） / パン の縦 3 ボタン、アクティブは青塗り、枠無し。
 - **右サイドパネル**（上から順）:
   1. 原稿 TXT（ファイル名 + ゴミ箱アイコンのクリアボタン、TXT ドロップゾーン）。未読込時は file-text アイコン＋メッセージ。
-  2. **編集**（h2 見出し、常時表示）: 内容 textarea / フォントコンボボックス / サイズ入力 / 削除ボタン。見出しより下のフォームはレイヤー選択中のみ表示。
+  2. **編集**（h2 見出し、常時表示）: 内容 textarea / フォントコンボボックス / サイズ入力 ＋ **組方向トグル（縦／横）**。見出しより下のフォームは**選択数が 1 のときのみ**表示（複数選択時は曖昧回避で非表示）。
   3. テキストレイヤー一覧。
+  4. **レイヤー削除ボタン**（一覧下部 `.layer-list-footer` 内、ゴミ箱アイコンの `.layer-delete-btn`）：選択中のいずれかが新規レイヤーの場合のみ表示（`updateDeleteButtonVisibility`）。クリックで選択中の新規分を一括削除し、既存レイヤーは選択に残す。
 - **空状態**（PSD 未読込）: spreads-container 中央にフォルダアイコン＋「「フォルダを開く」で PSDを格納しているフォルダを選択、またはドロップしてください。」
 - **中央プログレスモーダル**: PSD 読込・Photoshop 反映時。
 - **`confirmDialog`**: Tauri の native `ask` を置き換えるカスタムモーダル。`Promise<boolean>` を返し、Enter 確定 / Esc / 暗幕 / キャンセルで `false`。
@@ -145,7 +157,9 @@ ver_1.0/
 | --- | --- |
 | `V` | 選択ツール |
 | `T` | テキストツール |
-| `Space`（長押し） | パンツール一時切替（離すと元に戻る） |
+| `Space`（長押し） | パンツール一時切替（離すと元に戻る／ツールバー表示は維持） |
+| `Shift+ドラッグ`（V、空キャンバス） | マーキー選択に加算 |
+| `Shift+クリック`（V、レイヤー） | 選択のトグル |
 | `[` / `]` | サイズ ±2（Shift で ±10） |
 | `←` / `→` | 前 / 次のページ |
 | `Ctrl+←` / `Ctrl+→` | 先頭 / 末尾ページ |
@@ -164,7 +178,8 @@ ver_1.0/
 
 1. フォルダ選択 or ドロップ → Rust `list_psd_files` → `loadPsdFromPath`（ag-psd）→ `state.pages` に追加。`hasSavedThisSession` を false にリセット。
 2. ユーザー編集 → `state.edits`（既存レイヤー差分）/ `state.newLayers`（新規配置、フォント / サイズ / 方向含む）に蓄積。T ツールで既存/新規レイヤーをクリックすると in-place textarea が開き、確定で同じ state 差分に書き戻す。
-3. 「保存」 → `exportEdits()` に `saveMode` / `targetDir` を付けた payload を `apply_edits_via_photoshop` に渡す → 別名保存時は Rust で `create_dir_all` → JSX 生成（各 PSD に `savePath` を埋込）→ PS 実行 → センチネル → 完了。成功で `hasSavedThisSession = true`。
+3. 選択状態は `state.selectedLayers: Array<{pageIndex, layerId}>` で複数管理。`setSelectedLayer` / `getSelectedLayer` は配列の先頭要素を扱う単数ラッパ。マーキー選択・Shift トグルは `setSelectedLayers` / `toggleLayerSelected` で配列を更新。
+4. 「保存」 → `exportEdits()` に `saveMode` / `targetDir` を付けた payload を `apply_edits_via_photoshop` に渡す → 別名保存時は Rust で `create_dir_all` → JSX 生成（各 PSD に `savePath` を埋込）→ PS 実行 → センチネル → 完了。成功で `hasSavedThisSession = true`。
 
 ## 設計メモ
 
@@ -181,3 +196,7 @@ ver_1.0/
 - ズームショートカットは WebView2 のネイティブ処理と競合することがあるため、capture フェーズで先取り + `preventDefault + stopPropagation`。
 - 新規レイヤーのオーバーレイ枠サイズは `longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.05 * chars)`・`thick = ptInPsdPx * 1.25 * lineCount`。`.new-layer-text` / `.existing-layer-text` は `padding: 0` / `overflow: hidden`、枠縁と描画領域を一致させて見切れと余計な空白を両方回避（CJK グリフの ascent/descent ぶんの 5% だけバッファ）。
 - `Ctrl+S` / `Ctrl+Shift+S` は WebView2 のページ保存ショートカットと競合するので `bindTools` の keydown ハンドラ内で `preventDefault + return` にて確実に先取りする。
+- **Space の `preventDefault` はリピート keydown でも毎回呼ぶ**必要がある。MojiQ 流。`!e.repeat` ガードで初回しか prevent しないと、Space 長押し中に `#spreads-container`（`overflow: auto`）が既定の「1 画面下スクロール」を連打してしまう。
+- **パンのリスナーは MojiQ に倣って canvas 自身に張る**（`window` ではなく）、毎イベントで `preventDefault + stopPropagation`。`dragDropEnabled: true` の Tauri window 配下では Chromium 由来のドラッグ系既定動作がスクロールを誘発しうるため、イベントを親にバブリングさせない。
+- **複数選択モデル**：`state.selectedLayers` は `Array<{pageIndex, layerId}>`。`isLayerSelected(pageIndex, layerId)` は `some` でスキャン。`toggleLayerSelected` は配列入替で参照を更新する。`rebuildLayerList` が `applySelectionHighlight`（`some` マッチ）＋ `populateEditor`（選択数 1 のときだけフォーム表示）を呼ぶので、選択変更後は `renderOverlay + rebuildLayerList` を呼べばオーバーレイ・リスト・編集パネルが一括同期する。
+- **レイヤー矩形計算の共通化**：`canvas-tools.js` の `layerRectForExisting` / `layerRectForNew` が `{left, top, right, bottom, width, height, isVertical, ptInPsdPx}` を返し、`renderOverlay` とマーキーヒット判定（`rectsIntersect` + `collectLayerHits`）で同一式を使う。フォールバック（`fallbackLong`/`fallbackThick`/`minLong`/`minThick`）も共有。

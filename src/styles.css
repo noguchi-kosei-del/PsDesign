@@ -367,6 +367,41 @@ html, body, #app {
   margin-left: 2px;
 }
 
+.size-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.direction-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.dir-toggle-btn {
+  min-width: 34px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.dir-toggle-btn + .dir-toggle-btn {
+  border-left: 1px solid var(--border);
+}
+.dir-toggle-btn:hover:not(.active) {
+  background: var(--panel-hover);
+}
+.dir-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
 .tool-btn.active {
   background: var(--accent);
   border: none;
@@ -780,6 +815,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: grab;
 }
 
+.marquee-rect {
+  position: absolute;
+  border: 1px dashed var(--accent);
+  background: rgba(0, 120, 212, 0.12);
+  pointer-events: none;
+  box-sizing: border-box;
+  z-index: 5;
+}
+
 .text-input-floater {
   position: absolute;
   pointer-events: auto;
@@ -1067,17 +1111,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-overflow: ellipsis;
 }
 
-.danger-btn {
-  background: var(--panel-hover);
-  border: 1px solid var(--danger);
+.layer-list-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.layer-delete-btn {
+  width: 28px;
+  height: 28px;
+  color: var(--text-muted);
+}
+.layer-delete-btn:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.12);
   color: var(--danger);
-  margin-top: 4px;
 }
-.danger-btn:hover:not(:disabled) {
-  background: var(--danger);
-  color: #fff;
-  border-color: var(--danger);
-}
+.layer-delete-btn[hidden] { display: none; }
 
 .progress-modal {
   position: fixed;

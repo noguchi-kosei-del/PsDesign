@@ -283,24 +283,28 @@ function bindTools() {
     btn.addEventListener("click", () => setTool(btn.dataset.tool));
   }
   const applyActive = () => {
-    const current = getTool();
+    // Space 長押しで一時的に pan 化しているときは、直前ツールを選択中として表示し続ける
+    const current = panSpaceActive && panPreviousTool ? panPreviousTool : getTool();
     for (const btn of buttons) {
       btn.classList.toggle("active", btn.dataset.tool === current);
     }
   };
   onToolChange((tool) => {
-    applyActive();
     if (panSpaceActive && tool !== "pan") {
       panPreviousTool = null;
       panSpaceActive = false;
     }
+    applyActive();
   });
   applyActive();
 
   window.addEventListener("keydown", (e) => {
-    if (e.code === "Space" && !e.repeat) {
+    if (e.code === "Space") {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      // MojiQ 互換：リピート含めて全 Space keydown を preventDefault（既定の「Space で1画面下スクロール」を常に抑止）
+      e.preventDefault();
+      if (e.repeat) return;
       if (!panSpaceActive) {
         panSpaceActive = true;
         if (getTool() !== "pan") {
@@ -309,7 +313,6 @@ function bindTools() {
         } else {
           panPreviousTool = null;
         }
-        e.preventDefault();
       }
       return;
     }

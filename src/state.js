@@ -3,7 +3,7 @@ const state = {
   pages: [],
   edits: new Map(),
   newLayers: [],
-  selectedLayer: null,
+  selectedLayers: [], // Array<{pageIndex, layerId}>
   fonts: [],
   tool: "move",
   toolListeners: new Set(),
@@ -31,7 +31,7 @@ export function getFolder() { return state.folder; }
 
 export function clearPages() {
   state.pages = [];
-  state.selectedLayer = null;
+  state.selectedLayers = [];
   state.edits.clear();
   state.newLayers = [];
   const prev = state.currentPageIndex;
@@ -95,10 +95,42 @@ export function exportEdits() {
 }
 
 export function setSelectedLayer(pageIndex, layerId) {
-  state.selectedLayer = pageIndex == null ? null : { pageIndex, layerId };
+  state.selectedLayers = pageIndex == null ? [] : [{ pageIndex, layerId }];
 }
 
-export function getSelectedLayer() { return state.selectedLayer; }
+export function getSelectedLayer() { return state.selectedLayers[0] ?? null; }
+
+export function getSelectedLayers() { return state.selectedLayers; }
+
+export function setSelectedLayers(list) {
+  if (!Array.isArray(list)) {
+    state.selectedLayers = [];
+    return;
+  }
+  const seen = new Set();
+  const out = [];
+  for (const s of list) {
+    if (!s) continue;
+    const key = `${s.pageIndex}::${s.layerId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push({ pageIndex: s.pageIndex, layerId: s.layerId });
+  }
+  state.selectedLayers = out;
+}
+
+export function isLayerSelected(pageIndex, layerId) {
+  return state.selectedLayers.some((s) => s.pageIndex === pageIndex && s.layerId === layerId);
+}
+
+export function toggleLayerSelected(pageIndex, layerId) {
+  const idx = state.selectedLayers.findIndex((s) => s.pageIndex === pageIndex && s.layerId === layerId);
+  if (idx >= 0) {
+    state.selectedLayers = state.selectedLayers.filter((_, i) => i !== idx);
+  } else {
+    state.selectedLayers = [...state.selectedLayers, { pageIndex, layerId }];
+  }
+}
 
 export function setFonts(fonts) { state.fonts = fonts; }
 export function getFonts() { return state.fonts; }

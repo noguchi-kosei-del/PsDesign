@@ -5,11 +5,13 @@ import {
   getNewLayersForPsd,
   getPages,
   getSelectedLayer,
+  getSelectedLayers,
   removeNewLayer,
   setCurrentFont,
   setCurrentPageIndex,
   setEdit,
   setSelectedLayer,
+  setSelectedLayers,
   setTextSize,
   updateNewLayer,
 } from "./state.js";
@@ -22,6 +24,15 @@ const fontEl = () => document.getElementById("edit-font");
 const fontComboboxEl = () => document.getElementById("edit-font-combobox");
 const fontToggleEl = () => document.getElementById("edit-font-toggle");
 const fontListEl = () => document.getElementById("edit-font-list");
+const dirVerticalBtnEl = () => document.getElementById("dir-vertical-btn");
+const dirHorizontalBtnEl = () => document.getElementById("dir-horizontal-btn");
+
+function syncDirectionToggle(direction) {
+  const v = dirVerticalBtnEl();
+  const h = dirHorizontalBtnEl();
+  if (v) v.classList.toggle("active", direction === "vertical");
+  if (h) h.classList.toggle("active", direction === "horizontal");
+}
 
 export function rebuildLayerList() {
   const ul = listEl();
@@ -89,13 +100,14 @@ function selectLayer(pageIndex, layerId) {
 }
 
 function applySelectionHighlight() {
-  const sel = getSelectedLayer();
+  const selections = getSelectedLayers();
   for (const li of listEl().querySelectorAll("li[data-layer-id]")) {
-    const match =
-      sel &&
-      li.dataset.pageIndex === String(sel.pageIndex) &&
-      li.dataset.layerId === String(sel.layerId);
-    li.classList.toggle("selected", !!match);
+    const match = selections.some(
+      (s) =>
+        li.dataset.pageIndex === String(s.pageIndex) &&
+        li.dataset.layerId === String(s.layerId),
+    );
+    li.classList.toggle("selected", match);
   }
 }
 
@@ -114,8 +126,22 @@ function resolveSelection() {
   return { kind: "existing", page, layer };
 }
 
+function updateDeleteButtonVisibility() {
+  const deleteBtn = document.getElementById("delete-new-layer-btn");
+  if (!deleteBtn) return;
+  const anyNew = getSelectedLayers().some((s) => typeof s.layerId === "string");
+  deleteBtn.hidden = !anyNew;
+}
+
 function populateEditor() {
   const editor = editorEl();
+  const selections = getSelectedLayers();
+  updateDeleteButtonVisibility();
+  // 編集フォームは単独選択時のみ表示（複数選択中は内容が曖昧になるため非表示）。
+  if (selections.length !== 1) {
+    editor.hidden = true;
+    return;
+  }
   const resolved = resolveSelection();
   if (!resolved) {
     editor.hidden = true;
@@ -123,25 +149,24 @@ function populateEditor() {
   }
   editor.hidden = false;
 
-  const deleteBtn = document.getElementById("delete-new-layer-btn");
-
   let effectiveSize = null;
   let effectiveFont = null;
+  let effectiveDirection = "vertical";
   if (resolved.kind === "existing") {
     const { page, layer } = resolved;
     const edit = getEdit(page.path, layer.id) ?? {};
     contentsEl().value = edit.contents ?? layer.text ?? "";
     effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
     effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
+    effectiveDirection = edit.direction ?? layer.direction ?? "horizontal";
     rebuildFontOptions(effectiveFont);
-    if (deleteBtn) deleteBtn.hidden = true;
   } else {
     const { newLayer } = resolved;
     contentsEl().value = newLayer.contents ?? "";
     effectiveSize = newLayer.sizePt ?? null;
     effectiveFont = newLayer.fontPostScriptName ?? null;
+    effectiveDirection = newLayer.direction ?? "vertical";
     rebuildFontOptions(effectiveFont ?? "");
-    if (deleteBtn) deleteBtn.hidden = false;
   }
 
   if (effectiveSize != null && Number.isFinite(effectiveSize)) {
@@ -150,6 +175,7 @@ function populateEditor() {
   if (effectiveFont) {
     setCurrentFont(effectiveFont);
   }
+  syncDirectionToggle(effectiveDirection);
 }
 
 let comboItems = [];
@@ -343,14 +369,27 @@ export function bindEditorEvents() {
   const deleteBtn = document.getElementById("delete-new-layer-btn");
   if (deleteBtn) {
     deleteBtn.addEventListener("click", () => {
-      const resolved = resolveSelection();
-      if (!resolved || resolved.kind !== "new") return;
-      removeNewLayer(resolved.newLayer.tempId);
-      setSelectedLayer(null);
+      const selections = getSelectedLayers();
+      const tempIds = selections
+        .filter((s) => typeof s.layerId === "string")
+        .map((s) => s.layerId);
+      if (tempIds.length === 0) return;
+      for (const id of tempIds) removeNewLayer(id);
+      // 既存レイヤーは残し、新規分だけを選択から除外。
+      setSelectedLayers(selections.filter((s) => typeof s.layerId !== "string"));
       rebuildLayerList();
       refreshAllOverlays();
     });
   }
+  const bindDirButton = (btn, direction) => {
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      commitField("direction", direction);
+      syncDirectionToggle(direction);
+    });
+  };
+  bindDirButton(dirVerticalBtnEl(), "vertical");
+  bindDirButton(dirHorizontalBtnEl(), "horizontal");
 }
 
 function commitField(field, value) {
