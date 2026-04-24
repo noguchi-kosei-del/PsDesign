@@ -20,6 +20,10 @@ pub struct LayerEdit {
     pub dy: Option<f64>,
     #[serde(default)]
     pub direction: Option<String>,
+    #[serde(rename = "strokeColor", default)]
+    pub stroke_color: Option<String>,
+    #[serde(rename = "strokeWidthPx", default)]
+    pub stroke_width_px: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -33,6 +37,10 @@ pub struct NewLayer {
     pub size_pt: Option<f64>,
     #[serde(default)]
     pub direction: Option<String>,
+    #[serde(rename = "strokeColor", default)]
+    pub stroke_color: Option<String>,
+    #[serde(rename = "strokeWidthPx", default)]
+    pub stroke_width_px: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

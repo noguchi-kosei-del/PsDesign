@@ -49,7 +49,15 @@ pub fn apply_edits(payload: &EditPayload) -> Result<String, PhotoshopError> {
             let _ = std::fs::remove_file(&jsx_path);
             let trimmed = content.trim().to_string();
             if trimmed.starts_with("OK") {
-                return Ok(format!("{} 個の PSD を更新", payload.edits.len()));
+                let base = format!("{} 個の PSD を更新", payload.edits.len());
+                // JSX は警告を "OK|WARN <msg1> | <msg2>" 形式で付加する。
+                if let Some(idx) = trimmed.find("|WARN ") {
+                    let warn = trimmed[idx + "|WARN ".len()..].trim();
+                    if !warn.is_empty() {
+                        return Ok(format!("{}（警告: {}）", base, warn));
+                    }
+                }
+                return Ok(base);
             }
             let msg = trimmed
                 .strip_prefix("ERROR ")

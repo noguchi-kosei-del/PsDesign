@@ -6,12 +6,16 @@ import {
   getPages,
   getSelectedLayer,
   getSelectedLayers,
+  getStrokeColor,
+  getStrokeWidthPx,
   removeNewLayer,
   setCurrentFont,
   setCurrentPageIndex,
   setEdit,
   setSelectedLayer,
   setSelectedLayers,
+  setStrokeColor,
+  setStrokeWidthPx,
   setTextSize,
   toggleLayerSelected,
   updateNewLayer,
@@ -27,12 +31,40 @@ const fontToggleEl = () => document.getElementById("edit-font-toggle");
 const fontListEl = () => document.getElementById("edit-font-list");
 const dirVerticalBtnEl = () => document.getElementById("dir-vertical-btn");
 const dirHorizontalBtnEl = () => document.getElementById("dir-horizontal-btn");
+const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
+const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
+const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
+const strokeWidthInputEl = () => document.getElementById("stroke-width-input");
 
 function syncDirectionToggle(direction) {
   const v = dirVerticalBtnEl();
   const h = dirHorizontalBtnEl();
   if (v) v.classList.toggle("active", direction === "vertical");
   if (h) h.classList.toggle("active", direction === "horizontal");
+}
+
+// color === null は「複数選択で値が混在している」状態。全ボタン非アクティブ。
+function syncStrokeToggle(color) {
+  const n = strokeNoneBtnEl();
+  const w = strokeWhiteBtnEl();
+  const b = strokeBlackBtnEl();
+  if (n) n.classList.toggle("active", color === "none");
+  if (w) w.classList.toggle("active", color === "white");
+  if (b) b.classList.toggle("active", color === "black");
+}
+
+// widthPx === null は混在。input を空にして placeholder で示す。
+function syncStrokeWidthInput(widthPx) {
+  const input = strokeWidthInputEl();
+  if (!input) return;
+  if (document.activeElement === input) return;
+  if (widthPx == null) {
+    input.value = "";
+    input.placeholder = "混在";
+    return;
+  }
+  input.value = String(widthPx);
+  input.placeholder = "";
 }
 
 export function rebuildLayerList() {
@@ -138,47 +170,98 @@ function updateDeleteButtonVisibility() {
   deleteBtn.hidden = !anyNew;
 }
 
+// 選択中レイヤー集合からフチ（color/width）の共通値を算出する。
+// 全て同値なら値、混在なら null、選択 0 件なら既定値（none/2）。
+function computeCommonStroke(selections) {
+  if (selections.length === 0) {
+    return { strokeColor: "none", strokeWidthPx: 2 };
+  }
+  let color;
+  let width;
+  for (const s of selections) {
+    const resolved = resolveLayerRef(s);
+    if (!resolved) continue;
+    let c, w;
+    if (resolved.kind === "existing") {
+      const { page, layer } = resolved;
+      const edit = getEdit(page.path, layer.id) ?? {};
+      c = edit.strokeColor ?? layer.strokeColor ?? "none";
+      w = edit.strokeWidthPx ?? layer.strokeWidthPx ?? 2;
+    } else {
+      c = resolved.newLayer.strokeColor ?? "none";
+      w = resolved.newLayer.strokeWidthPx ?? 2;
+    }
+    if (color === undefined) color = c; else if (color !== c) color = null;
+    if (width === undefined) width = w; else if (width !== w) width = null;
+  }
+  return {
+    strokeColor: color === undefined ? "none" : color,
+    strokeWidthPx: width === undefined ? 2 : width,
+  };
+}
+
+function resolveLayerRef(sel) {
+  const page = getPages()[sel.pageIndex];
+  if (!page) return null;
+  if (typeof sel.layerId === "string") {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+    if (!nl) return null;
+    return { kind: "new", page, newLayer: nl };
+  }
+  const layer = page.textLayers.find((l) => l.id === sel.layerId);
+  if (!layer) return null;
+  return { kind: "existing", page, layer };
+}
+
 function populateEditor() {
   const editor = editorEl();
   const selections = getSelectedLayers();
   updateDeleteButtonVisibility();
-  // 編集フォームは単独選択時のみ表示（複数選択中は内容が曖昧になるため非表示）。
-  if (selections.length !== 1) {
-    editor.hidden = true;
-    return;
-  }
-  const resolved = resolveSelection();
-  if (!resolved) {
+
+  if (selections.length === 0) {
     editor.hidden = true;
     return;
   }
   editor.hidden = false;
 
-  let effectiveSize = null;
-  let effectiveFont = null;
-  let effectiveDirection = "vertical";
-  if (resolved.kind === "existing") {
-    const { page, layer } = resolved;
-    const edit = getEdit(page.path, layer.id) ?? {};
-    effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
-    effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
-    effectiveDirection = edit.direction ?? layer.direction ?? "horizontal";
-    rebuildFontOptions(effectiveFont);
-  } else {
-    const { newLayer } = resolved;
-    effectiveSize = newLayer.sizePt ?? null;
-    effectiveFont = newLayer.fontPostScriptName ?? null;
-    effectiveDirection = newLayer.direction ?? "vertical";
-    rebuildFontOptions(effectiveFont ?? "");
+  // フォント/サイズ/組方向は単独選択時のみ表示（複数だと値が曖昧）。
+  // フチは複数選択でも一括適用できるため常に表示。
+  const singleOnly = editor.querySelectorAll("[data-editor-scope='single']");
+  for (const el of singleOnly) el.hidden = selections.length !== 1;
+
+  if (selections.length === 1) {
+    const resolved = resolveSelection();
+    if (!resolved) { editor.hidden = true; return; }
+
+    let effectiveSize = null;
+    let effectiveFont = null;
+    let effectiveDirection = "vertical";
+    if (resolved.kind === "existing") {
+      const { page, layer } = resolved;
+      const edit = getEdit(page.path, layer.id) ?? {};
+      effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
+      effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
+      effectiveDirection = edit.direction ?? layer.direction ?? "horizontal";
+      rebuildFontOptions(effectiveFont);
+    } else {
+      const { newLayer } = resolved;
+      effectiveSize = newLayer.sizePt ?? null;
+      effectiveFont = newLayer.fontPostScriptName ?? null;
+      effectiveDirection = newLayer.direction ?? "vertical";
+      rebuildFontOptions(effectiveFont ?? "");
+    }
+
+    if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
+    if (effectiveFont) setCurrentFont(effectiveFont);
+    syncDirectionToggle(effectiveDirection);
   }
 
-  if (effectiveSize != null && Number.isFinite(effectiveSize)) {
-    setTextSize(effectiveSize);
-  }
-  if (effectiveFont) {
-    setCurrentFont(effectiveFont);
-  }
-  syncDirectionToggle(effectiveDirection);
+  // フチは単独/複数いずれでも共通値を表示。
+  const { strokeColor, strokeWidthPx } = computeCommonStroke(selections);
+  if (strokeColor != null) setStrokeColor(strokeColor);
+  if (strokeWidthPx != null) setStrokeWidthPx(strokeWidthPx);
+  syncStrokeToggle(strokeColor);
+  syncStrokeWidthInput(strokeWidthPx);
 }
 
 let comboItems = [];
@@ -398,6 +481,79 @@ export function bindEditorEvents() {
   };
   bindDirButton(dirVerticalBtnEl(), "vertical");
   bindDirButton(dirHorizontalBtnEl(), "horizontal");
+
+  const bindStrokeButton = (btn, color) => {
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      setStrokeColor(color);
+      syncStrokeToggle(color);
+      // 色と太さはセットで書き込む（片方だけだと既存レイヤーの他方が失われる）。
+      // 幅が混在しているときは各レイヤーの幅を保持（null）。
+      commitStrokeFields(color, currentWidthForCommit());
+    });
+  };
+  bindStrokeButton(strokeNoneBtnEl(), "none");
+  bindStrokeButton(strokeWhiteBtnEl(), "white");
+  bindStrokeButton(strokeBlackBtnEl(), "black");
+
+  const widthInput = strokeWidthInputEl();
+  if (widthInput) {
+    widthInput.addEventListener("input", () => {
+      const raw = widthInput.value;
+      if (raw === "") return;
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return;
+      setStrokeWidthPx(n);
+      commitStrokeFields(null, getStrokeWidthPx());
+    });
+    widthInput.addEventListener("blur", () => {
+      if (widthInput.value === "" || !Number.isFinite(Number(widthInput.value))) {
+        setStrokeWidthPx(2);
+        widthInput.value = "2";
+        commitStrokeFields(null, 2);
+      }
+    });
+  }
+}
+
+// colorOrNull / widthOrNull に null を渡すと「各レイヤーの現在値を保持」の意味。
+// 複数選択でフチ色/幅が混在している状態で片方だけを編集したとき、
+// 他方がグローバル state で上書きされて本来の値が失われるのを避ける。
+// 色と太さは JSX 側で必ずセットで評価されるため、ここで常に両フィールドを書き込む。
+function commitStrokeFields(colorOrNull, widthOrNull) {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return;
+  for (const sel of selections) {
+    const ref = resolveLayerRef(sel);
+    if (!ref) continue;
+    let curColor, curWidth;
+    if (ref.kind === "existing") {
+      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+      curColor = edit.strokeColor ?? ref.layer.strokeColor ?? "none";
+      curWidth = edit.strokeWidthPx ?? ref.layer.strokeWidthPx ?? 2;
+    } else {
+      curColor = ref.newLayer.strokeColor ?? "none";
+      curWidth = ref.newLayer.strokeWidthPx ?? 2;
+    }
+    const changes = {
+      strokeColor: colorOrNull !== null ? colorOrNull : curColor,
+      strokeWidthPx: widthOrNull !== null ? widthOrNull : curWidth,
+    };
+    if (ref.kind === "existing") {
+      setEdit(ref.page.path, ref.layer.id, changes);
+    } else {
+      updateNewLayer(ref.newLayer.tempId, changes);
+    }
+  }
+  rebuildLayerList();
+  refreshAllOverlays();
+}
+
+function currentWidthForCommit() {
+  const input = strokeWidthInputEl();
+  // 混在表示（input が空）のときは null を返し、per-layer 保持モードにする。
+  if (input && input.value === "") return null;
+  return getStrokeWidthPx();
 }
 
 function commitField(field, value) {

@@ -402,6 +402,46 @@ html, body, #app {
   color: #fff;
 }
 
+.stroke-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.stroke-toggle-btn {
+  min-width: 34px;
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+.stroke-toggle-btn + .stroke-toggle-btn {
+  border-left: 1px solid var(--border);
+}
+.stroke-toggle-btn:hover:not(.active) {
+  background: var(--panel-hover);
+}
+.stroke-toggle-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+
+.stroke-width-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.size-field-inline {
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
 .tool-btn.active {
   background: var(--accent);
   border: none;
@@ -603,6 +643,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .pagebar.collapsed {
   width: 24px;
+  background: transparent;
+  border-left: none;
+  border-right: none;
+  padding: 6px 0 0;
+  gap: 0;
 }
 
 .pagebar.collapsed .spread-nav-track { display: none; }
@@ -1040,7 +1085,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
+}
+
+/* editor 内の各項目（フォント / サイズ・組方向 / フチ）を区切り線で分ける。
+   :not([hidden]) ペアのみに適用することで、単独選択で一部項目が hidden の場合でも
+   先頭要素に不要な線が入らない。 */
+.editor > *:not([hidden]) + *:not([hidden]) {
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
 }
 
 .editor label,
@@ -1161,6 +1215,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .progress-modal[hidden] { display: none; }
+
+/* 確認ダイアログはハンバーガーメニュー (z-index 151) から呼ばれることがあるので、
+   必ずその上に表示させる。 */
+#confirm-modal { z-index: 300; }
 
 .progress-card {
   min-width: 360px;

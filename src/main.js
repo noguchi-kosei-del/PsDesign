@@ -170,7 +170,11 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     const result = await invoke("apply_edits_via_photoshop", { payload });
     hideProgress();
     const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
-    toast(`保存完了: ${result}${suffix}`, { kind: "success", duration: 3500 });
+    const hasWarn = typeof result === "string" && result.includes("警告:");
+    toast(`保存完了: ${result}${suffix}`, {
+      kind: hasWarn ? "info" : "success",
+      duration: hasWarn ? 7000 : 3500,
+    });
     hasSavedThisSession = true;
   } catch (e) {
     console.error(e);

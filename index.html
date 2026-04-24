@@ -193,7 +193,7 @@
           </section>
           <h2>編集</h2>
           <div id="editor" class="editor" hidden>
-            <label>
+            <label data-editor-scope="single">
               フォント
               <div class="font-combobox" id="edit-font-combobox">
                 <input id="edit-font" class="font-input" type="text" autocomplete="off" placeholder="フォント名で検索..." />
@@ -201,7 +201,7 @@
                 <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
               </div>
             </label>
-            <div class="size-field">
+            <div class="size-field" data-editor-scope="single">
               <span class="size-field-label">サイズ</span>
               <div class="size-row">
                 <div class="size-group" role="group" aria-label="文字サイズ">
@@ -213,6 +213,21 @@
                 <div class="direction-toggle" role="group" aria-label="組方向">
                   <button id="dir-vertical-btn" class="dir-toggle-btn" type="button" data-direction="vertical" title="縦書き">縦</button>
                   <button id="dir-horizontal-btn" class="dir-toggle-btn" type="button" data-direction="horizontal" title="横書き">横</button>
+                </div>
+              </div>
+            </div>
+            <div class="size-field">
+              <span class="size-field-label">フチ</span>
+              <div class="size-row">
+                <div class="stroke-toggle" role="group" aria-label="境界線">
+                  <button id="stroke-none-btn" class="stroke-toggle-btn" type="button" data-stroke="none" title="境界線なし">なし</button>
+                  <button id="stroke-white-btn" class="stroke-toggle-btn" type="button" data-stroke="white" title="白フチ">白</button>
+                  <button id="stroke-black-btn" class="stroke-toggle-btn" type="button" data-stroke="black" title="黒フチ">黒</button>
+                </div>
+                <div class="stroke-width-group" role="group" aria-label="フチ太さ">
+                  <span class="size-field-label size-field-inline">太さ</span>
+                  <input id="stroke-width-input" class="size-input" type="number" min="0" max="20" step="0.5" value="2" aria-label="境界線の太さ" />
+                  <span class="size-unit">px</span>
                 </div>
               </div>
             </div>

@@ -15,6 +15,10 @@ const state = {
   textSizeListeners: new Set(),
   currentFontPostScriptName: null,
   currentFontListeners: new Set(),
+  strokeColor: "none", // "none" | "white" | "black"
+  strokeColorListeners: new Set(),
+  strokeWidthPx: 2,
+  strokeWidthListeners: new Set(),
   currentPageIndex: 0,
   pageIndexListeners: new Set(),
   zoom: 1,
@@ -39,6 +43,8 @@ export function clearPages() {
   if (prev !== 0) {
     for (const fn of state.pageIndexListeners) fn(0);
   }
+  setStrokeColor("none");
+  setStrokeWidthPx(2);
 }
 
 export function addPage(page) { state.pages.push(page); }
@@ -153,7 +159,17 @@ export function onToolChange(fn) {
   return () => state.toolListeners.delete(fn);
 }
 
-export function addNewLayer({ psdPath, x, y, contents, fontPostScriptName, sizePt, direction }) {
+export function addNewLayer({
+  psdPath,
+  x,
+  y,
+  contents,
+  fontPostScriptName,
+  sizePt,
+  direction,
+  strokeColor,
+  strokeWidthPx,
+}) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
     tempId,
@@ -164,6 +180,8 @@ export function addNewLayer({ psdPath, x, y, contents, fontPostScriptName, sizeP
     fontPostScriptName: fontPostScriptName ?? null,
     sizePt: sizePt ?? null,
     direction: direction ?? "vertical",
+    strokeColor: strokeColor ?? "none",
+    strokeWidthPx: Number.isFinite(strokeWidthPx) ? strokeWidthPx : 2,
   };
   state.newLayers.push(layer);
   return layer;
@@ -266,4 +284,31 @@ export function setCurrentFont(psName) {
 export function onCurrentFontChange(fn) {
   state.currentFontListeners.add(fn);
   return () => state.currentFontListeners.delete(fn);
+}
+
+export function getStrokeColor() { return state.strokeColor; }
+export function setStrokeColor(color) {
+  const v = color === "white" || color === "black" ? color : "none";
+  if (state.strokeColor === v) return;
+  state.strokeColor = v;
+  for (const fn of state.strokeColorListeners) fn(v);
+}
+export function onStrokeColorChange(fn) {
+  state.strokeColorListeners.add(fn);
+  return () => state.strokeColorListeners.delete(fn);
+}
+
+export function getStrokeWidthPx() { return state.strokeWidthPx; }
+export function setStrokeWidthPx(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return;
+  const rounded = Math.round(v * 10) / 10;
+  const clamped = Math.max(0, Math.min(20, rounded));
+  if (state.strokeWidthPx === clamped) return;
+  state.strokeWidthPx = clamped;
+  for (const fn of state.strokeWidthListeners) fn(clamped);
+}
+export function onStrokeWidthChange(fn) {
+  state.strokeWidthListeners.add(fn);
+  return () => state.strokeWidthListeners.delete(fn);
 }

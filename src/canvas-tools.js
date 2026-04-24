@@ -7,6 +7,8 @@ import {
   getNewLayersForPsd,
   getSelectedLayer,
   getSelectedLayers,
+  getStrokeColor,
+  getStrokeWidthPx,
   getTextSize,
   getTool,
   isLayerSelected,
@@ -142,6 +144,16 @@ function rectsIntersect(a, b) {
   return !(b.left >= a.right || b.right <= a.left || b.top >= a.bottom || b.bottom <= a.top);
 }
 
+function applyStrokePreview(inner, strokeColor, strokeWidthPx, pxPerPsd) {
+  if (!strokeColor || strokeColor === "none" || !(strokeWidthPx > 0) || !(pxPerPsd > 0)) return;
+  const cssColor = strokeColor === "white" ? "#fff" : "#000";
+  // PSD px → screen px。最低 0.5px で visibility 確保。
+  const w = Math.max(0.5, strokeWidthPx * pxPerPsd);
+  inner.style.webkitTextStroke = `${w}px ${cssColor}`;
+  // paint-order を指定して、塗りが上・ストロークが下（外側近似）。
+  inner.style.paintOrder = "stroke fill";
+}
+
 function renderOverlay(ctx) {
   const { overlay, page, pageIndex } = ctx;
   overlay.innerHTML = "";
@@ -165,6 +177,12 @@ function renderOverlay(ctx) {
     }
     const existingFontCss = cssFontFamily(edit.fontPostScriptName ?? layer.font);
     if (existingFontCss) inner.style.fontFamily = existingFontCss;
+    applyStrokePreview(
+      inner,
+      edit.strokeColor ?? layer.strokeColor ?? "none",
+      edit.strokeWidthPx ?? layer.strokeWidthPx ?? 2,
+      pxPerPsd,
+    );
     box.appendChild(inner);
 
     if (isLayerSelected(pageIndex, layer.id)) {
@@ -189,6 +207,12 @@ function renderOverlay(ctx) {
     }
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
+    applyStrokePreview(
+      inner,
+      nl.strokeColor ?? "none",
+      nl.strokeWidthPx ?? 2,
+      pxPerPsd,
+    );
     box.appendChild(inner);
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
@@ -334,6 +358,8 @@ function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
     fontPostScriptName: getCurrentFont(),
     sizePt: getTextSize(),
     direction,
+    strokeColor: getStrokeColor(),
+    strokeWidthPx: getStrokeWidthPx(),
   });
   setSelectedLayer(pageIndex, created.tempId);
   refreshAllOverlays();
@@ -694,6 +720,8 @@ function startTextInput(ctx, x, y, direction = "vertical") {
         fontPostScriptName: getCurrentFont(),
         sizePt: getTextSize(),
         direction: direction === "horizontal" ? "horizontal" : "vertical",
+        strokeColor: getStrokeColor(),
+        strokeWidthPx: getStrokeWidthPx(),
       });
       setSelectedLayers([]);
       refreshAllOverlays();
