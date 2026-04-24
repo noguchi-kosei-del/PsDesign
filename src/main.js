@@ -1,7 +1,7 @@
 import { loadPsdFromPath } from "./psd-loader.js";
 import { loadPdfByPath, pickPdfFile } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
-import { refreshAllOverlays } from "./canvas-tools.js";
+import { nudgeSelectedLayers, refreshAllOverlays } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
 import {
@@ -26,6 +26,7 @@ import {
   getCurrentPageIndex,
   getFolder,
   getPages,
+  getPsdRotation,
   getTextSize,
   getTool,
   getZoom,
@@ -37,6 +38,7 @@ import {
   onToolChange,
   onZoomChange,
   setPdfRotation,
+  setPsdRotation,
   setCurrentPageIndex,
   setFolder,
   setFonts,
@@ -90,6 +92,20 @@ function bindPdfRotate() {
   });
 }
 
+function bindPsdRotate() {
+  const btn = document.getElementById("psd-rotate-btn");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    setPsdRotation((getPsdRotation() + 90) % 360);
+  });
+}
+
+function updatePsdRotateVisibility() {
+  const btn = document.getElementById("psd-rotate-btn");
+  if (!btn) return;
+  btn.hidden = getPages().length === 0;
+}
+
 function parentDir(p) {
   if (!p) return null;
   const m = p.match(/^(.+)[\\/][^\\/]+$/);
@@ -140,6 +156,7 @@ async function loadPsdFilesByPaths(files) {
   }
 
   updateSaveButton();
+  updatePsdRotateVisibility();
   hideProgress();
   if (failures.length) {
     const first = failures[0];
@@ -335,10 +352,26 @@ function bindTools() {
   });
   applyActive();
 
+  // Alt 単独押下/離上で Windows のシステムメニューが活性化し、次の Space で開いてしまう
+  // 事故を防ぐ。Alt+wheel でズームした直後に Space を押すと左上にメニューが出る現象の対策。
+  const suppressAltMenuActivation = (e) => {
+    if (e.key === "Alt" || e.code === "AltLeft" || e.code === "AltRight") {
+      e.preventDefault();
+    }
+  };
+  window.addEventListener("keydown", suppressAltMenuActivation);
+  window.addEventListener("keyup", suppressAltMenuActivation);
+
   window.addEventListener("keydown", (e) => {
     if (e.code === "Space") {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      // ボタンにフォーカスが残っていると Space で click が誘発され、直前に押したツール/回転ボタンが
+      // 再発火してしまう。Space をパン専用キーとして扱うため、入り口でフォーカスを解除する。
+      const active = document.activeElement;
+      if (active instanceof HTMLElement && (active.tagName === "BUTTON" || active.tagName === "A")) {
+        active.blur();
+      }
       // MojiQ 互換：リピート含めて全 Space keydown を preventDefault（既定の「Space で1画面下スクロール」を常に抑止）
       e.preventDefault();
       if (e.repeat) return;
@@ -409,12 +442,30 @@ function bindTools() {
       adjustTextSize(-(e.shiftKey ? 10 : 2));
     } else if (e.key === "]") {
       adjustTextSize(+(e.shiftKey ? 10 : 2));
-    } else if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      setCurrentPageIndex(getCurrentPageIndex() - 1);
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      setCurrentPageIndex(getCurrentPageIndex() + 1);
+    } else if (
+      e.key === "ArrowLeft" ||
+      e.key === "ArrowRight" ||
+      e.key === "ArrowUp" ||
+      e.key === "ArrowDown"
+    ) {
+      const step = e.shiftKey ? 10 : 1;
+      let dx = 0;
+      let dy = 0;
+      if (e.key === "ArrowLeft") dx = -step;
+      else if (e.key === "ArrowRight") dx = +step;
+      else if (e.key === "ArrowUp") dy = -step;
+      else if (e.key === "ArrowDown") dy = +step;
+      if (getTool() === "move" && nudgeSelectedLayers(dx, dy)) {
+        e.preventDefault();
+        return;
+      }
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setCurrentPageIndex(getCurrentPageIndex() - 1);
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setCurrentPageIndex(getCurrentPageIndex() + 1);
+      }
     }
   });
 
@@ -444,6 +495,7 @@ function bindPageChange() {
     renderAllSpreads();
     rebuildLayerList();
     renderPagebar();
+    updatePsdRotateVisibility();
   });
 }
 
@@ -695,6 +747,8 @@ function init() {
   initPagebar();
   bindPdfWorkspaceToggle();
   bindPdfRotate();
+  bindPsdRotate();
+  updatePsdRotateVisibility();
   mountPdfView();
   setupTauriDragDrop();
   renderAllSpreads();

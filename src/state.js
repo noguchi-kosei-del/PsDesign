@@ -31,6 +31,8 @@ const state = {
   pdfListeners: new Set(),
   pdfRotation: 0, // ユーザーが追加適用する回転（0/90/180/270）
   pdfRotationListeners: new Set(),
+  psdRotation: 0, // PSD 表示のビュー回転（0/90/180/270、表示専用）
+  psdRotationListeners: new Set(),
 };
 
 export const ZOOM_MIN = 0.1;
@@ -322,6 +324,20 @@ export function setPdfRotation(deg) {
 export function onPdfRotationChange(fn) {
   state.pdfRotationListeners.add(fn);
   return () => state.pdfRotationListeners.delete(fn);
+}
+
+export function getPsdRotation() { return state.psdRotation; }
+export function setPsdRotation(deg) {
+  const n = Number(deg);
+  if (!Number.isFinite(n)) return;
+  const normalized = ((Math.round(n / 90) * 90) % 360 + 360) % 360;
+  if (state.psdRotation === normalized) return;
+  state.psdRotation = normalized;
+  for (const fn of state.psdRotationListeners) fn(normalized);
+}
+export function onPsdRotationChange(fn) {
+  state.psdRotationListeners.add(fn);
+  return () => state.psdRotationListeners.delete(fn);
 }
 
 export function getCurrentFont() { return state.currentFontPostScriptName; }

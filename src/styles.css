@@ -733,6 +733,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: safe center;
   justify-content: safe center;
   padding: 16px;
+  /* ペイン自体はスクロールしない（回転ボタンはこの padding box に絶対配置で固定）。
+     スクロールは内側の #pdf-stage / #psd-stage に閉じる。 */
+  overflow: hidden;
+}
+
+/* PSD ステージ：ズーム拡大でページが溢れるため、ここでスクロール。 */
+.psd-stage {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: safe center;
+  justify-content: safe center;
+  overflow: auto;
 }
 
 .spreads-pdf-area {
@@ -746,7 +762,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-left: 1px solid var(--border);
 }
 
-.pdf-rotate-btn {
+.spreads-psd-area {
+  position: relative;
+}
+
+.pdf-rotate-btn,
+.psd-rotate-btn {
   position: absolute;
   top: 8px;
   right: 8px;
@@ -763,7 +784,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   justify-content: center;
   cursor: pointer;
 }
-.pdf-rotate-btn:hover {
+.pdf-rotate-btn:hover,
+.psd-rotate-btn:hover {
   background: var(--accent, #3b82f6);
   color: #fff;
 }
@@ -777,14 +799,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: safe center;
   justify-content: safe center;
   width: 100%;
+  /* ズームで拡大した PDF はここでスクロール（ペインは overflow:hidden で回転ボタンを固定）。 */
+  overflow: auto;
 }
 
 .pdf-canvas {
   display: block;
   background: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
-  max-width: 100%;
-  max-height: 100%;
 }
 .pdf-canvas[hidden] { display: none; }
 
@@ -1014,7 +1036,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layer-box:hover { background: rgba(120, 180, 255, 0.18); }
 
 .layer-box.selected {
-  border: 1.5px solid var(--accent);
+  border: 1px solid var(--accent);
+  box-shadow: 0 0 0 2px var(--accent);
   background: rgba(0, 120, 212, 0.18);
 }
 
@@ -1025,7 +1048,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .layer-box-new.selected {
-  border: 1.5px solid #e89a3c;
+  border: 1px solid #e89a3c;
+  box-shadow: 0 0 0 2px #e89a3c;
 }
 
 .new-layer-text,
@@ -1057,7 +1081,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-orientation: mixed;
 }
 
-.page-overlay[data-tool="text-v"] .layer-box,
+.page-overlay[data-tool="text-v"] .layer-box {
+  cursor: vertical-text;
+}
 .page-overlay[data-tool="text-h"] .layer-box {
   cursor: text;
 }

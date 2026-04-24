@@ -6,6 +6,8 @@ import {
   getFillColor,
   getFontDisplayName,
   getNewLayersForPsd,
+  getPages,
+  getPsdRotation,
   getSelectedLayer,
   getSelectedLayers,
   getStrokeColor,
@@ -75,6 +77,84 @@ export function refreshAllOverlays() {
   for (const m of mounts.values()) renderOverlay(m);
 }
 
+export function nudgeSelectedLayers(dx, dy) {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  const pages = getPages();
+  let moved = false;
+  for (const sel of selections) {
+    const page = pages[sel.pageIndex];
+    if (!page) continue;
+    if (typeof sel.layerId === "string") {
+      const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+      if (!nl) continue;
+      updateNewLayer(sel.layerId, { x: nl.x + dx, y: nl.y + dy });
+      moved = true;
+    } else {
+      const layer = page.textLayers.find((l) => l.id === sel.layerId);
+      if (!layer) continue;
+      addEditOffset(page.path, sel.layerId, dx, dy);
+      moved = true;
+    }
+  }
+  if (moved) {
+    refreshAllOverlays();
+    rebuildLayerList();
+  }
+  return moved;
+}
+
+function clampSizePt(v) {
+  const rounded = Math.round(v * 10) / 10;
+  return Math.max(6, Math.min(999, rounded));
+}
+
+export function resizeSelectedLayers(deltaPt) {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  const pages = getPages();
+  let changed = false;
+  for (const sel of selections) {
+    const page = pages[sel.pageIndex];
+    if (!page) continue;
+    if (typeof sel.layerId === "string") {
+      const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+      if (!nl) continue;
+      const cur = nl.sizePt ?? 24;
+      const next = clampSizePt(cur + deltaPt);
+      if (next === cur) continue;
+      const oldRect = layerRectForNew(page, nl);
+      const newRect = layerRectForNew(page, { ...nl, sizePt: next });
+      const dx = (oldRect.width - newRect.width) / 2;
+      const dy = (oldRect.height - newRect.height) / 2;
+      updateNewLayer(sel.layerId, { sizePt: next, x: nl.x + dx, y: nl.y + dy });
+      changed = true;
+    } else {
+      const layer = page.textLayers.find((l) => l.id === sel.layerId);
+      if (!layer) continue;
+      const edit = getEdit(page.path, sel.layerId) ?? {};
+      const cur = edit.sizePt ?? layer.fontSize ?? 24;
+      const next = clampSizePt(cur + deltaPt);
+      if (next === cur) continue;
+      const oldRect = layerRectForExisting(page, layer, edit);
+      const newRect = layerRectForExisting(page, layer, { ...edit, sizePt: next });
+      const ddx = (oldRect.width - newRect.width) / 2;
+      const ddy = (oldRect.height - newRect.height) / 2;
+      setEdit(page.path, sel.layerId, {
+        sizePt: next,
+        dx: (edit.dx ?? 0) + ddx,
+        dy: (edit.dy ?? 0) + ddy,
+      });
+      changed = true;
+    }
+  }
+  if (changed) {
+    refreshAllOverlays();
+    rebuildLayerList();
+  }
+  return changed;
+}
+
 function isTextTool(tool) {
   return tool === "text-v" || tool === "text-h";
 }
@@ -87,7 +167,8 @@ function applyToolAttrs(ctx) {
   const tool = getTool();
   ctx.overlay.dataset.tool = tool;
   ctx.canvas.style.cursor =
-    isTextTool(tool) ? "text" :
+    tool === "text-v" ? "vertical-text" :
+    tool === "text-h" ? "text" :
     tool === "pan" ? "grab" : "default";
 }
 
@@ -201,6 +282,7 @@ function renderOverlay(ctx) {
       box.classList.add("selected");
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
+    box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });
     overlay.appendChild(box);
   }
 
@@ -232,6 +314,7 @@ function renderOverlay(ctx) {
       box.classList.add("selected");
     }
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
+    box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, nl.tempId), { passive: false });
     overlay.appendChild(box);
   }
 
@@ -281,13 +364,36 @@ function createBox(page, left, top, width, height, kind) {
   return el;
 }
 
+// スクリーン空間の delta (dxS, dyS) を回転逆変換して「回転前のローカル空間」の delta に変換。
+// rotation は CSS の rotate() 方向（時計回り正）。CSS 座標は y 下向きのため、90° 回転で
+// ローカル (+x) は画面 (+y) に、ローカル (+y) は画面 (-x) に対応する。
+function inverseRotateDelta(dxS, dyS, rotation) {
+  switch (rotation) {
+    case 90:  return { dx:  dyS, dy: -dxS };
+    case 180: return { dx: -dxS, dy: -dyS };
+    case 270: return { dx: -dyS, dy:  dxS };
+    default:  return { dx:  dxS, dy:  dyS };
+  }
+}
+
 function canvasCoordsFromEvent(e, ctx) {
   const rect = ctx.canvas.getBoundingClientRect();
-  const scaleX = ctx.page.width / rect.width;
-  const scaleY = ctx.page.height / rect.height;
-  const x = (e.clientX - rect.left) * scaleX;
-  const y = (e.clientY - rect.top) * scaleY;
-  return { x, y, scaleX, scaleY };
+  const rotation = getPsdRotation();
+  const rotated90 = rotation === 90 || rotation === 270;
+  // getBoundingClientRect は回転後の視覚 bbox を返すため、90/270 では W/H をスワップ。
+  const W = rotated90 ? rect.height : rect.width;
+  const H = rotated90 ? rect.width : rect.height;
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  const { dx: dxL, dy: dyL } = inverseRotateDelta(e.clientX - cx, e.clientY - cy, rotation);
+  const scaleX = ctx.page.width / W;
+  const scaleY = ctx.page.height / H;
+  return {
+    x: (W / 2 + dxL) * scaleX,
+    y: (H / 2 + dyL) * scaleY,
+    scaleX,
+    scaleY,
+  };
 }
 
 function onCanvasMouseDown(e, ctx) {
@@ -296,10 +402,12 @@ function onCanvasMouseDown(e, ctx) {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
-    const scroller = document.getElementById("spreads-container");
+    // スクロールは #psd-stage に閉じている（ペイン本体は overflow:hidden で回転ボタンを固定）。
+    const scroller = ctx.canvas.closest(".psd-stage");
     if (!scroller) return;
     panState = {
       canvas: ctx.canvas,
+      scroller,
       startX: e.clientX,
       startY: e.clientY,
       scrollStart: { left: scroller.scrollLeft, top: scroller.scrollTop },
@@ -339,7 +447,7 @@ function onCanvasMouseMove(e, ctx) {
   if (!panState) return;
   e.preventDefault();
   e.stopPropagation();
-  const scroller = document.getElementById("spreads-container");
+  const scroller = panState.scroller;
   if (!scroller) return;
   const dx = e.clientX - panState.startX;
   const dy = e.clientY - panState.startY;
@@ -388,6 +496,18 @@ function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
   refreshAllOverlays();
   rebuildLayerList();
   advanceTxtSelection();
+}
+
+function onLayerWheel(e, ctx, layerId) {
+  // Alt+wheel はズーム、Ctrl/Meta+wheel はブラウザ既定（ページズーム等）に委ねる。
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (getTool() !== "move") return;
+  if (!isLayerSelected(ctx.pageIndex, layerId)) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const step = e.shiftKey ? 10 : 1;
+  const delta = e.deltaY < 0 ? +step : -step;
+  resizeSelectedLayers(delta);
 }
 
 function onExistingLayerMouseDown(e, ctx, layer) {
@@ -465,14 +585,29 @@ function beginMultiLayerDrag(e, ctx) {
   const startClientX = e.clientX;
   const startClientY = e.clientY;
   const rect = ctx.canvas.getBoundingClientRect();
-  const scaleX = ctx.page.width / rect.width;
-  const scaleY = ctx.page.height / rect.height;
-  const pxScaleX = rect.width / ctx.page.width;
-  const pxScaleY = rect.height / ctx.page.height;
+  const rotation = getPsdRotation();
+  const rotated90 = rotation === 90 || rotation === 270;
+  // 回転前の canvas CSS 寸法。
+  const W = rotated90 ? rect.height : rect.width;
+  const H = rotated90 ? rect.width : rect.height;
+  const scaleX = ctx.page.width / W;
+  const scaleY = ctx.page.height / H;
+  const pxScaleX = W / ctx.page.width;
+  const pxScaleY = H / ctx.page.height;
   const prevUserSelect = document.body.style.userSelect;
   document.body.style.userSelect = "none";
 
+  const computePsdDelta = (ev) => {
+    const { dx, dy } = inverseRotateDelta(
+      ev.clientX - startClientX,
+      ev.clientY - startClientY,
+      rotation,
+    );
+    return { ddx: dx * scaleX, ddy: dy * scaleY };
+  };
+
   const suppressDefault = (ev) => ev.preventDefault();
+  // overlay 自体が回転済みのため、translate() は PSD 空間（= 回転前ローカル）ピクセル量で与える。
   const applyPreview = (ddx, ddy) => {
     for (const item of items) {
       if (item.kind === "existing") {
@@ -489,8 +624,7 @@ function beginMultiLayerDrag(e, ctx) {
   };
   const onMove = (ev) => {
     ev.preventDefault();
-    const ddx = (ev.clientX - startClientX) * scaleX;
-    const ddy = (ev.clientY - startClientY) * scaleY;
+    const { ddx, ddy } = computePsdDelta(ev);
     applyPreview(ddx, ddy);
   };
   const onUp = (ev) => {
@@ -499,8 +633,7 @@ function beginMultiLayerDrag(e, ctx) {
     window.removeEventListener("dragstart", suppressDefault, true);
     window.removeEventListener("selectstart", suppressDefault, true);
     document.body.style.userSelect = prevUserSelect;
-    const ddx = (ev.clientX - startClientX) * scaleX;
-    const ddy = (ev.clientY - startClientY) * scaleY;
+    const { ddx, ddy } = computePsdDelta(ev);
     if (ddx !== 0 || ddy !== 0) {
       for (const item of items) {
         if (item.kind === "existing") {

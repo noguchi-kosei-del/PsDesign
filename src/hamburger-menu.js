@@ -1,4 +1,4 @@
-import { clearPages, clearPdf, clearTxtSource, setFolder, setPdfRotation } from "./state.js";
+import { clearPages, clearPdf, clearTxtSource, setFolder, setPdfRotation, setPsdRotation } from "./state.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { renderPagebar } from "./pagebar.js";
 import { rebuildLayerList } from "./text-editor.js";
@@ -94,6 +94,7 @@ async function goHome() {
   clearTxtSource();
   clearPdf();
   setPdfRotation(0);
+  setPsdRotation(0);
   renderAllSpreads();
   renderPagebar();
   rebuildLayerList();

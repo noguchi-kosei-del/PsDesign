@@ -1,10 +1,18 @@
-import { getCurrentPageIndex, getPages, getZoom, onZoomChange } from "./state.js";
+import {
+  getCurrentPageIndex,
+  getPages,
+  getPsdRotation,
+  getZoom,
+  onPsdRotationChange,
+  onZoomChange,
+} from "./state.js";
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 
-const container = () => document.getElementById("spreads-psd-area");
+const container = () => document.getElementById("psd-stage");
 const pageResizeObservers = new Set();
 const pageRedraws = new Set();
 let zoomSubscribed = false;
+let rotationSubscribed = false;
 
 const MAX_CANVAS_SIDE = 16384;
 
@@ -14,6 +22,12 @@ export function renderAllSpreads() {
   if (!zoomSubscribed) {
     zoomSubscribed = true;
     onZoomChange(() => {
+      for (const fn of pageRedraws) fn();
+    });
+  }
+  if (!rotationSubscribed) {
+    rotationSubscribed = true;
+    onPsdRotationChange(() => {
       for (const fn of pageRedraws) fn();
     });
   }
@@ -69,21 +83,30 @@ function buildPage(page, pageIndex, root) {
     const availH = Math.max(0, box.height - 32);
     if (availW <= 0 || availH <= 0) return;
 
+    const rotation = getPsdRotation();
+    const rotated90 = rotation === 90 || rotation === 270;
+
+    // 回転後の視覚 AR で利用可能領域にフィットするよう算出。
     const pageAR = page.width / page.height;
+    const visualAR = rotated90 ? 1 / pageAR : pageAR;
     const availAR = availW / availH;
-    let cssW;
-    let cssH;
-    if (pageAR >= availAR) {
-      cssW = availW;
-      cssH = availW / pageAR;
+    let visualW;
+    let visualH;
+    if (visualAR >= availAR) {
+      visualW = availW;
+      visualH = availW / visualAR;
     } else {
-      cssH = availH;
-      cssW = availH * pageAR;
+      visualH = availH;
+      visualW = availH * visualAR;
     }
 
     const zoom = getZoom();
-    cssW *= zoom;
-    cssH *= zoom;
+    visualW *= zoom;
+    visualH *= zoom;
+
+    // canvas 自体の CSS サイズ（= 回転前の寸法）
+    const cssW = rotated90 ? visualH : visualW;
+    const cssH = rotated90 ? visualW : visualH;
 
     let dpr = window.devicePixelRatio || 1;
     const maxDpr = Math.min(
@@ -98,6 +121,23 @@ function buildPage(page, pageIndex, root) {
     canvas.height = pxH;
     canvas.style.width = `${cssW}px`;
     canvas.style.height = `${cssH}px`;
+
+    // .page は回転後の可視 bbox サイズ、.canvas-wrap は絶対中央配置 + 回転。
+    el.style.width = `${visualW}px`;
+    el.style.height = `${visualH}px`;
+    if (rotation === 0) {
+      wrap.style.position = "";
+      wrap.style.left = "";
+      wrap.style.top = "";
+      wrap.style.transform = "";
+      wrap.style.transformOrigin = "";
+    } else {
+      wrap.style.position = "absolute";
+      wrap.style.left = "50%";
+      wrap.style.top = "50%";
+      wrap.style.transformOrigin = "center center";
+      wrap.style.transform = `translate(-50%, -50%) rotate(${rotation}deg)`;
+    }
 
     const ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = true;
