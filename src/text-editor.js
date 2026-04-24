@@ -1,6 +1,7 @@
 import {
   getCurrentPageIndex,
   getEdit,
+  getFillColor,
   getFonts,
   getNewLayersForPsd,
   getPages,
@@ -8,10 +9,12 @@ import {
   getSelectedLayers,
   getStrokeColor,
   getStrokeWidthPx,
+  onFillColorChange,
   removeNewLayer,
   setCurrentFont,
   setCurrentPageIndex,
   setEdit,
+  setFillColor,
   setSelectedLayer,
   setSelectedLayers,
   setStrokeColor,
@@ -35,6 +38,8 @@ const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
 const strokeWidthInputEl = () => document.getElementById("stroke-width-input");
+const fillWhiteBtnEl = () => document.getElementById("fill-white-btn");
+const fillBlackBtnEl = () => document.getElementById("fill-black-btn");
 
 function syncDirectionToggle(direction) {
   const v = dirVerticalBtnEl();
@@ -49,6 +54,14 @@ function syncStrokeToggle(color) {
   const w = strokeWhiteBtnEl();
   const b = strokeBlackBtnEl();
   if (n) n.classList.toggle("active", color === "none");
+  if (w) w.classList.toggle("active", color === "white");
+  if (b) b.classList.toggle("active", color === "black");
+}
+
+// color === null は混在、"default" は「そのまま」 → どちらも全スウォッチ非アクティブ。
+function syncFillToggle(color) {
+  const w = fillWhiteBtnEl();
+  const b = fillBlackBtnEl();
   if (w) w.classList.toggle("active", color === "white");
   if (b) b.classList.toggle("active", color === "black");
 }
@@ -172,9 +185,30 @@ function updateDeleteButtonVisibility() {
 
 // 選択中レイヤー集合からフチ（color/width）の共通値を算出する。
 // 全て同値なら値、混在なら null、選択 0 件なら既定値（none/2）。
+// 選択中レイヤー集合から文字色の共通値を算出する。
+// 全て同値なら値、混在なら null、選択 0 件なら既定値 ("default")。
+function computeCommonFill(selections) {
+  if (selections.length === 0) return "default";
+  let color;
+  for (const s of selections) {
+    const resolved = resolveLayerRef(s);
+    if (!resolved) continue;
+    let c;
+    if (resolved.kind === "existing") {
+      const { page, layer } = resolved;
+      const edit = getEdit(page.path, layer.id) ?? {};
+      c = edit.fillColor ?? layer.fillColor ?? "default";
+    } else {
+      c = resolved.newLayer.fillColor ?? "default";
+    }
+    if (color === undefined) color = c; else if (color !== c) color = null;
+  }
+  return color === undefined ? "default" : color;
+}
+
 function computeCommonStroke(selections) {
   if (selections.length === 0) {
-    return { strokeColor: "none", strokeWidthPx: 2 };
+    return { strokeColor: "none", strokeWidthPx: 20 };
   }
   let color;
   let width;
@@ -186,17 +220,17 @@ function computeCommonStroke(selections) {
       const { page, layer } = resolved;
       const edit = getEdit(page.path, layer.id) ?? {};
       c = edit.strokeColor ?? layer.strokeColor ?? "none";
-      w = edit.strokeWidthPx ?? layer.strokeWidthPx ?? 2;
+      w = edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20;
     } else {
       c = resolved.newLayer.strokeColor ?? "none";
-      w = resolved.newLayer.strokeWidthPx ?? 2;
+      w = resolved.newLayer.strokeWidthPx ?? 20;
     }
     if (color === undefined) color = c; else if (color !== c) color = null;
     if (width === undefined) width = w; else if (width !== w) width = null;
   }
   return {
     strokeColor: color === undefined ? "none" : color,
-    strokeWidthPx: width === undefined ? 2 : width,
+    strokeWidthPx: width === undefined ? 20 : width,
   };
 }
 
@@ -220,6 +254,9 @@ function populateEditor() {
 
   if (selections.length === 0) {
     editor.hidden = true;
+    // 選択解除でも文字色はツールバーに常駐しているため、
+    // 現在の state に合わせて UI だけ同期する（値は勝手に上書きしない）。
+    syncFillToggle(getFillColor());
     return;
   }
   editor.hidden = false;
@@ -256,12 +293,16 @@ function populateEditor() {
     syncDirectionToggle(effectiveDirection);
   }
 
-  // フチは単独/複数いずれでも共通値を表示。
+  // フチ/文字色は単独/複数いずれでも共通値を表示。
   const { strokeColor, strokeWidthPx } = computeCommonStroke(selections);
   if (strokeColor != null) setStrokeColor(strokeColor);
   if (strokeWidthPx != null) setStrokeWidthPx(strokeWidthPx);
   syncStrokeToggle(strokeColor);
   syncStrokeWidthInput(strokeWidthPx);
+
+  const fillColor = computeCommonFill(selections);
+  if (fillColor != null) setFillColor(fillColor);
+  syncFillToggle(fillColor);
 }
 
 let comboItems = [];
@@ -496,6 +537,24 @@ export function bindEditorEvents() {
   bindStrokeButton(strokeWhiteBtnEl(), "white");
   bindStrokeButton(strokeBlackBtnEl(), "black");
 
+  // スウォッチ再クリックで「そのまま（default）」に戻せる：
+  // アクティブ中の色を再押下すると default（色を触らない）状態に復帰する。
+  const bindFillButton = (btn, color) => {
+    if (!btn) return;
+    btn.addEventListener("click", () => {
+      const next = getFillColor() === color ? "default" : color;
+      setFillColor(next);
+      syncFillToggle(next);
+      commitFillField(next);
+    });
+  };
+  bindFillButton(fillWhiteBtnEl(), "white");
+  bindFillButton(fillBlackBtnEl(), "black");
+
+  // ツールバー常駐のフィルスウォッチは、外部の setFillColor（clearPages など）にも追従させる。
+  syncFillToggle(getFillColor());
+  onFillColorChange((c) => syncFillToggle(c));
+
   const widthInput = strokeWidthInputEl();
   if (widthInput) {
     widthInput.addEventListener("input", () => {
@@ -508,12 +567,27 @@ export function bindEditorEvents() {
     });
     widthInput.addEventListener("blur", () => {
       if (widthInput.value === "" || !Number.isFinite(Number(widthInput.value))) {
-        setStrokeWidthPx(2);
-        widthInput.value = "2";
-        commitStrokeFields(null, 2);
+        setStrokeWidthPx(20);
+        widthInput.value = "20";
+        commitStrokeFields(null, 20);
       }
     });
   }
+
+  // 太さの ± ボタン（0.5px ステップ、setStrokeWidthPx で 0〜999 にクランプ）。
+  const adjustStrokeWidth = (delta) => {
+    setStrokeWidthPx(getStrokeWidthPx() + delta);
+    const next = getStrokeWidthPx();
+    if (widthInput) {
+      widthInput.value = String(next);
+      widthInput.placeholder = "";
+    }
+    commitStrokeFields(null, next);
+  };
+  const widthDec = document.getElementById("stroke-width-dec-btn");
+  const widthInc = document.getElementById("stroke-width-inc-btn");
+  if (widthDec) widthDec.addEventListener("click", () => adjustStrokeWidth(-0.5));
+  if (widthInc) widthInc.addEventListener("click", () => adjustStrokeWidth(+0.5));
 }
 
 // colorOrNull / widthOrNull に null を渡すと「各レイヤーの現在値を保持」の意味。
@@ -530,10 +604,10 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
     if (ref.kind === "existing") {
       const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
       curColor = edit.strokeColor ?? ref.layer.strokeColor ?? "none";
-      curWidth = edit.strokeWidthPx ?? ref.layer.strokeWidthPx ?? 2;
+      curWidth = edit.strokeWidthPx ?? ref.layer.strokeWidthPx ?? 20;
     } else {
       curColor = ref.newLayer.strokeColor ?? "none";
-      curWidth = ref.newLayer.strokeWidthPx ?? 2;
+      curWidth = ref.newLayer.strokeWidthPx ?? 20;
     }
     const changes = {
       strokeColor: colorOrNull !== null ? colorOrNull : curColor,
@@ -543,6 +617,23 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
       setEdit(ref.page.path, ref.layer.id, changes);
     } else {
       updateNewLayer(ref.newLayer.tempId, changes);
+    }
+  }
+  rebuildLayerList();
+  refreshAllOverlays();
+}
+
+// 文字色を選択中の全レイヤーに書き込む。
+function commitFillField(color) {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return;
+  for (const sel of selections) {
+    const ref = resolveLayerRef(sel);
+    if (!ref) continue;
+    if (ref.kind === "existing") {
+      setEdit(ref.page.path, ref.layer.id, { fillColor: color });
+    } else {
+      updateNewLayer(ref.newLayer.tempId, { fillColor: color });
     }
   }
   rebuildLayerList();

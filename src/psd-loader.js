@@ -67,15 +67,40 @@ function readStrokeColor(fx) {
   return "none";
 }
 
+// 塗り色は ag-psd の layer.text.style.fillColor に入る。保存時期/バージョンで
+// {r,g,b} / {red,green,blue} / [r,g,b] / #rrggbb の揺れがあるため吸収。
+// 白黒に分類できない色は "default"（= 元の色を保持、書き戻し時に触らない）。
+function extractFillColor(layer) {
+  const c = layer?.text?.style?.fillColor;
+  if (!c) return "default";
+  let r = 0, g = 0, b = 0;
+  if (Array.isArray(c) && c.length >= 3) {
+    [r, g, b] = c;
+  } else if (typeof c === "object") {
+    r = c.r ?? c.red ?? 0;
+    g = c.g ?? c.green ?? 0;
+    b = c.b ?? c.blue ?? 0;
+  } else if (typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c)) {
+    r = parseInt(c.slice(1, 3), 16);
+    g = parseInt(c.slice(3, 5), 16);
+    b = parseInt(c.slice(5, 7), 16);
+  } else {
+    return "default";
+  }
+  if (r > 240 && g > 240 && b > 240) return "white";
+  if (r < 15 && g < 15 && b < 15) return "black";
+  return "default";
+}
+
 function extractStroke(layer) {
   const effects = layer.effects ?? null;
-  if (!effects) return { strokeColor: "none", strokeWidthPx: 2 };
+  if (!effects) return { strokeColor: "none", strokeWidthPx: 20 };
   const fx = pickActiveStrokeFx(effects.stroke);
-  if (!fx) return { strokeColor: "none", strokeWidthPx: 2 };
+  if (!fx) return { strokeColor: "none", strokeWidthPx: 20 };
   const strokeColor = readStrokeColor(fx);
-  if (strokeColor === "none") return { strokeColor: "none", strokeWidthPx: 2 };
+  if (strokeColor === "none") return { strokeColor: "none", strokeWidthPx: 20 };
   const sz = readStrokeSizePx(fx);
-  const strokeWidthPx = typeof sz === "number" && sz > 0 ? sz : 2;
+  const strokeWidthPx = typeof sz === "number" && sz > 0 ? sz : 20;
   return { strokeColor, strokeWidthPx };
 }
 
@@ -84,6 +109,7 @@ function collectTextLayers(layer, out = []) {
     const style = layer.text.style ?? {};
     const orientation = layer.text.orientation;
     const { strokeColor, strokeWidthPx } = extractStroke(layer);
+    const fillColor = extractFillColor(layer);
     out.push({
       id: layer.id,
       name: layer.name ?? "",
@@ -97,6 +123,7 @@ function collectTextLayers(layer, out = []) {
       direction: orientation === "vertical" ? "vertical" : "horizontal",
       strokeColor,
       strokeWidthPx,
+      fillColor,
     });
   }
   if (Array.isArray(layer.children)) {

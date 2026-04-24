@@ -30,7 +30,7 @@ export function renderAllSpreads() {
       <svg class="spreads-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
       </svg>
-      <p class="spreads-empty-text">「フォルダを開く」で PSDを格納しているフォルダを選択、またはドロップしてください。</p>
+      <p class="spreads-empty-text">「PSD を開く」で編集したい PSD ファイルを選択、またはこのウィンドウにドロップしてください。</p>
     `;
     root.appendChild(empty);
     return;

@@ -46,11 +46,24 @@ ver_1.0/
         └── jsx_gen.rs        # 編集内容から ExtendScript を生成（改行 \n → \r、autoLeadingAmount=125 他）
 ```
 
+## 最近の変更（このセッション）
+
+1. **読み込みをファイルベースに変更**: 「PSD を開く」はフォルダ選択ではなく **`.psd` の複数ファイル選択**ダイアログへ変更。`pickPsdFiles` → `loadPsdFilesByPaths`。D&D はファイル・フォルダ両対応（フォルダは内部で `list_psd_files` に展開）。
+2. **文字色スウォッチをサイドツールバーへ移動**: 編集パネルの `既定/白/黒` セグメントを廃止し、サイドツールバー下部に Photoshop 風のオーバーラップ 2 スウォッチ（白左上 / 黒右下）を `margin-top: auto` で配置。アクティブ中の色を再クリックで `default` にトグル off。
+3. **フチ色を 3 つの丸サムネに**: `なし / 白 / 黒` のテキストトグルを 20 px 径の丸スウォッチへ刷新（なし は白地 + 赤い斜線）。アクティブは青リング。
+4. **フチ太さに ± ボタン**: `[−] [input] px [＋]` レイアウト。0.5 px ステップ。初期値 **20 px** に変更（旧 2 px）。
+5. **サイズ / 太さの入力上限を 3 桁に**: どちらも `max=999`、`setTextSize` / `setStrokeWidthPx` のクランプも 999 に合わせ、`.size-input` は `56px → 44px` に縮小。
+6. **組方向トグルをアイコン化**: `縦` / `横` のテキストボタンを、サイドツールバーの T（縦書き）/ Y（横書き）ツールと同じ SVG アイコン（T + 矢印）に置換。
+7. **フチ行の要素順を入替**: 太さ（`[−] input px [＋]`）を左、色ドット 3 つを右へ（`.size-row` の `justify-content: space-between` で自動整列）。「太さ」ラベルも撤廃。
+8. **D&D ビジュアルフィードバック**: 全画面固定の `#drag-overlay` を追加し、Tauri の `drag-enter` / `drag-over` / `drag-leave` / `drag-drop` 4 イベントで青枠パルス（`drag-overlay-pulse`、1.2s ループ）＋ 投下時フラッシュ（`drag-overlay-flash`、0.35s）を再生。
+
+（詳細は下の各セクション、および `4c`・`4d`・`10. UI` を参照）
+
 ## 主要機能
 
 ### 1. PSD 読み込みと縦書き配置
-- 「フォルダを開く」で指定フォルダ内の全 PSD を読み込み、**1 画面 1 ページ** 表示。
-- フォルダ / TXT はウィンドウのどこへでも **ドラッグ&ドロップ可**。Tauri v2 の `dragDropEnabled: true` と `tauri://drag-drop` イベントで絶対パスを取得、拡張子でフォルダ / TXT を振分け。
+- 「PSD を開く」で **.psd ファイルを複数選択**して読み込み、**1 画面 1 ページ** 表示（`pickPsdFiles` が Tauri `plugin-dialog` の `open({ multiple: true, filters: [.psd] })` を呼ぶ → `loadPsdFilesByPaths(paths)` が順次 `loadPsdFromPath` → `addPage`）。
+- PSD ファイル / TXT / フォルダはウィンドウのどこへでも **ドラッグ&ドロップ可**。Tauri v2 の `dragDropEnabled: true` と `tauri://drag-drop` イベントで絶対パスを取得、拡張子で振り分け：`.psd` → そのまま取り込み、`.txt` → `loadTxtFromPath`、拡張子なし（フォルダ想定）→ Rust `list_psd_files` で中身の .psd を展開して取り込む（フォルダ D&D の利便性を維持）。
 - 右パネルは **現在表示中ページのテキストレイヤーのみ** をリスト。
 - キャンバス左の **縦ページバー** のハンドルをドラッグ / ←/→ キーでページ切替。`Ctrl+J` でページ番号入力ダイアログ（カスタムモーダル）。`Ctrl+←/→` で先頭 / 末尾ページ。
 
@@ -79,27 +92,42 @@ ver_1.0/
   - **ツールバーのアクティブ表示は Space 中でも直前ツールのまま**：`applyActive()` が `panSpaceActive && panPreviousTool ? panPreviousTool : getTool()` を参照し、Space 一時切替で V/T のハイライトが外れないようにする。
 
 ### 4. 文字サイズ編集（エディタ内 size-input）
-- 右パネルのレイヤーエディタ内、フォント検索欄の下に − / size-input / pt / ＋ の行。
-- **デフォルト 12pt**。ボタンは ±1pt、キーボード `[`/`]` は ±2pt（Shift で ±10pt）、size-input は直接入力で **0.1pt 単位**（`step="0.1"`）。
+- 右パネルのレイヤーエディタ内、フォント検索欄の下に − / size-input / pt / ＋ の行。入力欄は `.size-input`（44px 幅・右寄せ・tabular-nums）。
+- **デフォルト 12pt**。ボタンは ±1pt、キーボード `[`/`]` は ±2pt（Shift で ±10pt）、size-input は直接入力で **0.1pt 単位**（`step="0.1"`、`min=6` / `max=999` → 3 桁まで受け付け）。`setTextSize` も 6〜999 にクランプ。
 - `state.textSize` で「選択中レイヤーのサイズ」＋「次に配置する既定サイズ」を双方向同期。
 - キャンバスの新規/既存レイヤーのプレビューは `sizePt × dpi/72 × 画面倍率` で実寸相当、複数行は 125% の行送りで計算。
 
 ### 4b. 組方向（縦／横）トグル
-- サイズ入力の右に**セグメント型トグル**（`縦` / `横`）を配置。`.size-field` を `[label] → .size-row[.size-group | .direction-toggle]` 構造に再編。アクティブ側は `--accent` 塗り、ボタン間は 1px 枠線仕切り。
+- サイズ入力の右に**セグメント型トグル**を配置。ラベルは SVG アイコン（サイドツールバーの T（縦書き） / Y（横書き）ボタンと同じ "T + 下／右向き矢印" のストロークアイコンを流用、`stroke="currentColor"` で active 時に白反転）。`.size-field` を `[label] → .size-row[.size-group | .direction-toggle]` 構造に再編。アクティブ側は `--accent` 塗り、ボタン間は 1px 枠線仕切り。
 - 選択中レイヤーの `direction` を即時切替：`commitField("direction", "vertical" | "horizontal")` で既存は `setEdit`、新規は `updateNewLayer` に書き込み、`rebuildLayerList` + `refreshAllOverlays` が自動で走るのでオーバーレイ枠の縦横寸法（`layerRectForExisting` / `layerRectForNew`）と `writing-mode: vertical-rl` が同時更新。
 - `populateEditor` 内で選択レイヤーから有効 direction を算出（既存: `edit.direction ?? layer.direction ?? "horizontal"` ／ 新規: `newLayer.direction ?? "vertical"`）→ `syncDirectionToggle(direction)` でアクティブボタンを同期。
 - スコープ：トグルは「選択済みレイヤーの切替」用。新規配置 direction は「縦書き／横書きツール」の選択で決まるため、トグルは既存／新規レイヤーの事後修正専用。
 
 ### 4c. フチ効果（白／黒の境界線、Photoshop 互換）
-- 編集パネルのフチ行に **なし / 白 / 黒** のセグメント型トグル（`.stroke-toggle`）と、**太さ入力欄（px、step 0.5、0〜20）** を並列配置。
-- state モデル: `state.strokeColor` (`"none" | "white" | "black"`) と `state.strokeWidthPx`（初期値 2）をグローバルに保持し、`textSize` と同じく **選択中レイヤーの現在値**兼**次に配置する既定値**として両用。`addNewLayer` 引数に `strokeColor` / `strokeWidthPx` を追加、`clearPages` でデフォルトにリセット。
+- 編集パネルの **フチ** 行：左側に **太さ入力欄**（`[−][input] px [＋]`、`.size-input` 44px 幅、`step 0.5`、`min=0` / `max=999`、± ボタンで 0.5 px ステップ）、右側に **3 つの丸サムネ**（`.stroke-toggle > .stroke-dot.stroke-dot-none / .stroke-dot-white / .stroke-dot-black`）を `justify-content: space-between` で並列配置（文字色はサイドツールバー下部のスウォッチに分離）。各ドットは 20px 径の丸スウォッチで、`なし` は Photoshop の "No Color" 同様に白地 + 赤い斜線（`::before` 疑似要素、`overflow: hidden` + `border-radius: 50%` で円内にクリップ）、`白` / `黒` は単色塗り。アクティブ側は `box-shadow: 0 0 0 2px var(--accent)` のリングで強調。
+- state モデル: `state.strokeColor` (`"none" | "white" | "black"`) と `state.strokeWidthPx`（初期値 20）をグローバルに保持し、`textSize` と同じく **選択中レイヤーの現在値**兼**次に配置する既定値**として両用。`addNewLayer` 引数に `strokeColor` / `strokeWidthPx` を追加、`clearPages` でデフォルトにリセット。
 - 配置時: `placeTxtSelectionAt` / `startTextInput` 内の `addNewLayer` 呼び出しが `getStrokeColor() / getStrokeWidthPx()` を初期値として引き継ぐ。
 - オーバーレイプレビュー: `canvas-tools.js` の `applyStrokePreview(inner, color, widthPx, pxPerPsd)` が `-webkit-text-stroke: Npx <color>` + `paint-order: stroke fill` を `inner.style` に設定し、outside ストロークを近似。画面倍率 `pxPerPsd` で PSD px → screen px 変換。
 - Photoshop への書き戻し: `jsx_gen.rs` の `applyStrokeEffect(layerRef, {color, size})` が Action Manager で `frameFX`（境界線効果）を設定。outside / 100% / normal / solid color で固定。`color === "none"` のときは `disableStrokeEffect` で明示的に OFF。
 - PSD 読み戻し: `psd-loader.js` の `extractStroke(layer)` が `layer.effects.stroke` を 3 ヘルパ（`pickActiveStrokeFx` / `readStrokeSizePx` / `readStrokeColor`）で解釈し `strokeColor` / `strokeWidthPx` を復元。配列／単体、`enabled` / legacy `visible`、size の単位違い（pt → px 換算）、color が `{r,g,b}` / `{red,green,blue}` / `[r,g,b]` / `#rrggbb` のいずれでも吸収。白/黒以外の色は `"none"` にフォールバック（本アプリは白/黒のみ対応）。
 - **複数選択の一括適用**: `text-editor.js` の `commitStrokeFields(colorOrNull, widthOrNull)` が `getSelectedLayers()` をループして全レイヤーに書き込む。`null` を渡すと**そのレイヤーの現在値を保持**する仕様で、混在状態で片方だけ編集しても他方が上書きされない。色トグル押下時は `currentWidthForCommit()` が混在（input 空）を検知して `null` を返し幅保持モードに切替。
-- **編集パネルの scope 分離**: `index.html` で `data-editor-scope="single"` を付けた要素（フォント / サイズ・組方向）は単独選択時のみ、それ以外（フチ）は複数選択時も表示。`populateEditor` が `selections.length !== 1` で single-only を hidden にする。`computeCommonStroke(selections)` で全選択から共通値を算出、値が揃えば表示、混在なら `null` → トグル全非アクティブ・太さ input 空 + placeholder「混在」。
+- **編集パネルの scope 分離**: `index.html` で `data-editor-scope="single"` を付けた要素（フォント / サイズ・組方向）は単独選択時のみ、それ以外（フチ）は複数選択時も表示。`populateEditor` が `selections.length !== 1` で single-only を hidden にする。`computeCommonStroke(selections)` で全選択から共通値を算出、値が揃えば表示、混在なら `null` → トグル全非アクティブ・太さ input 空 + placeholder「混在」。文字色は編集パネル外（サイドツールバー）に移動したため、`size-field` に含まれない。
 - 保存時の data フロー: `exportEdits()` で既存 edit diff と新規 layer の両方が `strokeColor` / `strokeWidthPx` を保持 → Rust `LayerEdit` / `NewLayer` に serde で受け渡し → JSX 生成で `strokeColor: "..."`, `strokeWidth: N` をレイヤーオブジェクトに出力 → `applyStrokeEffect` 呼び出し。
+
+### 4d. 文字色（白／黒、Photoshop 互換）
+- **配置場所**: サイドツールバー下部（V/T/Y/パンの下、`margin-top: auto` で末尾にピン留め）に Photoshop 風の **オーバーラップ 2 スウォッチ**（`.fill-swatch-stack > .fill-swatch-white + .fill-swatch-black`）のみを配置。白スウォッチは左上、黒スウォッチは右下に重ねて表示し、アクティブ側は `box-shadow: 0 0 0 2px var(--accent)` のリングで強調。**アクティブ中のスウォッチを再クリックすると `default`（そのまま）状態に戻り**、両スウォッチとも非アクティブ表示になる。専用の「既定」ボタンは持たない。
+- **常駐型コントロール**: 選択解除時も表示され、次に配置するテキストの既定文字色を直接操作できる。値は `state.fillColor` と双方向同期（選択があれば共通値を反映、無ければ最後に選んだ値を保持）。
+- **`default`（そのまま）状態**は両スウォッチとも非アクティブ。書き戻し時も `ti.color` を触らない（元の色を保持）。新規レイヤーで `default` のまま配置された場合は従来通り黒を採用。専用の「既定」ボタンは持たず、アクティブ中のスウォッチを**再クリックすると `default` に戻る**トグル挙動で実現。
+- state モデル: `state.fillColor` (`"default" | "white" | "black"`)。`getFillColor` / `setFillColor(color)` / `onFillColorChange(fn)` 提供。`addNewLayer` 引数に `fillColor` を追加、`clearPages` で `"default"` にリセット。
+- 配置時: `placeTxtSelectionAt` / `startTextInput` 内の `addNewLayer` 呼び出しが `getFillColor()` を初期値として引き継ぐ。
+- オーバーレイプレビュー: `canvas-tools.js` の `applyFillPreview(inner, fillColor)` が `white` / `black` のときだけ `inner.style.color = "#fff" / "#000"` を設定。`default` は何も触らず、編集前の見た目を保持。既存/新規レイヤー両方に適用。
+- Photoshop への書き戻し: `jsx_gen.rs` の HEADER に `whiteColor()` と `fillColorFor(name)` を追加。`fillColorFor` は `"white"` / `"black"` で `SolidColor` を返し、`"default"` や未指定は `null`。
+  - 既存レイヤー: `e.fillColor` が文字列かつ `fillColorFor(...)` が非 null のときのみ `ti.color = fc` を適用。失敗は `addWarning` に記録し、保存自体は続行。
+  - 新規レイヤー: `nti.color` を `fillColorFor(nl.fillColor) ?? blackColor()` に設定（既定で黒を維持しつつ白も選択可能）。
+- PSD 読み戻し: `psd-loader.js` の `extractFillColor(layer)` が `layer.text.style.fillColor` を解釈し `white` / `black` を分類。白黒に分類できない色は `"default"` にフォールバック（書き戻しで触らないほうが安全）。color 形状揺れ（`{r,g,b}` / `{red,green,blue}` / `[r,g,b]` / `#rrggbb`）を吸収。
+- **複数選択の一括適用**: `text-editor.js` の `commitFillField(color)` が `getSelectedLayers()` をループして全レイヤーに書き込む。フチの `commitStrokeFields` と違って単一フィールドのみなので保持モードは不要。`computeCommonFill(selections)` で共通値を算出、混在なら `null` → 両スウォッチ全非アクティブ。
+- **UI 同期**: `syncFillToggle(color)` が 2 スウォッチの `.active` を付け替え（`"default"` / `null` はどちらも両方非アクティブ表示）。`bindEditorEvents` で `syncFillToggle(getFillColor())` を初期呼び出しし、さらに `onFillColorChange(syncFillToggle)` を購読して外部変更（`clearPages` 等）にも追従させる。`populateEditor` は選択 0 件時に編集パネルを hide しつつ `syncFillToggle(getFillColor())` でスウォッチ側の表示を保つ（ユーザーが意図して選んだ次配置用の色を勝手にリセットしない）。クリックハンドラは `getFillColor() === color` なら `default` に戻し、違えば `color` をセット（アクティブ再クリックでトグル off）。
+- 保存時の data フロー: `exportEdits()` で既存 edit diff と新規 layer の両方が `fillColor` を保持 → Rust `LayerEdit` / `NewLayer` の `fill_color: Option<String>` に受け渡し → JSX 生成で `fillColor: "..."` をレイヤーオブジェクトに出力 → `applyToPsd` 内で `ti.color` / `nti.color` に反映。
 
 ### 5. フォント選択
 - エディタ内は **カスタムコンボボックス**（検索入力 + `▾` トグル + 絞込みドロップダウン）。
@@ -136,7 +164,7 @@ ver_1.0/
 - メニュー項目:
   - **上書き保存**（`Ctrl+S`）: 既存 PSD を `doc.save()` で上書き。
   - **別名で保存**（`Ctrl+Shift+S`）: 親フォルダを選択するダイアログ → `<元フォルダ名>_YYYYMMDD_HHMMSS` のサブフォルダを Rust の `std::fs::create_dir_all` で作成 → 各 PSD を `doc.saveAs(file, PhotoshopSaveOptions, asCopy=true, Extension.LOWERCASE)` で書き出し。
-- **初回 Ctrl+S は別名で保存に自動フォールバック**：`hasSavedThisSession` フラグ（`loadFolderByPath` 開始時に false リセット、成功で true）を main.js が保持。メニューから明示的に「上書き保存」を選べば常に上書き。
+- **初回 Ctrl+S は別名で保存に自動フォールバック**：`hasSavedThisSession` フラグ（`loadPsdFilesByPaths` 開始時に false リセット、成功で true）を main.js が保持。メニューから明示的に「上書き保存」を選べば常に上書き。
 - payload は従来の `exportEdits()` に `saveMode: "overwrite" | "saveAs"` と `targetDir` を追加。`EditPayload`（lib.rs）と `generate_apply_script`（jsx_gen.rs）が対応。JSX の `applyToPsd(psdPath, edits, newLayers, savePath)` は 4 引数目 `savePath` が空なら `doc.save()`、セットされていれば `saveAs` を呼ぶ。
 - ドロップダウンは save-btn クリックでトグル、`document mousedown` による外側クリック検出 / `Esc` で閉じる。保存成功で右上トーストに保存先パスを併記。
 
@@ -159,13 +187,14 @@ ver_1.0/
   - ホバー/ドラッグ中にハンドル左側へ `現在ページ / 総数` のラベル。
   - 上部 `>>` トグルで折畳／展開、24px 幅に縮小＆トラック非表示。`localStorage psdesign_pagebar_visible` で永続化。
   - **折畳時は背景・枠・下部 padding をすべて消し、展開ボタン `＜` のみが浮いて見える状態**（`.pagebar.collapsed { background: transparent; border: none; padding: 6px 0 0; gap: 0; }`）。展開すると通常の `var(--panel)` 背景と枠が復活。
-- **サイドツールバー**: V（選択） / T（縦書き） / Y（横書き） / パン の縦 4 ボタン、アクティブは青塗り、枠無し。縦書き／横書きは `data-tool="text-v"` / `data-tool="text-h"` で切り替わり、どちらも `isTextTool(tool)` で同一系統として扱われる。
+- **サイドツールバー**: V（選択） / T（縦書き） / Y（横書き） / パン の縦 4 ボタン、アクティブは青塗り、枠無し。縦書き／横書きは `data-tool="text-v"` / `data-tool="text-h"` で切り替わり、どちらも `isTextTool(tool)` で同一系統として扱われる。末尾（`margin-top: auto` で押し下げ）に **文字色スウォッチ**（`.fill-color-picker`）：Photoshop 風に白と黒の小スウォッチをオーバーラップ配置し、アクティブ側は青リングで強調。**アクティブ中の色を再クリックすると「そのまま（default）」に戻る**（両スウォッチ非アクティブ表示）。
 - **右サイドパネル**（上から順）:
   1. 原稿 TXT（ファイル名 + ゴミ箱アイコンのクリアボタン、TXT ドロップゾーン）。未読込時は file-text アイコン＋メッセージ。
-  2. **編集**（h2 見出し、常時表示）: フォントコンボボックス / サイズ入力 ＋ **組方向トグル（縦／横）** / **フチ（なし/白/黒）＋太さ**。見出し直下の editor は**選択 0 件で hidden、1 件以上で表示**。`data-editor-scope="single"` を付けた項目（フォント / サイズ・組方向）は単独選択時のみ、**フチ項目は複数選択時も表示**して一括適用できる。項目間は `.editor > *:not([hidden]) + *:not([hidden]) { border-top: 1px solid var(--border); margin-top/padding-top: 10px; }` で**区切り線**を描画（hidden 要素は先頭扱いにならないよう `:not([hidden])` ペアのみ適用）。テキスト本文の編集は T ツールの in-place 編集で行う（サイドバーからの編集欄は廃止）。
+  2. **編集**（h2 見出し、常時表示）: フォントコンボボックス / サイズ入力 ＋ **組方向トグル（縦／横）** / **フチ行**（`なし/白/黒` トグル + `太さ: N px`）。見出し直下の editor は**選択 0 件で hidden、1 件以上で表示**。`data-editor-scope="single"` を付けた項目（フォント / サイズ・組方向）は単独選択時のみ、**フチ項目は複数選択時も表示**して一括適用できる。項目間は `.editor > *:not([hidden]) + *:not([hidden]) { border-top: 1px solid var(--border); margin-top/padding-top: 10px; }` で**区切り線**を描画（hidden 要素は先頭扱いにならないよう `:not([hidden])` ペアのみ適用）。テキスト本文の編集は T ツールの in-place 編集で行う（サイドバーからの編集欄は廃止）。文字色はサイドツールバー末尾のスウォッチに分離（選択解除中も操作可）。
   3. テキストレイヤー一覧。項目クリックで単数選択、**Shift+クリックで複数選択の加算／解除**（`toggleLayerSelected` 経由）。キャンバスのマーキー選択・Shift+レイヤークリックと同一の `state.selectedLayers` モデルを共有。
   4. **レイヤー削除ボタン**（一覧下部 `.layer-list-footer` 内、ゴミ箱アイコンの `.layer-delete-btn`）：選択中のいずれかが新規レイヤーの場合のみ表示（`updateDeleteButtonVisibility`）。クリックで `confirmDialog`（「レイヤーを削除します。よろしいですか？」）を出し、OK のときだけ選択中の新規分を一括削除し、既存レイヤーは選択に残す。
-- **空状態**（PSD 未読込）: spreads-container 中央にフォルダアイコン＋「「フォルダを開く」で PSDを格納しているフォルダを選択、またはドロップしてください。」
+- **空状態**（PSD 未読込）: spreads-container 中央にフォルダアイコン＋「「PSD を開く」で編集したい PSD ファイルを選択、またはこのウィンドウにドロップしてください。」
+- **D&D オーバーレイ**（`#drag-overlay`）: ファイルドラッグ中の視覚フィードバック。全画面固定・`pointer-events: none`・`z-index: 400`（モーダルの上に重なる）。Tauri の `tauri://drag-enter` / `tauri://drag-over` で `.active` 付与 → 青枠 + 内側グロウの **1.2 秒パルスアニメーション**（`drag-overlay-pulse`、`--accent` ↔ `--accent-hover`）、`tauri://drag-leave` で外して 0.18 秒 fade out。`tauri://drag-drop` では `.flash` クラスによる 0.35 秒のワンショットブライトフラッシュ（`drag-overlay-flash`）で投下確認を演出してから消える。
 - **中央プログレスモーダル**: PSD 読込・Photoshop 反映時。背景・カード・テキスト要素すべてに `data-tauri-drag-region` を付与してあり、読込中でもモーダル上のどこをドラッグしてもウインドウを移動できる。
 - **`confirmDialog`**: Tauri の native `ask` を置き換えるカスタムモーダル。`Promise<boolean>` を返し、Enter 確定 / Esc / 暗幕 / キャンセルで `false`。
 - **テーマ**: `:root[data-theme="dark"|"light"]` に CSS 変数セットを分離。キャンバス背景・ページ背景・ページバー・スクロールバーも変数化済み。`color-scheme` も同時に切替、`::-webkit-scrollbar*` と `scrollbar-color` でスクロールバーの配色も両テーマ追従。
@@ -196,8 +225,8 @@ ver_1.0/
 
 ## データフロー
 
-1. フォルダ選択 or ドロップ → Rust `list_psd_files` → `loadPsdFromPath`（ag-psd）→ `state.pages` に追加。`hasSavedThisSession` を false にリセット。
-2. ユーザー編集 → `state.edits`（既存レイヤー差分）/ `state.newLayers`（新規配置、フォント / サイズ / 方向 / フチ色・太さ含む）に蓄積。T ツールで既存/新規レイヤーをクリックすると in-place textarea が開き、確定で同じ state 差分に書き戻す。
+1. PSD ファイル選択（複数可）or ファイル／フォルダのドロップ → フォルダは Rust `list_psd_files` で `.psd` を展開 → `loadPsdFromPath`（ag-psd）→ `state.pages` に追加。`hasSavedThisSession` を false にリセット。`state.folder` は最初に読み込んだ PSD の親ディレクトリで初期化（別名で保存のフォルダ名生成に使う）。
+2. ユーザー編集 → `state.edits`（既存レイヤー差分）/ `state.newLayers`（新規配置、フォント / サイズ / 方向 / 文字色 / フチ色・太さ含む）に蓄積。T ツールで既存/新規レイヤーをクリックすると in-place textarea が開き、確定で同じ state 差分に書き戻す。
 3. 選択状態は `state.selectedLayers: Array<{pageIndex, layerId}>` で複数管理。`setSelectedLayer` / `getSelectedLayer` は配列の先頭要素を扱う単数ラッパ。マーキー選択・Shift トグルは `setSelectedLayers` / `toggleLayerSelected` で配列を更新。
 4. 「保存」 → `exportEdits()` に `saveMode` / `targetDir` を付けた payload を `apply_edits_via_photoshop` に渡す → 別名保存時は Rust で `create_dir_all` → JSX 生成（各 PSD に `savePath` を埋込）→ PS 実行 → センチネル → 完了。成功で `hasSavedThisSession = true`。
 
@@ -205,7 +234,7 @@ ver_1.0/
 
 - テキストレイヤーの編集は「差分」として state に持ち、元の `textLayers` はイミュータブルに扱う。
 - 新規レイヤーは `tempId`（"new-1", …）で識別。保存で実 Photoshop ID が振られ、次回読込時は既存レイヤーとして再編集できる。
-- **Tauri 2 の `dragDropEnabled: true`**（window config）で OS の D&D を Tauri `tauri://drag-drop` イベントとして受け取り、絶対パスが取れる。フォルダ / TXT を拡張子で振分け。
+- **Tauri 2 の `dragDropEnabled: true`**（window config）で OS の D&D を Tauri の 4 イベント（`tauri://drag-enter` / `tauri://drag-over` / `tauri://drag-leave` / `tauri://drag-drop`）として受け取り、絶対パスが取れる。`main.js` の `setupTauriDragDrop` が 4 つすべてを listen し、enter/over で D&D オーバーレイ表示、leave で非表示、drop で flash アニメ + `handleDroppedPaths` による振分け（`.psd` → 読込、`.txt` → `loadTxtFromPath`、拡張子なし → フォルダ想定で `list_psd_files` 展開）。
 - `ag-psd` の合成 `psd.canvas` を表示に使うため、色域（ICC）や一部レイヤー効果の忠実度は Photoshop 完全一致ではない。
 - 段落内の改行は UI では `\n`、Photoshop 保存時のみ JSX 側で `\r` に正規化。
 - 縦ページバーは `.workspace` のグリッド列（デフォルト `1fr auto 44px 320px` ／ 反転時 `320px 44px auto 1fr`）で幅を確保。折畳時はページバー列 44 → 24。ワークスペース反転時は `.workspace.flipped > .xxx` セレクタで各子要素に `grid-column` を再割当てし、ページバーハンドルラベルの `right: 100%` → `left: 100%`、折畳トグル SVG の `transform: scaleX(-1)` も自動反転。

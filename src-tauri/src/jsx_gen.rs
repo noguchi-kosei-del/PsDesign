@@ -75,6 +75,9 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             if let Some(w) = layer.stroke_width_px {
                 out.push_str(&format!(", strokeWidth: {}", w));
             }
+            if let Some(ref f) = layer.fill_color {
+                out.push_str(&format!(", fillColor: {}", js_string(f)));
+            }
             out.push_str("},\n");
         }
         out.push_str("], [\n");
@@ -96,6 +99,9 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             }
             if let Some(w) = nl.stroke_width_px {
                 out.push_str(&format!(", strokeWidth: {}", w));
+            }
+            if let Some(ref f) = nl.fill_color {
+                out.push_str(&format!(", fillColor: {}", js_string(f)));
             }
             out.push_str("},\n");
         }
@@ -220,6 +226,22 @@ function blackColor() {
   return c;
 }
 
+function whiteColor() {
+  var c = new SolidColor();
+  c.rgb.red = 255;
+  c.rgb.green = 255;
+  c.rgb.blue = 255;
+  return c;
+}
+
+// name: "white" | "black" | "default"（それ以外）。
+// "default" は null を返し、呼び出し側で「色を変更しない」を選択。
+function fillColorFor(name) {
+  if (name === "white") return whiteColor();
+  if (name === "black") return blackColor();
+  return null;
+}
+
 function normalizeLineBreaks(s) {
   if (typeof s !== "string") return s;
   return s.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
@@ -337,10 +359,18 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
         try {
           applyStrokeEffect(layer, {
             color: (typeof e.strokeColor === "string") ? e.strokeColor : "none",
-            size: (typeof e.strokeWidth === "number") ? e.strokeWidth : 2,
+            size: (typeof e.strokeWidth === "number") ? e.strokeWidth : 20,
           });
         } catch (eStroke) {
           addWarning("境界線効果の適用に失敗 (layer " + e.id + "): " + eStroke);
+        }
+      }
+      if (typeof e.fillColor === "string") {
+        var fc = fillColorFor(e.fillColor);
+        if (fc) {
+          try { ti.color = fc; } catch (eFill) {
+            addWarning("文字色の適用に失敗 (layer " + e.id + "): " + eFill);
+          }
         }
       }
     }
@@ -362,7 +392,10 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
         nti.size = new UnitValue((typeof nl.size === "number") ? nl.size : 24, "pt");
         try { nti.autoLeadingAmount = 125; } catch (eAutoLeadPct) {}
         try { nti.useAutoLeading = true; } catch (eAutoLead) {}
-        try { nti.color = blackColor(); } catch (eColor) {}
+        try {
+          var nfc = fillColorFor(typeof nl.fillColor === "string" ? nl.fillColor : "default");
+          nti.color = nfc ? nfc : blackColor();
+        } catch (eColor) {}
         nti.position = [new UnitValue(nl.x, "px"), new UnitValue(nl.y, "px")];
         try {
           var _b = layerRef.bounds;
@@ -371,7 +404,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
         try {
           applyStrokeEffect(layerRef, {
             color: (typeof nl.strokeColor === "string") ? nl.strokeColor : "none",
-            size: (typeof nl.strokeWidth === "number") ? nl.strokeWidth : 2,
+            size: (typeof nl.strokeWidth === "number") ? nl.strokeWidth : 20,
           });
         } catch (eStrokeNew) {
           addWarning("新規レイヤーへの境界線効果適用に失敗: " + eStrokeNew);

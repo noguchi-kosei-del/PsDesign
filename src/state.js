@@ -17,8 +17,10 @@ const state = {
   currentFontListeners: new Set(),
   strokeColor: "none", // "none" | "white" | "black"
   strokeColorListeners: new Set(),
-  strokeWidthPx: 2,
+  strokeWidthPx: 20,
   strokeWidthListeners: new Set(),
+  fillColor: "default", // "default" | "white" | "black"
+  fillColorListeners: new Set(),
   currentPageIndex: 0,
   pageIndexListeners: new Set(),
   zoom: 1,
@@ -44,7 +46,8 @@ export function clearPages() {
     for (const fn of state.pageIndexListeners) fn(0);
   }
   setStrokeColor("none");
-  setStrokeWidthPx(2);
+  setStrokeWidthPx(20);
+  setFillColor("default");
 }
 
 export function addPage(page) { state.pages.push(page); }
@@ -169,6 +172,7 @@ export function addNewLayer({
   direction,
   strokeColor,
   strokeWidthPx,
+  fillColor,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -181,7 +185,8 @@ export function addNewLayer({
     sizePt: sizePt ?? null,
     direction: direction ?? "vertical",
     strokeColor: strokeColor ?? "none",
-    strokeWidthPx: Number.isFinite(strokeWidthPx) ? strokeWidthPx : 2,
+    strokeWidthPx: Number.isFinite(strokeWidthPx) ? strokeWidthPx : 20,
+    fillColor: fillColor === "white" || fillColor === "black" ? fillColor : "default",
   };
   state.newLayers.push(layer);
   return layer;
@@ -249,7 +254,7 @@ export function setTextSize(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) return;
   const rounded = Math.round(v * 10) / 10;
-  const clamped = Math.max(6, Math.min(400, rounded));
+  const clamped = Math.max(6, Math.min(999, rounded));
   if (state.textSize === clamped) return;
   state.textSize = clamped;
   for (const fn of state.textSizeListeners) fn(clamped);
@@ -303,7 +308,7 @@ export function setStrokeWidthPx(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) return;
   const rounded = Math.round(v * 10) / 10;
-  const clamped = Math.max(0, Math.min(20, rounded));
+  const clamped = Math.max(0, Math.min(999, rounded));
   if (state.strokeWidthPx === clamped) return;
   state.strokeWidthPx = clamped;
   for (const fn of state.strokeWidthListeners) fn(clamped);
@@ -311,4 +316,16 @@ export function setStrokeWidthPx(n) {
 export function onStrokeWidthChange(fn) {
   state.strokeWidthListeners.add(fn);
   return () => state.strokeWidthListeners.delete(fn);
+}
+
+export function getFillColor() { return state.fillColor; }
+export function setFillColor(color) {
+  const v = color === "white" || color === "black" ? color : "default";
+  if (state.fillColor === v) return;
+  state.fillColor = v;
+  for (const fn of state.fillColorListeners) fn(v);
+}
+export function onFillColorChange(fn) {
+  state.fillColorListeners.add(fn);
+  return () => state.fillColorListeners.delete(fn);
 }

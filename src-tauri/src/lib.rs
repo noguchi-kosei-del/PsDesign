@@ -24,6 +24,8 @@ pub struct LayerEdit {
     pub stroke_color: Option<String>,
     #[serde(rename = "strokeWidthPx", default)]
     pub stroke_width_px: Option<f64>,
+    #[serde(rename = "fillColor", default)]
+    pub fill_color: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -41,6 +43,8 @@ pub struct NewLayer {
     pub stroke_color: Option<String>,
     #[serde(rename = "strokeWidthPx", default)]
     pub stroke_width_px: Option<f64>,
+    #[serde(rename = "fillColor", default)]
+    pub fill_color: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

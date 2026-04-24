@@ -38,43 +38,45 @@ import {
   setZoom,
 } from "./state.js";
 
-async function pickFolder() {
+async function pickPsdFiles() {
   const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({ directory: true, multiple: false });
-  return typeof picked === "string" ? picked : null;
+  const picked = await open({
+    multiple: true,
+    filters: [{ name: "Photoshop Document", extensions: ["psd"] }],
+  });
+  if (!picked) return [];
+  return Array.isArray(picked) ? picked : [picked];
 }
 
-async function listPsdFiles(folder) {
+async function listPsdFilesInFolder(folder) {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke("list_psd_files", { folder });
 }
 
-async function handleOpenFolder() {
-  const folder = await pickFolder();
-  if (!folder) return;
-  await loadFolderByPath(folder);
+async function handleOpenFiles() {
+  const files = await pickPsdFiles();
+  if (!files.length) return;
+  await loadPsdFilesByPaths(files);
 }
 
-async function loadFolderByPath(folder) {
-  if (!folder) return;
-  setFolder(folder);
+function parentDir(p) {
+  if (!p) return null;
+  const m = p.match(/^(.+)[\\/][^\\/]+$/);
+  return m ? m[1] : null;
+}
+
+async function loadPsdFilesByPaths(files) {
+  if (!files || files.length === 0) return;
+  // 最初に選んだファイルの親ディレクトリを「別名で保存」の既定フォルダ名算出に使う。
+  setFolder(parentDir(files[0]) ?? null);
   hasSavedThisSession = false;
 
-  showProgress({ title: "PSD を読み込み中", detail: "ファイル一覧を取得中..." });
-
-  let files;
-  try {
-    files = await listPsdFiles(folder);
-  } catch (e) {
-    hideProgress();
-    toast(`フォルダ読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
-    return;
-  }
-  if (!files.length) {
-    hideProgress();
-    toast(`PSD が見つかりません: ${folder}`, { kind: "error", duration: 4500 });
-    return;
-  }
+  showProgress({
+    title: "PSD を読み込み中",
+    detail: baseName(files[0]),
+    current: 0,
+    total: files.length,
+  });
 
   clearPages();
   renderAllSpreads();
@@ -450,19 +452,56 @@ function bindSizeTool() {
 
 async function handleDroppedPaths(paths) {
   if (!paths || paths.length === 0) return;
+  const psdFiles = [];
+  const txtFiles = [];
+  const unknowns = []; // 拡張子なし ＝ おそらくフォルダ
   for (const p of paths) {
-    if (/\.txt$/i.test(p)) {
-      await loadTxtFromPath(p);
-    } else {
-      await loadFolderByPath(p);
+    if (/\.psd$/i.test(p)) psdFiles.push(p);
+    else if (/\.txt$/i.test(p)) txtFiles.push(p);
+    else unknowns.push(p);
+  }
+  // フォルダらしきものは中の .psd を展開して取り込む（従来の利便性を維持）。
+  for (const folder of unknowns) {
+    try {
+      const files = await listPsdFilesInFolder(folder);
+      if (Array.isArray(files) && files.length) psdFiles.push(...files);
+    } catch (e) {
+      console.warn("フォルダ展開に失敗:", folder, e);
     }
+  }
+  if (psdFiles.length > 0) {
+    await loadPsdFilesByPaths(psdFiles);
+  }
+  for (const t of txtFiles) {
+    await loadTxtFromPath(t);
   }
 }
 
 async function setupTauriDragDrop() {
   try {
     const { listen } = await import("@tauri-apps/api/event");
+    const overlay = document.getElementById("drag-overlay");
+    const showOverlay = () => {
+      if (!overlay) return;
+      overlay.classList.remove("flash");
+      overlay.classList.add("active");
+    };
+    const hideOverlay = () => overlay?.classList.remove("active");
+    const flashOverlay = () => {
+      if (!overlay) return;
+      overlay.classList.remove("active");
+      overlay.classList.remove("flash");
+      // 同フレームの re-add でアニメーションを確実に再発火
+      void overlay.offsetWidth;
+      overlay.classList.add("flash");
+      setTimeout(() => overlay.classList.remove("flash"), 400);
+    };
+
+    await listen("tauri://drag-enter", showOverlay);
+    await listen("tauri://drag-over", showOverlay);
+    await listen("tauri://drag-leave", hideOverlay);
     await listen("tauri://drag-drop", (e) => {
+      flashOverlay();
       const paths = Array.isArray(e.payload?.paths) ? e.payload.paths : [];
       handleDroppedPaths(paths).catch((err) => console.error(err));
     });
@@ -602,7 +641,7 @@ function bindWindowControls() {
 }
 
 function init() {
-  document.getElementById("open-folder-btn").addEventListener("click", handleOpenFolder);
+  document.getElementById("open-folder-btn").addEventListener("click", handleOpenFiles);
   bindSaveMenu();
   initHamburgerMenu();
   bindTools();

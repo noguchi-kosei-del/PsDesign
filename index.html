@@ -38,7 +38,7 @@
           </button>
         </div>
         <div class="toolbar-actions">
-          <button id="open-folder-btn" class="icon-btn" title="フォルダを開く" aria-label="フォルダを開く">
+          <button id="open-folder-btn" class="icon-btn" title="PSD を開く" aria-label="PSD を開く">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
             </svg>
@@ -161,6 +161,12 @@
               <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
             </svg>
           </button>
+          <div class="fill-color-picker" role="group" aria-label="文字色">
+            <div class="fill-swatch-stack">
+              <button id="fill-white-btn" class="fill-swatch fill-swatch-white" type="button" data-fill="white" title="白文字（もう一度クリックで解除）" aria-label="白文字"></button>
+              <button id="fill-black-btn" class="fill-swatch fill-swatch-black" type="button" data-fill="black" title="黒文字（もう一度クリックで解除）" aria-label="黒文字"></button>
+            </div>
+          </div>
         </nav>
         <aside class="side-panel">
           <section class="txt-source" id="txt-source">
@@ -206,28 +212,45 @@
               <div class="size-row">
                 <div class="size-group" role="group" aria-label="文字サイズ">
                   <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
-                  <input id="size-input" class="size-input" type="number" min="6" max="400" step="0.1" value="12" aria-label="サイズ" />
+                  <input id="size-input" class="size-input" type="number" min="6" max="999" step="0.1" value="12" aria-label="サイズ" />
                   <span class="size-unit">pt</span>
                   <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
                 </div>
                 <div class="direction-toggle" role="group" aria-label="組方向">
-                  <button id="dir-vertical-btn" class="dir-toggle-btn" type="button" data-direction="vertical" title="縦書き">縦</button>
-                  <button id="dir-horizontal-btn" class="dir-toggle-btn" type="button" data-direction="horizontal" title="横書き">横</button>
+                  <button id="dir-vertical-btn" class="dir-toggle-btn" type="button" data-direction="vertical" title="縦組み" aria-label="縦組み">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="2 6 2 3 12 3 12 6"/>
+                      <line x1="4" y1="20" x2="10" y2="20"/>
+                      <line x1="7" y1="3" x2="7" y2="20"/>
+                      <line x1="18" y1="5" x2="18" y2="19"/>
+                      <polyline points="14 15 18 19 22 15"/>
+                    </svg>
+                  </button>
+                  <button id="dir-horizontal-btn" class="dir-toggle-btn" type="button" data-direction="horizontal" title="横組み" aria-label="横組み">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="2 6 2 3 12 3 12 6"/>
+                      <line x1="4" y1="20" x2="10" y2="20"/>
+                      <line x1="7" y1="3" x2="7" y2="20"/>
+                      <line x1="13" y1="12" x2="22" y2="12"/>
+                      <polyline points="18 8 22 12 18 16"/>
+                    </svg>
+                  </button>
                 </div>
               </div>
             </div>
             <div class="size-field">
               <span class="size-field-label">フチ</span>
               <div class="size-row">
-                <div class="stroke-toggle" role="group" aria-label="境界線">
-                  <button id="stroke-none-btn" class="stroke-toggle-btn" type="button" data-stroke="none" title="境界線なし">なし</button>
-                  <button id="stroke-white-btn" class="stroke-toggle-btn" type="button" data-stroke="white" title="白フチ">白</button>
-                  <button id="stroke-black-btn" class="stroke-toggle-btn" type="button" data-stroke="black" title="黒フチ">黒</button>
-                </div>
                 <div class="stroke-width-group" role="group" aria-label="フチ太さ">
-                  <span class="size-field-label size-field-inline">太さ</span>
-                  <input id="stroke-width-input" class="size-input" type="number" min="0" max="20" step="0.5" value="2" aria-label="境界線の太さ" />
+                  <button id="stroke-width-dec-btn" class="size-btn" type="button" title="細く" aria-label="細く">−</button>
+                  <input id="stroke-width-input" class="size-input" type="number" min="0" max="999" step="0.5" value="20" aria-label="境界線の太さ" />
                   <span class="size-unit">px</span>
+                  <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
+                </div>
+                <div class="stroke-toggle" role="group" aria-label="境界線">
+                  <button id="stroke-none-btn" class="stroke-dot stroke-dot-none" type="button" data-stroke="none" title="境界線なし" aria-label="境界線なし"></button>
+                  <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
+                  <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
                 </div>
               </div>
             </div>
@@ -315,6 +338,7 @@
       </div>
     </div>
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
+    <div class="drag-overlay" id="drag-overlay" aria-hidden="true"></div>
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

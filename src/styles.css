@@ -341,7 +341,7 @@ html, body, #app {
 }
 
 .size-input {
-  width: 56px;
+  width: 44px;
   padding: 4px 6px;
   background: var(--bg);
   color: var(--text);
@@ -390,7 +390,11 @@ html, body, #app {
   line-height: 1;
   cursor: pointer;
   transition: background 0.1s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
 }
+.dir-toggle-btn svg { display: block; }
 .dir-toggle-btn + .dir-toggle-btn {
   border-left: 1px solid var(--border);
 }
@@ -402,35 +406,73 @@ html, body, #app {
   color: #fff;
 }
 
+/* フチのサムネ（なし / 白 / 黒）：3 つの丸スウォッチを横並び表示。 */
 .stroke-toggle {
   display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  align-items: center;
+  gap: 8px;
+}
+
+.stroke-dot {
+  position: relative;
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  padding: 0;
+  border: 1px solid #555;
+  border-radius: 50%;
+  background: transparent;
+  cursor: pointer;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.08s ease;
+  font-size: 0;
+  color: transparent;
+}
+
+.stroke-dot:hover {
+  transform: scale(1.08);
+}
+
+.stroke-dot.active {
+  box-shadow: 0 0 0 2px var(--accent), 0 1px 2px rgba(0, 0, 0, 0.3);
+}
+
+.stroke-dot-white { background: #fff; }
+.stroke-dot-black { background: #000; }
+
+/* 「なし」は白地に赤い斜線（Photoshop の "No Color" スウォッチと同じ視覚記号） */
+.stroke-dot-none {
+  background: var(--panel);
+  border-color: #888;
   overflow: hidden;
 }
-.stroke-toggle-btn {
-  min-width: 34px;
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--text);
-  border: none;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.1s;
-}
-.stroke-toggle-btn + .stroke-toggle-btn {
-  border-left: 1px solid var(--border);
-}
-.stroke-toggle-btn:hover:not(.active) {
-  background: var(--panel-hover);
-}
-.stroke-toggle-btn.active {
-  background: var(--accent);
-  color: #fff;
+.stroke-dot-none::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 24px;
+  height: 2px;
+  background: var(--danger);
+  border-radius: 1px;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  pointer-events: none;
 }
 
 .stroke-width-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+/* 文字色トグルとフチトグルを横並びに並べるためのクラスタ */
+.toggle-cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.toggle-sub {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -606,6 +648,60 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--accent);
   border: none;
   color: #fff;
+}
+
+/* Photoshop 風の文字色ピッカー：白/黒の 2 枚をオーバーラップさせて下部に配置。
+   側面ツールバーの末尾に `margin-top: auto` で押し込み、上下を仕切り線で分ける。 */
+.fill-color-picker {
+  margin-top: auto;
+  padding: 10px 0 4px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.fill-swatch-stack {
+  position: relative;
+  width: 28px;
+  height: 28px;
+}
+
+.fill-swatch {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid #555;
+  border-radius: 2px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  transition: transform 0.08s ease;
+}
+
+.fill-swatch:hover {
+  transform: scale(1.08);
+}
+
+.fill-swatch-white {
+  background: #fff;
+  top: 0;
+  left: 0;
+  z-index: 1;
+}
+
+.fill-swatch-black {
+  background: #000;
+  bottom: 0;
+  right: 0;
+  z-index: 2;
+}
+
+.fill-swatch.active {
+  box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0, 0, 0, 0.4);
+  z-index: 3;
 }
 
 .spreads-container {
@@ -1378,3 +1474,49 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .toast-success { border-left-color: #3ca86b; }
 .toast-error { border-left-color: var(--danger); }
 .toast-info { border-left-color: var(--accent); }
+
+/* ドラッグ中に表示する全画面の枠オーバーレイ。Tauri の drag-enter/over イベント
+   で .active が付き、drag-leave/drop で外れる。pointer-events: none なので
+   下の UI はブロックしない。 */
+.drag-overlay {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  border: 3px solid var(--accent);
+  background: rgba(0, 120, 212, 0.05);
+  box-shadow: inset 0 0 24px rgba(0, 120, 212, 0.25);
+  opacity: 0;
+  transition: opacity 0.18s ease;
+  z-index: 400;
+}
+
+.drag-overlay.active {
+  opacity: 1;
+  animation: drag-overlay-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes drag-overlay-pulse {
+  0%, 100% {
+    box-shadow: inset 0 0 24px rgba(0, 120, 212, 0.25);
+    border-color: var(--accent);
+  }
+  50% {
+    box-shadow: inset 0 0 56px rgba(0, 120, 212, 0.45);
+    border-color: var(--accent-hover);
+  }
+}
+
+/* 投下成功時の一瞬のフラッシュ */
+.drag-overlay.flash {
+  animation: drag-overlay-flash 0.35s ease-out;
+}
+@keyframes drag-overlay-flash {
+  0% {
+    opacity: 1;
+    box-shadow: inset 0 0 80px rgba(0, 120, 212, 0.7);
+  }
+  100% {
+    opacity: 0;
+    box-shadow: inset 0 0 24px rgba(0, 120, 212, 0);
+  }
+}

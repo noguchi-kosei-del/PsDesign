@@ -3,6 +3,7 @@ import {
   addNewLayer,
   getCurrentFont,
   getEdit,
+  getFillColor,
   getFontDisplayName,
   getNewLayersForPsd,
   getSelectedLayer,
@@ -144,6 +145,13 @@ function rectsIntersect(a, b) {
   return !(b.left >= a.right || b.right <= a.left || b.top >= a.bottom || b.bottom <= a.top);
 }
 
+// fillColor === "default" はプレビュー上も編集前の表示を維持するため何も設定しない。
+// white/black のときだけ CSS color を上書きする。
+function applyFillPreview(inner, fillColor) {
+  if (fillColor === "white") inner.style.color = "#fff";
+  else if (fillColor === "black") inner.style.color = "#000";
+}
+
 function applyStrokePreview(inner, strokeColor, strokeWidthPx, pxPerPsd) {
   if (!strokeColor || strokeColor === "none" || !(strokeWidthPx > 0) || !(pxPerPsd > 0)) return;
   const cssColor = strokeColor === "white" ? "#fff" : "#000";
@@ -177,10 +185,11 @@ function renderOverlay(ctx) {
     }
     const existingFontCss = cssFontFamily(edit.fontPostScriptName ?? layer.font);
     if (existingFontCss) inner.style.fontFamily = existingFontCss;
+    applyFillPreview(inner, edit.fillColor ?? layer.fillColor ?? "default");
     applyStrokePreview(
       inner,
       edit.strokeColor ?? layer.strokeColor ?? "none",
-      edit.strokeWidthPx ?? layer.strokeWidthPx ?? 2,
+      edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
       pxPerPsd,
     );
     box.appendChild(inner);
@@ -207,10 +216,11 @@ function renderOverlay(ctx) {
     }
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
+    applyFillPreview(inner, nl.fillColor ?? "default");
     applyStrokePreview(
       inner,
       nl.strokeColor ?? "none",
-      nl.strokeWidthPx ?? 2,
+      nl.strokeWidthPx ?? 20,
       pxPerPsd,
     );
     box.appendChild(inner);
@@ -360,6 +370,7 @@ function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
     direction,
     strokeColor: getStrokeColor(),
     strokeWidthPx: getStrokeWidthPx(),
+    fillColor: getFillColor(),
   });
   setSelectedLayer(pageIndex, created.tempId);
   refreshAllOverlays();
@@ -722,6 +733,7 @@ function startTextInput(ctx, x, y, direction = "vertical") {
         direction: direction === "horizontal" ? "horizontal" : "vertical",
         strokeColor: getStrokeColor(),
         strokeWidthPx: getStrokeWidthPx(),
+        fillColor: getFillColor(),
       });
       setSelectedLayers([]);
       refreshAllOverlays();
