@@ -24,6 +24,7 @@ import {
   updateNewLayer,
 } from "./state.js";
 import { refreshAllOverlays } from "./canvas-tools.js";
+import { ensureFontLoaded } from "./font-loader.js";
 import { confirmDialog } from "./ui-feedback.js";
 
 const listEl = () => document.getElementById("layer-list");
@@ -322,6 +323,7 @@ function ensureComboBuilt() {
     const main = document.createElement("span");
     main.className = "font-combobox-name";
     main.textContent = font.name || font.postScriptName;
+    // 実フォントでの描画は viewport に入った時点で適用（初期表示の 500+ 件を一気にレンダしない）。
     li.appendChild(main);
     if (font.name && font.postScriptName && font.name !== font.postScriptName) {
       const sub = document.createElement("span");
@@ -332,8 +334,39 @@ function ensureComboBuilt() {
     li.addEventListener("mousedown", (e) => e.preventDefault());
     li.addEventListener("click", () => commitFont(font));
     list.appendChild(li);
-    return { el: li, font };
+    return { el: li, font, main, styled: false };
   });
+  attachFontPreviewObserver(list);
+}
+
+let fontPreviewObserver = null;
+function attachFontPreviewObserver(list) {
+  if (fontPreviewObserver) {
+    fontPreviewObserver.disconnect();
+    fontPreviewObserver = null;
+  }
+  if (typeof IntersectionObserver === "undefined") return;
+  fontPreviewObserver = new IntersectionObserver((entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const item = comboItems.find((c) => c.el === entry.target);
+      if (!item || item.styled) continue;
+      item.styled = true;
+      const { font, main } = item;
+      const parts = [];
+      if (font.name) parts.push(`"${font.name.replace(/"/g, '\\"')}"`);
+      if (font.postScriptName && font.postScriptName !== font.name) {
+        parts.push(`"${font.postScriptName.replace(/"/g, '\\"')}"`);
+      }
+      parts.push("sans-serif");
+      main.style.fontFamily = parts.join(", ");
+      ensureFontLoaded(font.postScriptName);
+      fontPreviewObserver.unobserve(entry.target);
+    }
+  }, { root: list, rootMargin: "80px 0px" });
+  for (const { el } of comboItems) {
+    fontPreviewObserver.observe(el);
+  }
 }
 
 function filterCombo(query) {
@@ -398,9 +431,12 @@ function commitFont(font) {
   const input = fontEl();
   input.value = font.name || font.postScriptName;
   input.dataset.ps = font.postScriptName;
+  ensureFontLoaded(font.postScriptName);
   setCurrentFont(font.postScriptName);
   commitField("fontPostScriptName", font.postScriptName);
   closeCombo();
+  // 選択直後は input からフォーカスを外して Space などのキーがキャンバス側に届くようにする。
+  input.blur();
 }
 
 function resolveFontFromInput(typed) {

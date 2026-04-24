@@ -25,6 +25,12 @@ const state = {
   pageIndexListeners: new Set(),
   zoom: 1,
   zoomListeners: new Set(),
+  pdfDoc: null,
+  pdfPath: null,
+  pdfPageCount: 0,
+  pdfListeners: new Set(),
+  pdfRotation: 0, // ユーザーが追加適用する回転（0/90/180/270）
+  pdfRotationListeners: new Set(),
 };
 
 export const ZOOM_MIN = 0.1;
@@ -48,6 +54,7 @@ export function clearPages() {
   setStrokeColor("none");
   setStrokeWidthPx(20);
   setFillColor("default");
+  // PDF は PSD 再読込から独立させる（ユーザー回転も保持）。ホームに戻る時のみ hamburger-menu 側で clearPdf を呼ぶ。
 }
 
 export function addPage(page) { state.pages.push(page); }
@@ -277,6 +284,44 @@ export function setZoom(z) {
 export function onZoomChange(fn) {
   state.zoomListeners.add(fn);
   return () => state.zoomListeners.delete(fn);
+}
+
+export function getPdfDoc() { return state.pdfDoc; }
+export function getPdfPath() { return state.pdfPath; }
+export function getPdfPageCount() { return state.pdfPageCount; }
+export function setPdf(doc, path) {
+  const prev = state.pdfDoc;
+  if (prev && prev !== doc && typeof prev.destroy === "function") {
+    try { prev.destroy(); } catch (_) {}
+  }
+  state.pdfDoc = doc || null;
+  state.pdfPath = path || null;
+  state.pdfPageCount = doc && typeof doc.numPages === "number" ? doc.numPages : 0;
+  // ユーザー回転は PDF 切替時も保持（同じワークフローの PDF は同じ向きの傾向があるため）。
+  // リセットしたい場合はホームに戻るで clearPdf → clearPdfRotation を呼ぶ。
+  for (const fn of state.pdfListeners) fn(state.pdfDoc);
+}
+export function clearPdf() {
+  if (!state.pdfDoc && !state.pdfPath) return;
+  setPdf(null, null);
+}
+export function onPdfChange(fn) {
+  state.pdfListeners.add(fn);
+  return () => state.pdfListeners.delete(fn);
+}
+
+export function getPdfRotation() { return state.pdfRotation; }
+export function setPdfRotation(deg) {
+  const n = Number(deg);
+  if (!Number.isFinite(n)) return;
+  const normalized = ((Math.round(n / 90) * 90) % 360 + 360) % 360;
+  if (state.pdfRotation === normalized) return;
+  state.pdfRotation = normalized;
+  for (const fn of state.pdfRotationListeners) fn(normalized);
+}
+export function onPdfRotationChange(fn) {
+  state.pdfRotationListeners.add(fn);
+  return () => state.pdfRotationListeners.delete(fn);
 }
 
 export function getCurrentFont() { return state.currentFontPostScriptName; }

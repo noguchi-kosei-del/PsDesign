@@ -20,6 +20,7 @@ import {
   toggleLayerSelected,
   updateNewLayer,
 } from "./state.js";
+import { ensureFontLoaded } from "./font-loader.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { advanceTxtSelection, getActiveTxtSelection } from "./txt-source.js";
 
@@ -183,8 +184,10 @@ function renderOverlay(ctx) {
       inner.style.fontSize = `${rect.ptInPsdPx * pxPerPsd}px`;
       inner.style.lineHeight = "1.05";
     }
-    const existingFontCss = cssFontFamily(edit.fontPostScriptName ?? layer.font);
+    const existingPs = edit.fontPostScriptName ?? layer.font;
+    const existingFontCss = cssFontFamily(existingPs);
     if (existingFontCss) inner.style.fontFamily = existingFontCss;
+    ensureFontLoaded(existingPs);
     applyFillPreview(inner, edit.fillColor ?? layer.fillColor ?? "default");
     applyStrokePreview(
       inner,
@@ -216,6 +219,7 @@ function renderOverlay(ctx) {
     }
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
+    ensureFontLoaded(nl.fontPostScriptName);
     applyFillPreview(inner, nl.fillColor ?? "default");
     applyStrokePreview(
       inner,
@@ -358,15 +362,23 @@ function endPan() {
   panState = null;
 }
 
+// クリック位置がレイヤー矩形の中央になるよう top-left をオフセットする。
+function centerTopLeft(page, { contents, sizePt, direction }, clickX, clickY) {
+  const r = layerRectForNew(page, { x: 0, y: 0, contents, sizePt, direction });
+  return { x: clickX - r.width / 2, y: clickY - r.height / 2 };
+}
+
 function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
   const { page, pageIndex } = ctx;
+  const sizePt = getTextSize();
+  const { x: nx, y: ny } = centerTopLeft(page, { contents: text, sizePt, direction }, x, y);
   const created = addNewLayer({
     psdPath: page.path,
-    x,
-    y,
+    x: nx,
+    y: ny,
     contents: text,
     fontPostScriptName: getCurrentFont(),
-    sizePt: getTextSize(),
+    sizePt,
     direction,
     strokeColor: getStrokeColor(),
     strokeWidthPx: getStrokeWidthPx(),
@@ -723,14 +735,17 @@ function startTextInput(ctx, x, y, direction = "vertical") {
     guardBlurUntilFocused: true,
     onCommit: (value) => {
       if (!value) return;
+      const sizePt = getTextSize();
+      const layerDir = direction === "horizontal" ? "horizontal" : "vertical";
+      const { x: nx, y: ny } = centerTopLeft(page, { contents: value, sizePt, direction: layerDir }, x, y);
       addNewLayer({
         psdPath: page.path,
-        x,
-        y,
+        x: nx,
+        y: ny,
         contents: value,
         fontPostScriptName: getCurrentFont(),
-        sizePt: getTextSize(),
-        direction: direction === "horizontal" ? "horizontal" : "vertical",
+        sizePt,
+        direction: layerDir,
         strokeColor: getStrokeColor(),
         strokeWidthPx: getStrokeWidthPx(),
         fillColor: getFillColor(),

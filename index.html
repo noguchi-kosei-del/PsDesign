@@ -38,12 +38,19 @@
           </button>
         </div>
         <div class="toolbar-actions">
+          <button id="open-pdf-btn" class="icon-btn" title="PDF を開く" aria-label="PDF を開く">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">PDF</text>
+            </svg>
+          </button>
           <button id="open-folder-btn" class="icon-btn" title="PSD を開く" aria-label="PSD を開く">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
             </svg>
           </button>
-          <button id="open-txt-toolbar-btn" class="icon-btn" title="TXTを開く" aria-label="TXTを開く">
+          <button id="open-txt-toolbar-btn" class="icon-btn" title="テキストを開く" aria-label="テキストを開く">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
               <polyline points="14 2 14 8 20 8"/>
@@ -106,7 +113,18 @@
       </header>
       <main class="workspace">
         <section class="spreads-container" id="spreads-container">
-          <div id="spreads-stage" class="spreads-stage"></div>
+          <div id="spreads-stage" class="spreads-stage">
+            <div class="spreads-pdf-area" id="spreads-pdf-area">
+              <button id="pdf-rotate-btn" class="pdf-rotate-btn icon-btn" type="button" title="PDF を 90° 回転（クリックごと）" aria-label="PDF を回転" hidden>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="21 2 21 8 15 8"/>
+                  <path d="M21 8A9 9 0 1 0 18.4 16.9"/>
+                </svg>
+              </button>
+              <div id="pdf-stage" class="pdf-stage"></div>
+            </div>
+            <div class="spreads-psd-area" id="spreads-psd-area"></div>
+          </div>
         </section>
         <div id="pagebar" class="pagebar">
           <button id="toggle-pagebar-btn" class="pagebar-toggle-btn" type="button" title="ページバーを折り畳む" aria-label="ページバーを折り畳む">
@@ -170,10 +188,10 @@
         </nav>
         <aside class="side-panel">
           <section class="txt-source" id="txt-source">
-            <h2>原稿 TXT</h2>
+            <h2>原稿テキスト</h2>
             <div id="txt-source-actions" class="txt-source-actions" hidden>
               <span id="txt-source-name" class="txt-source-name"></span>
-              <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="TXTをクリア" aria-label="TXTをクリア" hidden>
+              <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="テキストをクリア" aria-label="テキストをクリア" hidden>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="3 6 5 6 21 6"/>
                   <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
@@ -193,7 +211,7 @@
                   <line x1="8" y1="17" x2="16" y2="17"/>
                   <line x1="8" y1="9" x2="11" y2="9"/>
                 </svg>
-                <p class="txt-source-empty-text">TXTファイルを選択、またはここにドロップ</p>
+                <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
               </div>
             </div>
           </section>

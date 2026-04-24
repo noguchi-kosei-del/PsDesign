@@ -33,6 +33,9 @@ ver_1.0/
 │   ├── pagebar.js            # 縦ページバー（MojiQ 風カプセル型ハンドル + グリップ、>>トグルで折畳）
 │   ├── text-editor.js        # 右パネルのレイヤーリスト & エディタ（多選択対応・フォント検索コンボボックス・組方向トグル）
 │   ├── txt-source.js         # 原稿 TXT の読込・段落ブロック選択・ページマーカー解析・自動送り
+│   ├── pdf-loader.js         # `pdfjs-dist` 初期化、ファイルピッカー、read_binary_file → getDocument + ticker 方式プログレス
+│   ├── pdf-view.js           # 左ペインの PDF 描画（ページ/ズーム同期・ResizeObserver・renderToken レース対策・回転対応・`.page` ラベル付き）
+│   ├── font-loader.js        # フリーフォントを `FontFace` API で WebView に直接登録（Rust 側パスから bytes → ArrayBuffer）
 │   ├── hamburger-menu.js     # 左スライドインメニュー（テーマ切替 / ワークスペース左右反転 / ホームに戻る）
 │   ├── ui-feedback.js        # 中央プログレスモーダル + 右上トースト + `confirmDialog`（カスタム確認）
 │   └── styles.css            # ライト/ダーク両対応、スクロールバーも theme 追従
@@ -47,6 +50,26 @@ ver_1.0/
 ```
 
 ## 最近の変更（このセッション）
+
+0. **PDF 並列ビューアー（spreads-stage 分割版）**: PSD キャンバス領域を `.spreads-stage` の flex row で **左 PDF / 右 PSD** に 50/50 分割する構造に再設計。以前の `.workspace` グリッドに PDF 列を足す案は廃止し、`.spreads-stage > .spreads-pdf-area + .spreads-psd-area` 構造に変更。`.workspace.flipped` 時は `flex-direction: row-reverse` で左右自動入替。PDF 未読込時も PDF エリアは表示され、空状態（「PDF を開く、またはここにドロップしてください」）にツールバーと同じ **PDF ラベル入りファイルアイコン**を表示。ツールバーに `#open-pdf-btn` 追加（PDF → PSD → テキスト → 保存 の並び）。D&D で `.pdf` は `loadPdfByPath` に振り分け、複数同時ドロップ時は先頭のみ採用。pdfjs-dist v4.x を採用し、worker は `public/pdfjs/pdf.worker.min.mjs` に postinstall で自動コピー（`.gitignore` 対象）。`spread-view.js` の render 先は `#spreads-psd-area` に変更、`pdf-view.js` は `#spreads-pdf-area` を root として `.page .pdf-page` div 内に canvas と `.page-label`（`#<n>  <basename>`）を持つ。
+1. **PDF のページ/ズーム/回転同期と耐障害性**: ページは `onPageIndexChange` 購読で PSD に 1:1 対応（PDF が短い場合は「PDF にこのページはありません (N/M)」空状態）。ズームは `onZoomChange` 購読で PSD と同比率。連続ページ送りで `page.render` が重なっても `renderToken` で古い結果は破棄。PDF の intrinsic `rotate` に加え `state.pdfRotation` を合算して `page.getViewport({ rotation })` に渡す。PDF エリア右上に回転ボタン（90° CW 循環）を配置し、逆さま PDF 対応。
+2. **PDF 読込のプログレスバー（ticker 方式）**: `pdf-loader.loadPdfByPath` は 30ms 間隔のティッカーで `current` を `target` に追従させ（残距離 18% ずつ）、`0 → 40 → 70/90 → 95 → 100` と段階的に可視進捗を出す（PSD と同じ `${current} / ${total}` 表示）。`task.onProgress` は届けば 40–90 帯を上書き。ディスク読込 / PDF 解析 / 先頭ページ先読み の 3 段階で `detail` も更新。完了時の「読み込みました」トーストは不要との要望で削除、エラー時のみトースト表示。
+3. **PDF と PSD の独立性**: `clearPages` 内の `clearPdf()` 呼び出しを削除し、PSD 再読込しても PDF はリセットされない仕様に（同じワークフローで次々と PSD を開ける）。`setPdf` 内の `pdfRotation` リセットも削除（ユーザーが合わせた回転角は別 PDF を開いても保持、同ロット向きが統一されている現場で便利）。代わりに `hamburger-menu` の「ホームに戻る」で明示的に `clearPdf()` と `setPdfRotation(0)` を呼び、ダイアログ文言も「psd、テキスト、PDFがリセットされます」に更新。
+4. **フォントを FontFace API で WebView に直接登録**: OS インストール済みだが WebView2 が family 名解決できないフリーフォントでも描画できるよう、`fonts.rs` の `FontEntry` に `path: Option<String>` を追加し、`extract_fonts` でファイルパスを埋め込み。旧キャッシュ（path 無し）は `read_cache` が自動破棄して再ビルド。`font-loader.js` は `ensureFontLoaded(ps)` で `read_binary_file` を叩いて bytes を取得し、**family 名と PS 名の両方**で `new FontFace(name, buffer, { display: "swap" })` を登録（`FontFace` は buffer を消費する仕様のため `makeBuffer()` で名前ごとにコピー）。同時ロードはセマフォで **最大 3 並列**。新規登録時は 80ms デバウンス通知で `refreshAllOverlays` を発火。
+5. **フォントコンボを実フォントで表示 + IntersectionObserver で軽量化**: サイドバーのフォント検索ドロップダウンで、各項目名を**そのフォント自身**の書体で描画（`main.style.fontFamily = "Family", "PS", sans-serif`）。全 500+ 項目に一気に適用すると WebView が重くなるため、`IntersectionObserver(root: list, rootMargin: 80px)` で**可視範囲に入った項目だけ** `fontFamily` 設定 + `ensureFontLoaded` 呼び出し、一度スタイル適用した項目は `unobserve`。hover/click 時も `ensureFontLoaded` を呼び確実に読み込む。
+6. **テキスト入力系のフォーカス抜け自動化**: `commitFont` 完了時に `fontEl().blur()` を呼び、フォントコンボ選択後に Space でパンツールを切り替えた際に文字が入力欄に入る事故を防止。さらに `main.js` の `bindGlobalBlurOnOutsideClick` でキャプチャ `mousedown` を監視し、テキスト入力系（INPUT text/number/search、TEXTAREA、contenteditable）がアクティブかつクリック先が別の入力欄・`.font-combobox`・`.save-menu`・`.text-input-floater` 外であれば `blur()`。ボタン（type=button/submit）やチェックボックスは対象外（Space で文字入力しないため）。
+7. **テキストツール配置時の中央揃え**: `canvas-tools.js` に `centerTopLeft(page, {contents, sizePt, direction}, clickX, clickY)` ヘルパーを追加。`layerRectForNew` で矩形サイズを事前計算し、クリック座標が中央になるように top-left を返す。`placeTxtSelectionAt`（原稿テキスト配置）と `startTextInput` の `onCommit`（手入力確定時）でこのヘルパーを使用。既存レイヤーの in-place 編集は位置維持。
+8. **レイアウト微調整**:
+   - `.side-panel` の列幅を `320px → 280px` に縮小（グリッド 4 箇所）。
+   - サイドパネルの h2/h3 を `font-weight: 600 → 800`、`color: --text-muted → --text`、`font-size: 12 → 13px` で強調。
+   - ウィンドウ最小幅を `1300px` に設定（`tauri.conf.json`：初期 1360 / minWidth 1300）。
+9. **UI 表記**: ユーザーに見える「TXT」をすべて**「テキスト」**に置換（ツールバーボタン title、サイドパネル見出し「原稿テキスト」、空状態メッセージ、クリア確認、トースト）。
+10. **ヘッダーのボタン順入替**: 「PDF を開く」を「PSD を開く」の前に。最終順は `PDF → PSD → テキスト → 保存ドロップダウン`。
+11. **pdfjs worker の gitignore**: `public/pdfjs/` は `postinstall` で `node_modules/pdfjs-dist/build/` からコピーされる自動生成物のため `.gitignore` に追加。`npm install` するだけで再生成される。
+
+> **Before/After 構造要約**:
+> - 旧: `.workspace` = `1fr auto 44px 320px`（5 col で PDF を横列として追加する案もあったが没）
+> - 新: `.workspace` = `1fr auto 44px 280px`（以前のまま）。PDF は **`.spreads-stage` 内部**で `.spreads-pdf-area` と `.spreads-psd-area` の flex row 分割として表示。
 
 1. **読み込みをファイルベースに変更**: 「PSD を開く」はフォルダ選択ではなく **`.psd` の複数ファイル選択**ダイアログへ変更。`pickPsdFiles` → `loadPsdFilesByPaths`。D&D はファイル・フォルダ両対応（フォルダは内部で `list_psd_files` に展開）。
 2. **文字色スウォッチをサイドツールバーへ移動**: 編集パネルの `既定/白/黒` セグメントを廃止し、サイドツールバー下部に Photoshop 風のオーバーラップ 2 スウォッチ（白左上 / 黒右下）を `margin-top: auto` で配置。アクティブ中の色を再クリックで `default` にトグル off。

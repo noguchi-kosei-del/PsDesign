@@ -3,6 +3,8 @@ dist/
 .vite/
 src-tauri/target/
 src-tauri/gen/
+# postinstall で node_modules からコピーされる pdfjs worker
+public/pdfjs/
 .DS_Store
 Thumbs.db
 *.log

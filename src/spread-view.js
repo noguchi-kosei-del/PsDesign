@@ -1,7 +1,7 @@
 import { getCurrentPageIndex, getPages, getZoom, onZoomChange } from "./state.js";
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 
-const container = () => document.getElementById("spreads-stage");
+const container = () => document.getElementById("spreads-psd-area");
 const pageResizeObservers = new Set();
 const pageRedraws = new Set();
 let zoomSubscribed = false;

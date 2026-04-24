@@ -1,4 +1,8 @@
 import { loadPsdFromPath } from "./psd-loader.js";
+import { loadPdfByPath, pickPdfFile } from "./pdf-loader.js";
+import { mountPdfView } from "./pdf-view.js";
+import { refreshAllOverlays } from "./canvas-tools.js";
+import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
 import {
   bindEditorEvents,
@@ -25,11 +29,14 @@ import {
   getTextSize,
   getTool,
   getZoom,
+  getPdfRotation,
   hasEdits,
   onPageIndexChange,
+  onPdfChange,
   onTextSizeChange,
   onToolChange,
   onZoomChange,
+  setPdfRotation,
   setCurrentPageIndex,
   setFolder,
   setFonts,
@@ -57,6 +64,30 @@ async function handleOpenFiles() {
   const files = await pickPsdFiles();
   if (!files.length) return;
   await loadPsdFilesByPaths(files);
+}
+
+async function handleOpenPdf() {
+  const path = await pickPdfFile();
+  if (!path) return;
+  await loadPdfByPath(path);
+}
+
+function bindPdfWorkspaceToggle() {
+  // PDF エリアは常時表示（未読込時は empty state を見せる）。回転ボタンだけ doc 有無で切替。
+  const rotateBtn = document.getElementById("pdf-rotate-btn");
+  const apply = (doc) => {
+    if (rotateBtn) rotateBtn.hidden = !doc;
+  };
+  onPdfChange(apply);
+  apply(null);
+}
+
+function bindPdfRotate() {
+  const btn = document.getElementById("pdf-rotate-btn");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    setPdfRotation((getPdfRotation() + 90) % 360);
+  });
 }
 
 function parentDir(p) {
@@ -454,10 +485,12 @@ async function handleDroppedPaths(paths) {
   if (!paths || paths.length === 0) return;
   const psdFiles = [];
   const txtFiles = [];
+  const pdfFiles = [];
   const unknowns = []; // 拡張子なし ＝ おそらくフォルダ
   for (const p of paths) {
     if (/\.psd$/i.test(p)) psdFiles.push(p);
     else if (/\.txt$/i.test(p)) txtFiles.push(p);
+    else if (/\.pdf$/i.test(p)) pdfFiles.push(p);
     else unknowns.push(p);
   }
   // フォルダらしきものは中の .psd を展開して取り込む（従来の利便性を維持）。
@@ -474,6 +507,12 @@ async function handleDroppedPaths(paths) {
   }
   for (const t of txtFiles) {
     await loadTxtFromPath(t);
+  }
+  if (pdfFiles.length > 0) {
+    if (pdfFiles.length > 1) {
+      toast("PDF は 1 つだけ読み込みました（先頭のみ）", { kind: "info", duration: 3000 });
+    }
+    await loadPdfByPath(pdfFiles[0]);
   }
 }
 
@@ -642,6 +681,7 @@ function bindWindowControls() {
 
 function init() {
   document.getElementById("open-folder-btn").addEventListener("click", handleOpenFiles);
+  document.getElementById("open-pdf-btn")?.addEventListener("click", handleOpenPdf);
   bindSaveMenu();
   initHamburgerMenu();
   bindTools();
@@ -653,10 +693,38 @@ function init() {
   bindPageJumpDialog();
   initTxtSource();
   initPagebar();
+  bindPdfWorkspaceToggle();
+  bindPdfRotate();
+  mountPdfView();
   setupTauriDragDrop();
   renderAllSpreads();
   renderPagebar();
   loadFontsFromBackend();
+  // フォントが非同期で登録されるたびにオーバーレイを再描画して反映。
+  onFontsRegistered(() => refreshAllOverlays());
+  bindGlobalBlurOnOutsideClick();
+}
+
+// INPUT/TEXTAREA/contenteditable 以外をクリックしたら、現在フォーカス中のテキスト入力から
+// フォーカスを外す。Space でパンを切り替えた際に入力欄に文字が入る事故を防ぐ。
+function bindGlobalBlurOnOutsideClick() {
+  document.addEventListener("mousedown", (e) => {
+    const active = document.activeElement;
+    if (!active) return;
+    const tag = active.tagName;
+    const isTextInput =
+      (tag === "INPUT" && !/^(button|submit|checkbox|radio|range|color)$/i.test(active.type || "")) ||
+      tag === "TEXTAREA" ||
+      active.isContentEditable;
+    if (!isTextInput) return;
+    const target = e.target;
+    if (!target) return;
+    // 入力欄自身やそれに紐づく UI（コンボボックス・ドロップダウン等）の中をクリックしたときは維持
+    if (target === active || active.contains(target)) return;
+    const near = target.closest?.("input, textarea, [contenteditable], .font-combobox, .save-menu, .text-input-floater");
+    if (near) return;
+    active.blur();
+  }, true);
 }
 
 if (document.readyState === "loading") {

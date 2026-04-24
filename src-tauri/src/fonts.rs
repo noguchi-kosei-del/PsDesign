@@ -56,17 +56,18 @@ fn is_font_file(path: &Path) -> bool {
 
 fn extract_fonts(bytes: &[u8], path: &Path, seen: &mut HashSet<String>, out: &mut Vec<FontEntry>) {
     let count = ttf_parser::fonts_in_collection(bytes).unwrap_or(1);
+    let path_str = path.to_string_lossy().into_owned();
     for index in 0..count {
         let Ok(face) = ttf_parser::Face::parse(bytes, index) else { continue };
-        let Some(entry) = build_entry(&face) else { continue };
+        let Some(mut entry) = build_entry(&face) else { continue };
         if entry.post_script_name.is_empty() {
             continue;
         }
+        entry.path = Some(path_str.clone());
         if seen.insert(entry.post_script_name.clone()) {
             out.push(entry);
         }
     }
-    let _ = path;
 }
 
 fn build_entry(face: &ttf_parser::Face) -> Option<FontEntry> {
@@ -101,6 +102,7 @@ fn build_entry(face: &ttf_parser::Face) -> Option<FontEntry> {
     Some(FontEntry {
         name: display,
         post_script_name: ps,
+        path: None,
     })
 }
 
@@ -174,13 +176,20 @@ fn read_cache() -> Option<Vec<FontEntry>> {
         name: String,
         #[serde(rename = "postScriptName")]
         ps: String,
+        #[serde(default)]
+        path: Option<String>,
     }
     let rows: Vec<Row> = serde_json::from_str(&raw).ok()?;
+    // 旧キャッシュ（path なし）は破棄して再ビルド
+    if rows.iter().any(|r| r.path.is_none()) {
+        return None;
+    }
     Some(
         rows.into_iter()
             .map(|r| FontEntry {
                 name: r.name,
                 post_script_name: r.ps,
+                path: r.path,
             })
             .collect(),
     )

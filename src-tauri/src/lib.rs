@@ -70,6 +70,8 @@ pub struct FontEntry {
     pub name: String,
     #[serde(rename = "postScriptName")]
     pub post_script_name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
 }
 
 #[tauri::command]

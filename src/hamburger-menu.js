@@ -1,4 +1,4 @@
-import { clearPages, clearTxtSource, setFolder } from "./state.js";
+import { clearPages, clearPdf, clearTxtSource, setFolder, setPdfRotation } from "./state.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { renderPagebar } from "./pagebar.js";
 import { rebuildLayerList } from "./text-editor.js";
@@ -85,13 +85,15 @@ function toggleMenu() {
 async function goHome() {
   const ok = await confirmDialog({
     title: "ホームに戻る",
-    message: "読み込んだpsd、テキストがリセットされます。よろしいですか？",
+    message: "読み込んだpsd、テキスト、PDFがリセットされます。よろしいですか？",
     confirmLabel: "戻る",
   });
   if (!ok) return;
   setFolder(null);
   clearPages();
   clearTxtSource();
+  clearPdf();
+  setPdfRotation(0);
   renderAllSpreads();
   renderPagebar();
   rebuildLayerList();

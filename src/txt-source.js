@@ -177,7 +177,7 @@ async function handleOpenBtn() {
     await loadTxtFromPath(path);
   } catch (e) {
     console.error(e);
-    toast(`TXT読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
+    toast(`テキスト読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
   }
 }
 
@@ -188,7 +188,7 @@ export async function loadTxtFromPath(path) {
     renderViewer();
   } catch (e) {
     console.error(e);
-    toast(`TXT読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
+    toast(`テキスト読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
   }
 }
 
@@ -200,7 +200,7 @@ async function handleFileDropped(file) {
     renderViewer();
   } catch (e) {
     console.error(e);
-    toast(`TXT読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
+    toast(`テキスト読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
   }
 }
 
@@ -227,7 +227,7 @@ function bindDropzone() {
     if (!files || files.length === 0) return;
     const txt = Array.from(files).find(isTxtFile);
     if (!txt) {
-      toast("TXTファイルを指定してください", { kind: "error" });
+      toast("テキストファイルを指定してください", { kind: "error" });
       return;
     }
     handleFileDropped(txt);
@@ -263,7 +263,7 @@ export function initTxtSource() {
     if (!ok) return;
     clearTxtSource();
     renderViewer();
-    toast("TXTをクリアしました", { kind: "info", duration: 1500 });
+    toast("テキストをクリアしました", { kind: "info", duration: 1500 });
   });
   bindDropzone();
   renderViewer();
