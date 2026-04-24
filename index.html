@@ -135,11 +135,22 @@
               <line x1="12" y1="2" x2="12" y2="22"/>
             </svg>
           </button>
-          <button id="tool-text" class="tool-btn icon-btn side-tool-btn" data-tool="text" title="テキストツール (T)" aria-label="テキストツール">
+          <button id="tool-text-v" class="tool-btn icon-btn side-tool-btn" data-tool="text-v" title="縦書きツール (T)" aria-label="縦書きツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="4 7 4 4 20 4 20 7"/>
-              <line x1="9" y1="20" x2="15" y2="20"/>
-              <line x1="12" y1="4" x2="12" y2="20"/>
+              <polyline points="2 6 2 3 12 3 12 6"/>
+              <line x1="4" y1="20" x2="10" y2="20"/>
+              <line x1="7" y1="3" x2="7" y2="20"/>
+              <line x1="18" y1="5" x2="18" y2="19"/>
+              <polyline points="14 15 18 19 22 15"/>
+            </svg>
+          </button>
+          <button id="tool-text-h" class="tool-btn icon-btn side-tool-btn" data-tool="text-h" title="横書きツール (Y)" aria-label="横書きツール">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="2 6 2 3 12 3 12 6"/>
+              <line x1="4" y1="20" x2="10" y2="20"/>
+              <line x1="7" y1="3" x2="7" y2="20"/>
+              <line x1="13" y1="12" x2="22" y2="12"/>
+              <polyline points="18 8 22 12 18 16"/>
             </svg>
           </button>
           <button id="tool-pan" class="tool-btn icon-btn side-tool-btn" data-tool="pan" title="パンツール (Space長押し)" aria-label="パンツール">
@@ -183,10 +194,6 @@
           <h2>編集</h2>
           <div id="editor" class="editor" hidden>
             <label>
-              内容
-              <textarea id="edit-contents" rows="3"></textarea>
-            </label>
-            <label>
               フォント
               <div class="font-combobox" id="edit-font-combobox">
                 <input id="edit-font" class="font-input" type="text" autocomplete="off" placeholder="フォント名で検索..." />
@@ -226,14 +233,14 @@
         </aside>
       </main>
     </div>
-    <div class="progress-modal" id="progress-modal" hidden>
-      <div class="progress-card" role="dialog" aria-live="polite" aria-busy="true">
-        <div class="progress-title" id="progress-title">読込中</div>
-        <div class="progress-detail" id="progress-detail"></div>
-        <div class="progress-track">
+    <div class="progress-modal" id="progress-modal" data-tauri-drag-region hidden>
+      <div class="progress-card" role="dialog" aria-live="polite" aria-busy="true" data-tauri-drag-region>
+        <div class="progress-title" id="progress-title" data-tauri-drag-region>読込中</div>
+        <div class="progress-detail" id="progress-detail" data-tauri-drag-region></div>
+        <div class="progress-track" data-tauri-drag-region>
           <div class="progress-fill" id="progress-fill"></div>
         </div>
-        <div class="progress-count" id="progress-count"></div>
+        <div class="progress-count" id="progress-count" data-tauri-drag-region></div>
       </div>
     </div>
     <div class="hamburger-overlay" id="hamburger-overlay" hidden></div>
@@ -249,10 +256,10 @@
       </div>
       <div class="hamburger-menu-body"></div>
       <div class="hamburger-menu-footer">
-        <button id="sidebar-toggle-btn" class="menu-icon-btn" type="button" title="サイドバーを切替" aria-label="サイドバーを切替">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="3" y="4" width="18" height="16" rx="1.5"/>
-            <line x1="15" y1="4" x2="15" y2="20"/>
+        <button id="workspace-flip-btn" class="menu-icon-btn" type="button" title="ワークスペース反転" aria-label="ワークスペース反転">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">
+            <polygon class="flip-left-arrow" points="2,12 10,4 10,20"/>
+            <polygon class="flip-right-arrow" points="22,12 14,4 14,20"/>
           </svg>
         </button>
         <button id="theme-toggle-btn" class="menu-icon-btn" type="button" title="テーマ切替" aria-label="テーマ切替">

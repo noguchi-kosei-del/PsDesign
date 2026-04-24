@@ -13,13 +13,14 @@ import {
   setSelectedLayer,
   setSelectedLayers,
   setTextSize,
+  toggleLayerSelected,
   updateNewLayer,
 } from "./state.js";
 import { refreshAllOverlays } from "./canvas-tools.js";
+import { confirmDialog } from "./ui-feedback.js";
 
 const listEl = () => document.getElementById("layer-list");
 const editorEl = () => document.getElementById("editor");
-const contentsEl = () => document.getElementById("edit-contents");
 const fontEl = () => document.getElementById("edit-font");
 const fontComboboxEl = () => document.getElementById("edit-font-combobox");
 const fontToggleEl = () => document.getElementById("edit-font-toggle");
@@ -67,7 +68,7 @@ export function rebuildLayerList() {
       <div class="layer-text">${escapeHtml(truncate(displayText, 40))}</div>
       <div class="layer-meta">${escapeHtml(layer.font || "")} ${layer.fontSize ?? ""}pt ${editedMark}</div>
     `;
-    li.addEventListener("click", () => selectLayer(pageIndex, layer.id));
+    li.addEventListener("click", (e) => selectLayer(pageIndex, layer.id, e));
     ul.appendChild(li);
   }
 
@@ -81,7 +82,7 @@ export function rebuildLayerList() {
       <div class="layer-text">＋ ${escapeHtml(truncate(nl.contents, 40))}</div>
       <div class="layer-meta">新規テキスト ${nl.sizePt ?? ""}pt</div>
     `;
-    li.addEventListener("click", () => selectLayer(pageIndex, nl.tempId));
+    li.addEventListener("click", (e) => selectLayer(pageIndex, nl.tempId, e));
     ul.appendChild(li);
   }
 
@@ -89,11 +90,15 @@ export function rebuildLayerList() {
   populateEditor();
 }
 
-function selectLayer(pageIndex, layerId) {
+function selectLayer(pageIndex, layerId, event) {
   if (getCurrentPageIndex() !== pageIndex) {
     setCurrentPageIndex(pageIndex);
   }
-  setSelectedLayer(pageIndex, layerId);
+  if (event?.shiftKey) {
+    toggleLayerSelected(pageIndex, layerId);
+  } else {
+    setSelectedLayer(pageIndex, layerId);
+  }
   applySelectionHighlight();
   populateEditor();
   refreshAllOverlays();
@@ -155,14 +160,12 @@ function populateEditor() {
   if (resolved.kind === "existing") {
     const { page, layer } = resolved;
     const edit = getEdit(page.path, layer.id) ?? {};
-    contentsEl().value = edit.contents ?? layer.text ?? "";
     effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
     effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
     effectiveDirection = edit.direction ?? layer.direction ?? "horizontal";
     rebuildFontOptions(effectiveFont);
   } else {
     const { newLayer } = resolved;
-    contentsEl().value = newLayer.contents ?? "";
     effectiveSize = newLayer.sizePt ?? null;
     effectiveFont = newLayer.fontPostScriptName ?? null;
     effectiveDirection = newLayer.direction ?? "vertical";
@@ -315,7 +318,6 @@ function rebuildFontOptions(currentValue) {
 }
 
 export function bindEditorEvents() {
-  contentsEl().addEventListener("input", () => commitField("contents", contentsEl().value));
   const input = fontEl();
   input.addEventListener("focus", () => openCombo());
   input.addEventListener("input", () => {
@@ -368,12 +370,18 @@ export function bindEditorEvents() {
   });
   const deleteBtn = document.getElementById("delete-new-layer-btn");
   if (deleteBtn) {
-    deleteBtn.addEventListener("click", () => {
+    deleteBtn.addEventListener("click", async () => {
       const selections = getSelectedLayers();
       const tempIds = selections
         .filter((s) => typeof s.layerId === "string")
         .map((s) => s.layerId);
       if (tempIds.length === 0) return;
+      const ok = await confirmDialog({
+        title: "レイヤー削除",
+        message: "レイヤーを削除します。よろしいですか？",
+        confirmLabel: "削除",
+      });
+      if (!ok) return;
       for (const id of tempIds) removeNewLayer(id);
       // 既存レイヤーは残し、新規分だけを選択から除外。
       setSelectedLayers(selections.filter((s) => typeof s.layerId !== "string"));

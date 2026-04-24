@@ -71,11 +71,19 @@ export function refreshAllOverlays() {
   for (const m of mounts.values()) renderOverlay(m);
 }
 
+function isTextTool(tool) {
+  return tool === "text-v" || tool === "text-h";
+}
+
+function textToolDirection(tool) {
+  return tool === "text-h" ? "horizontal" : "vertical";
+}
+
 function applyToolAttrs(ctx) {
   const tool = getTool();
   ctx.overlay.dataset.tool = tool;
   ctx.canvas.style.cursor =
-    tool === "text" ? "text" :
+    isTextTool(tool) ? "text" :
     tool === "pan" ? "grab" : "default";
 }
 
@@ -264,13 +272,22 @@ function onCanvasMouseDown(e, ctx) {
     return;
   }
   if (e.button !== 0) return;
-  if (tool === "text") {
+  if (isTextTool(tool)) {
+    e.preventDefault();
+    e.stopPropagation();
+    const openFloater = document.querySelector(".text-input-floater");
+    if (openFloater) {
+      if (typeof openFloater.__finalize === "function") openFloater.__finalize(true);
+      else openFloater.remove();
+      return;
+    }
     const { x, y } = canvasCoordsFromEvent(e, ctx);
+    const direction = textToolDirection(tool);
     const txtSel = getActiveTxtSelection();
     if (txtSel) {
-      placeTxtSelectionAt(ctx, x, y, txtSel);
+      placeTxtSelectionAt(ctx, x, y, txtSel, direction);
     } else {
-      startTextInput(ctx, x, y);
+      startTextInput(ctx, x, y, direction);
     }
     return;
   }
@@ -307,7 +324,7 @@ function endPan() {
   panState = null;
 }
 
-function placeTxtSelectionAt(ctx, x, y, text) {
+function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
   const { page, pageIndex } = ctx;
   const created = addNewLayer({
     psdPath: page.path,
@@ -316,7 +333,7 @@ function placeTxtSelectionAt(ctx, x, y, text) {
     contents: text,
     fontPostScriptName: getCurrentFont(),
     sizePt: getTextSize(),
-    direction: "vertical",
+    direction,
   });
   setSelectedLayer(pageIndex, created.tempId);
   refreshAllOverlays();
@@ -326,7 +343,7 @@ function placeTxtSelectionAt(ctx, x, y, text) {
 
 function onExistingLayerMouseDown(e, ctx, layer) {
   const tool = getTool();
-  if (tool === "text") {
+  if (isTextTool(tool)) {
     e.stopPropagation();
     e.preventDefault();
     setSelectedLayer(ctx.pageIndex, layer.id);
@@ -354,7 +371,7 @@ function onExistingLayerMouseDown(e, ctx, layer) {
 
 function onNewLayerMouseDown(e, ctx, nl) {
   const tool = getTool();
-  if (tool === "text") {
+  if (isTextTool(tool)) {
     e.stopPropagation();
     e.preventDefault();
     setSelectedLayer(ctx.pageIndex, nl.tempId);
@@ -565,6 +582,59 @@ function collectLayerHits(ctx, selRect) {
   return hits;
 }
 
+// テキスト入力 textarea の共通生成ヘルパ。
+// DOM 生成・配置・keydown/focus/blur 配線・`__finalize` 付与を集約し、
+// commit 時のアクションだけ `onCommit(value)` で呼び出し元に委ねる。
+function createTextFloater(ctx, {
+  x, y, direction,
+  initialText = "",
+  selectAll = false,
+  guardBlurUntilFocused = false,
+  onCommit,
+}) {
+  const { page } = ctx;
+  const isVertical = direction !== "horizontal";
+  const input = document.createElement("textarea");
+  input.className = "text-input-floater";
+  input.dataset.direction = isVertical ? "vertical" : "horizontal";
+  input.placeholder = isVertical
+    ? "テキスト（縦書き）：Ctrl+Enterで確定 / Escで破棄"
+    : "テキスト（横書き）：Ctrl+Enterで確定 / Escで破棄";
+  input.style.left = `${(x / page.width) * 100}%`;
+  input.style.top = `${(y / page.height) * 100}%`;
+  if (initialText) input.value = initialText;
+  else input.rows = 1;
+  ctx.overlay.appendChild(input);
+  input.focus();
+  if (selectAll && initialText) input.select();
+
+  let finished = false;
+  let hasFocused = !guardBlurUntilFocused;
+  const finalize = (commit) => {
+    if (finished) return;
+    finished = true;
+    const value = input.value.replace(/\s+$/, "");
+    input.remove();
+    if (commit) onCommit(value);
+  };
+  input.__finalize = finalize;
+  input.addEventListener("focus", () => { hasFocused = true; });
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      finalize(true);
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      finalize(false);
+    }
+  });
+  input.addEventListener("blur", () => {
+    if (!hasFocused) return;
+    finalize(true);
+  });
+  return input;
+}
+
 function startInPlaceEdit(ctx, target) {
   const { page } = ctx;
   let initialText = "";
@@ -588,89 +658,46 @@ function startInPlaceEdit(ctx, target) {
   }
 
   const existing = ctx.overlay.querySelector(".text-input-floater");
-  if (existing) existing.remove();
+  if (existing) {
+    if (typeof existing.__finalize === "function") existing.__finalize(true);
+    else existing.remove();
+  }
 
-  const input = document.createElement("textarea");
-  input.className = "text-input-floater";
-  input.dataset.direction = direction === "vertical" ? "vertical" : "horizontal";
-  input.value = initialText;
-  input.placeholder = direction === "vertical"
-    ? "テキスト（縦書き）：Ctrl+Enterで確定 / Escで破棄"
-    : "テキスト（横書き）：Ctrl+Enterで確定 / Escで破棄";
-  input.style.left = `${(x / page.width) * 100}%`;
-  input.style.top = `${(y / page.height) * 100}%`;
-  ctx.overlay.appendChild(input);
-  input.focus();
-  input.select();
-
-  let finished = false;
-  const finalize = (commit) => {
-    if (finished) return;
-    finished = true;
-    const value = input.value.replace(/\s+$/, "");
-    input.remove();
-    if (!commit) return;
-    if (target.kind === "existing") {
-      setEdit(page.path, target.layer.id, { contents: value });
-    } else {
-      updateNewLayer(target.nl.tempId, { contents: value });
-    }
-    refreshAllOverlays();
-    rebuildLayerList();
-  };
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      finalize(true);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      finalize(false);
-    }
+  createTextFloater(ctx, {
+    x, y, direction,
+    initialText,
+    selectAll: true,
+    onCommit: (value) => {
+      if (target.kind === "existing") {
+        setEdit(page.path, target.layer.id, { contents: value });
+      } else {
+        updateNewLayer(target.nl.tempId, { contents: value });
+      }
+      refreshAllOverlays();
+      rebuildLayerList();
+    },
   });
-  input.addEventListener("blur", () => finalize(true));
 }
 
-function startTextInput(ctx, x, y) {
+function startTextInput(ctx, x, y, direction = "vertical") {
   const { page } = ctx;
-  const input = document.createElement("textarea");
-  input.className = "text-input-floater";
-  input.dataset.direction = "vertical";
-  input.rows = 1;
-  input.placeholder = "テキスト（縦書き）：Ctrl+Enterで確定 / Escで破棄";
-  input.style.left = `${(x / page.width) * 100}%`;
-  input.style.top = `${(y / page.height) * 100}%`;
-  ctx.overlay.appendChild(input);
-  input.focus();
-
-  let finished = false;
-  const finalize = (commit) => {
-    if (finished) return;
-    finished = true;
-    const value = input.value.replace(/\s+$/, "");
-    input.remove();
-    if (commit && value) {
-      const created = addNewLayer({
+  createTextFloater(ctx, {
+    x, y, direction,
+    guardBlurUntilFocused: true,
+    onCommit: (value) => {
+      if (!value) return;
+      addNewLayer({
         psdPath: page.path,
         x,
         y,
         contents: value,
         fontPostScriptName: getCurrentFont(),
         sizePt: getTextSize(),
-        direction: "vertical",
+        direction: direction === "horizontal" ? "horizontal" : "vertical",
       });
-      setSelectedLayer(ctx.pageIndex, created.tempId);
+      setSelectedLayers([]);
       refreshAllOverlays();
       rebuildLayerList();
-    }
-  };
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
-      finalize(true);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      finalize(false);
-    }
+    },
   });
-  input.addEventListener("blur", () => finalize(true));
 }

@@ -365,7 +365,9 @@ function bindTools() {
     if (e.key === "v" || e.key === "V") {
       setTool("move");
     } else if (e.key === "t" || e.key === "T") {
-      setTool("text");
+      setTool("text-v");
+    } else if (e.key === "y" || e.key === "Y") {
+      setTool("text-h");
     } else if (e.key === "[") {
       adjustTextSize(-(e.shiftKey ? 10 : 2));
     } else if (e.key === "]") {

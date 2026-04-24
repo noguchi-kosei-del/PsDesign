@@ -5,7 +5,7 @@ import { rebuildLayerList } from "./text-editor.js";
 import { confirmDialog } from "./ui-feedback.js";
 
 const THEME_KEY = "psdesign_theme";
-const SIDEBAR_KEY = "psdesign_sidebar_hidden";
+const FLIPPED_KEY = "psdesign_layout_flipped";
 
 const $ = (id) => document.getElementById(id);
 
@@ -28,26 +28,26 @@ function toggleTheme() {
   localStorage.setItem(THEME_KEY, next);
 }
 
-function applySidebar(hidden) {
+function applyFlipped(flipped) {
   const ws = document.querySelector(".workspace");
   if (!ws) return;
-  ws.classList.toggle("hide-sidebar", hidden);
-  const btn = $("sidebar-toggle-btn");
-  if (btn) btn.classList.toggle("active", hidden);
+  ws.classList.toggle("flipped", flipped);
+  const btn = $("workspace-flip-btn");
+  if (btn) btn.classList.toggle("flipped", flipped);
 }
 
-function loadSidebar() {
-  const saved = localStorage.getItem(SIDEBAR_KEY) === "1";
-  applySidebar(saved);
+function loadFlipped() {
+  const saved = localStorage.getItem(FLIPPED_KEY) === "1";
+  applyFlipped(saved);
   return saved;
 }
 
-function toggleSidebar() {
+function toggleFlipped() {
   const ws = document.querySelector(".workspace");
   if (!ws) return;
-  const nextHidden = !ws.classList.contains("hide-sidebar");
-  applySidebar(nextHidden);
-  localStorage.setItem(SIDEBAR_KEY, nextHidden ? "1" : "0");
+  const nextFlipped = !ws.classList.contains("flipped");
+  applyFlipped(nextFlipped);
+  localStorage.setItem(FLIPPED_KEY, nextFlipped ? "1" : "0");
 }
 
 function openMenu() {
@@ -107,19 +107,19 @@ async function goHome() {
 
 export function initHamburgerMenu() {
   loadTheme();
-  loadSidebar();
+  loadFlipped();
 
   const trigger = $("hamburger-btn");
   const closeBtn = $("hamburger-close-btn");
   const overlay = $("hamburger-overlay");
-  const sidebar = $("sidebar-toggle-btn");
+  const flipBtn = $("workspace-flip-btn");
   const theme = $("theme-toggle-btn");
   const home = $("home-btn");
 
   if (trigger) trigger.addEventListener("click", toggleMenu);
   if (closeBtn) closeBtn.addEventListener("click", closeMenu);
   if (overlay) overlay.addEventListener("click", closeMenu);
-  if (sidebar) sidebar.addEventListener("click", toggleSidebar);
+  if (flipBtn) flipBtn.addEventListener("click", toggleFlipped);
   if (theme) theme.addEventListener("click", toggleTheme);
   if (home) home.addEventListener("click", goHome);
 

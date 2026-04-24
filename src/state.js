@@ -143,7 +143,7 @@ export function getFontDisplayName(psName) {
 
 export function getTool() { return state.tool; }
 export function setTool(tool) {
-  if (tool !== "move" && tool !== "text" && tool !== "pan") return;
+  if (tool !== "move" && tool !== "text-v" && tool !== "text-h" && tool !== "pan") return;
   if (state.tool === tool) return;
   state.tool = tool;
   for (const fn of state.toolListeners) fn(tool);
