@@ -1,6 +1,19 @@
-import { clearPages, clearPdf, clearTxtSource, setFolder, setPdfRotation, setPsdRotation } from "./state.js";
+import {
+  clearPages,
+  clearPdf,
+  clearTxtSource,
+  setActivePane,
+  setFolder,
+  setParallelSyncMode,
+  setPdfPageIndex,
+  setPdfRotation,
+  setPdfSkipFirstBlank,
+  setPdfSplitMode,
+  setPdfZoom,
+  setPsdRotation,
+  setPsdZoom,
+} from "./state.js";
 import { renderAllSpreads } from "./spread-view.js";
-import { renderPagebar } from "./pagebar.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { confirmDialog } from "./ui-feedback.js";
 
@@ -95,8 +108,14 @@ async function goHome() {
   clearPdf();
   setPdfRotation(0);
   setPsdRotation(0);
+  setPdfSplitMode(false);
+  setPdfSkipFirstBlank(false);
+  setParallelSyncMode(true);
+  setActivePane("psd");
+  setPdfPageIndex(0);
+  setPdfZoom(1);
+  setPsdZoom(1);
   renderAllSpreads();
-  renderPagebar();
   rebuildLayerList();
   const saveBtn = document.getElementById("save-btn");
   if (saveBtn) {

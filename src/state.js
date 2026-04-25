@@ -23,8 +23,10 @@ const state = {
   fillColorListeners: new Set(),
   currentPageIndex: 0,
   pageIndexListeners: new Set(),
-  zoom: 1,
-  zoomListeners: new Set(),
+  pdfZoom: 1,
+  pdfZoomListeners: new Set(),
+  psdZoom: 1,
+  psdZoomListeners: new Set(),
   pdfDoc: null,
   pdfPath: null,
   pdfPageCount: 0,
@@ -33,6 +35,16 @@ const state = {
   pdfRotationListeners: new Set(),
   psdRotation: 0, // PSD 表示のビュー回転（0/90/180/270、表示専用）
   psdRotationListeners: new Set(),
+  pdfPageIndex: 0, // PDF 側の virtual page index（単ページ化時は物理ページと 1:1 ではない）
+  pdfPageIndexListeners: new Set(),
+  pdfSplitMode: false, // 単ページ化（横長 PDF の左ページのみを表示）
+  pdfSplitModeListeners: new Set(),
+  pdfSkipFirstBlank: false, // 先頭白紙ページを除外（単ページ化時のみ意味を持つ）
+  pdfSkipFirstBlankListeners: new Set(),
+  parallelSyncMode: true, // PDF / PSD の同期モード
+  parallelSyncModeListeners: new Set(),
+  activePane: "psd", // "pdf" | "psd"（非同期時に矢印キー/ホイールが効くペイン）
+  activePaneListeners: new Set(),
 };
 
 export const ZOOM_MIN = 0.1;
@@ -273,19 +285,37 @@ export function onTextSizeChange(fn) {
   return () => state.textSizeListeners.delete(fn);
 }
 
-export function getZoom() { return state.zoom; }
-export function setZoom(z) {
-  const v = Number(z);
-  if (!Number.isFinite(v)) return;
-  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, v));
-  const rounded = Math.round(clamped * 1000) / 1000;
-  if (state.zoom === rounded) return;
-  state.zoom = rounded;
-  for (const fn of state.zoomListeners) fn(rounded);
+function clampZoom(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, n));
+  return Math.round(clamped * 1000) / 1000;
 }
-export function onZoomChange(fn) {
-  state.zoomListeners.add(fn);
-  return () => state.zoomListeners.delete(fn);
+
+export function getPdfZoom() { return state.pdfZoom; }
+export function setPdfZoom(z) {
+  const rounded = clampZoom(z);
+  if (rounded == null) return;
+  if (state.pdfZoom === rounded) return;
+  state.pdfZoom = rounded;
+  for (const fn of state.pdfZoomListeners) fn(rounded);
+}
+export function onPdfZoomChange(fn) {
+  state.pdfZoomListeners.add(fn);
+  return () => state.pdfZoomListeners.delete(fn);
+}
+
+export function getPsdZoom() { return state.psdZoom; }
+export function setPsdZoom(z) {
+  const rounded = clampZoom(z);
+  if (rounded == null) return;
+  if (state.psdZoom === rounded) return;
+  state.psdZoom = rounded;
+  for (const fn of state.psdZoomListeners) fn(rounded);
+}
+export function onPsdZoomChange(fn) {
+  state.psdZoomListeners.add(fn);
+  return () => state.psdZoomListeners.delete(fn);
 }
 
 export function getPdfDoc() { return state.pdfDoc; }
@@ -301,6 +331,11 @@ export function setPdf(doc, path) {
   state.pdfPageCount = doc && typeof doc.numPages === "number" ? doc.numPages : 0;
   // ユーザー回転は PDF 切替時も保持（同じワークフローの PDF は同じ向きの傾向があるため）。
   // リセットしたい場合はホームに戻るで clearPdf → clearPdfRotation を呼ぶ。
+  // pdfPageIndex は新 PDF 読込時に 0 にリセット（旧 PDF の仮想ページ数とは無関係のため）。
+  if (state.pdfPageIndex !== 0) {
+    state.pdfPageIndex = 0;
+    for (const fn of state.pdfPageIndexListeners) fn(0);
+  }
   for (const fn of state.pdfListeners) fn(state.pdfDoc);
 }
 export function clearPdf() {
@@ -338,6 +373,67 @@ export function setPsdRotation(deg) {
 export function onPsdRotationChange(fn) {
   state.psdRotationListeners.add(fn);
   return () => state.psdRotationListeners.delete(fn);
+}
+
+export function getPdfPageIndex() { return state.pdfPageIndex; }
+export function setPdfPageIndex(i) {
+  if (!Number.isFinite(i)) return;
+  const clamped = Math.max(0, Math.round(i));
+  if (state.pdfPageIndex === clamped) return;
+  state.pdfPageIndex = clamped;
+  for (const fn of state.pdfPageIndexListeners) fn(clamped);
+}
+export function onPdfPageIndexChange(fn) {
+  state.pdfPageIndexListeners.add(fn);
+  return () => state.pdfPageIndexListeners.delete(fn);
+}
+
+export function getPdfSplitMode() { return state.pdfSplitMode; }
+export function setPdfSplitMode(on) {
+  const v = !!on;
+  if (state.pdfSplitMode === v) return;
+  state.pdfSplitMode = v;
+  for (const fn of state.pdfSplitModeListeners) fn(v);
+}
+export function onPdfSplitModeChange(fn) {
+  state.pdfSplitModeListeners.add(fn);
+  return () => state.pdfSplitModeListeners.delete(fn);
+}
+
+export function getPdfSkipFirstBlank() { return state.pdfSkipFirstBlank; }
+export function setPdfSkipFirstBlank(on) {
+  const v = !!on;
+  if (state.pdfSkipFirstBlank === v) return;
+  state.pdfSkipFirstBlank = v;
+  for (const fn of state.pdfSkipFirstBlankListeners) fn(v);
+}
+export function onPdfSkipFirstBlankChange(fn) {
+  state.pdfSkipFirstBlankListeners.add(fn);
+  return () => state.pdfSkipFirstBlankListeners.delete(fn);
+}
+
+export function getParallelSyncMode() { return state.parallelSyncMode; }
+export function setParallelSyncMode(on) {
+  const v = !!on;
+  if (state.parallelSyncMode === v) return;
+  state.parallelSyncMode = v;
+  for (const fn of state.parallelSyncModeListeners) fn(v);
+}
+export function onParallelSyncModeChange(fn) {
+  state.parallelSyncModeListeners.add(fn);
+  return () => state.parallelSyncModeListeners.delete(fn);
+}
+
+export function getActivePane() { return state.activePane; }
+export function setActivePane(pane) {
+  const v = pane === "pdf" ? "pdf" : "psd";
+  if (state.activePane === v) return;
+  state.activePane = v;
+  for (const fn of state.activePaneListeners) fn(v);
+}
+export function onActivePaneChange(fn) {
+  state.activePaneListeners.add(fn);
+  return () => state.activePaneListeners.delete(fn);
 }
 
 export function getCurrentFont() { return state.currentFontPostScriptName; }

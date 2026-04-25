@@ -98,6 +98,36 @@ H. **Alt 単独押下のシステムメニュー活性化を無効化**: Alt+whe
 
 （詳細は下の各セクション、および `4c`・`4d`・`10. UI` を参照）
 
+## 最新セッション（PDF/PSD 並列ビュー強化）
+
+I. **PDF 仮想ページ機構**: `src/pdf-pages.js` を新設し、PDF を物理ページ番号 + side（"full" / "left" / "right"）の **仮想ページ列**として扱うレイヤを追加。`getPdfVirtualPages()` / `getPdfVirtualPageCount()` / `getPdfVirtualPageAt(idx)` / `getPdfVirtualIndexForPhysicalPage(pageNum)` を提供。`pdf-view.js` は `getCurrentPageIndex` ではなく `getPdfPageIndex` + 仮想ページ参照に切替。side が `"left"` / `"right"` のときはオフスクリーン canvas に full レンダ → 表示用 canvas に半分だけ `drawImage(off, -srcX, 0)` で切り出し。`viewport0.width > viewport0.height` でないとき（縦長ページ・90°/270° 回転後の縦長見え）は自動で `"full"` にフォールバック。
+
+J. **PDF 単ページ化（横長見開き原稿の自動分割）**: `state.pdfSplitMode` を新設し、PDF 読込時に `pdf-loader.detectLandscape(doc)`（1 ページ目の `getViewport({rotation: baseRotation})` で width > height 判定）で **landscape を検出したら自動 ON**。手動切替ボタンは廃止（読込時の自動判定に一本化）。`pdf-pages.js` の生成ロジックは **和書右綴じ順**：P1 は中央分割の左半分のみ（裏白扱い）、P2 以降は **右半分 → 左半分** の 2 仮想ページに展開。総数 = `1 + 2 × (count - 1)`。
+
+K. **先頭白紙ページ除外（チェックボックス）**: `state.pdfSkipFirstBlank`（既定 false、永続化なし）と `<button id="skip-first-blank-btn" aria-pressed>` を追加。トグル ON のとき仮想ページ生成で `startPage` を 2 に上げ、物理 P1 を完全に除外（split モードに依存せず動作）。トグル前後で同じ物理ページに留まるよう `getPdfVirtualPageAt` → `getPdfVirtualIndexForPhysicalPage` で remap。**Tauri の `data-tauri-drag-region` がクリックを横取りする問題**を回避するため、`<label>` + `<input type=checkbox>` ではなく `<button aria-pressed>` + 自作チェックボックス疑似要素（`.skip-blank-box::after` で ✓）で実装。アイコンはファイル＋中央 × の SVG（白文字、控えめな主張）。
+
+L. **同期 / 非同期モードのページ進行ブリッジ**: `state.parallelSyncMode`（既定 true）と `state.activePane`（"pdf" / "psd"、既定 "psd"）を新設。同期モード ON では `onPageIndexChange` ↔ `onPdfPageIndexChange` を相互ミラー（再入防止に `syncBridgeBusy` フラグ）。PSD 未読込のときは `setCurrentPageIndex` が空回りするので `advancePage` / `jumpToEdge` 内で **PSD ページ無し → PDF を直接駆動**にフォールバック。非同期モードでは各ペインが独立し、`activePane` の側だけが矢印キー / ホイールで動く。**アクティブペインはクリックで切替**（`mousedown` を capture 相当で拾い、既存の layer-click 等は妨げない）。**青いリング枠** は async モード時のみ表示。同期に戻すときは **resync モーダル**（「このまま再同期」/「ページを合わせて再同期」）を出し、後者ではアクティブ側の index を非アクティブ側にコピー。トグル UI はアイコンのみ（`<button title="ページ同期" aria-label>` ＋ `<button title="ページ非同期" aria-label>`）、tooltip は「ページ同期 / ページ非同期」。
+
+M. **PDF/PSD ズームの独立化**: 共有 `state.zoom` を廃止、`state.pdfZoom` と `state.psdZoom` に分離。Alt+wheel は **カーソルが乗っているペイン**を直接ズーム（PDF 領域なら pdfZoom、PSD 領域なら psdZoom）。+/- ボタン・`Ctrl+=` / `Ctrl+-` / `Ctrl+0` はアクティブペインを操作。ズーム表示は `PSD 100%` / `PDF 100%` のように対象ペインを明記し、`activePane` 切替で自動更新。
+
+N. **PDF にもパンツール**: `pdf-view.js` にモジュールレベル `panState` を追加、canvas の `mousedown` / `mousemove` / `mouseup` を capture 相当で登録、毎イベントで `preventDefault + stopPropagation`。スクロール対象は `#pdf-stage`（PSD と同じ overflow:auto 構造）。`onToolChange` 購読で `cursor: grab`（pan 中）/ `grabbing`（ドラッグ中）/ `default` を切替。`window.mouseup` / `window.blur` を安全網に `endPdfPan()`。
+
+O. **`Ctrl+J` ページジャンプの PDF 対応**: `decidePageJumpTarget()` で activePane を優先、無効なら片方にフォールバック。PDF を選んだ場合は **仮想ページ番号**で受け付ける（単ページ化中は `#1左 / #2右 / #2左 / …` の通し番号、先頭白紙除外 ON のときは除外後の通し）。ヒント表示も `"PDF ページ：1 〜 N を入力してください"` のように対象明記。
+
+P. **ファイルピッカーのタイトル設定**: `pickPsdFiles` / `pickPdfFile` / `pickTxtPath` に `title: "PSDを開く" / "PDFを開く" / "テキストを開く"` を追加。OS のファイル選択ダイアログのタイトルバーに表示。
+
+Q. **ページバー廃止 → サイドツールバーの上下ボタン化**: `#pagebar`・`spread-nav-track` / `spread-nav-handle` 系の HTML / CSS / JS（`pagebar.js`）を全廃止。代わりに `.side-toolbar` 内の文字色スウォッチ直上に **ページ移動グループ（▲ / "現在 / 総数" / ▼）** を配置。`bindPageNav` が `advancePage(±1)` を駆動、`updatePageNav` が `onPageIndexChange` / `onPdfPageIndexChange` / `onPdfChange` / `onPdfSplitModeChange` / `onPdfSkipFirstBlankChange` / `onParallelSyncModeChange` / `onActivePaneChange` を購読して表示・disabled 状態を更新。`.workspace` のグリッドは `1fr auto 44px 280px` → `1fr auto auto`（要素 width 駆動）に変更。
+
+R. **サイズ・フチの ± ボタン位置入替**: `.size-group` / `.stroke-width-group` の DOM 順を `[−][input] [unit] [＋]` から **`[＋][input] [unit] [−]`** に入れ替え（id・ハンドラはそのまま、ショートカット `[` / `]` も従来どおり）。
+
+S. **MojiQ 流の折り畳み（サイドツールバー / サイドパネル）**: 各パネル先頭に高さ 24px の `.panel-header` 帯を追加し、`.panel-toggle-btn`（`>>` chevron）を配置。クリックで `.collapsed` クラスをトグルし、要素 `width` を `44px ↔ 24px` / `280px ↔ 24px` に縮める（`transition: width 0.25s ease`）。`.collapsed > *:not(.panel-header) { display: none }` で本体非表示。アイコンは `.icon-collapse`（`>>`）/ `.icon-expand`（`<<`）を CSS で切替、ワークスペース反転時は `transform: scaleX(-1)` で向きを自動反転。状態は `localStorage psdesign_side_toolbar_collapsed` / `psdesign_side_panel_collapsed` に永続化、起動時に復元。`bindCollapseToggles` / `bindPanelToggle` / `applyPanelCollapsed` で配線。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: `.workspace = 1fr auto 44px 280px`（spreads / pagebar / side-toolbar / side-panel の 4 列）
+> - 新: `.workspace = 1fr auto auto`（spreads / side-toolbar / side-panel の 3 列、後ろ 2 列は要素 width で driven）。pagebar 廃止。
+> - 旧: `state.zoom`（PDF/PSD 共有）、`state.currentPageIndex`（PDF/PSD 共有）
+> - 新: `state.pdfZoom` / `state.psdZoom`（独立）、`state.currentPageIndex`（PSD 専用）/ `state.pdfPageIndex`（PDF 専用）。同期モード時は main.js の bridge が両者を相互ミラー。
+
 ## 主要機能
 
 ### 1. PSD 読み込みと縦書き配置

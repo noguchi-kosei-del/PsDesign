@@ -154,6 +154,7 @@ async function pickTxtPath() {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({
     multiple: false,
+    title: "テキストを開く",
     filters: [{ name: "Text", extensions: ["txt"] }],
   });
   return typeof picked === "string" ? picked : null;

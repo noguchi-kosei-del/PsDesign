@@ -227,7 +227,7 @@ html, body, #app {
   height: 26px;
 }
 .zoom-level-btn {
-  min-width: 56px;
+  min-width: 80px;
   height: 26px;
   padding: 0 6px;
   background: transparent;
@@ -242,6 +242,100 @@ html, body, #app {
 .zoom-level-btn:hover {
   background: var(--panel-hover);
   border-color: var(--border);
+}
+
+.toolbar-viewmode {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 6px;
+  border-right: 1px solid var(--border);
+  /* toolbar の gap (12px) を打ち消し、左の区切り線（zoom の右ボーダー）から
+     6px の padding だけで sync 群を配置 → 左右の余白を対称にする。 */
+  margin-left: -12px;
+}
+.skip-blank-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 4px;
+  font-size: 11px;
+  font-family: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.skip-blank-btn:hover {
+  color: var(--text);
+}
+.skip-blank-box {
+  position: relative;
+  width: 13px;
+  height: 13px;
+  border: 1px solid var(--border);
+  border-radius: 2px;
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.skip-blank-btn[aria-pressed="true"] .skip-blank-box {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+.skip-blank-btn[aria-pressed="true"] .skip-blank-box::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.skip-blank-icon {
+  display: inline-block;
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+
+.sync-segment {
+  display: inline-flex;
+  align-items: center;
+  background: var(--panel-hover);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 2px;
+  gap: 2px;
+}
+.sync-seg-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.sync-seg-btn svg {
+  stroke: currentColor;
+}
+.sync-seg-btn:hover:not(.active) {
+  color: var(--text);
+}
+.sync-seg-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+.sync-seg-btn.active:hover {
+  background: var(--accent-hover);
 }
 
 .window-controls {
@@ -505,29 +599,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .workspace {
   display: grid;
-  grid-template-columns: 1fr auto 44px 280px;
+  /* side-toolbar / side-panel の列は要素の実 width で決まるよう auto。
+     折り畳み時は要素 width を 24px に縮めて、自動的に列幅も追従させる。 */
+  grid-template-columns: 1fr auto auto;
   overflow: hidden;
 }
 
 .workspace.flipped {
-  grid-template-columns: 280px 44px auto 1fr;
+  grid-template-columns: auto auto 1fr;
   grid-template-rows: 1fr;
 }
-.workspace.flipped > .spreads-container { grid-column: 4; grid-row: 1; }
-.workspace.flipped > .pagebar { grid-column: 3; grid-row: 1; }
+.workspace.flipped > .spreads-container { grid-column: 3; grid-row: 1; }
 .workspace.flipped > .side-toolbar { grid-column: 2; grid-row: 1; }
 .workspace.flipped > .side-panel { grid-column: 1; grid-row: 1; }
-
-/* 反転時のページバーハンドルラベル位置（キャンバス側へ寄せる） */
-.workspace.flipped .spread-nav-handle-label {
-  right: auto;
-  left: 100%;
-  margin-right: 0;
-  margin-left: 10px;
-}
-
-/* 反転時のページバー折畳トグル矢印方向を反転 */
-.workspace.flipped .pagebar-toggle-btn svg { transform: scaleX(-1); }
 
 /* ワークスペース反転ボタンの矢印：非反転時は左塗り、反転時は右塗り */
 #workspace-flip-btn.flipped .flip-left-arrow { fill: none; }
@@ -628,15 +712,75 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 :root[data-theme="light"] .theme-icon-moon { display: none; }
 
 .side-toolbar {
+  width: 44px;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 6px;
-  padding: 10px 6px;
+  padding: 0 6px 10px;
   background: var(--panel);
   border-left: 1px solid var(--border);
   border-right: 1px solid var(--border);
+  box-sizing: border-box;
+  transition: width 0.25s ease;
+  overflow: hidden;
 }
+
+.side-toolbar.collapsed {
+  width: 24px;
+  padding: 0;
+}
+.side-toolbar.collapsed > *:not(.panel-header) { display: none; }
+
+/* 折り畳み用ヘッダ：パネル先頭の 24px 帯にトグルボタン（>>）を配置 */
+.panel-header {
+  width: 100%;
+  height: 24px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.side-panel > .panel-header {
+  justify-content: flex-start;
+  padding: 0 6px;
+}
+.side-panel.collapsed > .panel-header {
+  justify-content: center;
+  padding: 0;
+}
+/* 反転時はサイドバーが左にあるので、>> アイコンの向きを反転 */
+.workspace.flipped .side-toolbar > .panel-header .icon-collapse,
+.workspace.flipped .side-toolbar > .panel-header .icon-expand,
+.workspace.flipped .side-panel > .panel-header .icon-collapse,
+.workspace.flipped .side-panel > .panel-header .icon-expand {
+  transform: scaleX(-1);
+}
+.panel-toggle-btn {
+  width: 20px;
+  height: 20px;
+  min-width: 20px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.panel-toggle-btn:hover {
+  background: var(--panel-hover);
+  border-color: var(--border);
+  color: var(--text);
+}
+.panel-toggle-btn .icon-expand { display: none; }
+.panel-toggle-btn .icon-collapse { display: block; }
+.collapsed > .panel-header .panel-toggle-btn .icon-expand { display: block; }
+.collapsed > .panel-header .panel-toggle-btn .icon-collapse { display: none; }
 
 .side-tool-btn {
   width: 32px;
@@ -650,11 +794,42 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: #fff;
 }
 
-/* Photoshop 風の文字色ピッカー：白/黒の 2 枚をオーバーラップさせて下部に配置。
-   側面ツールバーの末尾に `margin-top: auto` で押し込み、上下を仕切り線で分ける。 */
-.fill-color-picker {
+/* ページ移動ボタン（上下）：サイドツールバーの末尾近くに配置。
+   `.page-nav` に margin-top: auto を持たせ、これと続く .fill-color-picker をまとめて下部に押し込む。 */
+.page-nav {
   margin-top: auto;
-  padding: 10px 0 4px;
+  padding: 8px 0 4px;
+  border-top: 1px solid var(--border);
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.page-nav-btn {
+  width: 30px;
+  height: 26px;
+  min-width: 30px;
+  border-radius: 4px;
+}
+.page-nav-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+.page-nav-label {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  font-family: inherit;
+  user-select: none;
+  line-height: 1;
+  padding: 1px 0;
+  white-space: nowrap;
+}
+
+/* Photoshop 風の文字色ピッカー：白/黒の 2 枚をオーバーラップさせて下部に配置。 */
+.fill-color-picker {
+  padding: 8px 0 4px;
   border-top: 1px solid var(--border);
   width: 100%;
   display: flex;
@@ -766,6 +941,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   position: relative;
 }
 
+/* 非同期モード時のアクティブペイン強調（キーボード/ホイールの操作対象側） */
+.spreads-pdf-area.active-pane,
+.spreads-psd-area.active-pane {
+  box-shadow: inset 0 0 0 2px var(--accent);
+  transition: box-shadow 0.15s ease;
+}
+
 .pdf-rotate-btn,
 .psd-rotate-btn {
   position: absolute;
@@ -834,143 +1016,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 13px;
   line-height: 1.5;
 }
-
-.pagebar {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  width: 32px;
-  padding: 6px 0 14px;
-  gap: 10px;
-  background: var(--panel);
-  border-left: 1px solid var(--border);
-  border-right: 1px solid var(--border);
-  box-sizing: border-box;
-  transition: width 0.2s ease;
-}
-
-.pagebar.collapsed {
-  width: 24px;
-  background: transparent;
-  border-left: none;
-  border-right: none;
-  padding: 6px 0 0;
-  gap: 0;
-}
-
-.pagebar.collapsed .spread-nav-track { display: none; }
-
-.pagebar-toggle-btn {
-  flex-shrink: 0;
-  width: 20px;
-  height: 20px;
-  min-width: 20px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 3px;
-  color: var(--text-muted);
-  cursor: pointer;
-}
-
-.pagebar-toggle-btn:hover {
-  background: var(--panel-hover);
-  border-color: var(--border);
-  color: var(--text);
-}
-
-.pagebar-toggle-btn .icon-expand { display: none; }
-.pagebar-toggle-btn .icon-collapse { display: block; }
-.pagebar.collapsed .pagebar-toggle-btn .icon-expand { display: block; }
-.pagebar.collapsed .pagebar-toggle-btn .icon-collapse { display: none; }
-
-.spread-nav-track {
-  position: relative;
-  flex: 1;
-  width: 12px;
-  min-height: 0;
-  background: var(--pagebar-track);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  box-shadow: var(--pagebar-track-shadow);
-  cursor: pointer;
-  backdrop-filter: blur(8px);
-}
-
-.spread-nav-handle {
-  position: absolute;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
-  width: 10px;
-  height: 30px;
-  background: var(--pagebar-handle);
-  border-radius: 5px;
-  cursor: grab;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 2px;
-  box-shadow: var(--pagebar-handle-shadow);
-  transition: box-shadow 0.15s ease, transform 0.1s ease, top 0.1s ease-out;
-}
-
-.spread-nav-handle:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
-}
-
-.spread-nav-handle.dragging {
-  cursor: grabbing;
-  transform: translateX(-50%) scale(1.05);
-  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.5);
-  transition: box-shadow 0.15s ease, transform 0.1s ease;
-}
-
-.spread-nav-handle-grip {
-  display: flex;
-  flex-direction: column;
-  gap: 3px;
-}
-
-.spread-nav-handle-grip::before,
-.spread-nav-handle-grip::after {
-  content: '';
-  width: 6px;
-  height: 2px;
-  background: var(--pagebar-grip);
-  border-radius: 1px;
-}
-
-.spread-nav-handle-label {
-  position: absolute;
-  right: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-right: 10px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #fff;
-  font-family: ui-monospace, Consolas, monospace;
-  background: var(--accent);
-  padding: 4px 8px;
-  border-radius: 6px;
-  white-space: nowrap;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.15s ease;
-  box-shadow: 0 2px 8px rgba(0, 120, 212, 0.3);
-  font-variant-numeric: tabular-nums;
-}
-
-.spread-nav-handle:hover .spread-nav-handle-label,
-.spread-nav-handle.dragging .spread-nav-handle-label {
-  opacity: 1;
-}
-
 
 .spreads-empty {
   display: flex;
@@ -1133,12 +1178,20 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .side-panel {
+  width: 280px;
   background: var(--panel);
   border-left: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  box-sizing: border-box;
+  transition: width 0.25s ease;
 }
+
+.side-panel.collapsed {
+  width: 24px;
+}
+.side-panel.collapsed > *:not(.panel-header) { display: none; }
 
 .side-panel h2, .side-panel h3 {
   margin: 0;

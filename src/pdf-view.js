@@ -1,15 +1,22 @@
 import {
-  getCurrentPageIndex,
   getPdfDoc,
-  getPdfPageCount,
+  getPdfPageIndex,
   getPdfPath,
   getPdfRotation,
-  getZoom,
-  onPageIndexChange,
+  getPdfZoom,
+  getTool,
   onPdfChange,
+  onPdfPageIndexChange,
   onPdfRotationChange,
-  onZoomChange,
+  onPdfSkipFirstBlankChange,
+  onPdfSplitModeChange,
+  onPdfZoomChange,
+  onToolChange,
 } from "./state.js";
+import {
+  getPdfVirtualPageAt,
+  getPdfVirtualPageCount,
+} from "./pdf-pages.js";
 
 const MAX_CANVAS_SIDE = 16384;
 
@@ -23,6 +30,13 @@ let emptyEl = null;
 let outOfRangeEl = null;
 let renderToken = 0;
 let pendingRaf = 0;
+
+// MojiQ 流パン状態：mousedown 時にスクロール起点を保存し、move でスクロール量を更新する。
+let panState = null;
+if (typeof window !== "undefined") {
+  window.addEventListener("mouseup", () => { if (panState) endPdfPan(); });
+  window.addEventListener("blur", () => { if (panState) endPdfPan(); });
+}
 
 function basename(p) {
   if (!p) return "";
@@ -71,9 +85,22 @@ export function mountPdfView() {
   stageEl.appendChild(outOfRangeEl);
 
   onPdfChange(() => schedule());
-  onPageIndexChange(() => schedule());
-  onZoomChange(() => schedule());
+  onPdfPageIndexChange(() => schedule());
+  onPdfZoomChange(() => schedule());
   onPdfRotationChange(() => schedule());
+  onPdfSplitModeChange(() => schedule());
+  onPdfSkipFirstBlankChange(() => schedule());
+
+  // パンツール対応：canvas 上で mousedown→move→up で stage をスクロールする。
+  // PSD 側 (canvas-tools.js) と同じく、リスナーは canvas 自身に張り、毎回 stopPropagation
+  // で親要素へのバブリングを抑止する。
+  canvas.addEventListener("mousedown", (e) => onPdfCanvasMouseDown(e), true);
+  canvas.addEventListener("mousemove", (e) => onPdfCanvasMouseMove(e), true);
+  canvas.addEventListener("mouseup", (e) => onPdfCanvasMouseUp(e), true);
+
+  // ツール変更でカーソルを更新（pan のとき grab、それ以外 default）。
+  onToolChange(() => updatePdfCursor());
+  updatePdfCursor();
 
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => schedule());
@@ -81,6 +108,52 @@ export function mountPdfView() {
   }
 
   schedule();
+}
+
+function updatePdfCursor() {
+  if (!canvas) return;
+  canvas.style.cursor = getTool() === "pan" ? (panState ? "grabbing" : "grab") : "default";
+}
+
+function onPdfCanvasMouseDown(e) {
+  if (getTool() !== "pan") return;
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!stageEl) return;
+  panState = {
+    startX: e.clientX,
+    startY: e.clientY,
+    scrollStart: { left: stageEl.scrollLeft, top: stageEl.scrollTop },
+    prevUserSelect: document.body.style.userSelect,
+  };
+  document.body.style.userSelect = "none";
+  canvas.style.cursor = "grabbing";
+}
+
+function onPdfCanvasMouseMove(e) {
+  if (!panState) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!stageEl) return;
+  const dx = e.clientX - panState.startX;
+  const dy = e.clientY - panState.startY;
+  stageEl.scrollLeft = panState.scrollStart.left - dx;
+  stageEl.scrollTop = panState.scrollStart.top - dy;
+}
+
+function onPdfCanvasMouseUp(e) {
+  if (!panState) return;
+  e.preventDefault();
+  e.stopPropagation();
+  endPdfPan();
+}
+
+function endPdfPan() {
+  if (!panState) return;
+  document.body.style.userSelect = panState.prevUserSelect;
+  panState = null;
+  updatePdfCursor();
 }
 
 function schedule() {
@@ -112,12 +185,15 @@ function showOutOfRange(requested, total) {
   outOfRangeEl.hidden = false;
 }
 
-function showCanvas(pageNum) {
+function showCanvas(pageNum, side) {
   emptyEl.hidden = true;
   outOfRangeEl.hidden = true;
   pageWrap.hidden = false;
   if (labelEl) {
-    labelEl.textContent = `#${pageNum}  ${basename(getPdfPath())}`;
+    const sideLabel = side === "right" ? "右" : side === "left" ? "左" : "";
+    labelEl.textContent = sideLabel
+      ? `#${pageNum}${sideLabel}  ${basename(getPdfPath())}`
+      : `#${pageNum}  ${basename(getPdfPath())}`;
   }
 }
 
@@ -128,13 +204,23 @@ async function redraw() {
     showEmpty();
     return;
   }
-  const pageIndex = getCurrentPageIndex();
-  const pageNum = pageIndex + 1;
-  const total = getPdfPageCount() || doc.numPages || 0;
-  if (pageNum > total) {
-    showOutOfRange(pageNum, total);
+
+  const vtotal = getPdfVirtualPageCount();
+  if (vtotal === 0) {
+    showEmpty();
     return;
   }
+  const vidx = getPdfPageIndex();
+  if (vidx >= vtotal) {
+    showOutOfRange(vidx + 1, vtotal);
+    return;
+  }
+  const vp = getPdfVirtualPageAt(vidx);
+  if (!vp) {
+    showOutOfRange(vidx + 1, vtotal);
+    return;
+  }
+  const pageNum = vp.pageNum;
 
   const box = rootEl.getBoundingClientRect();
   const availW = Math.max(0, box.width - 32);
@@ -151,8 +237,16 @@ async function redraw() {
   const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
   const userRotation = getPdfRotation();
   const totalRotation = (((baseRotation + userRotation) % 360) + 360) % 360;
+
   const viewport0 = page.getViewport({ scale: 1, rotation: totalRotation });
-  const pageAR = viewport0.width / viewport0.height;
+  // 左/右半分表示は「横長ページ（width > height）」のときのみ有効。
+  // 縦長ページや 90/270° 回転で縦長に見えるときは full にフォールバック。
+  const isLandscape = viewport0.width > viewport0.height;
+  const wantsSplit = vp.side === "left" || vp.side === "right";
+  const side = wantsSplit && isLandscape ? vp.side : "full";
+
+  const fullAR = viewport0.width / viewport0.height;
+  const pageAR = side === "full" ? fullAR : fullAR / 2;
   const availAR = availW / availH;
   let cssW;
   let cssH;
@@ -163,41 +257,64 @@ async function redraw() {
     cssH = availH;
     cssW = availH * pageAR;
   }
-  const zoom = getZoom();
+  const zoom = getPdfZoom();
   cssW *= zoom;
   cssH *= zoom;
 
   let dpr = window.devicePixelRatio || 1;
+  const maxSideCss = side === "full" ? cssW : cssW * 2;
   const maxDpr = Math.min(
-    MAX_CANVAS_SIDE / Math.max(1, cssW),
+    MAX_CANVAS_SIDE / Math.max(1, maxSideCss),
     MAX_CANVAS_SIDE / Math.max(1, cssH),
   );
   if (dpr > maxDpr) dpr = Math.max(1, maxDpr);
 
-  const renderScale = (cssW / viewport0.width) * dpr;
+  // renderScale は「フルページ」基準。half の場合も full の倍率で render → 片側を切り出す。
+  const renderScale = (cssW * (side === "full" ? 1 : 2) / viewport0.width) * dpr;
   const viewport = page.getViewport({ scale: renderScale, rotation: totalRotation });
   const pxW = Math.max(1, Math.round(viewport.width));
   const pxH = Math.max(1, Math.round(viewport.height));
 
-  showCanvas(pageNum);
-  canvas.width = pxW;
-  canvas.height = pxH;
-  canvas.style.width = `${cssW}px`;
-  canvas.style.height = `${cssH}px`;
-
   const myToken = ++renderToken;
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, pxW, pxH);
+  showCanvas(pageNum, side);
 
-  try {
-    const task = page.render({ canvasContext: ctx, viewport });
-    await task.promise;
-  } catch (e) {
-    if (e && e.name === "RenderingCancelledException") return;
-    console.error("pdf render:", e);
-    return;
-  }
-  if (myToken !== renderToken) {
-    // 古い結果なので破棄（後続 redraw が上書きするはず）
+  if (side === "full") {
+    canvas.width = pxW;
+    canvas.height = pxH;
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, pxW, pxH);
+    try {
+      await page.render({ canvasContext: ctx, viewport }).promise;
+    } catch (e) {
+      if (e && e.name === "RenderingCancelledException") return;
+      console.error("pdf render:", e);
+      return;
+    }
+    if (myToken !== renderToken) return;
+  } else {
+    // オフスクリーンに full 描画 → 表示 canvas に片側だけ drawImage
+    const off = document.createElement("canvas");
+    off.width = pxW;
+    off.height = pxH;
+    try {
+      await page.render({ canvasContext: off.getContext("2d"), viewport }).promise;
+    } catch (e) {
+      if (e && e.name === "RenderingCancelledException") return;
+      console.error("pdf render:", e);
+      return;
+    }
+    if (myToken !== renderToken) return;
+    const halfPxW = Math.floor(pxW / 2);
+    // 右半分なら src 原点を halfPxW、左半分なら 0。
+    const srcX = side === "right" ? halfPxW : 0;
+    canvas.width = halfPxW;
+    canvas.height = pxH;
+    canvas.style.width = `${cssW}px`;
+    canvas.style.height = `${cssH}px`;
+    const ctx = canvas.getContext("2d");
+    ctx.clearRect(0, 0, halfPxW, pxH);
+    ctx.drawImage(off, -srcX, 0);
   }
 }

@@ -1,6 +1,18 @@
 import * as pdfjsLib from "pdfjs-dist";
-import { setPdf } from "./state.js";
+import { setPdf, setPdfSplitMode } from "./state.js";
 import { showProgress, hideProgress, toast, updateProgress } from "./ui-feedback.js";
+
+// 1 ページ目の物理サイズで「横長原稿」と判定する。横長なら単ページ表示（左半分のみ）。
+async function detectLandscape(doc) {
+  try {
+    const page = await doc.getPage(1);
+    const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
+    const vp = page.getViewport({ scale: 1, rotation: baseRotation });
+    return vp.width > vp.height;
+  } catch (_) {
+    return false;
+  }
+}
 
 let workerConfigured = false;
 function ensureWorker() {
@@ -26,6 +38,7 @@ export async function pickPdfFile() {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({
     multiple: false,
+    title: "PDFを開く",
     filters: [{ name: "PDF", extensions: ["pdf"] }],
   });
   if (!picked) return null;
@@ -87,6 +100,9 @@ export async function loadPdfByPath(path) {
 
     setTarget(100);
     await waitUntilReached(100);
+    // 横長原稿なら単ページ化を自動 ON、縦長なら OFF。setPdf より先に確定させて初回 redraw が正しいモードで走るようにする。
+    const isLandscape = await detectLandscape(doc);
+    setPdfSplitMode(isLandscape);
     setPdf(doc, path);
   } catch (e) {
     console.error("PDF 読込失敗:", e);

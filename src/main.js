@@ -11,7 +11,6 @@ import {
   rebuildLayerList,
 } from "./text-editor.js";
 import { initTxtSource, loadTxtFromPath } from "./txt-source.js";
-import { initPagebar, renderPagebar } from "./pagebar.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   hideProgress,
@@ -23,34 +22,56 @@ import {
   addPage,
   clearPages,
   exportEdits,
+  getActivePane,
   getCurrentPageIndex,
   getFolder,
   getPages,
+  getParallelSyncMode,
+  getPdfPageIndex,
+  getPdfRotation,
+  getPdfSkipFirstBlank,
+  getPdfZoom,
   getPsdRotation,
+  getPsdZoom,
   getTextSize,
   getTool,
-  getZoom,
-  getPdfRotation,
   hasEdits,
+  onActivePaneChange,
   onPageIndexChange,
+  onParallelSyncModeChange,
   onPdfChange,
+  onPdfPageIndexChange,
+  onPdfSkipFirstBlankChange,
+  onPdfSplitModeChange,
+  onPdfZoomChange,
+  onPsdZoomChange,
   onTextSizeChange,
   onToolChange,
-  onZoomChange,
-  setPdfRotation,
-  setPsdRotation,
+  setActivePane,
   setCurrentPageIndex,
   setFolder,
   setFonts,
+  setParallelSyncMode,
+  setPdfPageIndex,
+  setPdfRotation,
+  setPdfSkipFirstBlank,
+  setPdfZoom,
+  setPsdRotation,
+  setPsdZoom,
   setTextSize,
   setTool,
-  setZoom,
 } from "./state.js";
+import {
+  getPdfVirtualIndexForPhysicalPage,
+  getPdfVirtualPageAt,
+  getPdfVirtualPageCount,
+} from "./pdf-pages.js";
 
 async function pickPsdFiles() {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({
     multiple: true,
+    title: "PSDを開く",
     filters: [{ name: "Photoshop Document", extensions: ["psd"] }],
   });
   if (!picked) return [];
@@ -128,7 +149,7 @@ async function loadPsdFilesByPaths(files) {
   clearPages();
   renderAllSpreads();
   rebuildLayerList();
-  renderPagebar();
+  updatePageNav();
 
   const failures = [];
   for (let i = 0; i < files.length; i++) {
@@ -143,7 +164,7 @@ async function loadPsdFilesByPaths(files) {
       addPage(page);
       renderAllSpreads();
       rebuildLayerList();
-      renderPagebar();
+      updatePageNav();
     } catch (e) {
       console.error(e);
       failures.push({ path, error: e });
@@ -389,17 +410,17 @@ function bindTools() {
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       if (e.code === "Equal" || e.code === "NumpadAdd" || e.key === "+" || e.key === ";") {
         e.preventDefault();
-        setZoom(getZoom() * 1.15);
+        zoomActivePaneBy(1.15);
         return;
       }
       if (e.code === "Minus" || e.code === "NumpadSubtract" || e.key === "-") {
         e.preventDefault();
-        setZoom(getZoom() / 1.15);
+        zoomActivePaneBy(1 / 1.15);
         return;
       }
       if (e.code === "Digit0" || e.code === "Numpad0") {
         e.preventDefault();
-        setZoom(1);
+        resetActivePaneZoom();
         return;
       }
     }
@@ -421,10 +442,8 @@ function bindTools() {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      const total = getPages().length;
-      if (total === 0) return;
       e.preventDefault();
-      setCurrentPageIndex(e.key === "ArrowLeft" ? 0 : total - 1);
+      jumpToEdge(e.key === "ArrowLeft" ? "first" : "last");
       return;
     }
     if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -461,10 +480,10 @@ function bindTools() {
       }
       if (e.key === "ArrowLeft") {
         e.preventDefault();
-        setCurrentPageIndex(getCurrentPageIndex() - 1);
+        advancePage(-1);
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
-        setCurrentPageIndex(getCurrentPageIndex() + 1);
+        advancePage(+1);
       }
     }
   });
@@ -494,9 +513,279 @@ function bindPageChange() {
   onPageIndexChange(() => {
     renderAllSpreads();
     rebuildLayerList();
-    renderPagebar();
+    updatePageNav();
     updatePsdRotateVisibility();
   });
+  onPdfPageIndexChange(() => updatePageNav());
+  onPdfChange(() => updatePageNav());
+  onPdfSplitModeChange(() => updatePageNav());
+  onPdfSkipFirstBlankChange(() => updatePageNav());
+  onParallelSyncModeChange(() => updatePageNav());
+  onActivePaneChange(() => updatePageNav());
+}
+
+// サイドツールバー / サイドパネルの折り畳みトグル。localStorage に状態を保存して
+// 起動時に復元する（MojiQ Pro の同様 UI に倣う）。
+const SIDE_TOOLBAR_COLLAPSED_KEY = "psdesign_side_toolbar_collapsed";
+const SIDE_PANEL_COLLAPSED_KEY = "psdesign_side_panel_collapsed";
+
+function applyPanelCollapsed(el, collapsed, btn, expandedTitle, collapsedTitle) {
+  if (!el) return;
+  el.classList.toggle("collapsed", collapsed);
+  if (btn) {
+    const t = collapsed ? collapsedTitle : expandedTitle;
+    btn.title = t;
+    btn.setAttribute("aria-label", t);
+    btn.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  }
+}
+
+function bindPanelToggle(panelEl, btn, storageKey, expandedTitle, collapsedTitle) {
+  if (!panelEl || !btn) return;
+  let collapsed = false;
+  try { collapsed = localStorage.getItem(storageKey) === "1"; } catch (_) {}
+  applyPanelCollapsed(panelEl, collapsed, btn, expandedTitle, collapsedTitle);
+  btn.addEventListener("click", () => {
+    collapsed = !collapsed;
+    applyPanelCollapsed(panelEl, collapsed, btn, expandedTitle, collapsedTitle);
+    try { localStorage.setItem(storageKey, collapsed ? "1" : "0"); } catch (_) {}
+  });
+}
+
+function bindCollapseToggles() {
+  bindPanelToggle(
+    document.querySelector(".side-toolbar"),
+    document.getElementById("toggle-side-toolbar-btn"),
+    SIDE_TOOLBAR_COLLAPSED_KEY,
+    "ツールバーを折り畳む",
+    "ツールバーを展開",
+  );
+  bindPanelToggle(
+    document.querySelector(".side-panel"),
+    document.getElementById("toggle-side-panel-btn"),
+    SIDE_PANEL_COLLAPSED_KEY,
+    "サイドバーを折り畳む",
+    "サイドバーを展開",
+  );
+}
+
+// サイドツールバーの上下ボタン（ページ移動）配線 + 表示更新。
+function bindPageNav() {
+  const prev = document.getElementById("page-prev-btn");
+  const next = document.getElementById("page-next-btn");
+  if (prev) prev.addEventListener("click", () => advancePage(-1));
+  if (next) next.addEventListener("click", () => advancePage(+1));
+  updatePageNav();
+}
+
+function updatePageNav() {
+  const label = document.getElementById("page-nav-label");
+  const prev = document.getElementById("page-prev-btn");
+  const next = document.getElementById("page-next-btn");
+  // ページバー廃止後の現在位置 / 総数表示。advancePage と同じターゲット決定ロジックを採用。
+  const psdCount = getPages().length;
+  const pdfCount = getPdfVirtualPageCount();
+  let total = 0;
+  let current = 0;
+  if (getParallelSyncMode()) {
+    if (psdCount > 0) { total = psdCount; current = getCurrentPageIndex(); }
+    else if (pdfCount > 0) { total = pdfCount; current = getPdfPageIndex(); }
+  } else if (getActivePane() === "pdf" && pdfCount > 0) {
+    total = pdfCount; current = getPdfPageIndex();
+  } else if (psdCount > 0) {
+    total = psdCount; current = getCurrentPageIndex();
+  } else if (pdfCount > 0) {
+    total = pdfCount; current = getPdfPageIndex();
+  }
+  if (label) {
+    label.textContent = total > 0 ? `${current + 1} / ${total}` : "– / –";
+  }
+  const disabled = total === 0;
+  if (prev) prev.disabled = disabled || current <= 0;
+  if (next) next.disabled = disabled || current >= total - 1;
+}
+
+// ページ送り：同期モードなら両側、非同期ならアクティブペインだけ進める。
+// 同期中でも PSD 未読込の場合は PDF を直接駆動する（空の PSD index 経由だと
+// setCurrentPageIndex が「pages 0 件 → index 0 固定」で何も起こらないため）。
+function advancePage(delta) {
+  if (getParallelSyncMode()) {
+    if (getPages().length > 0) {
+      setCurrentPageIndex(getCurrentPageIndex() + delta);
+    } else {
+      const vcount = getPdfVirtualPageCount();
+      if (vcount === 0) return;
+      const clamped = Math.max(0, Math.min(vcount - 1, getPdfPageIndex() + delta));
+      setPdfPageIndex(clamped);
+    }
+    return;
+  }
+  if (getActivePane() === "pdf") {
+    const vcount = getPdfVirtualPageCount();
+    const next = getPdfPageIndex() + delta;
+    const clamped = Math.max(0, Math.min(Math.max(0, vcount - 1), next));
+    setPdfPageIndex(clamped);
+  } else {
+    setCurrentPageIndex(getCurrentPageIndex() + delta);
+  }
+}
+
+function jumpToEdge(where) {
+  if (getParallelSyncMode()) {
+    const psdTotal = getPages().length;
+    if (psdTotal > 0) {
+      setCurrentPageIndex(where === "first" ? 0 : psdTotal - 1);
+      return;
+    }
+    const vcount = getPdfVirtualPageCount();
+    if (vcount === 0) return;
+    setPdfPageIndex(where === "first" ? 0 : vcount - 1);
+    return;
+  }
+  if (getActivePane() === "pdf") {
+    const vcount = getPdfVirtualPageCount();
+    if (vcount === 0) return;
+    setPdfPageIndex(where === "first" ? 0 : vcount - 1);
+  } else {
+    const total = getPages().length;
+    if (total === 0) return;
+    setCurrentPageIndex(where === "first" ? 0 : total - 1);
+  }
+}
+
+// 同期モード中は currentPageIndex（PSD）と pdfPageIndex を相互にミラーする。
+// 非同期中は各側が独立して動く。再入防止にフラグで一方向の反映に限定。
+let syncBridgeBusy = false;
+function bindParallelSync() {
+  onPageIndexChange((psdIdx) => {
+    if (!getParallelSyncMode()) return;
+    if (syncBridgeBusy) return;
+    if (getPdfPageIndex() === psdIdx) return;
+    syncBridgeBusy = true;
+    try { setPdfPageIndex(psdIdx); } finally { syncBridgeBusy = false; }
+  });
+  onPdfPageIndexChange((pdfIdx) => {
+    if (!getParallelSyncMode()) return;
+    if (syncBridgeBusy) return;
+    if (getCurrentPageIndex() === pdfIdx) return;
+    syncBridgeBusy = true;
+    try { setCurrentPageIndex(pdfIdx); } finally { syncBridgeBusy = false; }
+  });
+}
+
+function bindActivePaneTracking() {
+  const pdfArea = document.getElementById("spreads-pdf-area");
+  const psdArea = document.getElementById("spreads-psd-area");
+  // 同期/非同期どちらでも activePane は常に追跡（ズーム対象の決定に使う）。
+  // リング枠の視覚強調は非同期モードのときだけ。
+  pdfArea?.addEventListener("mousedown", () => setActivePane("pdf"), true);
+  psdArea?.addEventListener("mousedown", () => setActivePane("psd"), true);
+  const apply = () => {
+    const asyncMode = !getParallelSyncMode();
+    pdfArea?.classList.toggle("active-pane", asyncMode && getActivePane() === "pdf");
+    psdArea?.classList.toggle("active-pane", asyncMode && getActivePane() === "psd");
+  };
+  onParallelSyncModeChange(apply);
+  onActivePaneChange(apply);
+  apply();
+}
+
+// resync モーダル制御
+let resyncResolver = null;
+function openResyncModal() {
+  const modal = document.getElementById("resync-modal");
+  if (!modal) return Promise.resolve(null);
+  modal.hidden = false;
+  return new Promise((resolve) => {
+    resyncResolver = resolve;
+  });
+}
+function closeResyncModal(result) {
+  const modal = document.getElementById("resync-modal");
+  if (modal) modal.hidden = true;
+  if (resyncResolver) {
+    const r = resyncResolver;
+    resyncResolver = null;
+    r(result);
+  }
+}
+function bindResyncModal() {
+  const modal = document.getElementById("resync-modal");
+  const cancel = document.getElementById("resync-cancel");
+  const keep = document.getElementById("resync-keep");
+  const match = document.getElementById("resync-match");
+  if (!modal || !cancel || !keep || !match) return;
+  cancel.addEventListener("click", () => closeResyncModal("cancel"));
+  keep.addEventListener("click", () => closeResyncModal("keep"));
+  match.addEventListener("click", () => closeResyncModal("match"));
+  modal.addEventListener("mousedown", (e) => {
+    if (e.target === modal) closeResyncModal("cancel");
+  });
+  document.addEventListener("keydown", (e) => {
+    if (modal.hidden) return;
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeResyncModal("cancel");
+    }
+  });
+}
+
+function bindViewModeControls() {
+  const syncOnBtn = document.getElementById("sync-on-btn");
+  const syncOffBtn = document.getElementById("sync-off-btn");
+  const skipBlankBtn = document.getElementById("skip-first-blank-btn");
+  if (!syncOnBtn || !syncOffBtn) return;
+
+  // 先頭白紙ページ除外トグル
+  if (skipBlankBtn) {
+    const syncSkipUi = () => {
+      skipBlankBtn.setAttribute("aria-pressed", getPdfSkipFirstBlank() ? "true" : "false");
+    };
+    syncSkipUi();
+    skipBlankBtn.addEventListener("click", () => {
+      // 切替前後で「同じ物理ページ」を維持するため、現在の virtual page の pageNum を保存しておき
+      // 切替後にその pageNum に対応する virtual index へ再マップする。
+      const cur = getPdfVirtualPageAt(getPdfPageIndex());
+      const prevPageNum = cur ? cur.pageNum : null;
+      setPdfSkipFirstBlank(!getPdfSkipFirstBlank());
+      if (prevPageNum != null) {
+        setPdfPageIndex(getPdfVirtualIndexForPhysicalPage(prevPageNum));
+      }
+    });
+    onPdfSkipFirstBlankChange(syncSkipUi);
+  }
+
+  // 同期トグル
+  syncOnBtn.addEventListener("click", async () => {
+    if (getParallelSyncMode()) return;
+    const choice = await openResyncModal();
+    if (choice === "cancel" || choice == null) return;
+    if (choice === "match") {
+      // アクティブペイン側の index を非アクティブ側に合わせる。
+      const active = getActivePane();
+      if (active === "pdf") {
+        setCurrentPageIndex(getPdfPageIndex());
+      } else {
+        setPdfPageIndex(getCurrentPageIndex());
+      }
+    }
+    setParallelSyncMode(true);
+  });
+  syncOffBtn.addEventListener("click", () => {
+    if (!getParallelSyncMode()) return;
+    setParallelSyncMode(false);
+    setActivePane("psd");
+  });
+
+  const syncModeUi = () => {
+    const sync = getParallelSyncMode();
+    syncOnBtn.classList.toggle("active", sync);
+    syncOffBtn.classList.toggle("active", !sync);
+    syncOnBtn.setAttribute("aria-pressed", sync ? "true" : "false");
+    syncOffBtn.setAttribute("aria-pressed", !sync ? "true" : "false");
+  };
+  onParallelSyncModeChange(syncModeUi);
+  syncModeUi();
 }
 
 function applyTextSize(n) {
@@ -601,40 +890,62 @@ async function setupTauriDragDrop() {
   }
 }
 
+// アクティブペイン基準のズーム操作（ボタン・キーボード）
+function zoomActivePaneBy(factor) {
+  zoomPaneBy(getActivePane(), factor);
+}
+function resetActivePaneZoom() {
+  resetPaneZoom(getActivePane());
+}
+function zoomPaneBy(pane, factor) {
+  if (pane === "pdf") setPdfZoom(getPdfZoom() * factor);
+  else setPsdZoom(getPsdZoom() * factor);
+}
+function resetPaneZoom(pane) {
+  if (pane === "pdf") setPdfZoom(1);
+  else setPsdZoom(1);
+}
+
 function bindZoomTool() {
   const out = document.getElementById("zoom-out-btn");
   const inn = document.getElementById("zoom-in-btn");
   const level = document.getElementById("zoom-level-btn");
-  const stage = document.getElementById("spreads-container");
+  const pdfArea = document.getElementById("spreads-pdf-area");
+  const psdArea = document.getElementById("spreads-psd-area");
   if (!out || !inn || !level) return;
 
+  const paneLabel = (pane) => (pane === "pdf" ? "PDF" : "PSD");
   const updateLevel = () => {
-    level.textContent = `${Math.round(getZoom() * 100)}%`;
+    const pane = getActivePane();
+    const z = pane === "pdf" ? getPdfZoom() : getPsdZoom();
+    level.textContent = `${paneLabel(pane)} ${Math.round(z * 100)}%`;
+    level.title = `${paneLabel(pane)} を 100% にリセット`;
   };
   updateLevel();
-  onZoomChange(updateLevel);
+  onPdfZoomChange(updateLevel);
+  onPsdZoomChange(updateLevel);
+  onActivePaneChange(updateLevel);
 
-  const step = (dir) => {
-    const cur = getZoom();
-    const factor = 1.15;
-    setZoom(dir > 0 ? cur * factor : cur / factor);
-  };
-  out.addEventListener("click", () => step(-1));
-  inn.addEventListener("click", () => step(+1));
-  level.addEventListener("click", () => setZoom(1));
+  out.addEventListener("click", () => zoomActivePaneBy(1 / 1.15));
+  inn.addEventListener("click", () => zoomActivePaneBy(1.15));
+  level.addEventListener("click", () => resetActivePaneZoom());
 
-  if (stage) {
-    stage.addEventListener(
+  // Alt+wheel はカーソルが乗っているペインをズーム（active-pane には依存しない方が直感的）。
+  const attachWheel = (area, pane) => {
+    if (!area) return;
+    area.addEventListener(
       "wheel",
       (e) => {
         if (!e.altKey) return;
         e.preventDefault();
         const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1;
-        setZoom(getZoom() * factor);
+        zoomPaneBy(pane, factor);
       },
       { passive: false },
     );
-  }
+  };
+  attachWheel(pdfArea, "pdf");
+  attachWheel(psdArea, "psd");
 
   window.addEventListener(
     "keydown",
@@ -642,13 +953,13 @@ function bindZoomTool() {
       if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
       let handled = false;
       if (e.code === "Equal" || e.code === "NumpadAdd" || e.key === "+" || e.key === ";") {
-        setZoom(getZoom() * 1.15);
+        zoomActivePaneBy(1.15);
         handled = true;
       } else if (e.code === "Minus" || e.code === "NumpadSubtract" || e.key === "-") {
-        setZoom(getZoom() / 1.15);
+        zoomActivePaneBy(1 / 1.15);
         handled = true;
       } else if (e.code === "Digit0" || e.code === "Numpad0") {
-        setZoom(1);
+        resetActivePaneZoom();
         handled = true;
       }
       if (handled) {
@@ -660,19 +971,39 @@ function bindZoomTool() {
   );
 }
 
+// ページジャンプ対象は activePane を優先し、無効なら片方にフォールバック。
+// PDF 側を選んだ場合は仮想ページ番号（単ページ化時は見開き分割後の番号）でジャンプする。
+let pageJumpTarget = "psd"; // "psd" | "pdf"
+
+function decidePageJumpTarget() {
+  const psdHas = getPages().length > 0;
+  const pdfHas = getPdfVirtualPageCount() > 0;
+  const preferred = getActivePane();
+  if (preferred === "pdf" && pdfHas) {
+    return { kind: "pdf", total: getPdfVirtualPageCount(), current: getPdfPageIndex(), label: "PDF" };
+  }
+  if (preferred === "psd" && psdHas) {
+    return { kind: "psd", total: getPages().length, current: getCurrentPageIndex(), label: "PSD" };
+  }
+  if (psdHas) return { kind: "psd", total: getPages().length, current: getCurrentPageIndex(), label: "PSD" };
+  if (pdfHas) return { kind: "pdf", total: getPdfVirtualPageCount(), current: getPdfPageIndex(), label: "PDF" };
+  return null;
+}
+
 function openPageJumpDialog() {
-  const total = getPages().length;
-  if (total === 0) {
+  const target = decidePageJumpTarget();
+  if (!target) {
     toast("ページが読み込まれていません", { kind: "info", duration: 1800 });
     return;
   }
+  pageJumpTarget = target.kind;
   const modal = document.getElementById("page-jump-modal");
   const input = document.getElementById("page-jump-input");
   const hint = document.getElementById("page-jump-hint");
   if (!modal || !input) return;
-  input.max = String(total);
-  input.value = String(getCurrentPageIndex() + 1);
-  if (hint) hint.textContent = `1 〜 ${total} のページ番号を入力してください`;
+  input.max = String(target.total);
+  input.value = String(target.current + 1);
+  if (hint) hint.textContent = `${target.label} ページ：1 〜 ${target.total} を入力してください`;
   modal.hidden = false;
   requestAnimationFrame(() => {
     input.focus();
@@ -690,7 +1021,8 @@ function commitPageJump() {
   if (!input) return;
   const v = parseInt(input.value, 10);
   if (Number.isFinite(v)) {
-    setCurrentPageIndex(v - 1);
+    if (pageJumpTarget === "pdf") setPdfPageIndex(v - 1);
+    else setCurrentPageIndex(v - 1);
   }
   closePageJumpDialog();
 }
@@ -744,15 +1076,19 @@ function init() {
   bindWindowControls();
   bindPageJumpDialog();
   initTxtSource();
-  initPagebar();
+  bindPageNav();
+  bindCollapseToggles();
   bindPdfWorkspaceToggle();
   bindPdfRotate();
   bindPsdRotate();
   updatePsdRotateVisibility();
   mountPdfView();
   setupTauriDragDrop();
+  bindParallelSync();
+  bindActivePaneTracking();
+  bindResyncModal();
+  bindViewModeControls();
   renderAllSpreads();
-  renderPagebar();
   loadFontsFromBackend();
   // フォントが非同期で登録されるたびにオーバーレイを再描画して反映。
   onFontsRegistered(() => refreshAllOverlays());

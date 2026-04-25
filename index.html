@@ -37,6 +37,39 @@
             </svg>
           </button>
         </div>
+        <div class="toolbar-viewmode" role="group" aria-label="ビューモード">
+          <button id="skip-first-blank-btn" class="skip-blank-btn" type="button" aria-pressed="false" title="先頭ページを除外" aria-label="先頭ページを除外">
+            <span class="skip-blank-box" aria-hidden="true"></span>
+            <svg class="skip-blank-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
+              <!-- ファイル本体 + 折り返し角 -->
+              <path d="M3 1.5 H10 L13 4.5 V14.5 H3 Z" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>
+              <path d="M10 1.5 V4.5 H13" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>
+              <!-- ファイル中央の × -->
+              <g stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
+                <line x1="5.5" y1="7" x2="10.5" y2="12"/>
+                <line x1="10.5" y1="7" x2="5.5" y2="12"/>
+              </g>
+            </svg>
+          </button>
+          <div class="sync-segment" role="group" aria-label="同期モード">
+            <button id="sync-on-btn" class="sync-seg-btn active" type="button" title="ページ同期" aria-label="ページ同期" aria-pressed="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
+                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
+              </svg>
+            </button>
+            <button id="sync-off-btn" class="sync-seg-btn" type="button" title="ページ非同期" aria-label="ページ非同期" aria-pressed="false">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M18.84 12.25l1.72-1.71a5 5 0 0 0-7.07-7.07L11 5.41"/>
+                <path d="M5.17 11.75l-1.71 1.71a5 5 0 0 0 7.07 7.07L12.58 18"/>
+                <line x1="8" y1="2" x2="8" y2="5"/>
+                <line x1="2" y1="8" x2="5" y2="8"/>
+                <line x1="16" y1="19" x2="16" y2="22"/>
+                <line x1="19" y1="16" x2="22" y2="16"/>
+              </svg>
+            </button>
+          </div>
+        </div>
         <div class="toolbar-actions">
           <button id="open-pdf-btn" class="icon-btn" title="PDF を開く" aria-label="PDF を開く">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -134,23 +167,17 @@
             </div>
           </div>
         </section>
-        <div id="pagebar" class="pagebar">
-          <button id="toggle-pagebar-btn" class="pagebar-toggle-btn" type="button" title="ページバーを折り畳む" aria-label="ページバーを折り畳む">
-            <svg class="icon-collapse" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="9 18 15 12 9 6"/>
-            </svg>
-            <svg class="icon-expand" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="15 18 9 12 15 6"/>
-            </svg>
-          </button>
-          <div id="spread-nav-track" class="spread-nav-track">
-            <div id="spread-nav-handle" class="spread-nav-handle">
-              <span class="spread-nav-handle-grip"></span>
-              <span id="spread-nav-label" class="spread-nav-handle-label"></span>
-            </div>
-          </div>
-        </div>
         <nav class="side-toolbar" role="group" aria-label="ツール">
+          <div class="panel-header">
+            <button id="toggle-side-toolbar-btn" class="panel-toggle-btn" type="button" title="ツールバーを折り畳む" aria-label="ツールバーを折り畳む">
+              <svg class="icon-collapse" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <svg class="icon-expand" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+            </button>
+          </div>
           <button id="tool-move" class="tool-btn icon-btn side-tool-btn" data-tool="move" title="選択ツール (V)" aria-label="選択ツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="5 9 2 12 5 15"/>
@@ -187,6 +214,19 @@
               <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
             </svg>
           </button>
+          <div class="page-nav" role="group" aria-label="ページ移動">
+            <button id="page-prev-btn" class="icon-btn page-nav-btn" type="button" title="前のページ (←)" aria-label="前のページ">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="18 15 12 9 6 15"/>
+              </svg>
+            </button>
+            <span id="page-nav-label" class="page-nav-label">– / –</span>
+            <button id="page-next-btn" class="icon-btn page-nav-btn" type="button" title="次のページ (→)" aria-label="次のページ">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+          </div>
           <div class="fill-color-picker" role="group" aria-label="文字色">
             <div class="fill-swatch-stack">
               <button id="fill-white-btn" class="fill-swatch fill-swatch-white" type="button" data-fill="white" title="白文字（もう一度クリックで解除）" aria-label="白文字"></button>
@@ -195,6 +235,16 @@
           </div>
         </nav>
         <aside class="side-panel">
+          <div class="panel-header">
+            <button id="toggle-side-panel-btn" class="panel-toggle-btn" type="button" title="サイドバーを折り畳む" aria-label="サイドバーを折り畳む">
+              <svg class="icon-collapse" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <svg class="icon-expand" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="15 18 9 12 15 6"/>
+              </svg>
+            </button>
+          </div>
           <section class="txt-source" id="txt-source">
             <h2>原稿テキスト</h2>
             <div id="txt-source-actions" class="txt-source-actions" hidden>
@@ -237,10 +287,10 @@
               <span class="size-field-label">サイズ</span>
               <div class="size-row">
                 <div class="size-group" role="group" aria-label="文字サイズ">
-                  <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
+                  <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
                   <input id="size-input" class="size-input" type="number" min="6" max="999" step="0.1" value="12" aria-label="サイズ" />
                   <span class="size-unit">pt</span>
-                  <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
+                  <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
                 </div>
                 <div class="direction-toggle" role="group" aria-label="組方向">
                   <button id="dir-vertical-btn" class="dir-toggle-btn" type="button" data-direction="vertical" title="縦組み" aria-label="縦組み">
@@ -268,10 +318,10 @@
               <span class="size-field-label">フチ</span>
               <div class="size-row">
                 <div class="stroke-width-group" role="group" aria-label="フチ太さ">
-                  <button id="stroke-width-dec-btn" class="size-btn" type="button" title="細く" aria-label="細く">−</button>
+                  <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
                   <input id="stroke-width-input" class="size-input" type="number" min="0" max="999" step="0.5" value="20" aria-label="境界線の太さ" />
                   <span class="size-unit">px</span>
-                  <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
+                  <button id="stroke-width-dec-btn" class="size-btn" type="button" title="細く" aria-label="細く">−</button>
                 </div>
                 <div class="stroke-toggle" role="group" aria-label="境界線">
                   <button id="stroke-none-btn" class="stroke-dot stroke-dot-none" type="button" data-stroke="none" title="境界線なし" aria-label="境界線なし"></button>
@@ -349,6 +399,17 @@
         <div class="page-jump-actions">
           <button type="button" id="confirm-modal-cancel" class="page-jump-btn">キャンセル</button>
           <button type="button" id="confirm-modal-ok" class="page-jump-btn page-jump-btn-primary">OK</button>
+        </div>
+      </div>
+    </div>
+    <div class="progress-modal" id="resync-modal" hidden>
+      <div class="progress-card" role="dialog" aria-modal="true">
+        <div class="progress-title">同期モードに戻す</div>
+        <div class="confirm-modal-message" id="resync-modal-message">現在のページをどう扱いますか？</div>
+        <div class="page-jump-actions">
+          <button type="button" id="resync-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="resync-keep" class="page-jump-btn">このまま再同期</button>
+          <button type="button" id="resync-match" class="page-jump-btn page-jump-btn-primary">ページを合わせて再同期</button>
         </div>
       </div>
     </div>

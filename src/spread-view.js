@@ -2,9 +2,9 @@ import {
   getCurrentPageIndex,
   getPages,
   getPsdRotation,
-  getZoom,
+  getPsdZoom,
   onPsdRotationChange,
-  onZoomChange,
+  onPsdZoomChange,
 } from "./state.js";
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 
@@ -21,7 +21,7 @@ export function renderAllSpreads() {
   if (!root) return;
   if (!zoomSubscribed) {
     zoomSubscribed = true;
-    onZoomChange(() => {
+    onPsdZoomChange(() => {
       for (const fn of pageRedraws) fn();
     });
   }
@@ -100,7 +100,7 @@ function buildPage(page, pageIndex, root) {
       visualW = availH * visualAR;
     }
 
-    const zoom = getZoom();
+    const zoom = getPsdZoom();
     visualW *= zoom;
     visualH *= zoom;
 
