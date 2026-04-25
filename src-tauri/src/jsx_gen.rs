@@ -14,6 +14,10 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
 
     let total = payload.edits.len();
     out.push_str(&format!("  initProgress({});\n", total));
+    // 個別 PSD の保存失敗を集計するカウンタ。ループの途中で例外が出ても残りの PSD を
+    // 処理し続け、最終的に "OK partial N/M" として Rust に返す。
+    out.push_str("  var __saveOk = 0;\n");
+    out.push_str("  var __saveFail = 0;\n");
 
     let save_as = payload.save_mode.as_deref() == Some("saveAs");
     let target_dir = payload.target_dir.as_deref().unwrap_or("");
@@ -44,6 +48,9 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
         } else {
             String::new()
         };
+        // ファイル単位の try/catch で「i 番目で失敗 → 残り全部スキップ」を回避。
+        // 失敗は addWarning に積むので最終トーストで件数とエラーが見える。
+        out.push_str("  try {\n");
         out.push_str(&format!(
             "applyToPsd({path}, [\n",
             path = js_string(&psd.psd_path)
@@ -105,14 +112,27 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             }
             out.push_str("},\n");
         }
-        out.push_str(&format!("], {});\n\n", js_string(&save_path)));
+        out.push_str(&format!("], {});\n", js_string(&save_path)));
+        out.push_str("    __saveOk++;\n");
+        out.push_str("  } catch (eFile) {\n");
+        out.push_str(&format!(
+            "    __saveFail++;\n    addWarning(\"[保存失敗] \" + {} + \": \" + (eFile && eFile.toString ? eFile.toString() : String(eFile)));\n",
+            js_string(file_name)
+        ));
+        out.push_str("  }\n\n");
     }
 
     out.push_str(&format!(
         "  setProgress({0}, {0}, \"完了\");\n",
         total
     ));
-    out.push_str("  writeSentinel(\"OK\");\n");
+    // 1 件以上失敗した場合は "OK partial <ok>/<total>" を返し、Rust 側で
+    // 「N / M 個の PSD を更新」表示に切替える。失敗詳細は |WARN suffix。
+    out.push_str("  if (__saveFail > 0) {\n");
+    out.push_str("    writeSentinel(\"OK partial \" + __saveOk + \"/\" + (__saveOk + __saveFail));\n");
+    out.push_str("  } else {\n");
+    out.push_str("    writeSentinel(\"OK\");\n");
+    out.push_str("  }\n");
     out.push_str("} catch (err) {\n");
     out.push_str("  writeSentinel(\"ERROR \" + (err && err.toString ? err.toString() : String(err)));\n");
     out.push_str("}\n");

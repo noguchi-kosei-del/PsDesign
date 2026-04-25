@@ -87,6 +87,10 @@ export function getEdit(psdPath, layerId) {
 }
 
 export function addEditOffset(psdPath, layerId, ddx, ddy) {
+  // NaN/Infinity が混入すると保存時に JSX へ "dx: NaN" リテラルが出力され、
+  // Photoshop 側で UnitValue 例外 → 当該 PSD 以降のループ全停止につながる。
+  // ここで finite な値だけを受け付けて伝播を防ぐ。
+  if (!Number.isFinite(ddx) || !Number.isFinite(ddy)) return;
   const current = getEdit(psdPath, layerId) ?? {};
   setEdit(psdPath, layerId, {
     dx: (current.dx ?? 0) + ddx,
@@ -95,6 +99,19 @@ export function addEditOffset(psdPath, layerId, ddx, ddy) {
 }
 
 export function hasEdits() { return state.edits.size > 0 || state.newLayers.length > 0; }
+
+// 数値フィールドから NaN/Infinity を取り除く。これらが JSX に渡ると
+// "dx: NaN" のようなリテラルが出力されて Photoshop が UnitValue 例外を
+// 投げ、当該 PSD 以降の保存ループが全停止する。防御深化のためここで
+// サニタイズしておく（一次防御は addEditOffset / setTextSize 等の入口）。
+function sanitizeNumericFields(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    if (typeof v === "number" && !Number.isFinite(v)) continue;
+    out[k] = v;
+  }
+  return out;
+}
 
 export function exportEdits() {
   const byPsd = new Map();
@@ -107,12 +124,15 @@ export function exportEdits() {
 
   for (const entry of state.edits.values()) {
     const { psdPath, layerId, ...rest } = entry;
-    ensure(psdPath).layers.push({ layerId, ...rest });
+    ensure(psdPath).layers.push({ layerId, ...sanitizeNumericFields(rest) });
   }
 
   for (const nl of state.newLayers) {
     const { psdPath, tempId: _tempId, ...rest } = nl;
-    ensure(psdPath).newLayers.push(rest);
+    // 新規レイヤーの x/y は配置必須のため、いずれかが NaN/Infinity なら
+    // そのレイヤー自体を payload から落とす（不正配置で JSX を壊さない）。
+    if (!Number.isFinite(nl.x) || !Number.isFinite(nl.y)) continue;
+    ensure(psdPath).newLayers.push(sanitizeNumericFields(rest));
   }
 
   return {

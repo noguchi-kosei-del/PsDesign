@@ -48,21 +48,37 @@ pub fn apply_edits(payload: &EditPayload) -> Result<String, PhotoshopError> {
             let _ = std::fs::remove_file(&sentinel_path);
             let _ = std::fs::remove_file(&jsx_path);
             let trimmed = content.trim().to_string();
-            if trimmed.starts_with("OK") {
-                let base = format!("{} 個の PSD を更新", payload.edits.len());
-                // JSX は警告を "OK|WARN <msg1> | <msg2>" 形式で付加する。
-                if let Some(idx) = trimmed.find("|WARN ") {
-                    let warn = trimmed[idx + "|WARN ".len()..].trim();
-                    if !warn.is_empty() {
-                        return Ok(format!("{}（警告: {}）", base, warn));
+            // "head" は OK ステータス本体（"OK" / "OK partial 7/10"）、
+            // "warn_suffix" は addWarning 由来の警告群（失敗 PSD 詳細含む）。
+            let (head, warn_suffix) = if let Some(idx) = trimmed.find("|WARN ") {
+                (
+                    trimmed[..idx].to_string(),
+                    trimmed[idx + "|WARN ".len()..].trim().to_string(),
+                )
+            } else {
+                (trimmed.clone(), String::new())
+            };
+            if head.starts_with("OK") {
+                let total = payload.edits.len();
+                let base = if let Some(rest) = head.strip_prefix("OK partial ") {
+                    // "<ok>/<total>" 形式を期待。パース失敗時は安全側で全件成功扱いに戻す。
+                    if let Some((ok_str, _)) = rest.split_once('/') {
+                        match ok_str.trim().parse::<usize>() {
+                            Ok(ok) => format!("{} / {} 個の PSD を更新", ok, total),
+                            Err(_) => format!("{} 個の PSD を更新", total),
+                        }
+                    } else {
+                        format!("{} 個の PSD を更新", total)
                     }
+                } else {
+                    format!("{} 個の PSD を更新", total)
+                };
+                if !warn_suffix.is_empty() {
+                    return Ok(format!("{}（警告: {}）", base, warn_suffix));
                 }
                 return Ok(base);
             }
-            let msg = trimmed
-                .strip_prefix("ERROR ")
-                .unwrap_or(&trimmed)
-                .to_string();
+            let msg = head.strip_prefix("ERROR ").unwrap_or(&head).to_string();
             return Err(PhotoshopError::ScriptFailed(msg));
         }
         if Instant::now() > deadline {

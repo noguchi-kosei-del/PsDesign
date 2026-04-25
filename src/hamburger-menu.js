@@ -16,6 +16,7 @@ import {
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { confirmDialog } from "./ui-feedback.js";
+import { openSettingsModal } from "./settings-ui.js";
 
 const THEME_KEY = "psdesign_theme";
 const FLIPPED_KEY = "psdesign_layout_flipped";
@@ -136,6 +137,7 @@ export function initHamburgerMenu() {
   const overlay = $("hamburger-overlay");
   const flipBtn = $("workspace-flip-btn");
   const theme = $("theme-toggle-btn");
+  const settings = $("settings-btn");
   const home = $("home-btn");
 
   if (trigger) trigger.addEventListener("click", toggleMenu);
@@ -143,6 +145,11 @@ export function initHamburgerMenu() {
   if (overlay) overlay.addEventListener("click", closeMenu);
   if (flipBtn) flipBtn.addEventListener("click", toggleFlipped);
   if (theme) theme.addEventListener("click", toggleTheme);
+  if (settings) settings.addEventListener("click", () => {
+    // ハンバーガーは閉じてから設定モーダルを出す（同時表示は両方とも z-index 200 系で重なるため）。
+    closeMenu();
+    openSettingsModal();
+  });
   if (home) home.addEventListener("click", goHome);
 
   document.addEventListener("keydown", (e) => {

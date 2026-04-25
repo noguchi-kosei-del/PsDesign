@@ -13,11 +13,19 @@ import {
 import { initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
+  confirmDialog,
   hideProgress,
   showProgress,
   toast,
   updateProgress,
 } from "./ui-feedback.js";
+import {
+  findShortcutMatch,
+  getPageDirectionInverted,
+  getShortcut,
+  matchShortcut,
+} from "./settings.js";
+import { initSettingsUi } from "./settings-ui.js";
 import {
   addPage,
   clearPages,
@@ -135,6 +143,17 @@ function parentDir(p) {
 
 async function loadPsdFilesByPaths(files) {
   if (!files || files.length === 0) return;
+  // 未保存の編集があるなら警告して確認を取る。clearPages() は state.edits / newLayers を
+  // 黙って消すため、編集中のユーザーがファイル選択ダイアログ等から別 PSD を開いた瞬間に
+  // 作業内容が無警告で失われる事故を防ぐ。
+  if (hasEdits()) {
+    const ok = await confirmDialog({
+      title: "未保存の編集があります",
+      message: "現在の編集内容は破棄されます。続行しますか？",
+      confirmLabel: "破棄して開く",
+    });
+    if (!ok) return;
+  }
   // 最初に選んだファイルの親ディレクトリを「別名で保存」の既定フォルダ名算出に使う。
   setFolder(parentDir(files[0]) ?? null);
   hasSavedThisSession = false;
@@ -196,6 +215,10 @@ function updateSaveButton() {
 
 let hasSavedThisSession = false;
 let saveMenuOpen = false;
+// Photoshop への保存 invoke が走っている間は true。Ctrl+S や保存ボタンの連打で
+// 同じ PSD に対して invoke が並行実行されると Photoshop 側で開くドキュメントが
+// 競合し、片方の編集が失われる / セッションが破壊されるためガードする。
+let saveInflight = false;
 
 async function pickSaveParentDir() {
   const { open } = await import("@tauri-apps/plugin-dialog");
@@ -225,6 +248,10 @@ function joinPath(parent, child) {
 }
 
 async function runSaveWithMode({ saveMode, targetDir }) {
+  if (saveInflight) {
+    toast("保存処理中です。完了までお待ちください", { kind: "info", duration: 2200 });
+    return;
+  }
   if (!hasEdits()) {
     toast("編集内容がありません", { kind: "info" });
     return;
@@ -235,6 +262,9 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     saveMode,
     targetDir: targetDir ?? null,
   };
+  saveInflight = true;
+  const saveBtn = document.getElementById("save-btn");
+  if (saveBtn) saveBtn.disabled = true;
   showProgress({ title: "Photoshop に反映中", detail: "スクリプトを実行しています..." });
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -251,6 +281,10 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     console.error(e);
     hideProgress();
     toast(`保存失敗: ${e.message ?? e}`, { kind: "error", duration: 5000 });
+  } finally {
+    saveInflight = false;
+    // pages 0 件なら disabled のまま。ある場合のみ復帰。
+    if (saveBtn) saveBtn.disabled = getPages().length === 0;
   }
 }
 
@@ -352,6 +386,49 @@ function baseName(p) {
 let panPreviousTool = null;
 let panSpaceActive = false;
 
+// 環境設定経由でカスタマイズされたショートカット ID を実際のアクションに dispatch。
+// pagePrev / pageNext / pageFirst / pageLast はページ送り反転設定 (settings.js) に従って
+// 進行方向を入替える。＋/− ボタン・サイドバーボタンは反転対象外（物理矢印キーのみ反転）。
+function runShortcut(id) {
+  const inv = getPageDirectionInverted();
+  switch (id) {
+    case "save":       handleOverwriteSave(); break;
+    case "saveAs":     handleSaveAs(); break;
+    case "pagePrev":   advancePage(inv ? +1 : -1); break;
+    case "pageNext":   advancePage(inv ? -1 : +1); break;
+    case "pageFirst":  jumpToEdge(inv ? "last" : "first"); break;
+    case "pageLast":   jumpToEdge(inv ? "first" : "last"); break;
+    case "pageJump":   openPageJumpDialog(); break;
+    case "toolSelect": setTool("move"); break;
+    case "toolTextV":  setTool("text-v"); break;
+    case "toolTextH":  setTool("text-h"); break;
+    case "zoomIn":     zoomActivePaneBy(1.15); break;
+    case "zoomOut":    zoomActivePaneBy(1 / 1.15); break;
+    case "zoomReset":  resetActivePaneZoom(); break;
+    case "sizeUp":     adjustTextSize(+2); break;
+    case "sizeDown":   adjustTextSize(-2); break;
+  }
+}
+
+// 入力欄 (INPUT/TEXTAREA/contenteditable) 内では発火させたくないショートカット判定。
+// 規則：修飾キーなし or 矢印キー使用 → 入力欄では無効。Ctrl+S 等は入力欄でも有効を維持。
+function isShortcutBlockedInInput(id, target) {
+  if (!target) return false;
+  const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
+  if (!isInput) return false;
+  const sc = getShortcut(id);
+  if (!sc) return false;
+  const isArrow =
+    sc.key === "ArrowLeft" || sc.key === "ArrowRight" ||
+    sc.key === "ArrowUp"   || sc.key === "ArrowDown";
+  const noMods = !sc.modifiers || sc.modifiers.length === 0;
+  return isArrow || noMods;
+}
+
+function isPageNavShortcut(id) {
+  return id === "pagePrev" || id === "pageNext" || id === "pageFirst" || id === "pageLast";
+}
+
 function bindTools() {
   const buttons = document.querySelectorAll(".tool-btn");
   for (const btn of buttons) {
@@ -384,16 +461,14 @@ function bindTools() {
   window.addEventListener("keyup", suppressAltMenuActivation);
 
   window.addEventListener("keydown", (e) => {
+    // Space は環境設定対象外（パン一時切替の特殊挙動を保つ）。
     if (e.code === "Space") {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      // ボタンにフォーカスが残っていると Space で click が誘発され、直前に押したツール/回転ボタンが
-      // 再発火してしまう。Space をパン専用キーとして扱うため、入り口でフォーカスを解除する。
       const active = document.activeElement;
       if (active instanceof HTMLElement && (active.tagName === "BUTTON" || active.tagName === "A")) {
         active.blur();
       }
-      // MojiQ 互換：リピート含めて全 Space keydown を preventDefault（既定の「Space で1画面下スクロール」を常に抑止）
       e.preventDefault();
       if (e.repeat) return;
       if (!panSpaceActive) {
@@ -407,85 +482,37 @@ function bindTools() {
       }
       return;
     }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
-      if (e.code === "Equal" || e.code === "NumpadAdd" || e.key === "+" || e.key === ";") {
-        e.preventDefault();
-        zoomActivePaneBy(1.15);
-        return;
-      }
-      if (e.code === "Minus" || e.code === "NumpadSubtract" || e.key === "-") {
-        e.preventDefault();
-        zoomActivePaneBy(1 / 1.15);
-        return;
-      }
-      if (e.code === "Digit0" || e.code === "Numpad0") {
-        e.preventDefault();
-        resetActivePaneZoom();
-        return;
-      }
-    }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "j" || e.key === "J")) {
-      e.preventDefault();
-      openPageJumpDialog();
-      return;
-    }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "s" || e.key === "S")) {
-      e.preventDefault();
-      handleOverwriteSave();
-      return;
-    }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && e.shiftKey && (e.key === "s" || e.key === "S")) {
-      e.preventDefault();
-      handleSaveAs();
-      return;
-    }
-    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+
+    // 矢印キーは「move ツール + レイヤー選択中」のときレイヤーナッジを最優先。
+    // ナッジが効かない場合は下のショートカット dispatch に流して pagePrev/pageNext に当てる。
+    const isArrowKey =
+      e.key === "ArrowLeft" || e.key === "ArrowRight" ||
+      e.key === "ArrowUp" || e.key === "ArrowDown";
+    if (isArrowKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const t = e.target;
-      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
-      e.preventDefault();
-      jumpToEdge(e.key === "ArrowLeft" ? "first" : "last");
-      return;
-    }
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    const target = e.target;
-    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
-      return;
-    }
-    if (e.key === "v" || e.key === "V") {
-      setTool("move");
-    } else if (e.key === "t" || e.key === "T") {
-      setTool("text-v");
-    } else if (e.key === "y" || e.key === "Y") {
-      setTool("text-h");
-    } else if (e.key === "[") {
-      adjustTextSize(-(e.shiftKey ? 10 : 2));
-    } else if (e.key === "]") {
-      adjustTextSize(+(e.shiftKey ? 10 : 2));
-    } else if (
-      e.key === "ArrowLeft" ||
-      e.key === "ArrowRight" ||
-      e.key === "ArrowUp" ||
-      e.key === "ArrowDown"
-    ) {
-      const step = e.shiftKey ? 10 : 1;
-      let dx = 0;
-      let dy = 0;
-      if (e.key === "ArrowLeft") dx = -step;
-      else if (e.key === "ArrowRight") dx = +step;
-      else if (e.key === "ArrowUp") dy = -step;
-      else if (e.key === "ArrowDown") dy = +step;
-      if (getTool() === "move" && nudgeSelectedLayers(dx, dy)) {
-        e.preventDefault();
-        return;
-      }
-      if (e.key === "ArrowLeft") {
-        e.preventDefault();
-        advancePage(-1);
-      } else if (e.key === "ArrowRight") {
-        e.preventDefault();
-        advancePage(+1);
+      const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (!isInput && getTool() === "move") {
+        const step = e.shiftKey ? 10 : 1;
+        let dx = 0, dy = 0;
+        if (e.key === "ArrowLeft") dx = -step;
+        else if (e.key === "ArrowRight") dx = +step;
+        else if (e.key === "ArrowUp") dy = -step;
+        else if (e.key === "ArrowDown") dy = +step;
+        if (nudgeSelectedLayers(dx, dy)) {
+          e.preventDefault();
+          return;
+        }
       }
     }
+
+    // 環境設定でカスタマイズ可能なショートカットの dispatch。
+    const id = findShortcutMatch(e);
+    if (!id) return;
+    if (isShortcutBlockedInInput(id, e.target)) return;
+    // ページ移動系のみ auto-repeat スロットル（80ms ≒ 12Hz、OS auto-repeat の 30Hz 由来の暴走を抑制）。
+    if (e.repeat && isPageNavShortcut(id) && !canAdvancePageNow()) return;
+    e.preventDefault();
+    runShortcut(id, e);
   });
 
   window.addEventListener("keyup", (e) => {
@@ -509,12 +536,25 @@ function bindTools() {
   });
 }
 
-function bindPageChange() {
-  onPageIndexChange(() => {
+// ページ変更時の重い再描画 (renderAllSpreads は DOM を全壊して再構築する) を rAF で
+// 合流させる。連打や ←/→ の OS auto-repeat で 1 フレーム内に複数のページ index 変更が
+// 来ても、最終 index に対して 1 回だけ rebuild する。ラベル更新 (updatePageNav) は
+// 軽いので毎回実行して即時反映させる。
+let pageChangeRaf = 0;
+function schedulePageRender() {
+  if (pageChangeRaf) return;
+  pageChangeRaf = requestAnimationFrame(() => {
+    pageChangeRaf = 0;
     renderAllSpreads();
     rebuildLayerList();
-    updatePageNav();
     updatePsdRotateVisibility();
+  });
+}
+
+function bindPageChange() {
+  onPageIndexChange(() => {
+    schedulePageRender();
+    updatePageNav();
   });
   onPdfPageIndexChange(() => updatePageNav());
   onPdfChange(() => updatePageNav());
@@ -603,6 +643,17 @@ function updatePageNav() {
   const disabled = total === 0;
   if (prev) prev.disabled = disabled || current <= 0;
   if (next) next.disabled = disabled || current >= total - 1;
+}
+
+// 矢印キー auto-repeat 時の leading-edge スロットル（80ms = 約 12Hz）。
+// 単発タップは throttle 対象外（ハンドラ側で e.repeat 判定して呼び分け）。
+const ARROW_REPEAT_THROTTLE_MS = 80;
+let lastArrowAdvanceAt = 0;
+function canAdvancePageNow() {
+  const now = performance.now();
+  if (now - lastArrowAdvanceAt < ARROW_REPEAT_THROTTLE_MS) return false;
+  lastArrowAdvanceAt = now;
+  return true;
 }
 
 // ページ送り：同期モードなら両側、非同期ならアクティブペインだけ進める。
@@ -950,18 +1001,12 @@ function bindZoomTool() {
   window.addEventListener(
     "keydown",
     (e) => {
-      if (!(e.ctrlKey || e.metaKey) || e.altKey) return;
+      // ズーム系は WebView2 の既定ページズームに先取りされるため capture フェーズで拾う。
+      // 環境設定のキーを matchShortcut で照合してから handle。
       let handled = false;
-      if (e.code === "Equal" || e.code === "NumpadAdd" || e.key === "+" || e.key === ";") {
-        zoomActivePaneBy(1.15);
-        handled = true;
-      } else if (e.code === "Minus" || e.code === "NumpadSubtract" || e.key === "-") {
-        zoomActivePaneBy(1 / 1.15);
-        handled = true;
-      } else if (e.code === "Digit0" || e.code === "Numpad0") {
-        resetActivePaneZoom();
-        handled = true;
-      }
+      if (matchShortcut(e, "zoomIn")) { zoomActivePaneBy(1.15); handled = true; }
+      else if (matchShortcut(e, "zoomOut")) { zoomActivePaneBy(1 / 1.15); handled = true; }
+      else if (matchShortcut(e, "zoomReset")) { resetActivePaneZoom(); handled = true; }
       if (handled) {
         e.preventDefault();
         e.stopPropagation();
@@ -1088,6 +1133,7 @@ function init() {
   bindActivePaneTracking();
   bindResyncModal();
   bindViewModeControls();
+  initSettingsUi();
   renderAllSpreads();
   loadFontsFromBackend();
   // フォントが非同期で登録されるたびにオーバーレイを再描画して反映。

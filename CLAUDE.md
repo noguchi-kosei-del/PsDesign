@@ -36,7 +36,9 @@ ver_1.0/
 │   ├── pdf-loader.js         # `pdfjs-dist` 初期化、ファイルピッカー、read_binary_file → getDocument + ticker 方式プログレス
 │   ├── pdf-view.js           # 左ペインの PDF 描画（ページ/ズーム同期・ResizeObserver・renderToken レース対策・回転対応・`.page` ラベル付き）
 │   ├── font-loader.js        # フリーフォントを `FontFace` API で WebView に直接登録（Rust 側パスから bytes → ArrayBuffer）
-│   ├── hamburger-menu.js     # 左スライドインメニュー（テーマ切替 / ワークスペース左右反転 / ホームに戻る）
+│   ├── hamburger-menu.js     # 左スライドインメニュー（テーマ切替 / ワークスペース左右反転 / 環境設定 / ホームに戻る）
+│   ├── settings.js           # 環境設定の state + localStorage 永続化 + ショートカット照合 (`findShortcutMatch` / `matchShortcut`) + 衝突検知 + listener API
+│   ├── settings-ui.js        # 環境設定モーダル（タブ：ショートカット / ページ送り反転）+ キーキャプチャモーダル + 衝突警告 UI
 │   ├── ui-feedback.js        # 中央プログレスモーダル + 右上トースト + `confirmDialog`（カスタム確認）
 │   └── styles.css            # ライト/ダーク両対応、スクロールバーも theme 追従
 └── src-tauri/
@@ -127,6 +129,65 @@ S. **MojiQ 流の折り畳み（サイドツールバー / サイドパネル）
 > - 新: `.workspace = 1fr auto auto`（spreads / side-toolbar / side-panel の 3 列、後ろ 2 列は要素 width で driven）。pagebar 廃止。
 > - 旧: `state.zoom`（PDF/PSD 共有）、`state.currentPageIndex`（PDF/PSD 共有）
 > - 新: `state.pdfZoom` / `state.psdZoom`（独立）、`state.currentPageIndex`（PSD 専用）/ `state.pdfPageIndex`（PDF 専用）。同期モード時は main.js の bridge が両者を相互ミラー。
+
+## 最新セッション（致命的バグ修正・連打対策・環境設定）
+
+### 致命的バグリスク調査と Critical 4 件の修正
+
+T. **多重押下防止（保存ボタン）**: `runSaveWithMode` 入口に `saveInflight` モジュール変数のガードを追加。in-flight 中は `toast("保存処理中です。完了までお待ちください")` で早期 return、`#save-btn` も `disabled` 化。`finally` で `saveInflight = false` + ボタン再有効化（`getPages().length === 0` のときは disabled のまま）。Ctrl+S / Ctrl+Shift+S / メニューからの呼び出しすべてに同じガードが効く。**Photoshop が同じ PSD を 2 回開いて状態破壊する事故**を根本防止。
+
+U. **編集中の PSD 切替で確認ダイアログ**: `loadPsdFilesByPaths` 冒頭で `hasEdits()` をチェック、true なら `confirmDialog({title: "未保存の編集があります", message: "現在の編集内容は破棄されます。続行しますか？", confirmLabel: "破棄して開く"})`。OK のときのみ `clearPages()` 実行。`handleDroppedPaths` 経由の D&D もここで一元的にカバー。ハンバーガー「ホームに戻る」は元から confirm 付きなので変更なし。
+
+V. **NaN ガード**: `addEditOffset(psdPath, layerId, ddx, ddy)` の冒頭で `Number.isFinite(ddx) && Number.isFinite(ddy)` チェック。さらに防御深化として `exportEdits()` 内に `sanitizeNumericFields(obj)` を追加し、payload 出力時に NaN/Infinity の数値フィールドを脱落させる。新規レイヤーは `x` / `y` のいずれかが non-finite なら**そのレイヤー自体を payload から除外**（不正配置で JSX を壊さない）。これがないと JSX に `dx: NaN` リテラルが流れて Photoshop 側で `UnitValue` 例外 → 当該 PSD 以降のループ全停止。
+
+W. **per-PSD try/catch + 進捗集計（JSX 側）**: `jsx_gen.rs` の `generate_apply_script` で各 `applyToPsd(...)` 呼び出しを **JS の try/catch で個別包囲**、`__saveOk++` / `__saveFail++` で集計、失敗は `addWarning("[保存失敗] <ファイル名>: <例外>")` に積んで継続。最終的に `writeSentinel("OK")` か `writeSentinel("OK partial " + __saveOk + "/" + (__saveOk + __saveFail))` を出力。`photoshop.rs` 側は `OK partial <ok>/<total>` をパースして「N / M 個の PSD を更新（警告: ...）」表示に切替。**「3 ファイル目で失敗 → 残り 7 ファイル未処理」のサイレント中断を解消**、ユーザーは成功数と失敗詳細を toast で確認できる。
+
+> **特記**: 調査時に Explore エージェントが Critical と報告した「`saveAs` 失敗時の編集破棄（`asCopy=true` で原本は安全）」「センチネル空文字で 10 分ハング（実際は ERROR として正しく返る）」「`commitFillField("default")` で色破壊（JSX 側 `fillColorFor("default") === null` で `ti.color` を触らず無害）」は実コードを verify した結果**いずれも誤検知**。エージェント結果は `findShortcutMatch` 等と同じく**実装を直接確認してから採用**するワークフローを徹底すべき。
+
+### ページ送り連打対策（PDF/PSD ラグ解消）
+
+X. **PDF レンダタスクの即時キャンセル**: `pdf-view.js` にモジュール変数 `currentRenderTask` を追加、新 redraw の冒頭で `cancelInFlightRender()` を呼んで前の `RenderTask.cancel()` を確実に発火。`page.render(...)` の戻り値（RenderTask）を捕捉して `try/await/finally` で `currentRenderTask = null` リセット。連打中も pdfjs ワーカーが裏で複数のレンダ計算を並行実行して CPU 飽和、という連鎖を断ち切る。`RenderingCancelledException` は既存 catch でハンドル済みのため追加コード不要。
+
+Y. **PSD ページ変更の rAF coalesce**: `bindPageChange` の `onPageIndexChange` 購読を `schedulePageRender()` で 1 フレーム合流。重い `renderAllSpreads()` + `rebuildLayerList()` + `updatePsdRotateVisibility()` は最終 index に対して 1 回だけ実行（`renderAllSpreads` は DOM を全壊して再構築するため、フレーム内で複数回呼ばれると DOM thrashing が生じる）。軽量な `updatePageNav()` のラベル更新のみは毎回即時実行して位置表示の応答性を保つ。
+
+Z. **キーリピートのスロットル**: `e.repeat === true`（OS auto-repeat、〜30Hz）のときだけ leading-edge 80ms スロットル（`canAdvancePageNow()` ヘルパ）で実質 12Hz に制限。単発の手タップは `e.repeat === false` なので throttle されず即時反映。`isPageNavShortcut(id)` で対象を `pagePrev/pageNext/pageFirst/pageLast` の 4 つだけに限定。
+
+### 環境設定（ショートカット + ページ送り反転）
+
+α. **`src/settings.js` 新設**: MojiQ の `js/settings.js` を踏襲した state 管理モジュール。
+- **永続化**: `localStorage` キー `psdesign_settings`、`migrate(old)` でデフォルト設定の上に保存値を被せる（デフォルトに無いキーは無視＝ホワイトリスト方式）。
+- **API**: `getShortcut(id)` / `setShortcut(id, key, modifiers)` / `getAllShortcuts()` / `getPageDirectionInverted()` / `setPageDirectionInverted(v)` / `resetShortcuts()` / `resetAll()` / `checkConflict(id, key, modifiers)` / `formatShortcutDisplay(sc)` / `normalizeKeyName(rawKey)` / `matchShortcut(event, id)` / `findShortcutMatch(event)` / `onSettingsChange(fn)`。
+- **照合ロジック**: `keysMatch(event, key)` で英字は case-insensitive、数値・記号キーは `e.code` 併用で JIS / US 配列差や Numpad を吸収（`=` ↔ `+` / `;`、`-` ↔ `_`、Numpad 系）。修飾キーは strict 一致（Ctrl は Cmd と等価）。
+- **既定 15 ショートカット**: save / saveAs / pagePrev / pageNext / pageFirst / pageLast / pageJump / toolSelect / toolTextV / toolTextH / zoomIn / zoomOut / zoomReset / sizeUp / sizeDown。Space（パン）と Alt 抑制は特殊挙動のため対象外。
+
+β. **`src/settings-ui.js` 新設**: モーダル UI 制御。
+- **タブ**: 「ショートカット」「ページ送り」の 2 タブ、`switchTab(id)` で `.active` 付け替え。
+- **ショートカットリスト**: `renderShortcutList()` で `getAllShortcuts()` を回して `<button class="shortcut-key-btn">` を動的生成、表示は `formatShortcutDisplay(sc)` で `Ctrl + Shift + S` のように整形。
+- **キーキャプチャモーダル**: `openKeyCapture(id, sc)` で `window.addEventListener("keydown", onCaptureKeyDown, true)` を **capture フェーズ**で登録、毎キー preventDefault + stopPropagation、`Escape` でキャンセル / `Backspace` でクリア / 修飾キー単独押下 (`Control` / `Shift` / `Alt` / `Meta`) は無視。確定時は `checkConflict()` で他 ID との衝突警告を表示（衝突時も上書き可、ユーザー判断）。
+- **ページ送り反転**: ラジオで `setPageDirectionInverted(value === "true")` 即時反映。
+- **listener 連携**: `onSettingsChange(() => { ... })` で外部からの変更（reset 等）にも UI 追従。
+
+γ. **`index.html` への追加**:
+- ハンバーガー footer に `<button id="settings-btn" class="menu-icon-btn" title="環境設定">` を**「テーマ切替」と「ホーム」の間に**配置（歯車 SVG アイコン）。
+- `<div class="settings-modal" id="settings-modal">` 本体（タブ + ショートカットリスト + ラジオ）と `<div class="settings-modal" id="key-capture-modal">` を末尾に追加。
+
+δ. **`styles.css` 追加**: `.settings-modal / .settings-card / .settings-tabs / .settings-tab / .settings-tab-panel / .settings-section-header / .settings-reset-btn / .shortcut-list / .shortcut-item / .shortcut-key-btn / .settings-radio-list / .settings-radio-option / .key-capture-card / .key-capture-display / .key-capture-conflict` を**既存の CSS 変数 (`--bg`, `--panel`, `--accent`, `--text`...) で**統一実装。z-index は `.settings-modal { z-index: 200 }`（ハンバーガー 151 より上）、`#key-capture-modal { z-index: 320 }`（キャプチャがさらに最前面）。
+
+ε. **`main.js` のショートカットハンドラ全面リファクタ**: keydown ハンドラから個別の hardcoded `if (e.code === "Equal" ...) zoomIn()` 群を撤去し、以下の構造に再編。
+- **Space**: 既存挙動（パン一時切替）をそのまま保持。
+- **矢印キー + move ツール + 選択中**: レイヤーナッジを最優先（`nudgeSelectedLayers(dx, dy)` が成功したら return）。これは環境設定対象外（ナッジは `e.shiftKey` で 1px / 10px 選択あり）。
+- **環境設定 dispatch**: `findShortcutMatch(e)` で ID 取得 → `isShortcutBlockedInInput(id, e.target)` で入力欄ガード（無修飾 or 矢印キーは入力欄では無効） → `e.repeat && isPageNavShortcut(id)` でページ送りのみ throttle → `runShortcut(id)` で実行。
+- **`runShortcut(id)`**: 15 ID を switch で dispatch。`pagePrev/pageNext/pageFirst/pageLast` は `getPageDirectionInverted()` に従って方向を入替（true なら `pagePrev → advancePage(+1)` / `pageNext → advancePage(-1)` / `pageFirst → jumpToEdge("last")` / `pageLast → jumpToEdge("first")`）。**サイドバーの ▲/▼ ボタンは反転対象外**（直接 `advancePage(±1)` を呼ぶため）。
+- `bindZoomTool` の capture フェーズハンドラも `matchShortcut(e, "zoomIn"/"zoomOut"/"zoomReset")` 一本化、WebView2 の native zoom hijack 対策は維持。
+- 既存の **Shift+]/[ で ±10pt の倍速調整**は撤去（matcher が strict 修飾判定のため）。±2pt の単発のみ。大きい変更はサイズ入力欄に直接タイプ。
+
+ζ. **`hamburger-menu.js` 配線**: `import { openSettingsModal } from "./settings-ui.js"`。「設定」クリック時は `closeMenu()` を先に呼んでから `openSettingsModal()`（ハンバーガーと設定モーダルの z-index 順序を簡潔化）。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: keydown ハンドラに 15 個の hardcoded `if (key === ...) action()` が直書き
+> - 新: `findShortcutMatch(event)` → `runShortcut(id)` の 2 段 dispatch、設定値は `localStorage` → `settings.js` → matcher で照合
+> - 旧: ←/→ キー = 物理方向で固定（advancePage に直結）
+> - 新: ←/→ キー = `pagePrev/pageNext` shortcut 経由、`pageDirectionInverted` で進行方向を実行時切替（▲/▼ ボタンは物理方向のまま）
 
 ## 主要機能
 
@@ -270,27 +331,30 @@ S. **MojiQ 流の折り畳み（サイドツールバー / サイドパネル）
 
 ## ショートカット
 
+下記のうち **★ 印は環境設定（ハンバーガー → 歯車）からカスタマイズ可能**。Space / Alt 抑制 / 矢印ナッジ / マーキー選択 / wheel 系 / Esc / Enter は固定。
+
 | キー | 動作 |
 | --- | --- |
-| `V` | 選択ツール |
-| `T` | 縦書きツール |
-| `Y` | 横書きツール |
+| `V` ★ | 選択ツール |
+| `T` ★ | 縦書きツール |
+| `Y` ★ | 横書きツール |
 | `Space`（長押し） | パンツール一時切替（離すと元に戻る／ツールバー表示は維持） |
 | `Shift+ドラッグ`（V、空キャンバス） | マーキー選択に加算 |
 | `Shift+クリック`（V、レイヤー） | 選択のトグル |
-| `[` / `]` | サイズ ±2（Shift で ±10） |
-| `←` / `→` | 前 / 次のページ |
-| `Ctrl+←` / `Ctrl+→` | 先頭 / 末尾ページ |
-| `Ctrl+J` | ページ番号ジャンプダイアログ |
-| `Ctrl+S` | 上書き保存（初回のみ別名で保存にフォールバック） |
-| `Ctrl+Shift+S` | 別名で保存（新規フォルダ作成） |
-| `Ctrl+=` / `Ctrl++` | ズームイン（15%） |
-| `Ctrl+-` | ズームアウト（15%） |
-| `Ctrl+0` | ズーム 100% |
+| `[` ★ / `]` ★ | サイズ ±2（旧 Shift で ±10 倍速は撤去） |
+| `←` ★ / `→` ★ | 前 / 次のページ（環境設定で**反転可**：→で前 / ←で次） |
+| `Ctrl+←` ★ / `Ctrl+→` ★ | 先頭 / 末尾ページ（反転設定で入替）|
+| `Ctrl+J` ★ | ページ番号ジャンプダイアログ |
+| `Ctrl+S` ★ | 上書き保存（初回のみ別名で保存にフォールバック）|
+| `Ctrl+Shift+S` ★ | 別名で保存（新規フォルダ作成） |
+| `Ctrl+=` ★ / `Ctrl++` ★ | ズームイン（15%） |
+| `Ctrl+-` ★ | ズームアウト（15%） |
+| `Ctrl+0` ★ | ズーム 100% |
 | `Alt + ホイール` | キャンバス上でズーム |
 | `Enter`（in-place 編集 / 手入力 textarea 内） | 改行 |
 | `Ctrl+Enter`（同上） | テキスト確定 |
-| `Esc` | フォント候補 / ダイアログ / 保存メニュー / テキスト入力を閉じる |
+| `Esc` | フォント候補 / ダイアログ / 保存メニュー / テキスト入力 / 環境設定モーダルを閉じる |
+| `←/↑/→/↓`（V ツール + レイヤー選択中） | 1px ナッジ（Shift で 10px、環境設定対象外）|
 
 ## データフロー
 
@@ -324,3 +388,13 @@ S. **MojiQ 流の折り畳み（サイドツールバー / サイドパネル）
 - **ag-psd の effects 読み戻しは形状揺れに注意**：`layer.effects.stroke` が Photoshop バージョンで配列 / 単体、`{value, units}` / ネスト `{value: {value, units}}`、`{r,g,b}` / `{red,green,blue}` / `[r,g,b]` / `#rrggbb` のいずれでも返る。`psd-loader.js` の `pickActiveStrokeFx` / `readStrokeSizePx` / `readStrokeColor` で吸収。pt 単位は 96/72 で px 換算、他単位はそのまま採用。
 - **Photoshop 側シークエンスバー（ScriptUI palette）**：`Window("palette", ...)` はモードレスで Photoshop 操作を妨げないが、長時間ブロッキングスクリプト下で再描画が止まるため、`setProgress` 毎に `.update()` を呼ぶ必要あり。`writeSentinel` 先頭で `closeProgress()` を呼び、OK/ERROR/例外いずれも UI を確実に閉じる。
 - **フチの `commitStrokeFields` は null = per-layer 保持**：色トグルクリック時は `commitStrokeFields(color, currentWidthForCommit())`、太さ input イベント時は `commitStrokeFields(null, width)`。`null` 指定の側は「各レイヤーの既存値を保持」と解釈される。これがないと複数選択で片方の属性だけ編集したとき、もう片方がグローバル state（`getStrokeColor/Width`）で他レイヤーに上書き伝播してしまう。`currentWidthForCommit` は width input が空（= 混在表示）なら `null` を返す。
+- **多重保存ガードは `runSaveWithMode` 入口の単一フラグ**：`saveInflight` をモジュール変数で持ち、ガードは中央 1 箇所だけ。Ctrl+S / Ctrl+Shift+S / メニューからの呼び出しすべてが `runSaveWithMode` を経由するので入口ガードで網羅できる。`finally` でリセット + `getPages().length === 0` のとき disabled を維持して save-btn の状態整合性を保つ。
+- **JSX の per-PSD 失敗継続パターン**：`generate_apply_script` のループで各 `applyToPsd(...)` を JS の `try { ...; __saveOk++; } catch (eFile) { __saveFail++; addWarning(...); }` で個別包囲。`applyToPsd` 内の `finally { doc.close(DONOTSAVECHANGES) }` が先に走るので例外発生時もリソースリークなし。最終 `writeSentinel("OK partial " + __saveOk + "/" + (__saveOk + __saveFail))` で部分成功を明示、Rust 側で `OK partial <ok>/<total>` を strip_prefix → "N / M 個の PSD を更新（警告: ...）" 表示に切替える。
+- **`exportEdits` の NaN サニタイズは二段防御**：一次は `addEditOffset` 入口で `Number.isFinite(ddx) && Number.isFinite(ddy)` チェック、二次は `exportEdits` 内 `sanitizeNumericFields(rest)` で payload 出力時に NaN/Infinity 数値を除去。新規レイヤー (`x`/`y`) は不正なら**そのレイヤー自体を payload から落とす**（壊れた配置で JSX を破綻させない）。これがないと JSX に `dx: NaN` リテラルが出て Photoshop 側で `UnitValue` 例外 → 当該 PSD 以降のループ全停止につながる。
+- **PDF レンダタスクは必ず `cancel()` する**：`pdf-view.js` の `currentRenderTask` モジュール変数で in-flight な `RenderTask` を保持し、新 redraw 冒頭で `cancelInFlightRender()` を呼んで前タスクを停止。`renderToken` のチェックだけだと結果は捨てるが裏で計算は走り続けるので、連打中に複数のレンダが並行して CPU 飽和する。`page.render(...)` の戻り値は **RenderTask（`.promise` と `.cancel()` を持つ）** であり、await するときは `.promise` のみ、cancel するときは task 本体に対して呼ぶ。
+- **PSD ページ変更の rAF coalesce**：`bindPageChange` の listener 内で `schedulePageRender()`（rAF debounce 1 段）を呼び、重い `renderAllSpreads()` + `rebuildLayerList()` + `updatePsdRotateVisibility()` をフレーム合流。`renderAllSpreads` は `root.innerHTML = ""` で DOM を全壊して再構築するため、auto-repeat 30Hz で連射されると DOM thrashing で著しいラグが出る。軽量な `updatePageNav()`（ラベル更新）のみは即時実行して位置表示の応答性を保つ。
+- **キーリピートの leading-edge スロットル**：`canAdvancePageNow()` が `lastArrowAdvanceAt + 80ms` を満たすかチェック、満たせば `lastArrowAdvanceAt = now()` 更新して true。`e.repeat === true && isPageNavShortcut(id)` のときだけ適用するので、単発の手タップは throttle されず即時反映。`pagePrev/pageNext/pageFirst/pageLast` の 4 つだけが対象、`sizeUp/sizeDown` 等は throttle されない。
+- **環境設定の matcher は strict 修飾キー一致**：`matchShortcutObj(event, sc)` で `event.ctrlKey !== wantCtrl` などを strict 比較。これにより `save = "Ctrl+S"` と `saveAs = "Ctrl+Shift+S"` が衝突なく共存できる（Ctrl+Shift+S 押下時、save の wantShift=false に対して shiftKey=true で不一致 → save は match せず、saveAs だけが match する）。代償として **`sizeUp = "]" no-mods` のとき Shift+] は match しない**ため、旧 Shift+] で ±10pt の倍速調整は撤去された。サイズ大幅変更はサイズ入力欄に直接タイプする運用。
+- **入力欄での shortcut ガードはルール 1 本**：`isShortcutBlockedInInput(id, target)` が「INPUT/TEXTAREA/contenteditable + (修飾キーなし or 矢印キー使用)」の組合せだけ true を返す。これにより Ctrl+S 等は入力中でも発火、Ctrl+← 等は入力中の word jump を尊重して shortcut 抑止、V/T/Y や ←/→ も入力中は素通し（テキスト入力の邪魔をしない）が一貫して効く。
+- **キーキャプチャモーダルは capture フェーズで全キー横取り**：`onCaptureKeyDown` を `window.addEventListener("keydown", fn, true)` で登録、毎キー `preventDefault + stopPropagation`。これでキャプチャ中に Ctrl+S 等の他 shortcut が誤発火するのを防ぐ。`closeKeyCapture` で必ず removeEventListener。修飾キー単独 (`Control` / `Shift` / `Alt` / `Meta`) は `isModifierOnly(key)` で無視（押し続けで暴走しないため）。
+- **ページ送り反転は keyboard だけ、ボタンは物理方向**：`runShortcut("pagePrev")` 内で `getPageDirectionInverted()` をチェックして `advancePage(±1)` を入替えるが、サイドバーの ▲/▼ ボタンは `bindPageNav` 内で直接 `advancePage(±1)` を呼ぶため反転設定の影響を受けない。これは「←/→ キーは『左キー = 進む方向』として配置するのが自然な人もいれば逆の人もいる」（縦書き右綴じ漫画の慣習）を尊重する一方、▲/▼ は視覚的に「上 = 戻る、下 = 進む」が普遍的なので物理方向で固定する設計判断。

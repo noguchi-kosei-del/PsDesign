@@ -30,6 +30,16 @@ let emptyEl = null;
 let outOfRangeEl = null;
 let renderToken = 0;
 let pendingRaf = 0;
+// 進行中の pdfjs RenderTask。連打で新しい redraw が走るときに .cancel() を呼んで
+// 古いレンダ計算を即停止する（呼ばないと CPU を食い続け、連打中に 30 件以上の
+// レンダタスクが裏で並行進行してラグの原因になる）。
+let currentRenderTask = null;
+
+function cancelInFlightRender() {
+  if (!currentRenderTask) return;
+  try { currentRenderTask.cancel(); } catch (_) {}
+  currentRenderTask = null;
+}
 
 // MojiQ 流パン状態：mousedown 時にスクロール起点を保存し、move でスクロール量を更新する。
 let panState = null;
@@ -276,6 +286,9 @@ async function redraw() {
   const pxH = Math.max(1, Math.round(viewport.height));
 
   const myToken = ++renderToken;
+  // 新しい redraw を始める前に古いタスクを必ずキャンセル。これがないと連打時に
+  // pdfjs が複数のレンダを並行実行して CPU が飽和する。
+  cancelInFlightRender();
   showCanvas(pageNum, side);
 
   if (side === "full") {
@@ -285,12 +298,16 @@ async function redraw() {
     canvas.style.height = `${cssH}px`;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, pxW, pxH);
+    const task = page.render({ canvasContext: ctx, viewport });
+    currentRenderTask = task;
     try {
-      await page.render({ canvasContext: ctx, viewport }).promise;
+      await task.promise;
     } catch (e) {
       if (e && e.name === "RenderingCancelledException") return;
       console.error("pdf render:", e);
       return;
+    } finally {
+      if (currentRenderTask === task) currentRenderTask = null;
     }
     if (myToken !== renderToken) return;
   } else {
@@ -298,12 +315,16 @@ async function redraw() {
     const off = document.createElement("canvas");
     off.width = pxW;
     off.height = pxH;
+    const task = page.render({ canvasContext: off.getContext("2d"), viewport });
+    currentRenderTask = task;
     try {
-      await page.render({ canvasContext: off.getContext("2d"), viewport }).promise;
+      await task.promise;
     } catch (e) {
       if (e && e.name === "RenderingCancelledException") return;
       console.error("pdf render:", e);
       return;
+    } finally {
+      if (currentRenderTask === task) currentRenderTask = null;
     }
     if (myToken !== renderToken) return;
     const halfPxW = Math.floor(pxW / 2);
