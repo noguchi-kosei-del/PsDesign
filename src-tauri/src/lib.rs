@@ -3,6 +3,7 @@ mod jsx_gen;
 mod photoshop;
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LayerEdit {
@@ -26,6 +27,12 @@ pub struct LayerEdit {
     pub stroke_width_px: Option<f64>,
     #[serde(rename = "fillColor", default)]
     pub fill_color: Option<String>,
+    #[serde(default)]
+    pub rotation: Option<f64>,
+    #[serde(rename = "leadingPct", default)]
+    pub leading_pct: Option<f64>,
+    #[serde(rename = "lineLeadings", default)]
+    pub line_leadings: Option<HashMap<String, f64>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -45,6 +52,12 @@ pub struct NewLayer {
     pub stroke_width_px: Option<f64>,
     #[serde(rename = "fillColor", default)]
     pub fill_color: Option<String>,
+    #[serde(default)]
+    pub rotation: Option<f64>,
+    #[serde(rename = "leadingPct", default)]
+    pub leading_pct: Option<f64>,
+    #[serde(rename = "lineLeadings", default)]
+    pub line_leadings: Option<HashMap<String, f64>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

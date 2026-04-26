@@ -1,8 +1,12 @@
 import {
+  abortHistoryTransient,
+  beginHistoryTransient,
+  commitHistoryTransient,
   getCurrentPageIndex,
   getEdit,
   getFillColor,
   getFonts,
+  getLeadingPct,
   getNewLayersForPsd,
   getPages,
   getSelectedLayer,
@@ -15,6 +19,7 @@ import {
   setCurrentPageIndex,
   setEdit,
   setFillColor,
+  setLeadingPct,
   setSelectedLayer,
   setSelectedLayers,
   setStrokeColor,
@@ -181,7 +186,8 @@ function updateDeleteButtonVisibility() {
   const deleteBtn = document.getElementById("delete-new-layer-btn");
   if (!deleteBtn) return;
   const anyNew = getSelectedLayers().some((s) => typeof s.layerId === "string");
-  deleteBtn.hidden = !anyNew;
+  // 削除ボタンは常時表示。新規レイヤーが選択されていないときは disabled でグレーアウト。
+  deleteBtn.disabled = !anyNew;
 }
 
 // 選択中レイヤー集合からフチ（color/width）の共通値を算出する。
@@ -266,6 +272,13 @@ function populateEditor() {
   // フチは複数選択でも一括適用できるため常に表示。
   const singleOnly = editor.querySelectorAll("[data-editor-scope='single']");
   for (const el of singleOnly) el.hidden = selections.length !== 1;
+  // タブ active が single-only でかつ複数選択になったらフチに自動切替。
+  if (selections.length !== 1) {
+    const activeTab = editor.querySelector(".editor-tab.active");
+    if (activeTab && activeTab.dataset.editorScope === "single") {
+      setEditorTab("stroke");
+    }
+  }
 
   if (selections.length === 1) {
     const resolved = resolveSelection();
@@ -274,23 +287,29 @@ function populateEditor() {
     let effectiveSize = null;
     let effectiveFont = null;
     let effectiveDirection = "vertical";
+    let effectiveLeading = null;
     if (resolved.kind === "existing") {
       const { page, layer } = resolved;
       const edit = getEdit(page.path, layer.id) ?? {};
       effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
       effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
       effectiveDirection = edit.direction ?? layer.direction ?? "horizontal";
+      // 既存レイヤーは PSD から行間を読み戻していないため、edit に明示があれば
+      // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
+      effectiveLeading = edit.leadingPct ?? 125;
       rebuildFontOptions(effectiveFont);
     } else {
       const { newLayer } = resolved;
       effectiveSize = newLayer.sizePt ?? null;
       effectiveFont = newLayer.fontPostScriptName ?? null;
       effectiveDirection = newLayer.direction ?? "vertical";
+      effectiveLeading = newLayer.leadingPct ?? 125;
       rebuildFontOptions(effectiveFont ?? "");
     }
 
     if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
     if (effectiveFont) setCurrentFont(effectiveFont);
+    if (Number.isFinite(effectiveLeading)) setLeadingPct(effectiveLeading);
     syncDirectionToggle(effectiveDirection);
   }
 
@@ -477,7 +496,33 @@ function rebuildFontOptions(currentValue) {
   input.dataset.ps = ps;
 }
 
+// editor タブ：サイズ / 行間 / フチ の表示切替。
+function setEditorTab(tab) {
+  const editor = editorEl();
+  if (!editor) return;
+  for (const btn of editor.querySelectorAll(".editor-tab")) {
+    const isActive = btn.dataset.tab === tab;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", isActive ? "true" : "false");
+  }
+  for (const panel of editor.querySelectorAll(".editor-tab-panel")) {
+    panel.hidden = panel.dataset.tabPanel !== tab;
+  }
+}
+
+function bindEditorTabs() {
+  const editor = editorEl();
+  if (!editor) return;
+  for (const btn of editor.querySelectorAll(".editor-tab")) {
+    // mousedown.preventDefault でフォーカス移動を抑止。in-place 編集 textarea に
+    // フォーカスが残るので、行間タブで per-line 編集を続行できる。
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => setEditorTab(btn.dataset.tab));
+  }
+}
+
 export function bindEditorEvents() {
+  bindEditorTabs();
   const input = fontEl();
   input.addEventListener("focus", () => openCombo());
   input.addEventListener("input", () => {
@@ -542,7 +587,9 @@ export function bindEditorEvents() {
         confirmLabel: "削除",
       });
       if (!ok) return;
+      beginHistoryTransient();
       for (const id of tempIds) removeNewLayer(id);
+      commitHistoryTransient();
       // 既存レイヤーは残し、新規分だけを選択から除外。
       setSelectedLayers(selections.filter((s) => typeof s.layerId !== "string"));
       rebuildLayerList();
@@ -633,6 +680,8 @@ export function bindEditorEvents() {
 function commitStrokeFields(colorOrNull, widthOrNull) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return;
+  let mutated = false;
+  beginHistoryTransient();
   for (const sel of selections) {
     const ref = resolveLayerRef(sel);
     if (!ref) continue;
@@ -654,7 +703,9 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
     } else {
       updateNewLayer(ref.newLayer.tempId, changes);
     }
+    mutated = true;
   }
+  if (mutated) commitHistoryTransient(); else abortHistoryTransient();
   rebuildLayerList();
   refreshAllOverlays();
 }
@@ -663,6 +714,8 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
 function commitFillField(color) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return;
+  let mutated = false;
+  beginHistoryTransient();
   for (const sel of selections) {
     const ref = resolveLayerRef(sel);
     if (!ref) continue;
@@ -671,7 +724,9 @@ function commitFillField(color) {
     } else {
       updateNewLayer(ref.newLayer.tempId, { fillColor: color });
     }
+    mutated = true;
   }
+  if (mutated) commitHistoryTransient(); else abortHistoryTransient();
   rebuildLayerList();
   refreshAllOverlays();
 }

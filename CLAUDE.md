@@ -398,3 +398,82 @@ Z. **キーリピートのスロットル**: `e.repeat === true`（OS auto-repea
 - **入力欄での shortcut ガードはルール 1 本**：`isShortcutBlockedInInput(id, target)` が「INPUT/TEXTAREA/contenteditable + (修飾キーなし or 矢印キー使用)」の組合せだけ true を返す。これにより Ctrl+S 等は入力中でも発火、Ctrl+← 等は入力中の word jump を尊重して shortcut 抑止、V/T/Y や ←/→ も入力中は素通し（テキスト入力の邪魔をしない）が一貫して効く。
 - **キーキャプチャモーダルは capture フェーズで全キー横取り**：`onCaptureKeyDown` を `window.addEventListener("keydown", fn, true)` で登録、毎キー `preventDefault + stopPropagation`。これでキャプチャ中に Ctrl+S 等の他 shortcut が誤発火するのを防ぐ。`closeKeyCapture` で必ず removeEventListener。修飾キー単独 (`Control` / `Shift` / `Alt` / `Meta`) は `isModifierOnly(key)` で無視（押し続けで暴走しないため）。
 - **ページ送り反転は keyboard だけ、ボタンは物理方向**：`runShortcut("pagePrev")` 内で `getPageDirectionInverted()` をチェックして `advancePage(±1)` を入替えるが、サイドバーの ▲/▼ ボタンは `bindPageNav` 内で直接 `advancePage(±1)` を呼ぶため反転設定の影響を受けない。これは「←/→ キーは『左キー = 進む方向』として配置するのが自然な人もいれば逆の人もいる」（縦書き右綴じ漫画の慣習）を尊重する一方、▲/▼ は視覚的に「上 = 戻る、下 = 進む」が普遍的なので物理方向で固定する設計判断。
+
+## 最新セッション（テキスト編集 UX 強化 + ルーラー / ガイド）
+
+### テキストツールの操作性向上
+
+a. **テキスト枠上で wheel サイズ可変**: `canvas-tools.js` の `onLayerWheel` の発火条件を `move` 限定から `move | text-v | text-h` に拡張。テキストツール選択中もレイヤー枠ホイールで ±1pt（Shift で ±10pt、6〜999 pt クランプ、中心固定）。
+
+b. **テキスト配置直後に方向キーでナッジ**: `main.js` の矢印キー dispatch で `getTool() === "move"` の制限を `move | text-v | text-h` に拡張。配置直後（自動選択中）も矢印キーで 1px / Shift+10px ナッジ可能。`startTextInput` 確定時に `setSelectedLayer(...)` で新規レイヤーを自動選択するようにし、txt 原稿配置と手入力配置の整合を取った。
+
+c. **選択中レイヤー右下にサイズバッジ**: `canvas-tools.js` `createSizeBadge(sizePt)` を追加し、`renderOverlay` で selected 時のみ box に append。`.layer-size-badge` は黒背景・白文字で枠下中央外側に張り出し（`top: 100%; left: 50%; transform: translateX(-50%)`）、`pointer-events:none` でホイール操作を妨げない。`.layer-box-new` の `overflow: hidden` を撤去（`.new-layer-text` 側で既に hidden 指定済みのため見た目への影響なし）し、バッジが枠外に出られるようにした。ホイールでサイズ変更すると `refreshAllOverlays` 経由でバッジも追従。
+
+d. **空所クリック先に選択解除（テキストツール）**: `onCanvasMouseDown` のテキストツール分岐で「txt セレクションなし + 選択中レイヤーあり」のとき、空所クリックを「まず選択解除のみ、新規 textarea は開かない」に変更。次のクリックではじめて新規入力 textarea が起動するため、配置完了後の空所クリックで意図せず textarea が暴発する事故を解消。
+
+### テキスト回転ハンドル
+
+e. **選択中レイヤー上辺中央に回転ハンドル**: `state.js` の `addNewLayer` に `rotation` 引数（既定 0）追加。`canvas-tools.js` で `box.style.transform = rotate(Ndeg)` を既存 / 新規両方に適用、selected 時に `createRotateHandle()` を box に追加。`beginRotateDrag(e, ctx, layerId)` がドラッグ中の `mousemove` で `Math.atan2` から角度差分を計算、`setLayerRotation(...)` で更新（Shift で 15° スナップ）。回転中心は `box.getBoundingClientRect()` の AABB 中心（CSS rotate は中心保持なので元の box 中心と一致）。`beginMultiLayerDrag` の preview transform を `translate() rotate()` 合成にして、ドラッグ中も回転が消えないように。
+
+f. **回転ハンドルの Photoshop 書き戻し**: `lib.rs` の `LayerEdit` / `NewLayer` に `rotation: Option<f64>` 追加。`jsx_gen.rs` で payload に `rotation: N` を出力し、`applyToPsd` 内で各レイヤー処理の最後に `layer.rotate(rotation, AnchorPosition.MIDDLECENTER)` を呼ぶ（失敗は `addWarning` で継続）。既存レイヤーの delta（dx/dy）と同じく、incremental に累積する仕様（保存後リロードしないと意図と乖離する場合あり）。
+
+### Undo / Redo / 全削除
+
+g. **history インフラ（state.js）**: `state.history`（snapshot 配列）/ `historyIndex` / `historyTransientDepth` / `historyListeners` を追加。`HISTORY_MAX = 100`。`snapshotState()` は `{edits: Array, newLayers: Array, nextTempId}` をディープコピー、`restoreSnapshot(snap)` で復元時に存在しなくなった `selectedLayers.tempId` を自動破棄。
+- 全 mutation 関数の末尾に `pushHistorySnapshot()` を埋め込み（`setEdit` / `addNewLayer` / `updateNewLayer` / `removeNewLayer`）。`addEditOffset` は `setEdit` 経由で 1 push。
+- `clearPages()` 末尾で `resetHistoryBaseline()` を呼び、PSD 読込時に履歴を空状態（snapshot 1 件）にリセット。
+- `beginHistoryTransient()` / `commitHistoryTransient()` / `abortHistoryTransient()` の depth カウンタで、ドラッグ中・複数選択一括編集中の連続更新を 1 件にまとめる。
+
+h. **ヘッダー Undo/Redo/全削除 ボタン群**: `index.html` のズームの右に `.toolbar-history` グループ（MojiQ Pro と同じ SVG アイコン：戻り矢印・進み矢印・×丸）。`.toolbar-history` に `margin-left: -12px` で `.toolbar` の `gap: 12px` を打ち消し、左右の余白を対称化（`.toolbar-viewmode` と同方針）。`.history-btn:disabled` で 0.35 透過、`.clear-all-btn:hover` のみ `--danger` 色。
+- ショートカット：`Ctrl+Z` で undo、`Ctrl+Y` または `Ctrl+Shift+Z` で redo、`Ctrl+Delete` で全削除（confirmDialog あり、文言は短く「現在の編集をすべて削除します。」）。`main.js` keydown ハンドラの環境設定 dispatch より前に hardcode（破壊的でないので固定キー）。
+- `bindHistoryButtons` で `onHistoryChange` を購読し、disabled 状態 + `refreshAllOverlays` + `rebuildLayerList` を一括更新。
+
+i. **ドラッグ中の連続更新を 1 件に集約**: `nudgeSelectedLayers` / `resizeSelectedLayers` / `beginRotateDrag` / `beginMultiLayerDrag.onUp` を `beginHistoryTransient()` … `commitHistoryTransient()` で囲み、ドラッグ 1 回 = 履歴 1 件。値変化なしのときは `abortHistoryTransient()`。`text-editor.js` の `commitStrokeFields` / `commitFillField` / レイヤー削除ボタンの一括 `removeNewLayer` も同様に batch 化。
+
+### サイドパネル UI 改善
+
+j. **セクション折りたたみ（h2 右の chevron）**: 各セクションを `<section class="panel-section" data-section="...">` で包み、`<h2 class="panel-section-h2">` を `flex` 行にして `<span>` ラベル + `<button class="section-toggle-btn">`（chevron-down SVG）を並置。`.panel-section.collapsed > *:not(.panel-section-h2) { display: none }` で本体を隠し、chevron は `.section-chevron { transition: transform 0.15s }` + `.collapsed .section-chevron { transform: rotate(180deg) }`。`.txt-source.collapsed` は `max-height: none; flex: 0 0 auto` で空き領域を作らないように。状態は `localStorage psdesign_panel_section_collapsed`（JSON `{txt, editor, layers}`）に永続化。
+
+k. **テキストレイヤー削除ボタンを常時表示**: `text-editor.js` `updateDeleteButtonVisibility` を `hidden` から `disabled` 切替に変更。新規レイヤー選択なしのときは `opacity: 0.35; cursor: not-allowed` でグレーアウト。CSS で `.layer-delete-btn[hidden]` を撤去し `.layer-delete-btn:disabled` を追加。
+
+l. **テキストレイヤーセクションを縦 flex で残り高さ占有**: `.panel-section[data-section="layers"]` に `display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0` を当て、`.layer-list-footer` に `margin-top: auto` を追加。レイヤー 0 件のときも削除ボタンが下端に固定される。
+
+### 行間（leading）と行ごと leading override
+
+m. **行間フィールド + ルビトグル**: `state.js` に `leadingPct: 125` + `getLeadingPct/setLeadingPct(50–500)/onLeadingPctChange` 追加。`addNewLayer` に `leadingPct` 引数追加（既定 125）。`clearPages` で 125 リセット。`index.html` のサイズとフチの間に「行間」フィールド（`[+] [input] % [-]`、`min=50` `max=500` `step=1`）+ ルビトグル（`なし` / `ルビ` の 2 段ボタン）。`main.js bindLeadingTool` でサイズツールと同じ pattern で配線、`+/-` で ±5%。
+- ルビトグル active は leadingPct から導出：`>= 150` で「ルビ」active、それ未満は「なし」active。`+/-` ボタン or 手動入力で値変化しても highlight が追従。
+- `canvas-tools.js renderOverlay` でプレビュー `inner.style.lineHeight` を leading から計算（既存：`edit.leadingPct/100`、なければ 1.05；新規：`nl.leadingPct/100`、デフォルト 1.25）。`layerRectForExisting` / `layerRectForNew` の厚み係数も `1.4` / `1.25` から `(leadingPct ?? 125) / 100` に置換し、行間広げで枠から見切れる問題を解消。
+- Photoshop 書き戻し：既存 / 新規両方で `nti.autoLeadingAmount = leadingPct; nti.useAutoLeading = true;` を呼ぶ。
+
+n. **行ごと leading override（in-place 編集中のカーソル行）**: `state.js` に `editingContext: {psdPath, layerId|tempId, currentLineIndex, totalLines}` 追加 + `setEditingContext` / `getEditingContext` / `onEditingContextChange`。各レイヤーに `lineLeadings: {[lineIndex]: pct}`（疎オブジェクト）追加 + `setLineLeading` / `getLineLeading` API。
+- `canvas-tools.js createTextFloater` に `onCursorChange` / `onClose` コールバックを追加。`focus/keyup/click/input/select` イベントで `selectionStart` から行 index 算出。`startInPlaceEdit` 開始時に `setEditingContext(...)`、close 時に `setEditingContext(null)`。
+- `main.js applyLeading(n)` を `editingContext` 有無で分岐：context あり → `setLineLeading(...)` で当該行 override に書込み、なし → 従来どおり layer 全体の `leadingPct`。`syncLeadingInputForEditingContext()` で input・ルビトグル・対象行ラベルを同期。
+- in-place 編集 textarea のフォーカスを保ったまま行間調整できるよう、`bindGlobalBlurOnOutsideClick` の安全ゾーンに `.editor` を追加、`bindLeadingTool` の `+/-` / ルビボタンに `mousedown.preventDefault` を入れた。textarea 自身の blur ハンドラも `relatedTarget.closest(".editor")` のときは finalize しないように。
+- `canvas-tools.js renderInnerText(inner, text, defaultPct, lineLeadings)` で `lineLeadings` がある場合のみ 1 行ずつ `<div>` に分けて per-line `line-height` を当てる（軽量経路は維持）。
+- Photoshop 書き戻し：`jsx_gen.rs` HEADER に `cloneActionDescriptor` / `cloneActionList` / `applyLineLeadings` を追加。`executeActionGet` で textKey を取得し、1 つ目の textStyle をテンプレに各行 `from`/`to` の textStyleRange を構築、override がある行だけ `autoLeading=false; leading=fontSize × pct/100 pt`、無ければ `autoLeading=true`。textKey をディープクローンして `textStyleRange` だけ差し替え、`set` で書き戻し。
+
+o. **編集パネルをタブ化（サイズ / 行間 / フチ）**: `index.html` の `#editor` 内、フォントの下を `.editor-tabs-section`（`.editor-tabs` + 3 つの `.editor-tab-panel`）に再構成。タブは `<button class="editor-tab" data-tab="size|leading|stroke">`。サイズ・行間タブには `data-editor-scope="single"` を付与し、複数選択時に自動で隠れる。`leading-target-label` は行間パネル内に移動。`text-editor.js setEditorTab(tab)` でタブ切替、`bindEditorTabs` で click 配線（`mousedown.preventDefault` で in-place 編集 textarea のフォーカス維持）。複数選択時は active が single-only なら `setEditorTab("stroke")` で自動切替。
+
+### Photoshop 風ルーラー + ドラッグでガイド線
+
+p. **`src/rulers.js` 新設**: PSD 表示領域の上/左に Photoshop と同じ目盛り付きルーラー帯を表示し、ドラッグでガイド線（cyan）を引ける機能。スコープは Phase A〜C（揮発、永続化なし）。
+- データモデル：`Map<psdPath, {h: number[], v: number[]}>` を rulers.js 内部に閉じる（state.js を膨らませず undo/redo にも巻き込まない）。値は PSD pixel 座標。`localStorage` に保存するのは `rulersVisible` のフラグだけ（key: `psdesign_rulers_visible`）。
+- 描画：ルーラー帯 = Canvas（HiDPI、`devicePixelRatio` で backing をスケール）、ガイド = `<div>` absolute（1 本 = 1 div、`pointer-events: auto`）。主目盛り間隔は `pickTickStep(pxPerPsd)` で `[1,2,5,10,20,25,50,100,200,250,500,1000,2000,2500,5000,10000]` PSD px の中から「主目盛りが画面 60〜120 CSS px ごとに来る」値を選択、副目盛りは 1/5。
+- 回転対応：`axisMappingForRotation(rotation)` を 1 関数に集約し、`{topAxis: "x"|"y", topSign, leftAxis, leftSign}` を返す。ルーラー帯は画面の上/左に固定したまま、目盛り値だけ PSD 軸に応じて切替（Photoshop と同じビュー回転挙動）。
+- 入力：上ルーラー mousedown → axis="h"（画面水平のガイド）、左ルーラー mousedown → axis="v"。ドラッグ中はガイド層にプレビュー線、mouseup で canvas 内なら `addGuide`、ルーラー帯内なら破棄。既存ガイドは本体ドラッグで `moveGuide` 連続更新、mouseup でルーラー帯に重なっていれば `removeGuide`（Photoshop と同じ削除 UX）。
+- 再描画タイミング：`requestRulerRedraw()`（rAF debounce）に集約。`ResizeObserver`（pane / stage / topCanvas / leftCanvas）+ `#psd-stage` の `scroll` + `onPsdZoomChange` / `onPsdRotationChange` / `onPageIndexChange` + `MutationObserver(documentElement, {attributeFilter:["data-theme"]})` で発火。`spread-view.js` の `redraw()` 末尾でも `requestRulerRedraw()` を呼ぶ（DOM 全壊 → 再構築後の座標再投影）。
+- Ctrl+R ショートカット：`settings.js DEFAULT_SETTINGS.shortcuts` に `toggleRulers: { key: "r", modifiers: ["ctrl"] }` 追加。`migrate()` がホワイトリストで穴埋めするので既存 settings は自動互換。`settings-ui.js` は `getAllShortcuts()` を全列挙する造りなので環境設定モーダルに自動で「定規の表示切替」が登場、別キーへのカスタマイズも可。
+- WebView2 のリロード抑止：`bindRulerToggle` で `bindZoomTool` と同じく capture フェーズの keydown 内で `matchShortcut(e, "toggleRulers")` を判定して `preventDefault + stopPropagation`。
+- DOM：`.spreads-psd-area > .psd-rulers > .psd-ruler-top + .psd-ruler-left + .psd-ruler-corner` と `.spreads-psd-area > .psd-guides-layer`。`.psd-rulers` は `position: absolute; top:0; left:0; width:100%; height:100%`（`inset:0` ショートハンドが Canvas 子の自動幅計算で安定しないため明示指定）、`.psd-ruler-top` は `width: calc(100% - var(--ruler-thick))` で明示幅。
+- ルーラー有効時のレイアウト：`.spreads-psd-area.rulers-on { padding-top: var(--ruler-thick); padding-left: var(--ruler-thick) }` で content（`#psd-stage`）を ruler 厚ぶん押し出す。absolute 配置のルーラー帯は padding-box（border 内側）基準なのでパディング変化の影響を受けず、ペイン端 0px から ruler-thick まで密着して描画される。
+- ライト/ダークテーマ追従：`getComputedStyle(documentElement).getPropertyValue("--text-muted" / "--panel" / "--border")` で Canvas 描画色を取得、`MutationObserver` で `data-theme` 変化を検知して再描画。
+
+q. **回転ボタンを右下に移動**: `.pdf-rotate-btn` / `.psd-rotate-btn` を `top: 8px` から `bottom: 8px` に変更（PDF / PSD 両ペイン同時）。ルーラー帯と top/left の位置がぶつからない。
+
+> **構造変更まとめ**:
+> - 旧: 編集セクション = 縦並び（フォント / サイズ / 行間 / フチ）
+> - 新: 編集セクション = フォントの下にタブ（サイズ / 行間 / フチ）、`.editor-tabs-section` + 3 panel
+> - 旧: PSD 編集に undo/redo なし、ルーラー / ガイドなし
+> - 新: history snapshot stack（max 100）+ ヘッダー Undo/Redo/全削除、Ctrl+R で Photoshop 風ルーラー + ドラッグガイド
+> - 旧: 行間は 125% 固定（JSX 側）、UI で調整不可
+> - 新: `state.leadingPct`（layer global）+ `lineLeadings: {[lineIndex]: pct}`（per-line override）、in-place 編集中のカーソル行で行ごと leading を変更可能、Photoshop には Action Manager で per-character leading として書き戻し

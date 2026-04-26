@@ -13,6 +13,8 @@ const state = {
   txtSelectedBlockIndex: null,
   textSize: 12,
   textSizeListeners: new Set(),
+  leadingPct: 125, // 行間（autoLeadingAmount %）。Photoshop の自動行送り 125% を既定。
+  leadingPctListeners: new Set(),
   currentFontPostScriptName: null,
   currentFontListeners: new Set(),
   strokeColor: "none", // "none" | "white" | "black"
@@ -45,7 +47,19 @@ const state = {
   parallelSyncModeListeners: new Set(),
   activePane: "psd", // "pdf" | "psd"（非同期時に矢印キー/ホイールが効くペイン）
   activePaneListeners: new Set(),
+  // 編集の undo / redo 履歴。スナップショット（edits + newLayers）配列。
+  history: [],
+  historyIndex: -1,
+  historyTransientDepth: 0, // > 0 のとき push を抑制（ドラッグ中など）
+  historyListeners: new Set(),
+  // in-place 編集（テキストツールでレイヤークリック時の textarea）の現在対象。
+  // null: 編集中でない。{psdPath, layerId|tempId, currentLineIndex, totalLines}: 編集中。
+  // 行間コントロールはこれが set のとき per-line override に書き込み、unset のとき global に書く。
+  editingContext: null,
+  editingContextListeners: new Set(),
 };
+
+const HISTORY_MAX = 100;
 
 export const ZOOM_MIN = 0.1;
 export const ZOOM_MAX = 8;
@@ -68,7 +82,131 @@ export function clearPages() {
   setStrokeColor("none");
   setStrokeWidthPx(20);
   setFillColor("default");
+  setLeadingPct(125);
+  resetHistoryBaseline();
   // PDF は PSD 再読込から独立させる（ユーザー回転も保持）。ホームに戻る時のみ hamburger-menu 側で clearPdf を呼ぶ。
+}
+
+// ===== 行ごとの行間オーバーライド =====
+// 既存レイヤーの edit / 新規レイヤーの nl に lineLeadings: {[lineIndex]: pct} を保持。
+// 値を null にすると当該行のオーバーライドを除去（global にフォールバック）。
+export function setLineLeading(psdPath, layerIdOrTempId, lineIndex, pctOrNull) {
+  if (!Number.isInteger(lineIndex) || lineIndex < 0) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].lineLeadings ?? {}) };
+    if (pctOrNull == null) delete cur[lineIndex]; else cur[lineIndex] = Math.round(pctOrNull);
+    state.newLayers[idx] = { ...state.newLayers[idx], lineLeadings: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.lineLeadings ?? {}) };
+    if (pctOrNull == null) delete cur[lineIndex]; else cur[lineIndex] = Math.round(pctOrNull);
+    setEdit(psdPath, layerIdOrTempId, { lineLeadings: cur });
+  }
+}
+
+export function getLineLeading(psdPath, layerIdOrTempId, lineIndex) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.lineLeadings?.[lineIndex];
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  return e?.lineLeadings?.[lineIndex];
+}
+
+export function getEditingContext() { return state.editingContext; }
+export function setEditingContext(ctx) {
+  state.editingContext = ctx ?? null;
+  for (const fn of state.editingContextListeners) fn(state.editingContext);
+}
+export function onEditingContextChange(fn) {
+  state.editingContextListeners.add(fn);
+  return () => state.editingContextListeners.delete(fn);
+}
+
+// ===== Undo / Redo 履歴 =====
+function snapshotState() {
+  return {
+    edits: Array.from(state.edits.entries()).map(([k, v]) => [k, { ...v }]),
+    newLayers: state.newLayers.map((l) => ({ ...l })),
+    nextTempId: state.nextTempId,
+  };
+}
+
+function restoreSnapshot(snap) {
+  state.edits = new Map(snap.edits.map(([k, v]) => [k, { ...v }]));
+  state.newLayers = snap.newLayers.map((l) => ({ ...l }));
+  state.nextTempId = snap.nextTempId;
+  // 復元で消えた新規レイヤーへの選択参照は破棄（参照不整合防止）。
+  state.selectedLayers = state.selectedLayers.filter((s) => {
+    if (typeof s.layerId === "string") {
+      return state.newLayers.some((nl) => nl.tempId === s.layerId);
+    }
+    return true;
+  });
+  for (const fn of state.historyListeners) fn();
+}
+
+function pushHistorySnapshot() {
+  if (state.historyTransientDepth > 0) return;
+  // redo 分岐は破棄してから現在状態を新たな最終地点として積む。
+  state.history = state.history.slice(0, state.historyIndex + 1);
+  state.history.push(snapshotState());
+  if (state.history.length > HISTORY_MAX) state.history.shift();
+  state.historyIndex = state.history.length - 1;
+  for (const fn of state.historyListeners) fn();
+}
+
+function resetHistoryBaseline() {
+  state.history = [snapshotState()];
+  state.historyIndex = 0;
+  state.historyTransientDepth = 0;
+  for (const fn of state.historyListeners) fn();
+}
+
+export function undo() {
+  if (!canUndo()) return false;
+  state.historyIndex--;
+  restoreSnapshot(state.history[state.historyIndex]);
+  return true;
+}
+
+export function redo() {
+  if (!canRedo()) return false;
+  state.historyIndex++;
+  restoreSnapshot(state.history[state.historyIndex]);
+  return true;
+}
+
+export function canUndo() { return state.historyIndex > 0; }
+export function canRedo() { return state.historyIndex < state.history.length - 1; }
+
+// 全削除：edits と newLayers をすべて消し、選択も解除する。空打ちのときは false を返す。
+export function clearAllEdits() {
+  if (state.edits.size === 0 && state.newLayers.length === 0) return false;
+  state.edits.clear();
+  state.newLayers = [];
+  state.selectedLayers = [];
+  pushHistorySnapshot();
+  return true;
+}
+
+// ドラッグ中は内部の連続更新を 1 件にまとめる。begin/commit のペアで使う。
+// nest 可能（depth カウンタ）。abort はドラッグ中断時に push せず depth だけ戻す。
+export function beginHistoryTransient() { state.historyTransientDepth++; }
+export function commitHistoryTransient() {
+  if (state.historyTransientDepth > 0) state.historyTransientDepth--;
+  if (state.historyTransientDepth === 0) pushHistorySnapshot();
+}
+export function abortHistoryTransient() {
+  if (state.historyTransientDepth > 0) state.historyTransientDepth--;
+}
+
+export function onHistoryChange(fn) {
+  state.historyListeners.add(fn);
+  return () => state.historyListeners.delete(fn);
 }
 
 export function addPage(page) { state.pages.push(page); }
@@ -80,6 +218,7 @@ export function setEdit(psdPath, layerId, changes) {
   const key = editKey(psdPath, layerId);
   const existing = state.edits.get(key) ?? { psdPath, layerId };
   state.edits.set(key, { ...existing, ...changes });
+  pushHistorySnapshot();
 }
 
 export function getEdit(psdPath, layerId) {
@@ -214,6 +353,8 @@ export function addNewLayer({
   strokeColor,
   strokeWidthPx,
   fillColor,
+  rotation,
+  leadingPct,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -228,8 +369,14 @@ export function addNewLayer({
     strokeColor: strokeColor ?? "none",
     strokeWidthPx: Number.isFinite(strokeWidthPx) ? strokeWidthPx : 20,
     fillColor: fillColor === "white" || fillColor === "black" ? fillColor : "default",
+    rotation: Number.isFinite(rotation) ? rotation : 0,
+    leadingPct: Number.isFinite(leadingPct) ? leadingPct : 125,
+    // 行ごとの行間オーバーライド。キーは 0-based の行番号、値は %。
+    // 未指定の行は層の leadingPct（autoLeading）を使う。
+    lineLeadings: {},
   };
   state.newLayers.push(layer);
+  pushHistorySnapshot();
   return layer;
 }
 
@@ -237,10 +384,13 @@ export function updateNewLayer(tempId, changes) {
   const idx = state.newLayers.findIndex((l) => l.tempId === tempId);
   if (idx < 0) return;
   state.newLayers[idx] = { ...state.newLayers[idx], ...changes };
+  pushHistorySnapshot();
 }
 
 export function removeNewLayer(tempId) {
+  const before = state.newLayers.length;
   state.newLayers = state.newLayers.filter((l) => l.tempId !== tempId);
+  if (state.newLayers.length !== before) pushHistorySnapshot();
 }
 
 export function getNewLayers() { return state.newLayers; }
@@ -303,6 +453,21 @@ export function setTextSize(n) {
 export function onTextSizeChange(fn) {
   state.textSizeListeners.add(fn);
   return () => state.textSizeListeners.delete(fn);
+}
+
+export function getLeadingPct() { return state.leadingPct; }
+export function setLeadingPct(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return;
+  const rounded = Math.round(v);
+  const clamped = Math.max(50, Math.min(500, rounded));
+  if (state.leadingPct === clamped) return;
+  state.leadingPct = clamped;
+  for (const fn of state.leadingPctListeners) fn(clamped);
+}
+export function onLeadingPctChange(fn) {
+  state.leadingPctListeners.add(fn);
+  return () => state.leadingPctListeners.delete(fn);
 }
 
 function clampZoom(v) {

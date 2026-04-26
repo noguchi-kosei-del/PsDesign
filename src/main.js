@@ -27,7 +27,16 @@ import {
 } from "./settings.js";
 import { initSettingsUi } from "./settings-ui.js";
 import {
+  initRulers,
+  toggleRulersVisible,
+  getRulersVisible,
+  onRulersVisibleChange,
+} from "./rulers.js";
+import {
   addPage,
+  canRedo,
+  canUndo,
+  clearAllEdits,
   clearPages,
   exportEdits,
   getActivePane,
@@ -45,6 +54,7 @@ import {
   getTool,
   hasEdits,
   onActivePaneChange,
+  onHistoryChange,
   onPageIndexChange,
   onParallelSyncModeChange,
   onPdfChange,
@@ -68,6 +78,15 @@ import {
   setPsdZoom,
   setTextSize,
   setTool,
+  redo,
+  undo,
+  getLeadingPct,
+  setLeadingPct,
+  onLeadingPctChange,
+  getEditingContext,
+  onEditingContextChange,
+  setLineLeading,
+  getLineLeading,
 } from "./state.js";
 import {
   getPdfVirtualIndexForPhysicalPage,
@@ -407,6 +426,7 @@ function runShortcut(id) {
     case "zoomReset":  resetActivePaneZoom(); break;
     case "sizeUp":     adjustTextSize(+2); break;
     case "sizeDown":   adjustTextSize(-2); break;
+    case "toggleRulers": toggleRulersVisible(); break;
   }
 }
 
@@ -427,6 +447,55 @@ function isShortcutBlockedInInput(id, target) {
 
 function isPageNavShortcut(id) {
   return id === "pagePrev" || id === "pageNext" || id === "pageFirst" || id === "pageLast";
+}
+
+// Undo / Redo / 全削除 ボタン群を配線。
+// 状態（disabled）は onHistoryChange / onPdfChange... ではなく state.history の
+// 変動と pages 切替に追従させたいので、updateHistoryButtons を共通呼び出しにする。
+function updateHistoryButtons() {
+  const undoBtn = document.getElementById("undo-btn");
+  const redoBtn = document.getElementById("redo-btn");
+  const clearBtn = document.getElementById("clear-all-btn");
+  if (undoBtn) undoBtn.disabled = !canUndo();
+  if (redoBtn) redoBtn.disabled = !canRedo();
+  if (clearBtn) clearBtn.disabled = !hasEdits();
+}
+
+async function handleClearAllEdits() {
+  if (!hasEdits()) return;
+  const ok = await confirmDialog({
+    title: "編集を全て削除",
+    message: "現在の編集（移動・追加レイヤー・テキスト変更など）をすべて削除します。",
+    confirmLabel: "全て削除",
+  });
+  if (!ok) return;
+  clearAllEdits();
+  refreshAllOverlays();
+  rebuildLayerList();
+}
+
+function bindHistoryButtons() {
+  const undoBtn = document.getElementById("undo-btn");
+  const redoBtn = document.getElementById("redo-btn");
+  const clearBtn = document.getElementById("clear-all-btn");
+  if (undoBtn) undoBtn.addEventListener("click", () => { if (undo()) syncAfterHistoryChange(); });
+  if (redoBtn) redoBtn.addEventListener("click", () => { if (redo()) syncAfterHistoryChange(); });
+  if (clearBtn) clearBtn.addEventListener("click", () => { handleClearAllEdits(); });
+  // 履歴の変更（push / undo / redo / baseline reset）に追従して disabled と再描画を更新。
+  onHistoryChange(() => {
+    updateHistoryButtons();
+    refreshAllOverlays();
+    rebuildLayerList();
+  });
+  updateHistoryButtons();
+}
+
+// undo / redo は state を書換えるだけなので、UI は onHistoryChange listener が受ける。
+// ここでは listener を介さない経路向けに用意（現状未使用、将来のため安全側）。
+function syncAfterHistoryChange() {
+  refreshAllOverlays();
+  rebuildLayerList();
+  updateHistoryButtons();
 }
 
 function bindTools() {
@@ -491,7 +560,9 @@ function bindTools() {
     if (isArrowKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
-      if (!isInput && getTool() === "move") {
+      const tool = getTool();
+      const nudgeTool = tool === "move" || tool === "text-v" || tool === "text-h";
+      if (!isInput && nudgeTool) {
         const step = e.shiftKey ? 10 : 1;
         let dx = 0, dy = 0;
         if (e.key === "ArrowLeft") dx = -step;
@@ -502,6 +573,27 @@ function bindTools() {
           e.preventDefault();
           return;
         }
+      }
+    }
+
+    // 履歴系（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / Ctrl+Delete）。
+    // 環境設定対象外（破壊的でないため固定キー、入力欄でも有効）。
+    if ((e.ctrlKey || e.metaKey) && !e.altKey) {
+      const k = e.key.toLowerCase();
+      if (k === "z" && !e.shiftKey) {
+        e.preventDefault();
+        if (undo()) { /* listener が UI を更新 */ }
+        return;
+      }
+      if (k === "y" || (k === "z" && e.shiftKey)) {
+        e.preventDefault();
+        if (redo()) { /* listener が UI を更新 */ }
+        return;
+      }
+      if (e.key === "Delete" || e.code === "Delete") {
+        e.preventDefault();
+        handleClearAllEdits();
+        return;
       }
     }
 
@@ -607,6 +699,46 @@ function bindCollapseToggles() {
     "サイドバーを折り畳む",
     "サイドバーを展開",
   );
+}
+
+// サイドパネル内 3 セクション（原稿テキスト / 編集 / テキストレイヤー）の折り畳み。
+// 各 .panel-section[data-section] の h2 内トグルボタンで開閉、状態は localStorage に保存。
+const SECTION_COLLAPSED_KEY = "psdesign_panel_section_collapsed";
+function loadSectionState() {
+  const defaults = { txt: false, editor: false, layers: false };
+  try {
+    const raw = localStorage.getItem(SECTION_COLLAPSED_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return { ...defaults, ...parsed };
+    }
+  } catch (_) {}
+  return defaults;
+}
+function saveSectionState(s) {
+  try { localStorage.setItem(SECTION_COLLAPSED_KEY, JSON.stringify(s)); } catch (_) {}
+}
+function bindSectionToggles() {
+  const state = loadSectionState();
+  for (const id of ["txt", "editor", "layers"]) {
+    const sec = document.querySelector(`.panel-section[data-section="${id}"]`);
+    const btn = sec?.querySelector(":scope > .panel-section-h2 > .section-toggle-btn");
+    if (!sec || !btn) continue;
+    const apply = () => {
+      sec.classList.toggle("collapsed", !!state[id]);
+      const t = state[id] ? "展開" : "折りたたむ";
+      btn.title = t;
+      btn.setAttribute("aria-label", t);
+      btn.setAttribute("aria-expanded", state[id] ? "false" : "true");
+    };
+    apply();
+    btn.addEventListener("click", () => {
+      state[id] = !state[id];
+      apply();
+      saveSectionState(state);
+    });
+  }
 }
 
 // サイドツールバーの上下ボタン（ページ移動）配線 + 表示更新。
@@ -873,6 +1005,131 @@ function bindSizeTool() {
   inc.addEventListener("click", () => adjustTextSize(+1));
 }
 
+// 行間を適用。in-place 編集中（editingContext あり）はカーソル行の per-line override に
+// 書き込み、そうでなければ従来どおり layer 全体の leadingPct を更新する。
+function applyLeading(n) {
+  const v = clampLeading(n);
+  const ec = getEditingContext();
+  if (ec) {
+    const targetId = ec.tempId ?? ec.layerId;
+    setLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0, v);
+    refreshAllOverlays();
+    rebuildLayerList();
+    syncLeadingInputForEditingContext();
+    return;
+  }
+  setLeadingPct(v);
+  if (hasSelection()) commitSelectedLayerField("leadingPct", getLeadingPct());
+}
+function clampLeading(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return getLeadingPct();
+  return Math.max(50, Math.min(500, Math.round(v)));
+}
+function adjustLeading(delta) {
+  const ec = getEditingContext();
+  if (ec) {
+    const targetId = ec.tempId ?? ec.layerId;
+    const cur = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
+    applyLeading(cur + delta);
+    return;
+  }
+  applyLeading(getLeadingPct() + delta);
+}
+
+// editingContext が active のときは leading-input にカーソル行の値を表示。
+// 行ごとの override が無ければレイヤー global の leadingPct を表示する。
+function syncLeadingInputForEditingContext() {
+  const input = document.getElementById("leading-input");
+  if (!input) return;
+  const ec = getEditingContext();
+  if (!ec) return;
+  const targetId = ec.tempId ?? ec.layerId;
+  const v = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
+  if (document.activeElement !== input) input.value = String(v);
+  // ルビトグルも追従
+  const onActive = v >= 150;
+  const off = document.getElementById("ruby-off-btn");
+  const on = document.getElementById("ruby-on-btn");
+  if (off) off.classList.toggle("active", !onActive);
+  if (on) on.classList.toggle("active", onActive);
+  // ターゲット行のラベル更新
+  const label = document.getElementById("leading-target-label");
+  if (label) {
+    label.textContent = `${ec.currentLineIndex + 1}行目`;
+    label.hidden = false;
+  }
+}
+
+function clearLeadingTargetLabel() {
+  const label = document.getElementById("leading-target-label");
+  if (label) {
+    label.hidden = true;
+  }
+}
+
+function bindLeadingTool() {
+  const input = document.getElementById("leading-input");
+  const dec = document.getElementById("leading-dec-btn");
+  const inc = document.getElementById("leading-inc-btn");
+  const rubyOff = document.getElementById("ruby-off-btn");
+  const rubyOn = document.getElementById("ruby-on-btn");
+  if (!input || !dec || !inc) return;
+
+  input.value = String(getLeadingPct());
+  // ルビトグルの active 表示は現在の leading から導出。150 以上で「ルビあり」、
+  // それ未満は「ルビなし」を highlight する。手動で 130 のような中間値にしても
+  // どちらかが必ず active なので状態が分かりやすい。
+  const syncRuby = (v) => {
+    const onActive = v >= 150;
+    if (rubyOff) rubyOff.classList.toggle("active", !onActive);
+    if (rubyOn) rubyOn.classList.toggle("active", onActive);
+  };
+  onLeadingPctChange((v) => {
+    if (document.activeElement !== input) input.value = String(v);
+    syncRuby(v);
+  });
+  syncRuby(getLeadingPct());
+
+  input.addEventListener("input", () => {
+    const v = parseInt(input.value, 10);
+    if (!Number.isFinite(v)) return;
+    applyLeading(v);
+  });
+  input.addEventListener("blur", () => {
+    // editingContext があれば対象行の値を、なければ global を表示。
+    const ec = getEditingContext();
+    if (ec) {
+      const targetId = ec.tempId ?? ec.layerId;
+      const v = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
+      input.value = String(v);
+    } else {
+      input.value = String(getLeadingPct());
+    }
+  });
+  // ボタン群は in-place 編集 textarea からのフォーカス移動を抑止する。これがないと
+  // + を押すたびに textarea が blur → カーソル行が失われ、editingContext が消える。
+  const keepFocus = (el) => el && el.addEventListener("mousedown", (e) => e.preventDefault());
+  keepFocus(dec); keepFocus(inc); keepFocus(rubyOff); keepFocus(rubyOn);
+  dec.addEventListener("click", () => adjustLeading(-5));
+  inc.addEventListener("click", () => adjustLeading(+5));
+  if (rubyOff) rubyOff.addEventListener("click", () => applyLeading(125));
+  if (rubyOn) rubyOn.addEventListener("click", () => applyLeading(150));
+
+  // in-place 編集の context 変化に追従して input/ボタンの表示を更新。
+  // context が立つ → カーソル行の per-line 値（無ければ global）を表示し対象行ラベル ON。
+  // context が消える → global 値に戻し、ラベル OFF。
+  onEditingContextChange((ec) => {
+    if (ec) {
+      syncLeadingInputForEditingContext();
+    } else {
+      clearLeadingTargetLabel();
+      input.value = String(getLeadingPct());
+      syncRuby(getLeadingPct());
+    }
+  });
+}
+
 async function handleDroppedPaths(paths) {
   if (!paths || paths.length === 0) return;
   const psdFiles = [];
@@ -955,6 +1212,34 @@ function zoomPaneBy(pane, factor) {
 function resetPaneZoom(pane) {
   if (pane === "pdf") setPdfZoom(1);
   else setPsdZoom(1);
+}
+
+// 定規ボタンの click + ON/OFF 表示同期 + Ctrl+R の WebView リロード抑止。
+// Ctrl+R は WebView2 の既定リロードに先取りされやすいので、bindZoomTool と同じく
+// capture フェーズで matchShortcut("toggleRulers") を判定して preventDefault。
+function bindRulerToggle() {
+  const btn = document.getElementById("toggle-rulers-btn");
+  const sync = () => {
+    if (!btn) return;
+    const on = getRulersVisible();
+    btn.setAttribute("aria-pressed", on ? "true" : "false");
+    btn.classList.toggle("active", on);
+  };
+  if (btn) btn.addEventListener("click", () => toggleRulersVisible());
+  onRulersVisibleChange(sync);
+  sync();
+
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (matchShortcut(e, "toggleRulers")) {
+        toggleRulersVisible();
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    { capture: true },
+  );
 }
 
 function bindZoomTool() {
@@ -1112,9 +1397,11 @@ function init() {
   document.getElementById("open-folder-btn").addEventListener("click", handleOpenFiles);
   document.getElementById("open-pdf-btn")?.addEventListener("click", handleOpenPdf);
   bindSaveMenu();
+  bindHistoryButtons();
   initHamburgerMenu();
   bindTools();
   bindSizeTool();
+  bindLeadingTool();
   bindZoomTool();
   bindPageChange();
   bindEditorEvents();
@@ -1123,6 +1410,7 @@ function init() {
   initTxtSource();
   bindPageNav();
   bindCollapseToggles();
+  bindSectionToggles();
   bindPdfWorkspaceToggle();
   bindPdfRotate();
   bindPsdRotate();
@@ -1139,6 +1427,8 @@ function init() {
   // フォントが非同期で登録されるたびにオーバーレイを再描画して反映。
   onFontsRegistered(() => refreshAllOverlays());
   bindGlobalBlurOnOutsideClick();
+  initRulers();
+  bindRulerToggle();
 }
 
 // INPUT/TEXTAREA/contenteditable 以外をクリックしたら、現在フォーカス中のテキスト入力から
@@ -1157,7 +1447,9 @@ function bindGlobalBlurOnOutsideClick() {
     if (!target) return;
     // 入力欄自身やそれに紐づく UI（コンボボックス・ドロップダウン等）の中をクリックしたときは維持
     if (target === active || active.contains(target)) return;
-    const near = target.closest?.("input, textarea, [contenteditable], .font-combobox, .save-menu, .text-input-floater");
+    // editor パネル内のクリックも安全ゾーンに含める。in-place 編集 textarea が active な
+    // ときに行間 input / +/- / ルビボタンを触っても勝手に textarea が blur しないようにする。
+    const near = target.closest?.("input, textarea, [contenteditable], .font-combobox, .save-menu, .text-input-floater, .editor");
     if (near) return;
     active.blur();
   }, true);

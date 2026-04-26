@@ -7,6 +7,7 @@ import {
   onPsdZoomChange,
 } from "./state.js";
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
+import { requestRulerRedraw } from "./rulers.js";
 
 const container = () => document.getElementById("psd-stage");
 const pageResizeObservers = new Set();
@@ -152,6 +153,8 @@ function buildPage(page, pageIndex, root) {
       ctx.fillText("（合成プレビューなし）", 16 * dpr, 32 * dpr);
     }
     refreshAllOverlays();
+    // ページ DOM が再構築/再描画されるたびにルーラーとガイドの座標投影をやり直す。
+    requestRulerRedraw();
   };
 
   wrap.appendChild(canvas);

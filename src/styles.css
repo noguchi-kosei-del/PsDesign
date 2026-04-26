@@ -244,6 +244,29 @@ html, body, #app {
   border-color: var(--border);
 }
 
+.toolbar-history {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-right: 1px solid var(--border);
+  /* toolbar の gap (12px) を打ち消し、左の区切り線（zoom の右ボーダー）から
+     6px の padding だけで対称に配置する（viewmode と同方針）。*/
+  margin-left: -12px;
+}
+.history-btn {
+  width: 28px;
+  height: 28px;
+}
+.history-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.history-btn.clear-all-btn:not(:disabled):hover {
+  color: var(--danger);
+  background: var(--panel-hover);
+}
+
 .toolbar-viewmode {
   display: flex;
   align-items: center;
@@ -499,6 +522,46 @@ html, body, #app {
   background: var(--accent);
   color: #fff;
 }
+
+/* ルビ有無トグル：方向トグルと同じ見た目で 2 段選択。テキストラベル用に幅を少し広く。 */
+.ruby-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ruby-toggle-btn {
+  min-width: 36px;
+  padding: 4px 8px;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  font-size: 11px;
+  line-height: 1;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.1s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.ruby-toggle-btn + .ruby-toggle-btn { border-left: 1px solid var(--border); }
+.ruby-toggle-btn:hover:not(.active) { background: var(--panel-hover); }
+.ruby-toggle-btn.active { background: var(--accent); color: #fff; }
+
+/* in-place 編集中のカーソル行を行間ラベル右に小さく表示。ラベルが立っているときは
+   行間操作が「その行の左側余白だけ」を変えるモードであることを示す。 */
+.leading-target-label {
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: var(--accent);
+  border-radius: 8px;
+  letter-spacing: 0;
+}
+.leading-target-label[hidden] { display: none; }
 
 /* フチのサムネ（なし / 白 / 黒）：3 つの丸スウォッチを横並び表示。 */
 .stroke-toggle {
@@ -941,6 +1004,97 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   position: relative;
 }
 
+/* ===== ルーラー / ガイド =====
+   ペイン直下に固定配置。rulers-on のとき #psd-stage を ruler 厚ぶん押し出して
+   ステージのコンテンツが目盛りで隠れないようにする。 */
+:root { --ruler-thick: 18px; }
+
+/* ルーラー有効時はペイン側の padding を ruler 厚ぶんだけ確保してステージを押し出す。
+   absolute 配置の rotate ボタンは padding-box（border 内側）基準なので影響なし。
+   Photoshop と同じくルーラーがキャンバスに密着する見た目になる（ペイン端 0px から
+   ruler-thick まで ruler 帯、その後ろから content）。 */
+.spreads-psd-area.rulers-on {
+  padding-top: var(--ruler-thick);
+  padding-left: var(--ruler-thick);
+}
+
+.psd-rulers {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 3;
+}
+.psd-rulers[hidden] { display: none; }
+
+.psd-ruler {
+  position: absolute;
+  pointer-events: auto;
+  background: var(--panel);
+  display: block;
+  box-sizing: border-box;
+}
+/* canvas 要素は left+right による自動幅計算が安定しないため width:calc で明示指定。 */
+.psd-ruler-top {
+  top: 0;
+  left: var(--ruler-thick);
+  width: calc(100% - var(--ruler-thick));
+  height: var(--ruler-thick);
+  border-bottom: 1px solid var(--border);
+  cursor: ns-resize;
+}
+.psd-ruler-left {
+  top: var(--ruler-thick);
+  left: 0;
+  width: var(--ruler-thick);
+  height: calc(100% - var(--ruler-thick));
+  border-right: 1px solid var(--border);
+  cursor: ew-resize;
+}
+.psd-ruler-corner {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: var(--ruler-thick);
+  height: var(--ruler-thick);
+  background: var(--panel);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+}
+
+/* ガイド層：ルーラー帯の下にある canvas エリアに重なる。透過 + 個別ガイドのみ捕捉。 */
+.psd-guides-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 2;
+  overflow: hidden;
+}
+.psd-guides-layer[hidden] { display: none; }
+.psd-guide {
+  position: absolute;
+  pointer-events: auto;
+  background: #00d2ff;
+  opacity: 0.85;
+  transition: background 0.1s, opacity 0.1s;
+}
+.psd-guide[data-axis="h"] { height: 1px; cursor: ns-resize; }
+.psd-guide[data-axis="v"] { width: 1px;  cursor: ew-resize; }
+/* ホバー/ドラッグ時に強調 */
+.psd-guide:hover, .psd-guide.dragging {
+  background: var(--accent);
+  opacity: 1;
+}
+/* ドラッグ中はクリック判定を広めに（実線は 1px のままでも当たり判定だけ広げる） */
+.psd-guide.dragging[data-axis="h"] { box-shadow: 0 0 0 2px var(--accent); }
+.psd-guide.dragging[data-axis="v"] { box-shadow: 0 0 0 2px var(--accent); }
+
 /* 非同期モード時のアクティブペイン強調（キーボード/ホイールの操作対象側） */
 .spreads-pdf-area.active-pane,
 .spreads-psd-area.active-pane {
@@ -951,7 +1105,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .pdf-rotate-btn,
 .psd-rotate-btn {
   position: absolute;
-  top: 8px;
+  bottom: 8px;
   right: 8px;
   z-index: 2;
   width: 28px;
@@ -1089,7 +1243,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layer-box-new {
   border: 1px dashed rgba(255, 200, 120, 0.8);
   background: rgba(255, 200, 120, 0.1);
-  overflow: hidden;
 }
 
 .layer-box-new.selected {
@@ -1124,6 +1277,54 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layer-box-existing[data-direction="vertical"] .existing-layer-text {
   writing-mode: vertical-rl;
   text-orientation: mixed;
+}
+
+.layer-size-badge {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-top: 2px;
+  background: #000;
+  color: #fff;
+  font: 700 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 3px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+  user-select: none;
+  z-index: 3;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.layer-rotate-handle {
+  position: absolute;
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 18px;
+  width: 12px;
+  height: 12px;
+  background: var(--accent);
+  border: 1.5px solid #fff;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+  cursor: grab;
+  pointer-events: auto;
+  z-index: 4;
+}
+.layer-rotate-handle:active { cursor: grabbing; }
+.layer-rotate-handle::before {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 1.5px;
+  height: 18px;
+  background: var(--accent);
+  transform: translateX(-50%);
+  pointer-events: none;
 }
 
 .page-overlay[data-tool="text-v"] .layer-box {
@@ -1202,6 +1403,45 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   letter-spacing: 0.8px;
   color: var(--text);
   border-bottom: 1px solid var(--border);
+}
+
+/* セクション折りたたみ：h2 を flex 行にして右端にトグルボタン。collapsed クラスで
+   h2 以外の子要素を隠し、chevron を上向きに反転する。 */
+.panel-section-h2 {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.panel-section-h2 > span { flex: 1 1 auto; }
+.section-toggle-btn {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  border-radius: 3px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.section-toggle-btn:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.section-chevron {
+  transition: transform 0.15s ease;
+}
+.panel-section.collapsed .section-chevron { transform: rotate(180deg); }
+.panel-section.collapsed > *:not(.panel-section-h2) { display: none; }
+/* txt-source は max-height + flex column 構造のため、collapsed 時は最低限の
+   高さに戻す（dropzone が flex:1 で max-height を埋める性質を切る）。*/
+.panel-section.collapsed.txt-source {
+  max-height: none;
+  flex: 0 0 auto;
 }
 
 .txt-source {
@@ -1373,6 +1613,39 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   letter-spacing: 0.5px;
 }
 
+/* タブ：サイズ / 行間 / フチ を切替表示。フォントの下、editor の中で 1 ブロック扱い。 */
+.editor-tabs-section {
+  display: flex;
+  flex-direction: column;
+}
+.editor-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 8px;
+}
+.editor-tab {
+  flex: 1;
+  padding: 6px 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.1s, border-color 0.1s;
+}
+.editor-tab:hover:not(.active) { color: var(--text); }
+.editor-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.editor-tab[hidden] { display: none; }
+.editor-tab-panel { display: block; }
+.editor-tab-panel[hidden] { display: none; }
+
 .editor textarea, .editor input, .editor select {
   background: var(--bg);
   color: var(--text);
@@ -1450,12 +1723,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-overflow: ellipsis;
 }
 
+/* テキストレイヤーセクションを残り高さいっぱいに広げ、内側の layer-list が
+   flex:1 で伸び、footer (削除ボタン) が常にセクション最下部に固定されるようにする。
+   min-height: 0 を入れないと flex 子が overflow:auto でも縮まない（仕様）。 */
+.panel-section[data-section="layers"] {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
 .layer-list-footer {
   display: flex;
   justify-content: flex-end;
   padding: 6px 12px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
+  margin-top: auto;
 }
 .layer-delete-btn {
   width: 28px;
@@ -1466,7 +1750,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: rgba(231, 76, 60, 0.12);
   color: var(--danger);
 }
-.layer-delete-btn[hidden] { display: none; }
+.layer-delete-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
 
 .progress-modal {
   position: fixed;

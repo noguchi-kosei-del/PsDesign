@@ -37,7 +37,37 @@
             </svg>
           </button>
         </div>
+        <div class="toolbar-history" role="group" aria-label="履歴">
+          <button id="undo-btn" class="icon-btn history-btn" type="button" title="元に戻す (Ctrl+Z)" aria-label="元に戻す" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 7h11a5 5 0 0 1 5 5v0a5 5 0 0 1-5 5H6"/>
+              <polyline points="8 11 4 7 8 3"/>
+            </svg>
+          </button>
+          <button id="redo-btn" class="icon-btn history-btn" type="button" title="やり直し (Ctrl+Y)" aria-label="やり直し" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M20 7H9a5 5 0 0 0-5 5v0a5 5 0 0 0 5 5h9"/>
+              <polyline points="16 11 20 7 16 3"/>
+            </svg>
+          </button>
+          <button id="clear-all-btn" class="icon-btn history-btn clear-all-btn" type="button" title="編集を全て削除 (Ctrl+Delete)" aria-label="編集を全て削除" disabled>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="9"/>
+              <line x1="9" y1="9" x2="15" y2="15"/>
+              <line x1="15" y1="9" x2="9" y2="15"/>
+            </svg>
+          </button>
+        </div>
         <div class="toolbar-viewmode" role="group" aria-label="ビューモード">
+          <button id="toggle-rulers-btn" class="icon-btn" type="button" title="定規 (Ctrl+R)" aria-label="定規" aria-pressed="false">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="2" y="9" width="20" height="6" rx="1"/>
+              <line x1="6" y1="9" x2="6" y2="13"/>
+              <line x1="10" y1="9" x2="10" y2="12"/>
+              <line x1="14" y1="9" x2="14" y2="13"/>
+              <line x1="18" y1="9" x2="18" y2="12"/>
+            </svg>
+          </button>
           <button id="skip-first-blank-btn" class="skip-blank-btn" type="button" aria-pressed="false" title="先頭ページを除外" aria-label="先頭ページを除外">
             <span class="skip-blank-box" aria-hidden="true"></span>
             <svg class="skip-blank-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
@@ -164,6 +194,12 @@
                 </svg>
               </button>
               <div id="psd-stage" class="psd-stage"></div>
+              <div class="psd-rulers" id="psd-rulers" hidden>
+                <canvas class="psd-ruler psd-ruler-top" id="psd-ruler-top"></canvas>
+                <canvas class="psd-ruler psd-ruler-left" id="psd-ruler-left"></canvas>
+                <div class="psd-ruler-corner"></div>
+              </div>
+              <div class="psd-guides-layer" id="psd-guides-layer" hidden></div>
             </div>
           </div>
         </section>
@@ -245,8 +281,15 @@
               </svg>
             </button>
           </div>
-          <section class="txt-source" id="txt-source">
-            <h2>原稿テキスト</h2>
+          <section class="panel-section txt-source" id="txt-source" data-section="txt">
+            <h2 class="panel-section-h2">
+              <span>原稿テキスト</span>
+              <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
+                <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+            </h2>
             <div id="txt-source-actions" class="txt-source-actions" hidden>
               <span id="txt-source-name" class="txt-source-name"></span>
               <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="テキストをクリア" aria-label="テキストをクリア" hidden>
@@ -273,7 +316,15 @@
               </div>
             </div>
           </section>
-          <h2>編集</h2>
+          <section class="panel-section" data-section="editor">
+          <h2 class="panel-section-h2">
+            <span>編集</span>
+            <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
+              <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+          </h2>
           <div id="editor" class="editor" hidden>
             <label data-editor-scope="single">
               フォント
@@ -283,58 +334,87 @@
                 <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
               </div>
             </label>
-            <div class="size-field" data-editor-scope="single">
-              <span class="size-field-label">サイズ</span>
-              <div class="size-row">
-                <div class="size-group" role="group" aria-label="文字サイズ">
-                  <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
-                  <input id="size-input" class="size-input" type="number" min="6" max="999" step="0.1" value="12" aria-label="サイズ" />
-                  <span class="size-unit">pt</span>
-                  <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
-                </div>
-                <div class="direction-toggle" role="group" aria-label="組方向">
-                  <button id="dir-vertical-btn" class="dir-toggle-btn" type="button" data-direction="vertical" title="縦組み" aria-label="縦組み">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <polyline points="2 6 2 3 12 3 12 6"/>
-                      <line x1="4" y1="20" x2="10" y2="20"/>
-                      <line x1="7" y1="3" x2="7" y2="20"/>
-                      <line x1="18" y1="5" x2="18" y2="19"/>
-                      <polyline points="14 15 18 19 22 15"/>
-                    </svg>
-                  </button>
-                  <button id="dir-horizontal-btn" class="dir-toggle-btn" type="button" data-direction="horizontal" title="横組み" aria-label="横組み">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <polyline points="2 6 2 3 12 3 12 6"/>
-                      <line x1="4" y1="20" x2="10" y2="20"/>
-                      <line x1="7" y1="3" x2="7" y2="20"/>
-                      <line x1="13" y1="12" x2="22" y2="12"/>
-                      <polyline points="18 8 22 12 18 16"/>
-                    </svg>
-                  </button>
+            <div class="editor-tabs-section">
+              <div class="editor-tabs" role="tablist">
+                <button id="editor-tab-size" class="editor-tab active" data-tab="size" data-editor-scope="single" type="button" role="tab" aria-selected="true">サイズ</button>
+                <button id="editor-tab-leading" class="editor-tab" data-tab="leading" data-editor-scope="single" type="button" role="tab" aria-selected="false">行間</button>
+                <button id="editor-tab-stroke" class="editor-tab" data-tab="stroke" type="button" role="tab" aria-selected="false">フチ</button>
+              </div>
+              <div class="editor-tab-panel" data-tab-panel="size" role="tabpanel">
+                <div class="size-row">
+                  <div class="size-group" role="group" aria-label="文字サイズ">
+                    <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
+                    <input id="size-input" class="size-input" type="number" min="6" max="999" step="0.1" value="12" aria-label="サイズ" />
+                    <span class="size-unit">pt</span>
+                    <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
+                  </div>
+                  <div class="direction-toggle" role="group" aria-label="組方向">
+                    <button id="dir-vertical-btn" class="dir-toggle-btn" type="button" data-direction="vertical" title="縦組み" aria-label="縦組み">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="2 6 2 3 12 3 12 6"/>
+                        <line x1="4" y1="20" x2="10" y2="20"/>
+                        <line x1="7" y1="3" x2="7" y2="20"/>
+                        <line x1="18" y1="5" x2="18" y2="19"/>
+                        <polyline points="14 15 18 19 22 15"/>
+                      </svg>
+                    </button>
+                    <button id="dir-horizontal-btn" class="dir-toggle-btn" type="button" data-direction="horizontal" title="横組み" aria-label="横組み">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="2 6 2 3 12 3 12 6"/>
+                        <line x1="4" y1="20" x2="10" y2="20"/>
+                        <line x1="7" y1="3" x2="7" y2="20"/>
+                        <line x1="13" y1="12" x2="22" y2="12"/>
+                        <polyline points="18 8 22 12 18 16"/>
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-            <div class="size-field">
-              <span class="size-field-label">フチ</span>
-              <div class="size-row">
-                <div class="stroke-width-group" role="group" aria-label="フチ太さ">
-                  <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
-                  <input id="stroke-width-input" class="size-input" type="number" min="0" max="999" step="0.5" value="20" aria-label="境界線の太さ" />
-                  <span class="size-unit">px</span>
-                  <button id="stroke-width-dec-btn" class="size-btn" type="button" title="細く" aria-label="細く">−</button>
+              <div class="editor-tab-panel" data-tab-panel="leading" role="tabpanel" hidden>
+                <div class="size-row">
+                  <div class="size-group" role="group" aria-label="行間">
+                    <button id="leading-inc-btn" class="size-btn" type="button" title="広く">＋</button>
+                    <input id="leading-input" class="size-input" type="number" min="50" max="500" step="1" value="125" aria-label="行間" />
+                    <span class="size-unit">%</span>
+                    <button id="leading-dec-btn" class="size-btn" type="button" title="狭く">−</button>
+                  </div>
+                  <div class="ruby-toggle" role="group" aria-label="ルビ">
+                    <button id="ruby-off-btn" class="ruby-toggle-btn" type="button" data-ruby="off" title="ルビなし（行間 125%）">なし</button>
+                    <button id="ruby-on-btn" class="ruby-toggle-btn" type="button" data-ruby="on" title="ルビあり（行間 150%）">ルビ</button>
+                  </div>
                 </div>
-                <div class="stroke-toggle" role="group" aria-label="境界線">
-                  <button id="stroke-none-btn" class="stroke-dot stroke-dot-none" type="button" data-stroke="none" title="境界線なし" aria-label="境界線なし"></button>
-                  <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
-                  <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
+                <span id="leading-target-label" class="leading-target-label" hidden></span>
+              </div>
+              <div class="editor-tab-panel" data-tab-panel="stroke" role="tabpanel" hidden>
+                <div class="size-row">
+                  <div class="stroke-width-group" role="group" aria-label="フチ太さ">
+                    <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
+                    <input id="stroke-width-input" class="size-input" type="number" min="0" max="999" step="0.5" value="20" aria-label="境界線の太さ" />
+                    <span class="size-unit">px</span>
+                    <button id="stroke-width-dec-btn" class="size-btn" type="button" title="細く" aria-label="細く">−</button>
+                  </div>
+                  <div class="stroke-toggle" role="group" aria-label="境界線">
+                    <button id="stroke-none-btn" class="stroke-dot stroke-dot-none" type="button" data-stroke="none" title="境界線なし" aria-label="境界線なし"></button>
+                    <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
+                    <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-          <h2>テキストレイヤー</h2>
+          </section>
+          <section class="panel-section" data-section="layers">
+          <h2 class="panel-section-h2">
+            <span>テキストレイヤー</span>
+            <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
+              <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
+              </svg>
+            </button>
+          </h2>
           <ul id="layer-list" class="layer-list"></ul>
           <div class="layer-list-footer">
-            <button id="delete-new-layer-btn" class="icon-btn layer-delete-btn" type="button" title="レイヤー削除" aria-label="レイヤー削除" hidden>
+            <button id="delete-new-layer-btn" class="icon-btn layer-delete-btn" type="button" title="レイヤー削除" aria-label="レイヤー削除" disabled>
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <polyline points="3 6 5 6 21 6"/>
                 <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
@@ -344,6 +424,7 @@
               </svg>
             </button>
           </div>
+          </section>
         </aside>
       </main>
     </div>

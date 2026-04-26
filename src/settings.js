@@ -28,6 +28,7 @@ export const DEFAULT_SETTINGS = {
     zoomReset:  { key: "0",          modifiers: ["ctrl"],          description: "ズーム 100%" },
     sizeUp:     { key: "]",          modifiers: [],                description: "文字サイズを大きく" },
     sizeDown:   { key: "[",          modifiers: [],                description: "文字サイズを小さく" },
+    toggleRulers: { key: "r",        modifiers: ["ctrl"],          description: "定規の表示切替" },
   },
 };
 

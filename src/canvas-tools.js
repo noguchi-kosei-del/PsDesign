@@ -1,10 +1,14 @@
 import {
+  abortHistoryTransient,
   addEditOffset,
   addNewLayer,
+  beginHistoryTransient,
+  commitHistoryTransient,
   getCurrentFont,
   getEdit,
   getFillColor,
   getFontDisplayName,
+  getLeadingPct,
   getNewLayersForPsd,
   getPages,
   getPsdRotation,
@@ -17,6 +21,7 @@ import {
   isLayerSelected,
   onToolChange,
   setEdit,
+  setEditingContext,
   setSelectedLayer,
   setSelectedLayers,
   toggleLayerSelected,
@@ -82,20 +87,25 @@ export function nudgeSelectedLayers(dx, dy) {
   if (selections.length === 0) return false;
   const pages = getPages();
   let moved = false;
-  for (const sel of selections) {
-    const page = pages[sel.pageIndex];
-    if (!page) continue;
-    if (typeof sel.layerId === "string") {
-      const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
-      if (!nl) continue;
-      updateNewLayer(sel.layerId, { x: nl.x + dx, y: nl.y + dy });
-      moved = true;
-    } else {
-      const layer = page.textLayers.find((l) => l.id === sel.layerId);
-      if (!layer) continue;
-      addEditOffset(page.path, sel.layerId, dx, dy);
-      moved = true;
+  beginHistoryTransient();
+  try {
+    for (const sel of selections) {
+      const page = pages[sel.pageIndex];
+      if (!page) continue;
+      if (typeof sel.layerId === "string") {
+        const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+        if (!nl) continue;
+        updateNewLayer(sel.layerId, { x: nl.x + dx, y: nl.y + dy });
+        moved = true;
+      } else {
+        const layer = page.textLayers.find((l) => l.id === sel.layerId);
+        if (!layer) continue;
+        addEditOffset(page.path, sel.layerId, dx, dy);
+        moved = true;
+      }
     }
+  } finally {
+    if (moved) commitHistoryTransient(); else abortHistoryTransient();
   }
   if (moved) {
     refreshAllOverlays();
@@ -114,6 +124,7 @@ export function resizeSelectedLayers(deltaPt) {
   if (selections.length === 0) return false;
   const pages = getPages();
   let changed = false;
+  beginHistoryTransient();
   for (const sel of selections) {
     const page = pages[sel.pageIndex];
     if (!page) continue;
@@ -148,6 +159,7 @@ export function resizeSelectedLayers(deltaPt) {
       changed = true;
     }
   }
+  if (changed) commitHistoryTransient(); else abortHistoryTransient();
   if (changed) {
     refreshAllOverlays();
     rebuildLayerList();
@@ -186,9 +198,12 @@ function layerRectForExisting(page, layer, edit) {
   const previewText = edit.contents ?? layer.text ?? "";
   const chars = Math.max(1, longestLine(previewText));
   const lineCount = Math.max(1, countLines(previewText));
-  const fallbackThick = ptInPsdPx * 1.4 * lineCount;
+  // 行間 (autoLeadingAmount %) を厚み（行スタック方向）の係数に反映。125% を最低値として
+  // 設定しても既存の見た目より細くしないように clamp。
+  const leadingFactor = Math.max(1.25, ((edit.leadingPct ?? 125) / 100));
+  const fallbackThick = ptInPsdPx * leadingFactor * lineCount;
   const fallbackLong = ptInPsdPx * 1.05 * chars;
-  const minThick = Math.max(ptInPsdPx * 1.2, 20);
+  const minThick = Math.max(ptInPsdPx * leadingFactor, 20);
   const minLong = Math.max(ptInPsdPx * 2, 48);
 
   let width;
@@ -214,7 +229,9 @@ function layerRectForNew(page, nl) {
   const contents = nl.contents ?? "";
   const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
-  const thick = Math.max(24, ptInPsdPx * 1.25 * lineCount);
+  // 行間 (%) を厚み係数に反映。125 が既定。
+  const leadingFactor = (nl.leadingPct ?? 125) / 100;
+  const thick = Math.max(24, ptInPsdPx * leadingFactor * lineCount);
   const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.05 * chars);
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
@@ -253,18 +270,21 @@ function renderOverlay(ctx) {
   for (const layer of page.textLayers) {
     const edit = getEdit(page.path, layer.id) ?? {};
     const rect = layerRectForExisting(page, layer, edit);
+    const rotation = edit.rotation ?? 0;
     const box = createBox(page, rect.left, rect.top, rect.width, rect.height, "existing");
     box.dataset.layerId = String(layer.id);
     box.dataset.direction = rect.isVertical ? "vertical" : "horizontal";
+    if (rotation) box.style.transform = `rotate(${rotation}deg)`;
     box.title = rect.previewText.length > 60 ? rect.previewText.slice(0, 60) + "…" : rect.previewText;
 
     const inner = document.createElement("div");
     inner.className = "existing-layer-text";
-    inner.textContent = rect.previewText;
     if (pxPerPsd > 0) {
       inner.style.fontSize = `${rect.ptInPsdPx * pxPerPsd}px`;
-      inner.style.lineHeight = "1.05";
     }
+    // 行間：edit.leadingPct があれば反映、なければ既定 1.05（既存表示と整合）。
+    const defaultLeadPct = Number.isFinite(edit.leadingPct) ? edit.leadingPct : 105;
+    renderInnerText(inner, rect.previewText, defaultLeadPct, edit.lineLeadings);
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
     if (existingFontCss) inner.style.fontFamily = existingFontCss;
@@ -280,6 +300,8 @@ function renderOverlay(ctx) {
 
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
+      box.appendChild(createRotateHandle(ctx, layer.id));
+      box.appendChild(createSizeBadge(edit.sizePt ?? layer.fontSize ?? 24));
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });
@@ -288,17 +310,18 @@ function renderOverlay(ctx) {
 
   for (const nl of getNewLayersForPsd(page.path)) {
     const rect = layerRectForNew(page, nl);
+    const rotation = nl.rotation ?? 0;
     const box = createBox(page, rect.left, rect.top, rect.width, rect.height, "new");
     box.dataset.tempId = nl.tempId;
     box.dataset.direction = rect.isVertical ? "vertical" : "horizontal";
+    if (rotation) box.style.transform = `rotate(${rotation}deg)`;
     box.classList.add("text-box-preview");
     const inner = document.createElement("div");
     inner.className = "new-layer-text";
-    inner.textContent = nl.contents;
     if (pxPerPsd > 0) {
       inner.style.fontSize = `${rect.ptInPsdPx * pxPerPsd}px`;
-      inner.style.lineHeight = "1.25";
     }
+    renderInnerText(inner, nl.contents, nl.leadingPct ?? 125, nl.lineLeadings);
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
     ensureFontLoaded(nl.fontPostScriptName);
@@ -312,6 +335,8 @@ function renderOverlay(ctx) {
     box.appendChild(inner);
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
+      box.appendChild(createRotateHandle(ctx, nl.tempId));
+      box.appendChild(createSizeBadge(nl.sizePt ?? 24));
     }
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, nl.tempId), { passive: false });
@@ -352,6 +377,108 @@ function longestLine(s) {
 function countLines(s) {
   if (!s) return 0;
   return String(s).split(/\r?\n/).length;
+}
+
+// inner にテキストを描画する。lineLeadings に override があれば 1 行ずつ <div> に
+// 分けて per-line line-height を当てる。無ければ単一ブロックで描画（軽量）。
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings) {
+  inner.textContent = "";
+  const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
+  const fallback = String((defaultLeadingPct ?? 125) / 100);
+  if (!overrides) {
+    inner.textContent = text ?? "";
+    inner.style.lineHeight = fallback;
+    return;
+  }
+  const lines = String(text ?? "").split(/\r?\n/);
+  // 親自体の line-height はリセット（per-line div 側で個別に当てる）。
+  inner.style.lineHeight = fallback;
+  for (let i = 0; i < lines.length; i++) {
+    const lineEl = document.createElement("div");
+    const pct = Number.isFinite(overrides[i]) ? overrides[i] : (defaultLeadingPct ?? 125);
+    lineEl.style.lineHeight = String(pct / 100);
+    // 空行はゼロ幅スペースで高さ/幅を確保（CSS の writing-mode が縦書きでも有効）。
+    lineEl.textContent = lines[i].length > 0 ? lines[i] : "​";
+    inner.appendChild(lineEl);
+  }
+}
+
+function createSizeBadge(sizePt) {
+  const el = document.createElement("div");
+  el.className = "layer-size-badge";
+  const rounded = Math.round((sizePt ?? 0) * 10) / 10;
+  el.textContent = `${rounded}pt`;
+  return el;
+}
+
+function createRotateHandle(ctx, layerId) {
+  const el = document.createElement("div");
+  el.className = "layer-rotate-handle";
+  el.title = "ドラッグで回転（Shift で 15° スナップ）";
+  el.addEventListener("mousedown", (e) => beginRotateDrag(e, ctx, layerId));
+  return el;
+}
+
+function getLayerRotation(ctx, layerId) {
+  if (typeof layerId === "string") {
+    const nl = getNewLayersForPsd(ctx.page.path).find((l) => l.tempId === layerId);
+    return nl?.rotation ?? 0;
+  }
+  const edit = getEdit(ctx.page.path, layerId) ?? {};
+  return edit.rotation ?? 0;
+}
+
+function setLayerRotation(ctx, layerId, deg) {
+  const normalized = ((deg + 180) % 360 + 360) % 360 - 180;
+  if (typeof layerId === "string") {
+    updateNewLayer(layerId, { rotation: normalized });
+  } else {
+    setEdit(ctx.page.path, layerId, { rotation: normalized });
+  }
+}
+
+function beginRotateDrag(e, ctx, layerId) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const box = e.currentTarget.parentElement;
+  if (!box) return;
+  // CSS rotate は要素中心を保つ（変換中心は中心）。getBoundingClientRect は
+  // 回転後の AABB を返すが、その中心は回転中心と一致する（rect 中心 = 元の中心）。
+  const rect = box.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+
+  const startRotation = getLayerRotation(ctx, layerId);
+  const startAngle = Math.atan2(e.clientY - cy, e.clientX - cx) * 180 / Math.PI;
+
+  const prevUserSelect = document.body.style.userSelect;
+  const prevCursor = document.body.style.cursor;
+  document.body.style.userSelect = "none";
+  document.body.style.cursor = "grabbing";
+
+  let moved = false;
+  beginHistoryTransient();
+  const onMove = (ev) => {
+    ev.preventDefault();
+    const a = Math.atan2(ev.clientY - cy, ev.clientX - cx) * 180 / Math.PI;
+    let next = startRotation + (a - startAngle);
+    if (ev.shiftKey) next = Math.round(next / 15) * 15;
+    if (next !== startRotation) moved = true;
+    setLayerRotation(ctx, layerId, next);
+    refreshAllOverlays();
+  };
+  const onUp = () => {
+    window.removeEventListener("mousemove", onMove);
+    window.removeEventListener("mouseup", onUp);
+    document.body.style.userSelect = prevUserSelect;
+    document.body.style.cursor = prevCursor;
+    if (moved) commitHistoryTransient(); else abortHistoryTransient();
+    rebuildLayerList();
+  };
+  window.addEventListener("mousemove", onMove);
+  window.addEventListener("mouseup", onUp);
 }
 
 function createBox(page, left, top, width, height, kind) {
@@ -432,9 +559,18 @@ function onCanvasMouseDown(e, ctx) {
     const txtSel = getActiveTxtSelection();
     if (txtSel) {
       placeTxtSelectionAt(ctx, x, y, txtSel, direction);
-    } else {
-      startTextInput(ctx, x, y, direction);
+      return;
     }
+    // 配置直後・編集直後の選択中レイヤーがあるとき、空所クリックは「まず選択解除」
+    // を優先し、新規テキスト入力は開かない。次のクリックで新規入力が起動する。
+    // txt セレクションが残っているときは段落配置を続行（rapid placement を妨げない）。
+    if (getSelectedLayers().length > 0) {
+      setSelectedLayers([]);
+      refreshAllOverlays();
+      rebuildLayerList();
+      return;
+    }
+    startTextInput(ctx, x, y, direction);
     return;
   }
   if (tool === "move") {
@@ -491,6 +627,7 @@ function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
     strokeColor: getStrokeColor(),
     strokeWidthPx: getStrokeWidthPx(),
     fillColor: getFillColor(),
+    leadingPct: getLeadingPct(),
   });
   setSelectedLayer(pageIndex, created.tempId);
   refreshAllOverlays();
@@ -501,7 +638,8 @@ function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
 function onLayerWheel(e, ctx, layerId) {
   // Alt+wheel はズーム、Ctrl/Meta+wheel はブラウザ既定（ページズーム等）に委ねる。
   if (e.altKey || e.ctrlKey || e.metaKey) return;
-  if (getTool() !== "move") return;
+  const tool = getTool();
+  if (tool !== "move" && !isTextTool(tool)) return;
   if (!isLayerSelected(ctx.pageIndex, layerId)) return;
   e.preventDefault();
   e.stopPropagation();
@@ -574,10 +712,13 @@ function beginMultiLayerDrag(e, ctx) {
   for (const sel of selections) {
     if (typeof sel.layerId === "string") {
       const nl = getNewLayersForPsd(ctx.page.path).find((l) => l.tempId === sel.layerId);
-      if (nl) items.push({ kind: "new", nl, startX: nl.x, startY: nl.y });
+      if (nl) items.push({ kind: "new", nl, startX: nl.x, startY: nl.y, rotation: nl.rotation ?? 0 });
     } else {
       const layer = ctx.page.textLayers.find((l) => l.id === sel.layerId);
-      if (layer) items.push({ kind: "existing", layer });
+      if (layer) {
+        const edit = getEdit(ctx.page.path, sel.layerId) ?? {};
+        items.push({ kind: "existing", layer, rotation: edit.rotation ?? 0 });
+      }
     }
   }
   if (items.length === 0) return;
@@ -612,7 +753,10 @@ function beginMultiLayerDrag(e, ctx) {
     for (const item of items) {
       if (item.kind === "existing") {
         const boxEl = ctx.overlay.querySelector(`.layer-box-existing[data-layer-id="${item.layer.id}"]`);
-        if (boxEl) boxEl.style.transform = `translate(${ddx * pxScaleX}px, ${ddy * pxScaleY}px)`;
+        if (boxEl) {
+          const rot = item.rotation ? ` rotate(${item.rotation}deg)` : "";
+          boxEl.style.transform = `translate(${ddx * pxScaleX}px, ${ddy * pxScaleY}px)${rot}`;
+        }
       } else {
         const boxEl = ctx.overlay.querySelector(`.layer-box-new[data-temp-id="${item.nl.tempId}"]`);
         if (boxEl) {
@@ -635,6 +779,7 @@ function beginMultiLayerDrag(e, ctx) {
     document.body.style.userSelect = prevUserSelect;
     const { ddx, ddy } = computePsdDelta(ev);
     if (ddx !== 0 || ddy !== 0) {
+      beginHistoryTransient();
       for (const item of items) {
         if (item.kind === "existing") {
           addEditOffset(ctx.page.path, item.layer.id, ddx, ddy);
@@ -642,6 +787,7 @@ function beginMultiLayerDrag(e, ctx) {
           updateNewLayer(item.nl.tempId, { x: item.startX + ddx, y: item.startY + ddy });
         }
       }
+      commitHistoryTransient();
     }
     refreshAllOverlays();
     rebuildLayerList();
@@ -773,6 +919,8 @@ function createTextFloater(ctx, {
   selectAll = false,
   guardBlurUntilFocused = false,
   onCommit,
+  onClose,
+  onCursorChange,
 }) {
   const { page } = ctx;
   const isVertical = direction !== "horizontal";
@@ -798,9 +946,23 @@ function createTextFloater(ctx, {
     const value = input.value.replace(/\s+$/, "");
     input.remove();
     if (commit) onCommit(value);
+    if (onClose) onClose(commit);
   };
   input.__finalize = finalize;
-  input.addEventListener("focus", () => { hasFocused = true; });
+  // カーソル位置から現在行を算出して通知。selectionStart までの \n の数 = 0-based 行番号。
+  const reportCursor = () => {
+    if (!onCursorChange) return;
+    const pos = input.selectionStart ?? 0;
+    const before = input.value.slice(0, pos);
+    const lineIndex = (before.match(/\n/g) ?? []).length;
+    const totalLines = (input.value.match(/\n/g) ?? []).length + 1;
+    onCursorChange({ lineIndex, totalLines, contents: input.value });
+  };
+  input.addEventListener("focus", () => { hasFocused = true; reportCursor(); });
+  input.addEventListener("keyup", reportCursor);
+  input.addEventListener("click", reportCursor);
+  input.addEventListener("input", reportCursor);
+  input.addEventListener("select", reportCursor);
   input.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -810,8 +972,14 @@ function createTextFloater(ctx, {
       finalize(false);
     }
   });
-  input.addEventListener("blur", () => {
+  input.addEventListener("blur", (e) => {
     if (!hasFocused) return;
+    // 行間 input / +/- / ルビボタンなど editor パネル内に focus が移ったときは
+    // commit せずに textarea を残す（per-line leading 変更後にカーソル行を維持するため）。
+    const next = e.relatedTarget;
+    if (next && typeof next.closest === "function" && next.closest(".editor, .side-panel .editor")) {
+      return;
+    }
     finalize(true);
   });
   return input;
@@ -845,10 +1013,19 @@ function startInPlaceEdit(ctx, target) {
     else existing.remove();
   }
 
+  // editingContext を立てて、サイドパネルの行間コントロールが per-line override に
+  // 書き込めるようにする。target に応じて layerId / tempId を埋める。
+  const editTargetMeta = target.kind === "existing"
+    ? { psdPath: page.path, layerId: target.layer.id }
+    : { psdPath: page.path, tempId: target.nl.tempId };
+
   createTextFloater(ctx, {
     x, y, direction,
     initialText,
     selectAll: true,
+    onCursorChange: ({ lineIndex, totalLines, contents }) => {
+      setEditingContext({ ...editTargetMeta, currentLineIndex: lineIndex, totalLines, contents });
+    },
     onCommit: (value) => {
       if (target.kind === "existing") {
         setEdit(page.path, target.layer.id, { contents: value });
@@ -858,6 +1035,7 @@ function startInPlaceEdit(ctx, target) {
       refreshAllOverlays();
       rebuildLayerList();
     },
+    onClose: () => setEditingContext(null),
   });
 }
 
@@ -871,7 +1049,7 @@ function startTextInput(ctx, x, y, direction = "vertical") {
       const sizePt = getTextSize();
       const layerDir = direction === "horizontal" ? "horizontal" : "vertical";
       const { x: nx, y: ny } = centerTopLeft(page, { contents: value, sizePt, direction: layerDir }, x, y);
-      addNewLayer({
+      const created = addNewLayer({
         psdPath: page.path,
         x: nx,
         y: ny,
@@ -882,8 +1060,9 @@ function startTextInput(ctx, x, y, direction = "vertical") {
         strokeColor: getStrokeColor(),
         strokeWidthPx: getStrokeWidthPx(),
         fillColor: getFillColor(),
+        leadingPct: getLeadingPct(),
       });
-      setSelectedLayers([]);
+      setSelectedLayer(ctx.pageIndex, created.tempId);
       refreshAllOverlays();
       rebuildLayerList();
     },

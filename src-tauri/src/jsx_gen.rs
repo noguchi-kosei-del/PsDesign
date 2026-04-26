@@ -85,6 +85,18 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             if let Some(ref f) = layer.fill_color {
                 out.push_str(&format!(", fillColor: {}", js_string(f)));
             }
+            if let Some(r) = layer.rotation {
+                out.push_str(&format!(", rotation: {}", r));
+            }
+            if let Some(l) = layer.leading_pct {
+                out.push_str(&format!(", leadingPct: {}", l));
+            }
+            if let Some(ref ll) = layer.line_leadings {
+                if !ll.is_empty() {
+                    out.push_str(", lineLeadings: ");
+                    emit_line_leadings(&mut out, ll);
+                }
+            }
             out.push_str("},\n");
         }
         out.push_str("], [\n");
@@ -109,6 +121,18 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             }
             if let Some(ref f) = nl.fill_color {
                 out.push_str(&format!(", fillColor: {}", js_string(f)));
+            }
+            if let Some(r) = nl.rotation {
+                out.push_str(&format!(", rotation: {}", r));
+            }
+            if let Some(l) = nl.leading_pct {
+                out.push_str(&format!(", leadingPct: {}", l));
+            }
+            if let Some(ref ll) = nl.line_leadings {
+                if !ll.is_empty() {
+                    out.push_str(", lineLeadings: ");
+                    emit_line_leadings(&mut out, ll);
+                }
             }
             out.push_str("},\n");
         }
@@ -137,6 +161,20 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
     out.push_str("  writeSentinel(\"ERROR \" + (err && err.toString ? err.toString() : String(err)));\n");
     out.push_str("}\n");
     out
+}
+
+fn emit_line_leadings(out: &mut String, m: &std::collections::HashMap<String, f64>) {
+    out.push('{');
+    let mut first = true;
+    // 出力順を安定化させるため key でソート（ExtendScript 側は順序非依存だが diff 安定化に有用）。
+    let mut keys: Vec<&String> = m.keys().collect();
+    keys.sort();
+    for k in keys {
+        if !first { out.push_str(", "); }
+        first = false;
+        out.push_str(&format!("\"{}\": {}", k, m[k]));
+    }
+    out.push('}');
 }
 
 fn js_string(s: &str) -> String {
@@ -329,6 +367,114 @@ function applyStrokeEffect(layerRef, opts) {
   executeAction(sID("set"), desc, DialogModes.NO);
 }
 
+// ===== 行ごとの行間（per-line leading）適用 =====
+// Photoshop は per-character leading なので、Action Manager で textKey を取得して
+// textStyleRange を行単位にバラし、override がある行だけ autoLeading=false + 絶対 leading
+// に置換する。ベースの textStyle は 1 つ目から複製して継承する。
+
+function isObjEmpty(o) {
+  if (!o) return true;
+  for (var k in o) if (o.hasOwnProperty(k)) return false;
+  return true;
+}
+
+function copyDescKey(src, dst, key) {
+  var t = src.getType(key);
+  switch (t) {
+    case DescValueType.STRINGTYPE:    dst.putString(key, src.getString(key)); break;
+    case DescValueType.INTEGERTYPE:   dst.putInteger(key, src.getInteger(key)); break;
+    case DescValueType.LARGEINTEGERTYPE: dst.putLargeInteger(key, src.getLargeInteger(key)); break;
+    case DescValueType.DOUBLETYPE:    dst.putDouble(key, src.getDouble(key)); break;
+    case DescValueType.BOOLEANTYPE:   dst.putBoolean(key, src.getBoolean(key)); break;
+    case DescValueType.UNITDOUBLE:    dst.putUnitDouble(key, src.getUnitDoubleType(key), src.getUnitDoubleValue(key)); break;
+    case DescValueType.ENUMERATEDTYPE: dst.putEnumerated(key, src.getEnumerationType(key), src.getEnumerationValue(key)); break;
+    case DescValueType.OBJECTTYPE:    dst.putObject(key, src.getObjectType(key), cloneActionDescriptor(src.getObjectValue(key))); break;
+    case DescValueType.LISTTYPE:      dst.putList(key, cloneActionList(src.getList(key))); break;
+    case DescValueType.REFERENCETYPE: dst.putReference(key, src.getReference(key)); break;
+    case DescValueType.CLASSTYPE:     dst.putClass(key, src.getClass(key)); break;
+    case DescValueType.ALIASTYPE:     dst.putPath(key, src.getPath(key)); break;
+    case DescValueType.RAWTYPE:       dst.putData(key, src.getData(key)); break;
+  }
+}
+
+function cloneActionDescriptor(d) {
+  var c = new ActionDescriptor();
+  for (var i = 0; i < d.count; i++) {
+    var key = d.getKey(i);
+    copyDescKey(d, c, key);
+  }
+  return c;
+}
+
+function cloneActionList(srcList) {
+  var dst = new ActionList();
+  for (var i = 0; i < srcList.count; i++) {
+    var t = srcList.getType(i);
+    switch (t) {
+      case DescValueType.STRINGTYPE:    dst.putString(srcList.getString(i)); break;
+      case DescValueType.INTEGERTYPE:   dst.putInteger(srcList.getInteger(i)); break;
+      case DescValueType.DOUBLETYPE:    dst.putDouble(srcList.getDouble(i)); break;
+      case DescValueType.BOOLEANTYPE:   dst.putBoolean(srcList.getBoolean(i)); break;
+      case DescValueType.UNITDOUBLE:    dst.putUnitDouble(srcList.getUnitDoubleType(i), srcList.getUnitDoubleValue(i)); break;
+      case DescValueType.ENUMERATEDTYPE: dst.putEnumerated(srcList.getEnumerationType(i), srcList.getEnumerationValue(i)); break;
+      case DescValueType.OBJECTTYPE:    dst.putObject(srcList.getObjectType(i), cloneActionDescriptor(srcList.getObjectValue(i))); break;
+      case DescValueType.LISTTYPE:      dst.putList(cloneActionList(srcList.getList(i))); break;
+      case DescValueType.REFERENCETYPE: dst.putReference(srcList.getReference(i)); break;
+      case DescValueType.CLASSTYPE:     dst.putClass(srcList.getClass(i)); break;
+    }
+  }
+  return dst;
+}
+
+function applyLineLeadings(layer, lineLeadings, contents, fontSizePt) {
+  if (isObjEmpty(lineLeadings)) return;
+  app.activeDocument.activeLayer = layer;
+
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+  var baseStyle = oldRanges.getObjectValue(0).getObjectValue(sID("textStyle"));
+
+  var lines = String(contents).split("\r");
+  var newRangeList = new ActionList();
+  var pos = 0;
+  for (var i = 0; i < lines.length; i++) {
+    var len = lines[i].length;
+    var startChar = pos;
+    var includeBreak = (i < lines.length - 1) ? 1 : 0;
+    var endChar = pos + len + includeBreak;
+
+    var styleClone = cloneActionDescriptor(baseStyle);
+    var pct = lineLeadings[String(i)];
+    if (typeof pct === "number") {
+      styleClone.putBoolean(sID("autoLeading"), false);
+      styleClone.putUnitDouble(sID("leading"), sID("pointsUnit"), fontSizePt * (pct / 100));
+    } else {
+      styleClone.putBoolean(sID("autoLeading"), true);
+    }
+
+    var rangeDesc = new ActionDescriptor();
+    rangeDesc.putInteger(sID("from"), startChar);
+    rangeDesc.putInteger(sID("to"), endChar);
+    rangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+    newRangeList.putObject(sID("textStyleRange"), rangeDesc);
+    pos = endChar;
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textKey"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
 function disableStrokeEffect(layerRef) {
   app.activeDocument.activeLayer = layerRef;
   var desc = new ActionDescriptor();
@@ -393,6 +539,29 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
           }
         }
       }
+      if (typeof e.leadingPct === "number") {
+        try {
+          ti.autoLeadingAmount = e.leadingPct;
+          ti.useAutoLeading = true;
+        } catch (eLead) {
+          addWarning("行間の適用に失敗 (layer " + e.id + "): " + eLead);
+        }
+      }
+      if (e.lineLeadings && !isObjEmpty(e.lineLeadings)) {
+        try {
+          var __sz = ti.size.value;
+          applyLineLeadings(layer, e.lineLeadings, ti.contents, __sz);
+        } catch (eLineLead) {
+          addWarning("行ごとの行間の適用に失敗 (layer " + e.id + "): " + eLineLead);
+        }
+      }
+      if (typeof e.rotation === "number" && e.rotation !== 0) {
+        try {
+          layer.rotate(e.rotation, AnchorPosition.MIDDLECENTER);
+        } catch (eRot) {
+          addWarning("レイヤー回転の適用に失敗 (layer " + e.id + "): " + eRot);
+        }
+      }
     }
     if (newLayers && newLayers.length > 0) {
       for (var j = 0; j < newLayers.length; j++) {
@@ -410,7 +579,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
           try { nti.font = nl.font; } catch (eFont) {}
         }
         nti.size = new UnitValue((typeof nl.size === "number") ? nl.size : 24, "pt");
-        try { nti.autoLeadingAmount = 125; } catch (eAutoLeadPct) {}
+        var __lpNew = (typeof nl.leadingPct === "number") ? nl.leadingPct : 125;
+        try { nti.autoLeadingAmount = __lpNew; } catch (eAutoLeadPct) {}
         try { nti.useAutoLeading = true; } catch (eAutoLead) {}
         try {
           var nfc = fillColorFor(typeof nl.fillColor === "string" ? nl.fillColor : "default");
@@ -428,6 +598,21 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
           });
         } catch (eStrokeNew) {
           addWarning("新規レイヤーへの境界線効果適用に失敗: " + eStrokeNew);
+        }
+        if (nl.lineLeadings && !isObjEmpty(nl.lineLeadings)) {
+          try {
+            var __szNew = nti.size.value;
+            applyLineLeadings(layerRef, nl.lineLeadings, nti.contents, __szNew);
+          } catch (eLineLeadNew) {
+            addWarning("新規レイヤーの行ごとの行間適用に失敗: " + eLineLeadNew);
+          }
+        }
+        if (typeof nl.rotation === "number" && nl.rotation !== 0) {
+          try {
+            layerRef.rotate(nl.rotation, AnchorPosition.MIDDLECENTER);
+          } catch (eRotNew) {
+            addWarning("新規レイヤー回転の適用に失敗: " + eRotNew);
+          }
         }
       }
     }
