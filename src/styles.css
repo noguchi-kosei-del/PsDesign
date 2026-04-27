@@ -19,6 +19,8 @@
   --scrollbar-track: #1e1e1e;
   --scrollbar-thumb: #3e3e42;
   --scrollbar-thumb-hover: #5a5a5e;
+  --section-fade: rgba(0, 0, 0, 0.28);
+  --panel-body: #2c2c2d;
   color-scheme: dark;
 }
 
@@ -42,6 +44,8 @@
   --scrollbar-track: #e8e8e8;
   --scrollbar-thumb: #c0c0c0;
   --scrollbar-thumb-hover: #a0a0a0;
+  --section-fade: rgba(0, 0, 0, 0.10);
+  --panel-body: #f4f4f4;
   color-scheme: light;
 }
 
@@ -97,6 +101,21 @@ html, body, #app {
   padding: 4px 0 4px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
+  position: relative;
+}
+
+/* ヘッダーバー下端の立体グラデーション。
+   border-bottom 直上の 10px に透明 → --section-fade のグラデを重ねて、
+   下のワークスペースから浮いて見えるようにする。pointer-events: none で操作を妨げない。 */
+.toolbar::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 10px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent 0%, var(--section-fade) 100%);
 }
 
 .toolbar h1 {
@@ -1405,6 +1424,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1px solid var(--border);
 }
 
+/* セクションの本体（h2 以外）をトグルバーよりやや明るい色にして段差を強調。
+   side-panel が var(--panel) なので、panel-section に var(--panel-body) を当てると
+   h2 だけ var(--panel) に戻せば自然にコントラストがつく。 */
+.panel-section {
+  background: var(--panel-body);
+}
+
 /* セクション折りたたみ：h2 を flex 行にして右端にトグルボタン。collapsed クラスで
    h2 以外の子要素を隠し、chevron を上向きに反転する。 */
 .panel-section-h2 {
@@ -1412,6 +1438,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  position: relative;
+  background: var(--panel);
+}
+/* ヘッダーバー内側の立体グラデーション。
+   border-bottom 直上の 8px に透明 → --section-fade のグラデを重ねて、
+   バー自体がボタン風に立体的に見えるようにする。pointer-events: none で操作を妨げない。 */
+.panel-section-h2::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 8px;
+  pointer-events: none;
+  background: linear-gradient(180deg, transparent 0%, var(--section-fade) 100%);
 }
 .panel-section-h2 > span { flex: 1 1 auto; }
 .section-toggle-btn {

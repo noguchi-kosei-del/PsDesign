@@ -47,6 +47,8 @@ const state = {
   parallelSyncModeListeners: new Set(),
   activePane: "psd", // "pdf" | "psd"（非同期時に矢印キー/ホイールが効くペイン）
   activePaneListeners: new Set(),
+  parallelViewMode: "parallel", // "parallel" | "psdOnly"
+  parallelViewModeListeners: new Set(),
   // 編集の undo / redo 履歴。スナップショット（edits + newLayers）配列。
   history: [],
   historyIndex: -1,
@@ -619,6 +621,18 @@ export function setActivePane(pane) {
 export function onActivePaneChange(fn) {
   state.activePaneListeners.add(fn);
   return () => state.activePaneListeners.delete(fn);
+}
+
+export function getParallelViewMode() { return state.parallelViewMode; }
+export function setParallelViewMode(mode) {
+  const v = mode === "psdOnly" ? "psdOnly" : "parallel";
+  if (state.parallelViewMode === v) return;
+  state.parallelViewMode = v;
+  for (const fn of state.parallelViewModeListeners) fn(v);
+}
+export function onParallelViewModeChange(fn) {
+  state.parallelViewModeListeners.add(fn);
+  return () => state.parallelViewModeListeners.delete(fn);
 }
 
 export function getCurrentFont() { return state.currentFontPostScriptName; }

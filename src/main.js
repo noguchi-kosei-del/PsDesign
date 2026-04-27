@@ -44,6 +44,7 @@ import {
   getFolder,
   getPages,
   getParallelSyncMode,
+  getParallelViewMode,
   getPdfPageIndex,
   getPdfRotation,
   getPdfSkipFirstBlank,
@@ -57,6 +58,7 @@ import {
   onHistoryChange,
   onPageIndexChange,
   onParallelSyncModeChange,
+  onParallelViewModeChange,
   onPdfChange,
   onPdfPageIndexChange,
   onPdfSkipFirstBlankChange,
@@ -70,6 +72,7 @@ import {
   setFolder,
   setFonts,
   setParallelSyncMode,
+  setParallelViewMode,
   setPdfPageIndex,
   setPdfRotation,
   setPdfSkipFirstBlank,
@@ -971,6 +974,39 @@ function bindViewModeControls() {
   syncModeUi();
 }
 
+const VIEW_MODE_LS_KEY = "psdesign_parallel_view_mode";
+
+function bindParallelViewMode() {
+  const parallelBtn = document.getElementById("view-parallel-btn");
+  const psdOnlyBtn = document.getElementById("view-psd-only-btn");
+  const pdfArea = document.getElementById("spreads-pdf-area");
+  if (!parallelBtn || !psdOnlyBtn || !pdfArea) return;
+
+  try {
+    const saved = localStorage.getItem(VIEW_MODE_LS_KEY);
+    if (saved === "parallel" || saved === "psdOnly") setParallelViewMode(saved);
+  } catch {}
+
+  parallelBtn.addEventListener("click", () => setParallelViewMode("parallel"));
+  psdOnlyBtn.addEventListener("click", () => {
+    setParallelViewMode("psdOnly");
+    if (getActivePane() === "pdf") setActivePane("psd");
+  });
+
+  const sync = () => {
+    const mode = getParallelViewMode();
+    const isParallel = mode === "parallel";
+    pdfArea.toggleAttribute("hidden", !isParallel);
+    parallelBtn.classList.toggle("active", isParallel);
+    psdOnlyBtn.classList.toggle("active", !isParallel);
+    parallelBtn.setAttribute("aria-pressed", isParallel ? "true" : "false");
+    psdOnlyBtn.setAttribute("aria-pressed", !isParallel ? "true" : "false");
+    try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
+  };
+  onParallelViewModeChange(sync);
+  sync();
+}
+
 function applyTextSize(n) {
   setTextSize(n);
   if (hasSelection()) {
@@ -1223,7 +1259,6 @@ function bindRulerToggle() {
     if (!btn) return;
     const on = getRulersVisible();
     btn.setAttribute("aria-pressed", on ? "true" : "false");
-    btn.classList.toggle("active", on);
   };
   if (btn) btn.addEventListener("click", () => toggleRulersVisible());
   onRulersVisibleChange(sync);
@@ -1421,6 +1456,7 @@ function init() {
   bindActivePaneTracking();
   bindResyncModal();
   bindViewModeControls();
+  bindParallelViewMode();
   initSettingsUi();
   renderAllSpreads();
   loadFontsFromBackend();

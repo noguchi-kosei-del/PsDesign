@@ -477,3 +477,32 @@ q. **回転ボタンを右下に移動**: `.pdf-rotate-btn` / `.psd-rotate-btn` 
 > - 新: history snapshot stack（max 100）+ ヘッダー Undo/Redo/全削除、Ctrl+R で Photoshop 風ルーラー + ドラッグガイド
 > - 旧: 行間は 125% 固定（JSX 側）、UI で調整不可
 > - 新: `state.leadingPct`（layer global）+ `lineLeadings: {[lineIndex]: pct}`（per-line override）、in-place 編集中のカーソル行で行ごと leading を変更可能、Photoshop には Action Manager で per-character leading として書き戻し
+
+## 最新セッション（定規ボタン移動 + 表示モード切替 + 立体感）
+
+r. **定規ボタンをサイドツールバーへ移動**: トップツールバー `.toolbar-viewmode` から `#toggle-rulers-btn` を撤去し、サイドツールバーの `#tool-move`（選択ツール）の直下に再配置。`.icon-btn .side-tool-btn` クラスのみで、`.tool-btn` / `data-tool` は付けず（`applyActive` の相互排他選択に巻き込まれないようにするため）、`bindRulerToggle` 側で `aria-pressed` だけ ON/OFF を反映。**`.active` クラスは付与しない**（V/T/Y のような青塗りハイライトはルーラーには不要との要望、トグル状態は aria-pressed と実際のルーラー描画で十分判別可能）。
+
+s. **PDF/PSD 並列 ⇄ PSD のみ 切替トグル**: ヘッダー左、ハンバーガーボタンの**直右**に 2 ボタンのセグメント型トグル（`.sync-segment .view-mode-segment`、既存の同期トグルと同じ視覚スタイルを再利用）を配置。左ボタン（2 つの長方形アイコン）= 並列、右ボタン（単独長方形アイコン）= PSD のみ。
+- **state**: `state.parallelViewMode: "parallel" | "psdOnly"` + `getParallelViewMode` / `setParallelViewMode` / `onParallelViewModeChange` を追加（既存 `parallelSyncMode` と同形）。
+- **挙動**: `bindParallelViewMode()` がクリックで `.spreads-pdf-area` の `hidden` 属性をトグル（既存の `.spreads-pdf-area[hidden] { display: none; }` ルールが効くので CSS 追加不要）。`psdOnly` に切り替わる瞬間に `getActivePane() === "pdf"` なら `setActivePane("psd")` で死状態（PDF にキー入力が向かい続ける）を回避。`parallelSyncMode` 自体は触らない（並列に戻したとき同期/非同期がそのまま維持される方が驚きが少ない、という設計判断）。
+- **永続化**: `localStorage` キー `psdesign_parallel_view_mode`（"parallel" / "psdOnly"）。テーマ・ワークスペース反転と同方針。**PDF の document / pageIndex / pdfZoom / pdfRotation は `hidden` で隠すだけなので完全に保持され**、並列に戻すと切替前の状態でそのまま再表示される。
+- **ルーラー / ガイドへの影響なし**: `.psd-rulers` / `.psd-guides-layer` は `.spreads-psd-area` 配下なので PSD のみ表示時もそのまま機能する。
+
+t. **定規表示状態の永続化（実装済みであることを確認）**: `rulers.js` の `loadVisible()` / `saveVisible()` で `localStorage` キー `psdesign_rulers_visible`（"1" / "0"）を読み書き。モジュール load 時に `let rulersVisible = loadVisible();` で復元、`setRulersVisible` 内で値が変化した瞬間に save。`initRulers()` が `applyVisibilityToDom()` を呼んで DOM に反映するため、Ctrl+R で ON にしてからアプリ再起動すると ON のまま立ち上がる。**実装済みなので新規変更なし**、ユーザーから「動かない」と申告された場合の調査軸として：(1) dev / release で WebView2 の userData フォルダが別、(2) PSD 未読込時はルーラー描画対象がなく目盛りが見えないので OFF と勘違い、の 2 点を疑う。
+
+u. **立体感のためのグラデーション**:
+- **ヘッダーバー下端**: `.toolbar::after` に `border-bottom` 直上 10px の `linear-gradient(180deg, transparent → var(--section-fade))` を `position: absolute` で重ねる。`pointer-events: none` で操作非干渉、`.toolbar` 側に `position: relative` を追加して anchor を確立。
+- **サイドバー各セクションの h2 ヘッダーバー内側**: `.panel-section-h2::after` で同型のグラデを 8px。トグルバーがボタン風に立体的に「上に乗っている」ように見える。`.panel-section-h2` に `position: relative` を追加。
+- **CSS 変数 `--section-fade`**: ダーク `rgba(0, 0, 0, 0.28)` / ライト `rgba(0, 0, 0, 0.10)`。テーマ追従。
+
+v. **サイドバーセクション本体を h2 より明るい背景に**: トグルバー（`.panel-section-h2`）は元の `var(--panel)` のまま、本体（`.panel-section` 全体）を `var(--panel-body)` に切替。
+- **CSS 変数 `--panel-body`**: ダーク `#2c2c2d`（元 `--panel: #252526` よりやや明るい）、ライト `#f4f4f4`（元 `--panel: #ededed` よりやや明るい）。
+- **効果**: h2 が一段濃く、内側の項目（txt-source-dropzone / editor / layer-list）が一段明るく見えるコントラストになり、h2::after グラデーションと組み合わせてトグルバーの立体感を増す。`.panel-section { background: var(--panel-body); } .panel-section-h2 { background: var(--panel); }` の 2 行で済む。
+
+> **構造変更まとめ**:
+> - 旧: 定規ボタン = ヘッダーの `.toolbar-viewmode` 内、`.active` 青塗りで状態表示
+> - 新: 定規ボタン = サイドツールバー `#tool-move` 直下、`aria-pressed` のみで状態保持（背景色変化なし）
+> - 旧: PDF / PSD 表示は常に並列、PDF を一時的に消す手段なし
+> - 新: ハンバーガー右に並列 / PSD のみ トグル、`localStorage` 永続化、PDF 状態は隠している間も保持
+> - 旧: サイドバー h2 とセクション本体は同じ `var(--panel)`、平面的
+> - 新: h2 = `var(--panel)` + `::after` グラデ / 本体 = `var(--panel-body)`（明るめ）、ヘッダーバー（`.toolbar`）下端にも `::after` グラデ → セクションが「上に乗っている」立体感
