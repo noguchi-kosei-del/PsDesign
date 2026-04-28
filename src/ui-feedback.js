@@ -79,6 +79,56 @@ export function confirmDialog({
   });
 }
 
+// 単一 OK ボタンの中央モーダル通知。`#confirm-modal` の DOM を流用し、
+// Cancel ボタンを一時的に非表示にする。OK / Esc / Enter / 背景クリックで dismiss。
+// 戻り値は Promise<void>。
+export function notifyDialog({
+  title = "通知",
+  message = "",
+  okLabel = "OK",
+} = {}) {
+  return new Promise((resolve) => {
+    const modal = $("confirm-modal");
+    const titleEl = $("confirm-modal-title");
+    const msgEl = $("confirm-modal-message");
+    const okBtn = $("confirm-modal-ok");
+    const cancelBtn = $("confirm-modal-cancel");
+    if (!modal || !okBtn || !msgEl) {
+      resolve();
+      return;
+    }
+    if (titleEl) titleEl.textContent = title;
+    msgEl.textContent = message;
+    okBtn.textContent = okLabel;
+    // Cancel ボタンは notify では非表示。次回 confirmDialog の呼び出し時に
+    // 復帰するよう cleanup で元の hidden 状態に戻す。
+    const prevCancelHidden = cancelBtn ? cancelBtn.hidden : false;
+    if (cancelBtn) cancelBtn.hidden = true;
+    modal.hidden = false;
+
+    const cleanup = () => {
+      modal.hidden = true;
+      if (cancelBtn) cancelBtn.hidden = prevCancelHidden;
+      okBtn.removeEventListener("click", onOk);
+      modal.removeEventListener("mousedown", onOverlay);
+      document.removeEventListener("keydown", onKey);
+      resolve();
+    };
+    const onOk = () => cleanup();
+    const onOverlay = (e) => { if (e.target === modal) cleanup(); };
+    const onKey = (e) => {
+      if (e.key === "Escape" || e.key === "Enter") {
+        e.preventDefault();
+        cleanup();
+      }
+    };
+    okBtn.addEventListener("click", onOk);
+    modal.addEventListener("mousedown", onOverlay);
+    document.addEventListener("keydown", onKey);
+    requestAnimationFrame(() => okBtn.focus());
+  });
+}
+
 export function toast(message, { kind = "info", duration = 2800 } = {}) {
   const container = $("toast-container");
   if (!container) return;

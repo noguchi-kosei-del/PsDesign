@@ -587,9 +587,46 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
           nti.color = nfc ? nfc : blackColor();
         } catch (eColor) {}
         nti.position = [new UnitValue(nl.x, "px"), new UnitValue(nl.y, "px")];
+        // Photoshop の textItem.position はテキストアンカー（横書き=ベースライン左、
+        // 縦書き=1 文字目の右上）であり、PsDesign 側の nl.x/nl.y は bounding-box の
+        // top-left を意図している。さらに編集画面の縦書き CSS は writing-mode: vertical-rl
+        // で 1 列目（最右列）が box.right から始まるため、
+        //   - 横書き: 配置後の bounds.top-left を (nl.x, nl.y) に揃える。
+        //   - 縦書き: bounds.top-right を (nl.x + thick, nl.y) に揃える。
+        //     ここで thick = ptInPsdPx * leadingFactor * lineCount は編集側 layerRectForNew と同じ式。
         try {
           var _b = layerRef.bounds;
-          layerRef.translate(new UnitValue(0, "px"), new UnitValue(0, "px"));
+          var _actualLeft  = _b[0].as("px");
+          var _actualTop   = _b[1].as("px");
+          var _actualRight = _b[2].as("px");
+          var _fixDx, _fixDy;
+          if (nl.direction === "vertical") {
+            var _dpi = doc.resolution;
+            var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
+            var _ptInPx = _sizePt * (_dpi / 72);
+            var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
+            var _contentsForCount = String(nl.contents || "");
+            var _lc = _contentsForCount.split(/\r?\n/).length;
+            if (_lc < 1) _lc = 1;
+            var _thick = _ptInPx * _lpFactor * _lc;
+            if (_thick < 24) _thick = 24;
+            // CSS line-box 由来の最右列インセット。理論値は (leadingFactor - 1) * em / 2
+            // (両側均等の half-leading 想定) だが、実機の Browser 側 vertical-rl では
+            // line-height extra (= (L - 1) * em) が左側に寄せて配置される挙動が観測された。
+            // empirical に full extra を採用 (24pt/600dpi/125% で 50px)。
+            // 反復: 1/2 → 12px 右ズレ / 3/4 → 8px 右ズレ / 1 → ≈0px (本値)。
+            var _halfLeading = (_lpFactor - 1) * _ptInPx;
+            if (_halfLeading < 0) _halfLeading = 0;
+            var _boxRight = nl.x + _thick - _halfLeading;
+            _fixDx = _boxRight - _actualRight;
+            _fixDy = nl.y - _actualTop;
+          } else {
+            _fixDx = nl.x - _actualLeft;
+            _fixDy = nl.y - _actualTop;
+          }
+          if (_fixDx !== 0 || _fixDy !== 0) {
+            layerRef.translate(new UnitValue(_fixDx, "px"), new UnitValue(_fixDy, "px"));
+          }
         } catch (eBounds) {}
         try {
           applyStrokeEffect(layerRef, {

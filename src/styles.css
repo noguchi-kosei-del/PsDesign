@@ -402,13 +402,18 @@ html, body, #app {
   cursor: pointer;
 }
 
-.window-ctrl-btn:hover {
-  background: var(--panel-hover);
+/* 最小化・最大化ボタンの hover：グローバルの `button:hover` (青塗り) を打ち消し、
+   現在の背景色から少し濃くなる半透明黒オーバーレイにする。selector は
+   .window-controls > .window-ctrl-btn まで含めて specificity を上げる。 */
+.window-controls .window-ctrl-btn:hover:not(:disabled) {
+  background: rgba(0, 0, 0, 0.18);
   border-color: transparent;
+  color: var(--text);
 }
 
-.window-ctrl-btn.window-ctrl-close:hover {
+.window-controls .window-ctrl-btn.window-ctrl-close:hover:not(:disabled) {
   background: #e81123;
+  border-color: #e81123;
   color: #fff;
 }
 
@@ -441,6 +446,17 @@ html, body, #app {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
+}
+
+/* PDF / PSD / TXT を開くボタンは識別性を優先して一回り大きめに表示 */
+.icon-btn.file-open-btn {
+  width: 38px;
+  height: 32px;
+  min-width: 38px;
+}
+.icon-btn.file-open-btn svg {
+  width: 22px;
+  height: 22px;
 }
 
 .tool-btn.icon-btn {
@@ -1122,10 +1138,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 
 .pdf-rotate-btn,
-.psd-rotate-btn {
+.psd-rotate-btn,
+.psd-guides-lock-btn {
   position: absolute;
   bottom: 8px;
-  right: 8px;
   z-index: 2;
   width: 28px;
   height: 28px;
@@ -1139,11 +1155,33 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   justify-content: center;
   cursor: pointer;
 }
+.pdf-rotate-btn,
+.psd-rotate-btn { right: 8px; }
+/* ロックボタンは回転ボタンの左隣（28px + 4px gap = 32px ぶん左へ） */
+.psd-guides-lock-btn { right: 44px; }
+
 .pdf-rotate-btn:hover,
-.psd-rotate-btn:hover {
+.psd-rotate-btn:hover,
+.psd-guides-lock-btn:hover {
   background: var(--accent, #3b82f6);
   color: #fff;
 }
+
+/* ロックボタンの状態に応じたアイコン切替（押下＝ロック中） */
+.psd-guides-lock-btn .lock-icon-locked { display: none; }
+.psd-guides-lock-btn .lock-icon-unlocked { display: block; }
+.psd-guides-lock-btn[aria-pressed="true"] .lock-icon-locked { display: block; }
+.psd-guides-lock-btn[aria-pressed="true"] .lock-icon-unlocked { display: none; }
+.psd-guides-lock-btn[aria-pressed="true"] {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  border-color: var(--accent, #3b82f6);
+}
+
+/* ガイドロック中：ガイド本体・ルーラー帯ともにドラッグ用 cursor を変更。 */
+.spreads-psd-area.guides-locked .psd-guide { cursor: default; }
+.spreads-psd-area.guides-locked .psd-ruler-top { cursor: default; }
+.spreads-psd-area.guides-locked .psd-ruler-left { cursor: default; }
 
 .pdf-stage {
   flex: 1;
@@ -1344,6 +1382,18 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--accent);
   transform: translateX(-50%);
   pointer-events: none;
+}
+
+/* Ctrl+H: テキストフレーム非表示モード（InDesign 風）。
+ * - 通常時はレイヤーボックスの破線・背景を透明化。
+ * - ただし選択中（.selected）のレイヤーは枠・サイズバッジ・回転ハンドルを残す。
+ * - テキスト本体は影響なし。クリック判定（pointer-events）も維持。 */
+body.frames-hidden .layer-box:not(.selected),
+body.frames-hidden .layer-box-new:not(.selected),
+body.frames-hidden .layer-box-existing:not(.selected) {
+  border-color: transparent !important;
+  background: transparent !important;
+  box-shadow: none !important;
 }
 
 .page-overlay[data-tool="text-v"] .layer-box {
@@ -2036,14 +2086,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .settings-card {
   width: 560px;
   max-width: 92vw;
+  /* タブを切り替えてもダイアログサイズが揺れないよう固定高さ。
+     ショートカット一覧（最も縦長）が快適に収まる比率に合わせる。 */
+  height: 80vh;
   max-height: 80vh;
+  min-height: 500px;
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 6px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
-  min-height: 0;
 }
 
 .settings-header {
@@ -2059,15 +2112,21 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 700;
   color: var(--text);
 }
-.settings-close-btn {
-  width: 26px;
-  height: 26px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text-muted);
+.settings-done-btn {
+  padding: 6px 16px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
 }
-.settings-close-btn:hover { color: var(--text); background: var(--panel-hover); }
+.settings-done-btn:hover {
+  background: #1385e3;
+  border-color: #1385e3;
+}
 
 .settings-tabs {
   display: flex;
@@ -2076,6 +2135,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-shrink: 0;
 }
 .settings-tab {
+  flex: 1 1 0;
   padding: 10px 18px;
   background: none;
   border: none;
@@ -2085,6 +2145,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 12px;
   font-family: inherit;
   font-weight: 600;
+  text-align: center;
+  white-space: nowrap;
   transition: color 0.15s, border-color 0.15s;
 }
 .settings-tab:hover { color: var(--text); }
@@ -2178,6 +2240,40 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--panel);
 }
 
+/* デフォルト値（新規テキストの初期値）入力欄 */
+.settings-defaults-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 8px;
+}
+.settings-default-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.settings-default-label {
+  flex: 1;
+  font-size: 12px;
+  color: var(--text);
+}
+.settings-default-input {
+  width: 200px;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: inherit;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  box-sizing: border-box;
+}
+.settings-default-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
 /* ラジオオプション（ページ送り反転） */
 .settings-radio-list {
   display: flex;
@@ -2223,6 +2319,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* キーキャプチャモーダル */
 .key-capture-card {
   width: 360px;
+  /* settings-card の固定高さを継承させない（小さいダイアログなので auto） */
+  height: auto;
+  min-height: 0;
   text-align: center;
   padding-bottom: 12px;
 }

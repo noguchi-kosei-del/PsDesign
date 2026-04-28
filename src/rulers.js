@@ -24,16 +24,25 @@ import {
 // ===== State =====
 const RULER_THICK = 18; // CSS px。styles.css の --ruler-thick と同期。
 const VISIBLE_KEY = "psdesign_rulers_visible";
+const LOCKED_KEY = "psdesign_guides_locked";
 
 const guidesByPsd = new Map(); // psdPath -> { h: number[], v: number[] } （PSD pixel）
 let rulersVisible = loadVisible();
 const visibleListeners = new Set();
+let guidesLocked = loadLocked();
+const lockedListeners = new Set();
 
 function loadVisible() {
   try { return localStorage.getItem(VISIBLE_KEY) === "1"; } catch { return false; }
 }
 function saveVisible() {
   try { localStorage.setItem(VISIBLE_KEY, rulersVisible ? "1" : "0"); } catch {}
+}
+function loadLocked() {
+  try { return localStorage.getItem(LOCKED_KEY) === "1"; } catch { return false; }
+}
+function saveLocked() {
+  try { localStorage.setItem(LOCKED_KEY, guidesLocked ? "1" : "0"); } catch {}
 }
 
 export function getRulersVisible() { return rulersVisible; }
@@ -53,6 +62,31 @@ export function toggleRulersVisible() { setRulersVisible(!rulersVisible); }
 export function onRulersVisibleChange(fn) {
   visibleListeners.add(fn);
   return () => visibleListeners.delete(fn);
+}
+
+// ガイドのロック。true の間は新規作成・移動・削除のドラッグ操作を全てブロック。
+// 表示自体は継続（Photoshop / InDesign の "ガイドをロック" と同じ挙動）。
+export function getGuidesLocked() { return guidesLocked; }
+
+export function setGuidesLocked(on) {
+  const v = !!on;
+  if (guidesLocked === v) return;
+  guidesLocked = v;
+  saveLocked();
+  applyLockedToDom();
+  for (const fn of lockedListeners) fn(v);
+}
+
+export function toggleGuidesLocked() { setGuidesLocked(!guidesLocked); }
+
+export function onGuidesLockedChange(fn) {
+  lockedListeners.add(fn);
+  return () => lockedListeners.delete(fn);
+}
+
+function applyLockedToDom() {
+  if (!paneEl) return;
+  paneEl.classList.toggle("guides-locked", guidesLocked);
 }
 
 function getCurrentPsdPath() {
@@ -127,6 +161,7 @@ export function initRulers() {
   mounted = true;
 
   applyVisibilityToDom();
+  applyLockedToDom();
 
   // 描画タイミングを 1 経路にまとめる（rAF でcoalesce）。
   // ペイン / ステージに加え、ルーラー Canvas 自身もサイズ変化を監視（hidden 解除直後の
@@ -338,13 +373,18 @@ function drawRulerOnCanvas(canvas, w, h, dpr, cs, geom, side) {
   ctx.font = `10px system-ui, -apple-system, "Segoe UI", sans-serif`;
   ctx.textBaseline = side === "top" ? "alphabetic" : "alphabetic";
 
+  // ルーラー帯の「主軸方向の長さ」: top は横幅 w、left は縦高さ h。
+  // 副目盛り側の太さ（tick 長さの基準）: top は h、left は w を使う。
+  const along = side === "top" ? w : h;
+  const across = side === "top" ? h : w;
+
   // 副目盛り
   ctx.lineWidth = 1;
   for (let v = 0; v <= axisInfo.length; v += subStep) {
     const lp = valueToLocal(v);
-    if (lp < -2 || lp > w + 2) continue;
+    if (lp < -2 || lp > along + 2) continue;
     const isMajor = Math.round(v / step) === v / step || (Math.abs((v % step)) < 0.001);
-    const tickLen = isMajor ? Math.floor(h * 0.6) : Math.floor(h * 0.3);
+    const tickLen = isMajor ? Math.floor(across * 0.6) : Math.floor(across * 0.3);
     ctx.beginPath();
     if (side === "top") {
       const x = Math.round(lp) + 0.5;
@@ -361,15 +401,15 @@ function drawRulerOnCanvas(canvas, w, h, dpr, cs, geom, side) {
   // 主目盛りの数値ラベル
   for (let v = 0; v <= axisInfo.length; v += step) {
     const lp = valueToLocal(v);
-    if (lp < -20 || lp > w + 20) continue;
+    if (lp < -20 || lp > along + 20) continue;
     const label = String(Math.round(v));
     if (side === "top") {
       ctx.textAlign = "left";
-      ctx.fillText(label, Math.round(lp) + 2, h - Math.floor(h * 0.6) - 2);
+      ctx.fillText(label, Math.round(lp) + 2, h - Math.floor(across * 0.6) - 2);
     } else {
       // 縦方向は数値を 90° 回転して縦読みを避け、目盛り上に小さく表示。
       ctx.save();
-      ctx.translate(w - Math.floor(h * 0.6) - 2, Math.round(lp) - 2);
+      ctx.translate(w - Math.floor(across * 0.6) - 2, Math.round(lp) - 2);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = "left";
       ctx.fillText(label, 0, 0);
@@ -462,6 +502,13 @@ function renderGuides(geom) {
 // 左ルーラー mousedown → axis="v"（画面垂直のガイド）= 値は topAxis 軸
 function beginCreateGuide(e, axisFromRuler) {
   if (e.button !== 0) return;
+  if (guidesLocked) {
+    // ロック中は新規作成不可。ただし event を完全に消費して、ブラウザの mousedown
+    // 既定動作（テキスト選択開始など）が下層に伝播しないようにする。
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   // 上ルーラー = "h"（画面水平）, 左ルーラー = "v"（画面垂直）
   // ただし呼び出し側は「ルーラーの種類」で渡すので、対応関係：
   //   topRuler -> axis="h"（mouse down 後 Y で値決定）
@@ -499,6 +546,12 @@ function beginCreateGuide(e, axisFromRuler) {
 
 function beginMoveGuide(e, axis, index) {
   if (e.button !== 0) return;
+  if (guidesLocked) {
+    // ロック中はガイド移動・削除不可。event は消費して下層レイヤーへ伝播させない。
+    e.preventDefault();
+    e.stopPropagation();
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   const psdPath = getCurrentPsdPath();

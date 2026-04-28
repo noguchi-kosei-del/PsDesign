@@ -20,10 +20,12 @@ import {
   getTool,
   isLayerSelected,
   onToolChange,
+  removeNewLayer,
   setEdit,
   setEditingContext,
   setSelectedLayer,
   setSelectedLayers,
+  toDisplaySizePt,
   toggleLayerSelected,
   updateNewLayer,
 } from "./state.js";
@@ -112,6 +114,26 @@ export function nudgeSelectedLayers(dx, dy) {
     rebuildLayerList();
   }
   return moved;
+}
+
+// 選択中のレイヤーを削除する（Delete / Backspace から呼ばれる想定）。
+// 新規追加レイヤーのみ削除可能。PSD 既存テキストレイヤーは選択から外すだけで残す
+// （PSD バイナリからの削除は edit モデル外のため未対応）。
+// 何かを削除した場合 true、対象がなく no-op の場合 false を返す。
+export function deleteSelectedLayers() {
+  const selections = getSelectedLayers();
+  const tempIds = selections
+    .filter((s) => typeof s.layerId === "string")
+    .map((s) => s.layerId);
+  if (tempIds.length === 0) return false;
+  beginHistoryTransient();
+  for (const id of tempIds) removeNewLayer(id);
+  commitHistoryTransient();
+  // 既存 PSD レイヤーの選択は維持し、新規分のみ選択から外す。
+  setSelectedLayers(selections.filter((s) => typeof s.layerId !== "string"));
+  refreshAllOverlays();
+  rebuildLayerList();
+  return true;
 }
 
 function clampSizePt(v) {
@@ -301,7 +323,7 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       box.appendChild(createRotateHandle(ctx, layer.id));
-      box.appendChild(createSizeBadge(edit.sizePt ?? layer.fontSize ?? 24));
+      box.appendChild(createSizeBadge(edit.sizePt ?? layer.fontSize ?? 24, page));
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });
@@ -336,7 +358,7 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
       box.appendChild(createRotateHandle(ctx, nl.tempId));
-      box.appendChild(createSizeBadge(nl.sizePt ?? 24));
+      box.appendChild(createSizeBadge(nl.sizePt ?? 24, page));
     }
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, nl.tempId), { passive: false });
@@ -403,10 +425,12 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings) {
   }
 }
 
-function createSizeBadge(sizePt) {
+function createSizeBadge(sizePt, page) {
   const el = document.createElement("div");
   el.className = "layer-size-badge";
-  const rounded = Math.round((sizePt ?? 0) * 10) / 10;
+  // 基準PSD 比で換算した pt を表示。基準が 1 ページ目（または未読込）の場合は素のまま。
+  const display = toDisplaySizePt(sizePt ?? 0, page);
+  const rounded = Math.round((display ?? 0) * 10) / 10;
   el.textContent = `${rounded}pt`;
   return el;
 }
@@ -708,20 +732,87 @@ function beginMultiLayerDrag(e, ctx) {
   const selections = getSelectedLayers().filter((s) => s.pageIndex === ctx.pageIndex);
   if (selections.length === 0) return;
 
+  // Photoshop と同じ Alt+ドラッグ複製。ドラッグ開始時に各選択レイヤーの複製を
+  // 同位置に作成し、items をその複製（kind:"new"）に差し替えて以降のプレビュー
+  // と確定処理に乗せる。元レイヤーはそのまま残る。
+  const isDuplicate = !!e.altKey;
+
   const items = [];
-  for (const sel of selections) {
-    if (typeof sel.layerId === "string") {
-      const nl = getNewLayersForPsd(ctx.page.path).find((l) => l.tempId === sel.layerId);
-      if (nl) items.push({ kind: "new", nl, startX: nl.x, startY: nl.y, rotation: nl.rotation ?? 0 });
-    } else {
-      const layer = ctx.page.textLayers.find((l) => l.id === sel.layerId);
-      if (layer) {
+  if (isDuplicate) {
+    beginHistoryTransient();
+    const newSelections = [];
+    for (const sel of selections) {
+      if (typeof sel.layerId === "string") {
+        const nl = getNewLayersForPsd(ctx.page.path).find((l) => l.tempId === sel.layerId);
+        if (!nl) continue;
+        const dup = addNewLayer({
+          psdPath: nl.psdPath,
+          x: nl.x,
+          y: nl.y,
+          contents: nl.contents,
+          fontPostScriptName: nl.fontPostScriptName,
+          sizePt: nl.sizePt,
+          direction: nl.direction,
+          strokeColor: nl.strokeColor,
+          strokeWidthPx: nl.strokeWidthPx,
+          fillColor: nl.fillColor,
+          rotation: nl.rotation ?? 0,
+          leadingPct: nl.leadingPct,
+        });
+        if (nl.lineLeadings && Object.keys(nl.lineLeadings).length > 0) {
+          updateNewLayer(dup.tempId, { lineLeadings: { ...nl.lineLeadings } });
+        }
+        items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
+        newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
+      } else {
+        const layer = ctx.page.textLayers.find((l) => l.id === sel.layerId);
+        if (!layer) continue;
         const edit = getEdit(ctx.page.path, sel.layerId) ?? {};
-        items.push({ kind: "existing", layer, rotation: edit.rotation ?? 0 });
+        const dupX = (layer.left ?? 0) + (edit.dx ?? 0);
+        const dupY = (layer.top ?? 0) + (edit.dy ?? 0);
+        const dup = addNewLayer({
+          psdPath: ctx.page.path,
+          x: dupX,
+          y: dupY,
+          contents: edit.contents ?? layer.text ?? "",
+          fontPostScriptName: edit.fontPostScriptName ?? layer.font ?? null,
+          sizePt: edit.sizePt ?? layer.fontSize ?? null,
+          direction: edit.direction ?? layer.direction ?? "horizontal",
+          strokeColor: edit.strokeColor ?? layer.strokeColor ?? "none",
+          strokeWidthPx: edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
+          fillColor: edit.fillColor ?? layer.fillColor ?? "default",
+          rotation: edit.rotation ?? 0,
+          leadingPct: edit.leadingPct ?? 125,
+        });
+        if (edit.lineLeadings && Object.keys(edit.lineLeadings).length > 0) {
+          updateNewLayer(dup.tempId, { lineLeadings: { ...edit.lineLeadings } });
+        }
+        items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
+        newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
       }
     }
+    if (items.length === 0) {
+      abortHistoryTransient();
+      return;
+    }
+    setSelectedLayers(newSelections);
+    renderOverlay(ctx);
+    rebuildLayerList();
+  } else {
+    for (const sel of selections) {
+      if (typeof sel.layerId === "string") {
+        const nl = getNewLayersForPsd(ctx.page.path).find((l) => l.tempId === sel.layerId);
+        if (nl) items.push({ kind: "new", nl, startX: nl.x, startY: nl.y, rotation: nl.rotation ?? 0 });
+      } else {
+        const layer = ctx.page.textLayers.find((l) => l.id === sel.layerId);
+        if (layer) {
+          const edit = getEdit(ctx.page.path, sel.layerId) ?? {};
+          items.push({ kind: "existing", layer, rotation: edit.rotation ?? 0 });
+        }
+      }
+    }
+    if (items.length === 0) return;
   }
-  if (items.length === 0) return;
 
   const startClientX = e.clientX;
   const startClientY = e.clientY;
@@ -736,7 +827,9 @@ function beginMultiLayerDrag(e, ctx) {
   const pxScaleX = W / ctx.page.width;
   const pxScaleY = H / ctx.page.height;
   const prevUserSelect = document.body.style.userSelect;
+  const prevCursor = document.body.style.cursor;
   document.body.style.userSelect = "none";
+  if (isDuplicate) document.body.style.cursor = "copy";
 
   const computePsdDelta = (ev) => {
     const { dx, dy } = inverseRotateDelta(
@@ -777,8 +870,19 @@ function beginMultiLayerDrag(e, ctx) {
     window.removeEventListener("dragstart", suppressDefault, true);
     window.removeEventListener("selectstart", suppressDefault, true);
     document.body.style.userSelect = prevUserSelect;
+    if (isDuplicate) document.body.style.cursor = prevCursor;
     const { ddx, ddy } = computePsdDelta(ev);
-    if (ddx !== 0 || ddy !== 0) {
+    if (isDuplicate) {
+      // 複製は開始時点で beginHistoryTransient 済み。移動量があれば位置も確定し、
+      // 移動量ゼロでも複製自体は残るため必ず commit して 1 つの履歴ステップにする。
+      if (ddx !== 0 || ddy !== 0) {
+        for (const item of items) {
+          // 複製はすべて kind:"new"。
+          updateNewLayer(item.nl.tempId, { x: item.startX + ddx, y: item.startY + ddy });
+        }
+      }
+      commitHistoryTransient();
+    } else if (ddx !== 0 || ddy !== 0) {
       beginHistoryTransient();
       for (const item of items) {
         if (item.kind === "existing") {

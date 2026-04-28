@@ -105,30 +105,29 @@
           </div>
         </div>
         <div class="toolbar-actions">
-          <button id="open-pdf-btn" class="icon-btn" title="PDF を開く" aria-label="PDF を開く">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <button id="open-pdf-btn" class="icon-btn file-open-btn" title="PDF を開く" aria-label="PDF を開く">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
               <polyline points="14 2 14 8 20 8"/>
               <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">PDF</text>
             </svg>
           </button>
-          <button id="open-folder-btn" class="icon-btn" title="PSD を開く" aria-label="PSD を開く">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+          <button id="open-folder-btn" class="icon-btn file-open-btn" title="PSD を開く" aria-label="PSD を開く">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
+              <text x="12" y="17" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">PSD</text>
             </svg>
           </button>
-          <button id="open-txt-toolbar-btn" class="icon-btn" title="テキストを開く" aria-label="テキストを開く">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <button id="open-txt-toolbar-btn" class="icon-btn file-open-btn" title="テキストを開く" aria-label="テキストを開く">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
               <polyline points="14 2 14 8 20 8"/>
-              <line x1="8" y1="13" x2="16" y2="13"/>
-              <line x1="8" y1="17" x2="16" y2="17"/>
-              <line x1="8" y1="9" x2="11" y2="9"/>
+              <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
             </svg>
           </button>
           <div class="save-container" id="save-container">
-            <button id="save-btn" class="icon-btn" disabled title="Photoshop で保存" aria-label="Photoshop で保存" aria-haspopup="menu" aria-expanded="false">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <button id="save-btn" class="icon-btn file-open-btn" disabled title="Photoshop で保存" aria-label="Photoshop で保存" aria-haspopup="menu" aria-expanded="false">
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
                 <polyline points="17 21 17 13 7 13 7 21"/>
                 <polyline points="7 3 7 8 15 8"/>
@@ -191,6 +190,16 @@
               <div id="pdf-stage" class="pdf-stage"></div>
             </div>
             <div class="spreads-psd-area" id="spreads-psd-area">
+              <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" hidden>
+                <svg class="lock-icon-unlocked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                  <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+                </svg>
+                <svg class="lock-icon-locked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                  <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                </svg>
+              </button>
               <button id="psd-rotate-btn" class="psd-rotate-btn icon-btn" type="button" title="PSD を 90° 回転（クリックごと）" aria-label="PSD を回転" hidden>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="21 2 21 8 15 8"/>
@@ -321,9 +330,7 @@
                 <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
                   <polyline points="14 2 14 8 20 8"/>
-                  <line x1="8" y1="13" x2="16" y2="13"/>
-                  <line x1="8" y1="17" x2="16" y2="17"/>
-                  <line x1="8" y1="9" x2="11" y2="9"/>
+                  <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
                 </svg>
                 <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
               </div>
@@ -528,16 +535,12 @@
       <div class="settings-card" role="dialog" aria-modal="true" aria-label="環境設定">
         <div class="settings-header">
           <span class="settings-title">環境設定</span>
-          <button type="button" id="settings-close-btn" class="icon-btn settings-close-btn" title="閉じる" aria-label="閉じる">
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
+          <button type="button" id="settings-close-btn" class="settings-done-btn" title="閉じる" aria-label="完了">完了</button>
         </div>
         <div class="settings-tabs" role="tablist">
           <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
           <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">ページ送り</button>
+          <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">デフォルト</button>
         </div>
         <div class="settings-tab-panel active" id="settings-tab-shortcuts" role="tabpanel">
           <div class="settings-section-header">
@@ -566,6 +569,32 @@
                 <span class="settings-radio-desc">→ で前ページ、← で次ページ（縦書き右綴じ向け）</span>
               </span>
             </label>
+          </div>
+        </div>
+        <div class="settings-tab-panel" id="settings-tab-defaults" role="tabpanel">
+          <div class="settings-section-header">
+            <span>新規テキストの初期値</span>
+            <button type="button" id="settings-reset-defaults-btn" class="settings-reset-btn">デフォルトに戻す</button>
+          </div>
+          <p class="settings-section-desc">テキストツールで配置する新規テキストの初期値です。アプリ起動時とファイル切替時に反映されます。</p>
+          <div class="settings-defaults-list">
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-text-size">文字サイズ (pt)</label>
+              <input type="number" id="default-text-size" class="settings-default-input" min="6" max="999" step="0.1" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-leading-pct">行間 (%)</label>
+              <input type="number" id="default-leading-pct" class="settings-default-input" min="50" max="500" step="1" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-stroke-width">フチの太さ (px)</label>
+              <input type="number" id="default-stroke-width" class="settings-default-input" min="0" max="999" step="0.1" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-font">フォント</label>
+              <input type="text" id="default-font" class="settings-default-input" list="default-font-list" placeholder="（指定なし）" />
+              <datalist id="default-font-list"></datalist>
+            </div>
           </div>
         </div>
       </div>

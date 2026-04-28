@@ -9,13 +9,18 @@ import {
   checkConflict,
   formatShortcutDisplay,
   getAllShortcuts,
+  getDefaults,
   getPageDirectionInverted,
   normalizeKeyName,
   onSettingsChange,
+  resetDefaults,
   resetShortcuts,
+  setDefault,
   setPageDirectionInverted,
   setShortcut,
 } from "./settings.js";
+import { applyToolDefaults, getFonts } from "./state.js";
+import { onFontsRegistered } from "./font-loader.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,6 +35,7 @@ function openModal() {
   // 開くたびに最新値で再描画（外部から setPageDirectionInverted が呼ばれた等を反映）。
   renderShortcutList();
   syncPageDirectionUi();
+  syncDefaultsUi();
   // デフォルトはショートカットタブ。
   switchTab("shortcuts");
 }
@@ -89,6 +95,36 @@ function syncPageDirectionUi() {
     inp.checked = isOn;
     const wrap = inp.closest(".settings-radio-option");
     if (wrap) wrap.classList.toggle("selected", isOn);
+  }
+}
+
+// 「デフォルト」タブ：保存値をフォームに反映。
+function syncDefaultsUi() {
+  const d = getDefaults();
+  const ts = $("default-text-size");
+  const lp = $("default-leading-pct");
+  const sw = $("default-stroke-width");
+  const ft = $("default-font");
+  if (ts) ts.value = String(d.textSize ?? "");
+  if (lp) lp.value = String(d.leadingPct ?? "");
+  if (sw) sw.value = String(d.strokeWidthPx ?? "");
+  if (ft) ft.value = String(d.fontPostScriptName ?? "");
+  populateFontDatalist();
+}
+
+// インストール済みフォントを <datalist> に流し込み（PostScript 名で確定する想定、
+// 表示名は label 属性で参考表示）。
+function populateFontDatalist() {
+  const list = $("default-font-list");
+  if (!list) return;
+  const fonts = getFonts() ?? [];
+  list.innerHTML = "";
+  for (const f of fonts) {
+    if (!f?.postScriptName) continue;
+    const opt = document.createElement("option");
+    opt.value = f.postScriptName;
+    if (f.name && f.name !== f.postScriptName) opt.label = f.name;
+    list.appendChild(opt);
   }
 }
 
@@ -258,8 +294,54 @@ export function initSettingsUi() {
     if (modalOpen) {
       renderShortcutList();
       syncPageDirectionUi();
+      syncDefaultsUi();
     }
   });
+
+  // 「デフォルト」タブの入力欄。change で settings に保存し、即座にツール状態にも反映。
+  bindDefaultsInputs();
+
+  // フォントが非同期で登録されるたびに datalist を更新（モーダルが開いていなくてもよい）。
+  onFontsRegistered(() => {
+    if (modalOpen) populateFontDatalist();
+  });
+}
+
+function bindDefaultsInputs() {
+  const wireNumber = (id, key) => {
+    const inp = $(id);
+    if (!inp) return;
+    inp.addEventListener("change", () => {
+      const v = Number(inp.value);
+      if (!Number.isFinite(v)) {
+        // 無効入力 → 現在値で復帰。
+        syncDefaultsUi();
+        return;
+      }
+      setDefault(key, v);
+      applyToolDefaults();
+    });
+  };
+  wireNumber("default-text-size",   "textSize");
+  wireNumber("default-leading-pct", "leadingPct");
+  wireNumber("default-stroke-width", "strokeWidthPx");
+
+  const ft = $("default-font");
+  if (ft) {
+    ft.addEventListener("change", () => {
+      setDefault("fontPostScriptName", String(ft.value || "").trim());
+      applyToolDefaults();
+    });
+  }
+
+  const reset = $("settings-reset-defaults-btn");
+  if (reset) {
+    reset.addEventListener("click", () => {
+      resetDefaults();
+      syncDefaultsUi();
+      applyToolDefaults();
+    });
+  }
 }
 
 export function openSettingsModal() {

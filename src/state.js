@@ -1,3 +1,5 @@
+import { getDefaults } from "./settings.js";
+
 const state = {
   folder: null,
   pages: [],
@@ -59,6 +61,10 @@ const state = {
   // 行間コントロールはこれが set のとき per-line override に書き込み、unset のとき global に書く。
   editingContext: null,
   editingContextListeners: new Set(),
+  // テキストフレーム（overlay 内のレイヤーボックス全体）表示フラグ。
+  // false のとき renderOverlay は中身を出さない（プレビューに集中したいとき用、Ctrl+H）。
+  framesVisible: true,
+  framesVisibleListeners: new Set(),
 };
 
 const HISTORY_MAX = 100;
@@ -82,11 +88,23 @@ export function clearPages() {
     for (const fn of state.pageIndexListeners) fn(0);
   }
   setStrokeColor("none");
-  setStrokeWidthPx(20);
   setFillColor("default");
-  setLeadingPct(125);
+  // ツール初期値（フチ太さ・行間・文字サイズ・フォント）はユーザー設定の「デフォルト」を反映。
+  applyToolDefaults();
   resetHistoryBaseline();
   // PDF は PSD 再読込から独立させる（ユーザー回転も保持）。ホームに戻る時のみ hamburger-menu 側で clearPdf を呼ぶ。
+}
+
+// 環境設定 → 「デフォルト」の値を新規テキストレイヤー用ツール状態に反映する。
+// アプリ起動時 / clearPages 時 / 設定パネルでの値変更時に呼ぶ。
+export function applyToolDefaults() {
+  const d = getDefaults();
+  if (Number.isFinite(d.textSize)) setTextSize(d.textSize);
+  if (Number.isFinite(d.leadingPct)) setLeadingPct(d.leadingPct);
+  if (Number.isFinite(d.strokeWidthPx)) setStrokeWidthPx(d.strokeWidthPx);
+  setCurrentFont(typeof d.fontPostScriptName === "string" && d.fontPostScriptName.length > 0
+    ? d.fontPostScriptName
+    : null);
 }
 
 // ===== 行ごとの行間オーバーライド =====
@@ -126,6 +144,20 @@ export function setEditingContext(ctx) {
 export function onEditingContextChange(fn) {
   state.editingContextListeners.add(fn);
   return () => state.editingContextListeners.delete(fn);
+}
+
+// テキストフレーム（layer-box overlay）表示。Ctrl+H から切り替え。
+export function getFramesVisible() { return state.framesVisible; }
+export function setFramesVisible(v) {
+  const next = !!v;
+  if (state.framesVisible === next) return;
+  state.framesVisible = next;
+  for (const fn of state.framesVisibleListeners) fn(next);
+}
+export function toggleFramesVisible() { setFramesVisible(!state.framesVisible); }
+export function onFramesVisibleChange(fn) {
+  state.framesVisibleListeners.add(fn);
+  return () => state.framesVisibleListeners.delete(fn);
 }
 
 // ===== Undo / Redo 履歴 =====
@@ -213,6 +245,25 @@ export function onHistoryChange(fn) {
 
 export function addPage(page) { state.pages.push(page); }
 export function getPages() { return state.pages; }
+
+// 基準PSD（最初に読み込まれた PSD ページ）。1 つも読み込まれていない場合は null。
+export function getReferencePage() {
+  return state.pages[0] ?? null;
+}
+
+// 実 pt を「基準PSD 換算 pt」へ変換する。基準と一致 / 未読込 / 不正値の場合は素通し。
+// 換算は物理高さ (height/dpi) の比に基づく：DPI 違い・キャンバス寸法違いの両方を吸収する。
+export function toDisplaySizePt(actualPt, page) {
+  if (!Number.isFinite(actualPt)) return actualPt;
+  const ref = getReferencePage();
+  if (!ref || !page || ref === page) return actualPt;
+  const refDpi = ref.dpi ?? 72;
+  const pageDpi = page.dpi ?? 72;
+  const refH = (ref.height ?? 0) / refDpi;
+  const pageH = (page.height ?? 0) / pageDpi;
+  if (!(refH > 0) || !(pageH > 0)) return actualPt;
+  return actualPt * (refH / pageH);
+}
 
 function editKey(psdPath, layerId) { return `${psdPath}::${layerId}`; }
 

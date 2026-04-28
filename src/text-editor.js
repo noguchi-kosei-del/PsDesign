@@ -25,6 +25,7 @@ import {
   setStrokeColor,
   setStrokeWidthPx,
   setTextSize,
+  toDisplaySizePt,
   toggleLayerSelected,
   updateNewLayer,
 } from "./state.js";
@@ -86,6 +87,17 @@ function syncStrokeWidthInput(widthPx) {
   input.placeholder = "";
 }
 
+// 実 pt を「基準PSD 換算 pt」表示文字列にする。値が無いときは空文字。
+// 基準PSD（getPages()[0]）と同じ page なら素のまま。
+function formatDisplayPt(actualPt, page) {
+  if (actualPt == null || actualPt === "") return "";
+  const num = typeof actualPt === "number" ? actualPt : Number(actualPt);
+  if (!Number.isFinite(num)) return "";
+  const display = toDisplaySizePt(num, page);
+  const rounded = Math.round((display ?? 0) * 10) / 10;
+  return `${rounded}pt`;
+}
+
 export function rebuildLayerList() {
   const ul = listEl();
   ul.innerHTML = "";
@@ -117,7 +129,7 @@ export function rebuildLayerList() {
     const editedMark = edit ? `• 編集済${movedMark}` : "";
     li.innerHTML = `
       <div class="layer-text">${escapeHtml(truncate(displayText, 40))}</div>
-      <div class="layer-meta">${escapeHtml(layer.font || "")} ${layer.fontSize ?? ""}pt ${editedMark}</div>
+      <div class="layer-meta">${escapeHtml(layer.font || "")} ${formatDisplayPt(layer.fontSize, page)} ${editedMark}</div>
     `;
     li.addEventListener("click", (e) => selectLayer(pageIndex, layer.id, e));
     ul.appendChild(li);
@@ -131,7 +143,7 @@ export function rebuildLayerList() {
     li.dataset.layerKind = "new";
     li.innerHTML = `
       <div class="layer-text">＋ ${escapeHtml(truncate(nl.contents, 40))}</div>
-      <div class="layer-meta">新規テキスト ${nl.sizePt ?? ""}pt</div>
+      <div class="layer-meta">新規テキスト ${formatDisplayPt(nl.sizePt, page)}</div>
     `;
     li.addEventListener("click", (e) => selectLayer(pageIndex, nl.tempId, e));
     ul.appendChild(li);

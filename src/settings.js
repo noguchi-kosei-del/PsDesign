@@ -9,9 +9,16 @@ const STORAGE_KEY = "psdesign_settings";
 
 // デフォルト設定。バージョン番号を持ち、将来の項目追加時に migrate() で穴埋め。
 export const DEFAULT_SETTINGS = {
-  version: 1,
+  version: 2,
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
   pageDirectionInverted: false,
+  // 新規テキストレイヤーの初期値。アプリ起動時 / clearPages 時に state.js へ反映される。
+  defaults: {
+    textSize: 12,           // pt（実 pt、表示は基準PSD換算）
+    leadingPct: 125,        // %（autoLeadingAmount）
+    strokeWidthPx: 20,      // px（フチの太さ）
+    fontPostScriptName: "", // 空文字 = 指定なし（system default）
+  },
   shortcuts: {
     save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
     saveAs:     { key: "s",          modifiers: ["ctrl", "shift"], description: "別名で保存" },
@@ -29,6 +36,7 @@ export const DEFAULT_SETTINGS = {
     sizeUp:     { key: "]",          modifiers: [],                description: "文字サイズを大きく" },
     sizeDown:   { key: "[",          modifiers: [],                description: "文字サイズを小さく" },
     toggleRulers: { key: "r",        modifiers: ["ctrl"],          description: "定規の表示切替" },
+    toggleFrames: { key: "h",        modifiers: ["ctrl"],          description: "テキストフレームの表示切替" },
   },
 };
 
@@ -57,6 +65,21 @@ function migrate(old) {
   out.version = DEFAULT_SETTINGS.version;
   if (typeof old.pageDirectionInverted === "boolean") {
     out.pageDirectionInverted = old.pageDirectionInverted;
+  }
+  if (old.defaults && typeof old.defaults === "object") {
+    const d = old.defaults;
+    if (typeof d.textSize === "number" && Number.isFinite(d.textSize)) {
+      out.defaults.textSize = d.textSize;
+    }
+    if (typeof d.leadingPct === "number" && Number.isFinite(d.leadingPct)) {
+      out.defaults.leadingPct = d.leadingPct;
+    }
+    if (typeof d.strokeWidthPx === "number" && Number.isFinite(d.strokeWidthPx)) {
+      out.defaults.strokeWidthPx = d.strokeWidthPx;
+    }
+    if (typeof d.fontPostScriptName === "string") {
+      out.defaults.fontPostScriptName = d.fontPostScriptName;
+    }
   }
   if (old.shortcuts && typeof old.shortcuts === "object") {
     for (const id of Object.keys(out.shortcuts)) {
@@ -126,6 +149,35 @@ export function setPageDirectionInverted(v) {
 export function resetShortcuts() {
   if (!settings) load();
   settings.shortcuts = deepClone(DEFAULT_SETTINGS.shortcuts);
+  save();
+}
+
+// ===== デフォルト値（新規テキストレイヤーの初期値） =====
+export function getDefaults() {
+  if (!settings) load();
+  return { ...settings.defaults };
+}
+
+export function getDefault(key) {
+  if (!settings) load();
+  if (settings.defaults && Object.prototype.hasOwnProperty.call(settings.defaults, key)) {
+    return settings.defaults[key];
+  }
+  return DEFAULT_SETTINGS.defaults[key];
+}
+
+export function setDefault(key, value) {
+  if (!settings) load();
+  if (!settings.defaults) settings.defaults = deepClone(DEFAULT_SETTINGS.defaults);
+  if (!Object.prototype.hasOwnProperty.call(DEFAULT_SETTINGS.defaults, key)) return;
+  if (settings.defaults[key] === value) return;
+  settings.defaults[key] = value;
+  save();
+}
+
+export function resetDefaults() {
+  if (!settings) load();
+  settings.defaults = deepClone(DEFAULT_SETTINGS.defaults);
   save();
 }
 

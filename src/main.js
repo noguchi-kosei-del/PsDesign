@@ -1,7 +1,7 @@
 import { loadPsdFromPath } from "./psd-loader.js";
 import { loadPdfByPath, pickPdfFile } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
-import { nudgeSelectedLayers, refreshAllOverlays } from "./canvas-tools.js";
+import { deleteSelectedLayers, nudgeSelectedLayers, refreshAllOverlays } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
 import {
@@ -15,6 +15,7 @@ import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   confirmDialog,
   hideProgress,
+  notifyDialog,
   showProgress,
   toast,
   updateProgress,
@@ -31,6 +32,9 @@ import {
   toggleRulersVisible,
   getRulersVisible,
   onRulersVisibleChange,
+  getGuidesLocked,
+  toggleGuidesLocked,
+  onGuidesLockedChange,
 } from "./rulers.js";
 import {
   addPage,
@@ -90,6 +94,10 @@ import {
   onEditingContextChange,
   setLineLeading,
   getLineLeading,
+  toggleFramesVisible,
+  onFramesVisibleChange,
+  getFramesVisible,
+  applyToolDefaults,
 } from "./state.js";
 import {
   getPdfVirtualIndexForPhysicalPage,
@@ -157,6 +165,33 @@ function updatePsdRotateVisibility() {
   btn.hidden = getPages().length === 0;
 }
 
+function bindPsdGuidesLock() {
+  const btn = document.getElementById("psd-guides-lock-btn");
+  if (!btn) return;
+  const sync = () => {
+    const locked = getGuidesLocked();
+    btn.setAttribute("aria-pressed", locked ? "true" : "false");
+    btn.title = locked ? "ガイドのロック解除" : "ガイドをロック";
+    btn.setAttribute("aria-label", btn.title);
+  };
+  btn.addEventListener("click", () => toggleGuidesLocked());
+  onGuidesLockedChange(sync);
+  sync();
+  // ガイド表示と連動して表示/非表示。ルーラー OFF または PSD 未読込時は隠す。
+  const updateVis = () => {
+    btn.hidden = !getRulersVisible() || getPages().length === 0;
+  };
+  onRulersVisibleChange(updateVis);
+  updateVis();
+}
+
+// ガイドロックボタンの「ファイル読込みあり」条件を、PSD ロード/クリア時に同期。
+function updatePsdGuidesLockVisibility() {
+  const btn = document.getElementById("psd-guides-lock-btn");
+  if (!btn) return;
+  btn.hidden = !getRulersVisible() || getPages().length === 0;
+}
+
 function parentDir(p) {
   if (!p) return null;
   const m = p.match(/^(.+)[\\/][^\\/]+$/);
@@ -219,6 +254,7 @@ async function loadPsdFilesByPaths(files) {
 
   updateSaveButton();
   updatePsdRotateVisibility();
+  updatePsdGuidesLockVisibility();
   hideProgress();
   if (failures.length) {
     const first = failures[0];
@@ -294,11 +330,12 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     hideProgress();
     const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
     const hasWarn = typeof result === "string" && result.includes("警告:");
-    toast(`保存完了: ${result}${suffix}`, {
-      kind: hasWarn ? "info" : "success",
-      duration: hasWarn ? 7000 : 3500,
-    });
     hasSavedThisSession = true;
+    // 保存完了は中央モーダルで通知（ユーザー要望）。警告ありなら見出しに⚠を付与。
+    await notifyDialog({
+      title: hasWarn ? "保存完了 ⚠ 警告あり" : "保存完了",
+      message: `${result}${suffix}`,
+    });
   } catch (e) {
     console.error(e);
     hideProgress();
@@ -430,6 +467,7 @@ function runShortcut(id) {
     case "sizeUp":     adjustTextSize(+2); break;
     case "sizeDown":   adjustTextSize(-2); break;
     case "toggleRulers": toggleRulersVisible(); break;
+    case "toggleFrames": toggleFramesVisible(); break;
   }
 }
 
@@ -579,6 +617,23 @@ function bindTools() {
       }
     }
 
+    // Delete / Backspace で選択中の追加テキストフレームを削除（修飾キーなし）。
+    // 入力欄やテキスト編集中（floater の textarea）には介入しない。
+    if (
+      (e.key === "Delete" || e.key === "Backspace") &&
+      !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
+    ) {
+      const t = e.target;
+      const isInput =
+        t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (!isInput) {
+        if (deleteSelectedLayers()) {
+          e.preventDefault();
+          return;
+        }
+      }
+    }
+
     // 履歴系（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / Ctrl+Delete）。
     // 環境設定対象外（破壊的でないため固定キー、入力欄でも有効）。
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
@@ -643,6 +698,7 @@ function schedulePageRender() {
     renderAllSpreads();
     rebuildLayerList();
     updatePsdRotateVisibility();
+    updatePsdGuidesLockVisibility();
   });
 }
 
@@ -1277,6 +1333,28 @@ function bindRulerToggle() {
   );
 }
 
+// Ctrl+H はブラウザ既定で履歴を開くため、capture フェーズで preventDefault してから
+// テキストフレーム表示をトグル。InDesign 風に「枠装飾だけ消してテキストは残す」ため、
+// DOM は再描画せず body のクラスを toggle して CSS で見た目だけ切替える。
+function bindFramesToggle() {
+  const applyClass = () => {
+    document.body.classList.toggle("frames-hidden", !getFramesVisible());
+  };
+  applyClass();
+  onFramesVisibleChange(applyClass);
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (matchShortcut(e, "toggleFrames")) {
+        toggleFramesVisible();
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    },
+    { capture: true },
+  );
+}
+
 function bindZoomTool() {
   const out = document.getElementById("zoom-out-btn");
   const inn = document.getElementById("zoom-in-btn");
@@ -1450,6 +1528,8 @@ function init() {
   bindPdfRotate();
   bindPsdRotate();
   updatePsdRotateVisibility();
+  bindPsdGuidesLock();
+  updatePsdGuidesLockVisibility();
   mountPdfView();
   setupTauriDragDrop();
   bindParallelSync();
@@ -1458,6 +1538,8 @@ function init() {
   bindViewModeControls();
   bindParallelViewMode();
   initSettingsUi();
+  // 環境設定の「デフォルト」（文字サイズ・行間・フチ太さ・フォント）をツール初期値に反映。
+  applyToolDefaults();
   renderAllSpreads();
   loadFontsFromBackend();
   // フォントが非同期で登録されるたびにオーバーレイを再描画して反映。
@@ -1465,6 +1547,7 @@ function init() {
   bindGlobalBlurOnOutsideClick();
   initRulers();
   bindRulerToggle();
+  bindFramesToggle();
 }
 
 // INPUT/TEXTAREA/contenteditable 以外をクリックしたら、現在フォーカス中のテキスト入力から
