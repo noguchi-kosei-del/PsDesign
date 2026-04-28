@@ -65,6 +65,9 @@ const state = {
   // false のとき renderOverlay は中身を出さない（プレビューに集中したいとき用、Ctrl+H）。
   framesVisible: true,
   framesVisibleListeners: new Set(),
+  // AI 画像スキャン (run_ai_ocr) の最新結果。自動配置 (ai-place.js) で参照する。
+  // { doc: MokuroDocument, sourcePath: string } | null
+  aiOcrDoc: null,
 };
 
 const HISTORY_MAX = 100;
@@ -89,11 +92,21 @@ export function clearPages() {
   }
   setStrokeColor("none");
   setFillColor("default");
+  // OCR キャッシュ (aiOcrDoc) は PDF に紐付いている。PSD 切替では消さない。
+  // ai-place.js が sourcePath を current PDF と比較し、不一致なら自動で再スキャンする。
   // ツール初期値（フチ太さ・行間・文字サイズ・フォント）はユーザー設定の「デフォルト」を反映。
   applyToolDefaults();
   resetHistoryBaseline();
   // PDF は PSD 再読込から独立させる（ユーザー回転も保持）。ホームに戻る時のみ hamburger-menu 側で clearPdf を呼ぶ。
 }
+
+// ===== AI OCR ドキュメント (mokuro 結果) =====
+// 画像スキャン (run_ai_ocr) の結果を保持し、自動配置機能から参照する。
+export function setAiOcrDoc(doc, sourcePath) {
+  state.aiOcrDoc = { doc, sourcePath: sourcePath || null };
+}
+export function getAiOcrDoc() { return state.aiOcrDoc; }
+export function clearAiOcrDoc() { state.aiOcrDoc = null; }
 
 // 環境設定 → 「デフォルト」の値を新規テキストレイヤー用ツール状態に反映する。
 // アプリ起動時 / clearPages 時 / 設定パネルでの値変更時に呼ぶ。

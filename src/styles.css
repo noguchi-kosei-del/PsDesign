@@ -2373,3 +2373,453 @@ body.frames-hidden .layer-box-existing:not(.selected) {
 .key-capture-card .page-jump-actions {
   margin: 0 16px;
 }
+
+/* ===========================================================================
+ * AI セリフ自動抽出 (mokuro 統合)
+ * =========================================================================== */
+
+/* TXT パネル下の「AIで読み取り」ボタン */
+.ai-ocr-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 6px 12px;
+  background: var(--panel-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.ai-ocr-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.ai-ocr-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ai-ocr-btn svg {
+  flex-shrink: 0;
+}
+
+/* ハンバーガーメニュー footer の AIインストール ボタンに小バッジ */
+.ai-install-menu-btn {
+  position: relative;
+}
+.ai-install-menu-badge {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  min-width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--danger);
+  border: 1px solid var(--panel);
+  pointer-events: none;
+}
+.ai-install-menu-badge[hidden] { display: none; }
+
+/* AIインストール モーダル */
+.ai-install-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+  backdrop-filter: blur(2px);
+}
+.ai-install-modal[hidden] { display: none; }
+
+.ai-install-card {
+  width: 640px;
+  max-width: 95vw;
+  height: 80vh;
+  max-height: 80vh;
+  min-height: 540px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-install-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ai-install-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ai-install-intro {
+  padding: 12px 16px 4px;
+}
+.ai-install-intro-text {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.ai-install-intro-text code {
+  background: var(--bg);
+  padding: 1px 6px;
+  border-radius: 3px;
+  font-family: ui-monospace, "Consolas", "Menlo", monospace;
+  font-size: 11px;
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.ai-install-status {
+  padding: 6px 16px 8px;
+}
+.ai-status-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+}
+.ai-status-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.ai-status-row.installed .ai-status-dot {
+  background: #2ea043;
+  box-shadow: 0 0 8px rgba(46, 160, 67, 0.5);
+}
+.ai-status-row.missing .ai-status-dot {
+  background: var(--danger);
+}
+.ai-status-label {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.ai-status-value {
+  font-weight: 600;
+}
+
+.ai-phase-list {
+  list-style: none;
+  margin: 4px 16px 8px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.ai-phase-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-body);
+}
+.ai-phase-item:last-child { border-bottom: none; }
+
+.ai-phase-tick {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  flex-shrink: 0;
+  position: relative;
+}
+.ai-phase-item.active .ai-phase-tick {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(0, 120, 212, 0.18);
+  animation: ai-phase-pulse 1.4s ease-in-out infinite;
+}
+.ai-phase-item.done .ai-phase-tick {
+  border-color: #2ea043;
+  background: #2ea043;
+}
+.ai-phase-item.done .ai-phase-tick::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+@keyframes ai-phase-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.18); }
+  50%      { box-shadow: 0 0 0 6px rgba(0, 120, 212, 0.05); }
+}
+
+.ai-phase-label {
+  flex: 1;
+  font-weight: 500;
+}
+.ai-phase-state {
+  font-size: 11px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.ai-phase-item.active .ai-phase-state { color: var(--accent); font-weight: 600; }
+.ai-phase-item.done .ai-phase-state { color: #2ea043; font-weight: 600; }
+
+.ai-install-progress {
+  margin: 0 16px 8px;
+  padding: 10px 12px;
+  background: var(--panel-body);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.ai-install-progress[hidden] { display: none; }
+
+.ai-install-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.ai-install-active-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.ai-install-meta-right {
+  display: inline-flex;
+  gap: 6px;
+}
+.ai-meta-badge {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 1px 8px;
+  border-radius: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.ai-meta-badge:empty { display: none; }
+
+.ai-install-progress-track {
+  height: 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ai-install-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--accent);
+  transition: width 0.2s ease-out;
+}
+.ai-install-progress-count {
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.ai-install-progress-count:empty { display: none; }
+
+.ai-log-viewer {
+  flex: 1;
+  margin: 0 16px;
+  padding: 8px 10px;
+  font-family: ui-monospace, "Consolas", "Menlo", monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  line-height: 1.5;
+  color: var(--text);
+  min-height: 0;
+}
+.ai-log-line { margin: 0; }
+.ai-log-line.stderr { color: var(--danger); }
+
+.ai-install-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+/* TXT パネル下の「自動配置」ボタン (画像スキャンの隣)。
+   画像スキャンと同じ寸法・基本スタイルだが、確定アクションなのでアクセントを強める。 */
+.ai-place-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  margin-left: 6px;
+  padding: 6px 12px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  font-family: inherit;
+  font-weight: 600;
+  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+}
+.ai-place-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.ai-place-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.ai-place-btn svg { flex-shrink: 0; }
+
+/* 自動配置 — 確認モーダル */
+.ai-place-review-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 220;
+  backdrop-filter: blur(2px);
+}
+.ai-place-review-modal[hidden] { display: none; }
+
+.ai-place-review-card {
+  width: 720px;
+  max-width: 95vw;
+  max-height: 80vh;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-place-review-header {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.ai-place-review-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+.ai-place-review-intro {
+  padding: 10px 16px 4px;
+}
+.ai-place-review-intro-text {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.6;
+}
+.ai-place-review-intro-text kbd {
+  display: inline-block;
+  padding: 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  font-family: ui-monospace, "Consolas", "Menlo", monospace;
+  font-size: 11px;
+  color: var(--text);
+}
+
+.ai-place-review-tablewrap {
+  flex: 1;
+  margin: 8px 16px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+}
+.ai-place-review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  color: var(--text);
+}
+.ai-place-review-table th,
+.ai-place-review-table td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.ai-place-review-table th {
+  background: var(--panel-body);
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--text-muted);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.ai-place-review-table tbody tr:hover { background: var(--panel-hover); }
+.ai-place-review-table .ai-place-col-page { width: 56px; text-align: center; font-variant-numeric: tabular-nums; }
+.ai-place-review-table .ai-place-col-psd  { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 220px; }
+.ai-place-review-table .ai-place-col-num  { width: 70px; text-align: right; font-variant-numeric: tabular-nums; }
+.ai-place-review-table .ai-place-col-status { width: 130px; }
+.ai-place-status-ok    { color: #2ea043; font-weight: 600; }
+.ai-place-status-warn  { color: #d97706; font-weight: 600; }
+.ai-place-status-error { color: var(--danger); font-weight: 600; }
+
+.ai-place-review-summary {
+  padding: 8px 16px;
+  font-size: 12px;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-variant-numeric: tabular-nums;
+}
+
+.ai-place-review-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 12px 16px;
+  flex-shrink: 0;
+}
+
+/* インストール実行中はヘッダ右上の「完了」ボタンを赤い「中止」に切替。
+   .settings-done-btn の青を打ち消して --danger を当てる。 */
+.ai-install-cancel-btn,
+.settings-done-btn.ai-install-cancel-btn {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+.ai-install-cancel-btn:hover,
+.settings-done-btn.ai-install-cancel-btn:hover {
+  background: #c0392b;
+  border-color: #c0392b;
+}
+

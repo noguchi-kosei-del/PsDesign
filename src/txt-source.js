@@ -47,7 +47,7 @@ function toHalfWidthInt(s) {
   return Number.isFinite(n) ? n : null;
 }
 
-function parsePages(content) {
+export function parsePages(content) {
   const normalized = (content ?? "").replace(/\r\n?/g, "\n");
   const re = new RegExp(PAGE_MARKER_RE.source, "gi");
   const byPage = new Map();
@@ -191,6 +191,13 @@ export async function loadTxtFromPath(path) {
     console.error(e);
     toast(`テキスト読込失敗: ${e.message ?? e}`, { kind: "error", duration: 4500 });
   }
+}
+
+// 文字列バッファから直接 TXT パネルに流し込むヘルパー。
+// AI OCR 結果 (ai-ocr.js) や、その他のプログラム生成テキストから呼ぶ。
+export function loadTxtFromContent(name, content) {
+  setTxtSource({ name: name || "untitled.txt", content: content || "" });
+  renderViewer();
 }
 
 async function handleFileDropped(file) {

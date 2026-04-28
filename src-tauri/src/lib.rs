@@ -1,5 +1,6 @@
 mod fonts;
 mod jsx_gen;
+mod ocr;
 mod photoshop;
 
 use serde::{Deserialize, Serialize};
@@ -133,11 +134,17 @@ async fn list_psd_files(folder: String) -> Result<Vec<String>, String> {
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             apply_edits_via_photoshop,
             list_fonts,
             read_binary_file,
-            list_psd_files
+            list_psd_files,
+            ocr::check_ai_models,
+            ocr::install_ai_models,
+            ocr::cancel_ai_install,
+            ocr::run_ai_ocr,
+            ocr::export_ai_text
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

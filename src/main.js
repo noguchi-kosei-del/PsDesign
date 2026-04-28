@@ -11,6 +11,9 @@ import {
   rebuildLayerList,
 } from "./text-editor.js";
 import { initTxtSource, loadTxtFromPath } from "./txt-source.js";
+import { bindAiInstallMenu } from "./ai-install.js";
+import { bindAiOcrButton } from "./ai-ocr.js";
+import { bindAiPlaceButton } from "./ai-place.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   confirmDialog,
@@ -1521,6 +1524,9 @@ function init() {
   bindWindowControls();
   bindPageJumpDialog();
   initTxtSource();
+  bindAiInstallMenu();
+  bindAiOcrButton();
+  bindAiPlaceButton();
   bindPageNav();
   bindCollapseToggles();
   bindSectionToggles();

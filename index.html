@@ -324,6 +324,29 @@
                 </svg>
               </button>
             </div>
+            <button id="ai-ocr-btn" class="ai-ocr-btn" type="button" title="開いている PDF / 画像から AI でセリフを抽出" aria-label="画像スキャン" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+                <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+                <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+                <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+                <path d="M7 12h10"/>
+              </svg>
+              <span>画像スキャン</span>
+            </button>
+            <button id="ai-place-btn" class="ai-place-btn" type="button" title="検出した吹き出しに TXT のセリフを自動で割り当てて配置" aria-label="自動配置">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/>
+                <path d="m14 7 3 3"/>
+                <path d="M5 6v4"/>
+                <path d="M19 14v4"/>
+                <path d="M10 2v2"/>
+                <path d="M7 8H3"/>
+                <path d="M21 16h-4"/>
+                <path d="M11 3H9"/>
+              </svg>
+              <span>自動配置</span>
+            </button>
             <div id="txt-source-dropzone" class="txt-source-dropzone">
               <div id="txt-source-viewer" class="txt-source-viewer" hidden></div>
               <div id="txt-source-empty" class="txt-source-empty">
@@ -497,6 +520,18 @@
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2h-4a1 1 0 0 1-1-1v-6h-4v6a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2z"/>
           </svg>
         </button>
+        <button id="ai-install-btn" class="menu-icon-btn ai-install-menu-btn" type="button" title="AIインストール (manga-ocr / comic-text-detector)" aria-label="AIインストール">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <rect x="4" y="6" width="16" height="12" rx="2"/>
+            <path d="M8 10h.01"/>
+            <path d="M16 10h.01"/>
+            <path d="M9 14c.667.667 1.333 1 3 1s2.333-.333 3-1"/>
+            <path d="M12 2v4"/>
+            <path d="M3 10h2"/>
+            <path d="M19 10h2"/>
+          </svg>
+          <span class="ai-install-menu-badge" id="ai-install-menu-badge" hidden></span>
+        </button>
       </div>
     </aside>
     <div class="progress-modal" id="confirm-modal" hidden>
@@ -610,6 +645,98 @@
         <div class="page-jump-actions">
           <button type="button" id="key-capture-cancel" class="page-jump-btn">キャンセル</button>
           <button type="button" id="key-capture-ok" class="page-jump-btn page-jump-btn-primary" disabled>設定</button>
+        </div>
+      </div>
+    </div>
+    <div class="ai-install-modal" id="ai-install-modal" data-tauri-drag-region hidden>
+      <div class="ai-install-card" role="dialog" aria-modal="true" aria-labelledby="ai-install-title" data-tauri-drag-region>
+        <div class="ai-install-header" data-tauri-drag-region>
+          <span class="ai-install-title" id="ai-install-title" data-tauri-drag-region>AIインストール</span>
+          <button type="button" id="ai-install-close-btn" class="settings-done-btn" title="閉じる" aria-label="閉じる">完了</button>
+        </div>
+        <div class="ai-install-intro" data-tauri-drag-region>
+          <p class="ai-install-intro-text" data-tauri-drag-region>
+            漫画のセリフを自動抽出するために、以下の AI モデルを <code>%LOCALAPPDATA%\PsDesign\ai-runtime</code> にインストールします（合計 約 3〜5 GB / 10〜30 分）。
+          </p>
+        </div>
+        <div class="ai-install-status">
+          <div class="ai-status-row" id="ai-status-runtime">
+            <span class="ai-status-dot"></span>
+            <span class="ai-status-label">ランタイム状態:</span>
+            <span class="ai-status-value" id="ai-status-runtime-value">未確認</span>
+          </div>
+        </div>
+        <ul class="ai-phase-list" id="ai-phase-list">
+          <li class="ai-phase-item" data-phase="base">
+            <span class="ai-phase-tick" aria-hidden="true"></span>
+            <span class="ai-phase-label">共通基盤 (Python / pip / build prerequisites)</span>
+            <span class="ai-phase-state" id="ai-phase-base-state">未開始</span>
+          </li>
+          <li class="ai-phase-item" data-phase="ctd">
+            <span class="ai-phase-tick" aria-hidden="true"></span>
+            <span class="ai-phase-label">comic-text-detector (吹き出し検出)</span>
+            <span class="ai-phase-state" id="ai-phase-ctd-state">未開始</span>
+          </li>
+          <li class="ai-phase-item" data-phase="mocr">
+            <span class="ai-phase-tick" aria-hidden="true"></span>
+            <span class="ai-phase-label">manga-ocr (日本語OCR)</span>
+            <span class="ai-phase-state" id="ai-phase-mocr-state">未開始</span>
+          </li>
+          <li class="ai-phase-item" data-phase="torch">
+            <span class="ai-phase-tick" aria-hidden="true"></span>
+            <span class="ai-phase-label">PyTorch (CUDA) + 検証</span>
+            <span class="ai-phase-state" id="ai-phase-torch-state">未開始</span>
+          </li>
+        </ul>
+        <div class="ai-install-progress" id="ai-install-progress" hidden>
+          <div class="ai-install-progress-meta">
+            <span class="ai-install-active-label" id="ai-install-active-label">準備中</span>
+            <span class="ai-install-meta-right">
+              <span id="ai-install-speed" class="ai-meta-badge"></span>
+              <span id="ai-install-eta" class="ai-meta-badge"></span>
+            </span>
+          </div>
+          <div class="ai-install-progress-track">
+            <div class="ai-install-progress-fill" id="ai-install-progress-fill"></div>
+          </div>
+          <div class="ai-install-progress-count" id="ai-install-progress-count"></div>
+        </div>
+        <div class="ai-log-viewer" id="ai-log-viewer" aria-live="polite" data-tauri-drag-region="false"></div>
+        <div class="ai-install-actions">
+          <button type="button" id="ai-install-start-btn" class="page-jump-btn page-jump-btn-primary">インストール開始</button>
+          <button type="button" id="ai-install-cancel-btn" class="page-jump-btn" hidden>キャンセル</button>
+        </div>
+      </div>
+    </div>
+    <div class="ai-place-review-modal" id="ai-place-review-modal" hidden>
+      <div class="ai-place-review-card" role="dialog" aria-modal="true" aria-labelledby="ai-place-review-title">
+        <div class="ai-place-review-header">
+          <span class="ai-place-review-title" id="ai-place-review-title">自動配置プラン確認</span>
+        </div>
+        <div class="ai-place-review-intro">
+          <p class="ai-place-review-intro-text">
+            検出した吹き出しと TXT ブロックをページごとに突き合わせます。配置を実行すると、新規テキストレイヤーがプレビューに追加されます。Photoshop への書き出しは、その後 <kbd>Ctrl</kbd>+<kbd>S</kbd> から行ってください。
+          </p>
+        </div>
+        <div class="ai-place-review-tablewrap">
+          <table class="ai-place-review-table">
+            <thead>
+              <tr>
+                <th class="ai-place-col-page">ページ</th>
+                <th class="ai-place-col-psd">PSD</th>
+                <th class="ai-place-col-num">吹き出し</th>
+                <th class="ai-place-col-num">TXT</th>
+                <th class="ai-place-col-num">配置</th>
+                <th class="ai-place-col-status">状態</th>
+              </tr>
+            </thead>
+            <tbody id="ai-place-review-tbody"></tbody>
+          </table>
+        </div>
+        <div class="ai-place-review-summary" id="ai-place-review-summary"></div>
+        <div class="ai-place-review-actions">
+          <button type="button" id="ai-place-review-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="ai-place-review-ok" class="page-jump-btn page-jump-btn-primary">配置を実行</button>
         </div>
       </div>
     </div>
