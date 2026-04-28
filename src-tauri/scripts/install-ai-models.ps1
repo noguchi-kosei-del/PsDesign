@@ -117,22 +117,22 @@ Invoke-Pip -PhaseLabel "Phase 3" -Args (@("-u", "-m", "pip", "install", "-q", "-
 # mokuro の依存を経由してインストールされる。ここでは進捗ログ用のフェーズ
 # 区切りとして mokuro 本体に含まれるテキスト検出ライブラリ群を先行インストールする。
 # pip のキャッシュがあるので mokuro 本体インストール時に再ダウンロードは発生しない。
-Write-Step "Phase 4a. Installing comic-text-detector (吹き出し検出モデル)"
+Write-Step "Phase 4a. Installing comic-text-detector (bubble detection model)"
 Invoke-Pip -PhaseLabel "Phase 4a" -Args ($PipBaseArgs + @(
     "shapely", "scipy", "scikit-image", "opencv-python-headless", "pyclipper",
     "transformers", "natsort", "numpy", "Pillow"
 ))
 
 # ---------------------------------------------------------------------------
-# Phase 4b. manga-ocr (日本語 OCR モデル)
+# Phase 4b. manga-ocr (Japanese OCR model)
 # ---------------------------------------------------------------------------
-Write-Step "Phase 4b. Installing manga-ocr (日本語OCRモデル)"
+Write-Step "Phase 4b. Installing manga-ocr (Japanese OCR model)"
 Invoke-Pip -PhaseLabel "Phase 4b" -Args ($PipBaseArgs + @("manga-ocr"))
 
 # ---------------------------------------------------------------------------
-# Phase 4c. mokuro (上記 2 モデルを束ねるオーケストレータ)
+# Phase 4c. mokuro (orchestrator)
 # ---------------------------------------------------------------------------
-Write-Step "Phase 4c. Installing mokuro (オーケストレータ)"
+Write-Step "Phase 4c. Installing mokuro (orchestrator)"
 Invoke-Pip -PhaseLabel "Phase 4c" -Args ($PipBaseArgs + @("mokuro"))
 
 # ---------------------------------------------------------------------------
@@ -149,7 +149,10 @@ Invoke-Pip -PhaseLabel "Phase 5" -Args ($PipBaseArgs + @(
 # Phase 6. Verify
 # ---------------------------------------------------------------------------
 Write-Step "Phase 6. Verifying runtime"
+# pkg_resources is deprecated 警告を抑制 (comic_text_detector の依存が古い API を使っている)
+$env:PYTHONWARNINGS = "ignore::UserWarning"
 & $PythonExe -u -c "import torch, mokuro, manga_ocr; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
+Remove-Item Env:PYTHONWARNINGS -ErrorAction SilentlyContinue
 $mokuroExe = Join-Path $RuntimeDir "Scripts/mokuro.exe"
 if (-not (Test-Path $mokuroExe)) {
     throw "mokuro.exe not found at $mokuroExe"

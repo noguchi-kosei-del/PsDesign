@@ -666,25 +666,35 @@
             <span class="ai-status-value" id="ai-status-runtime-value">未確認</span>
           </div>
         </div>
+        <div class="ai-install-timing" id="ai-install-timing" hidden>
+          <span class="ai-install-timing-row">
+            <span class="ai-install-timing-label">経過</span>
+            <span class="ai-install-timing-value" id="ai-install-elapsed">0秒</span>
+          </span>
+          <span class="ai-install-timing-row">
+            <span class="ai-install-timing-label">合計目安</span>
+            <span class="ai-install-timing-value">約 10〜20 分</span>
+          </span>
+        </div>
         <ul class="ai-phase-list" id="ai-phase-list">
           <li class="ai-phase-item" data-phase="base">
             <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">共通基盤 (Python / pip / build prerequisites)</span>
+            <span class="ai-phase-label">共通基盤 (Python / pip / build prerequisites)<span class="ai-phase-eta">通常 ~1分</span></span>
             <span class="ai-phase-state" id="ai-phase-base-state">未開始</span>
           </li>
           <li class="ai-phase-item" data-phase="ctd">
             <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">comic-text-detector (吹き出し検出)</span>
+            <span class="ai-phase-label">comic-text-detector (吹き出し検出)<span class="ai-phase-eta">通常 ~3分</span></span>
             <span class="ai-phase-state" id="ai-phase-ctd-state">未開始</span>
           </li>
           <li class="ai-phase-item" data-phase="mocr">
             <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">manga-ocr (日本語OCR)</span>
+            <span class="ai-phase-label">manga-ocr (日本語OCR)<span class="ai-phase-eta">通常 ~1分</span></span>
             <span class="ai-phase-state" id="ai-phase-mocr-state">未開始</span>
           </li>
           <li class="ai-phase-item" data-phase="torch">
             <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">PyTorch (CUDA) + 検証</span>
+            <span class="ai-phase-label">PyTorch (CUDA) + 検証<span class="ai-phase-eta">通常 ~5〜10分（最も長いフェーズ）</span></span>
             <span class="ai-phase-state" id="ai-phase-torch-state">未開始</span>
           </li>
         </ul>

@@ -2823,6 +2823,43 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   border-color: #c0392b;
 }
 
+/* ---- AI install timing & phase ETA ---- */
+.ai-install-timing {
+  display: flex;
+  gap: 18px;
+  align-items: baseline;
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.ai-install-timing-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.ai-install-timing-label {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.ai-install-timing-value {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.ai-phase-eta {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-weight: 400;
+  margin-top: 2px;
+}
+.ai-phase-item.active .ai-phase-eta {
+  color: var(--accent);
+}
+
 /* ---- Auto-update modal dialog ---- */
 .update-modal {
   position: fixed;

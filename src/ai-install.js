@@ -240,6 +240,19 @@ async function runInstall() {
   const startBtn = $("ai-install-start-btn");
   if (startBtn) startBtn.disabled = true;
 
+  // 経過時間表示の開始
+  const installStartedAt = Date.now();
+  const timingBox = $("ai-install-timing");
+  const elapsedEl = $("ai-install-elapsed");
+  if (timingBox) timingBox.hidden = false;
+  if (elapsedEl) elapsedEl.textContent = "0秒";
+  const elapsedTick = setInterval(() => {
+    if (elapsedEl) {
+      const sec = Math.floor((Date.now() - installStartedAt) / 1000);
+      elapsedEl.textContent = formatDuration(sec);
+    }
+  }, 1000);
+
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
 
@@ -287,6 +300,8 @@ async function runInstall() {
     // userCancelled === true: ポップアップ・トーストとも出さず静かに戻る
   } finally {
     clearInterval(tick);
+    clearInterval(elapsedTick);
+    if (timingBox) timingBox.hidden = true;
     for (const u of listeners) try { u(); } catch (_) {}
     listeners = [];
     runningInstall = false;
