@@ -2823,3 +2823,59 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   border-color: #c0392b;
 }
 
+/* ---- Auto-update banner ---- */
+.update-banner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 6px 16px;
+  background: rgba(64, 130, 220, 0.18);
+  border-bottom: 1px solid rgba(64, 130, 220, 0.45);
+  color: var(--text);
+  font-size: 13px;
+}
+.update-banner[hidden] {
+  display: none;
+}
+.update-banner-text {
+  flex: 1 1 auto;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#update-banner-version {
+  font-weight: 700;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+}
+.update-banner-apply {
+  padding: 4px 12px;
+  background: var(--accent);
+  color: #fff;
+  border: 1px solid var(--accent);
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.update-banner-apply:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+.update-banner-apply:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.update-banner-dismiss {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.update-banner-dismiss:hover {
+  color: var(--text);
+  border-color: var(--text-muted);
+}
+
+

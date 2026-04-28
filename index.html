@@ -8,6 +8,11 @@
   </head>
   <body>
     <div id="app" class="app">
+      <div id="update-banner" class="update-banner" hidden>
+        <span class="update-banner-text">新しいバージョン <span id="update-banner-version"></span> があります。</span>
+        <button id="update-apply-btn" type="button" class="update-banner-apply">今すぐ更新</button>
+        <button id="update-dismiss-btn" type="button" class="update-banner-dismiss" aria-label="閉じる">後で</button>
+      </div>
       <header class="toolbar" data-tauri-drag-region>
         <h1 data-tauri-drag-region class="app-logo" aria-label="PsDesign" title="PsDesign">
           <span class="app-logo-icon" aria-hidden="true">Pd</span>

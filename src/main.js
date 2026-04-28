@@ -14,6 +14,7 @@ import { initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { bindAiInstallMenu } from "./ai-install.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
 import { bindAiPlaceButton } from "./ai-place.js";
+import { bindAutoUpdater } from "./auto-updater.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   confirmDialog,
@@ -1527,6 +1528,7 @@ function init() {
   bindAiInstallMenu();
   bindAiOcrButton();
   bindAiPlaceButton();
+  bindAutoUpdater();
   bindPageNav();
   bindCollapseToggles();
   bindSectionToggles();
