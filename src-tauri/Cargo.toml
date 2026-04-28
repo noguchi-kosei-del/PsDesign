@@ -1,6 +1,6 @@
 [package]
 name = "psdesign"
-version = "1.2.1"
+version = "1.2.2"
 description = "PSD spread editor with Photoshop apply-back, AI OCR, and auto-placement (mokuro)"
 edition = "2021"
 rust-version = "1.77"

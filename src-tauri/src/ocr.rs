@@ -568,6 +568,12 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
         .arg(&script)
         .arg("-RuntimeDir")
         .arg(&target)
+        // Python サブプロセスのstdout buffering / cp932 / Pipe to stdout was broken
+        // 対策。PowerShell から呼ばれる pip / python -c が安定する。
+        .env("PYTHONUNBUFFERED", "1")
+        .env("PYTHONIOENCODING", "utf-8")
+        .env("PYTHONLEGACYWINDOWSSTDIO", "0")
+        .env("PYTHONUTF8", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
