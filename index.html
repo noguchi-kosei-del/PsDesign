@@ -8,11 +8,6 @@
   </head>
   <body>
     <div id="app" class="app">
-      <div id="update-banner" class="update-banner" hidden>
-        <span class="update-banner-text">新しいバージョン <span id="update-banner-version"></span> があります。</span>
-        <button id="update-apply-btn" type="button" class="update-banner-apply">今すぐ更新</button>
-        <button id="update-dismiss-btn" type="button" class="update-banner-dismiss" aria-label="閉じる">後で</button>
-      </div>
       <header class="toolbar" data-tauri-drag-region>
         <h1 data-tauri-drag-region class="app-logo" aria-label="PsDesign" title="PsDesign">
           <span class="app-logo-icon" aria-hidden="true">Pd</span>
@@ -747,6 +742,27 @@
     </div>
     <div class="toast-container" id="toast-container" aria-live="polite"></div>
     <div class="drag-overlay" id="drag-overlay" aria-hidden="true"></div>
+
+    <!-- 自動更新ダイアログ -->
+    <div id="update-modal" class="update-modal" role="dialog" aria-modal="true" aria-labelledby="update-modal-title" hidden>
+      <div class="update-modal-card">
+        <div id="update-modal-icon" class="update-modal-icon update-modal-icon-info">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <line x1="12" y1="15" x2="12" y2="3"/>
+          </svg>
+        </div>
+        <h3 id="update-modal-title" class="update-modal-title">新しいバージョンがあります</h3>
+        <div id="update-modal-version" class="update-modal-version">v–</div>
+        <p id="update-modal-message" class="update-modal-message">今すぐアップデートしますか？</p>
+        <div id="update-modal-buttons" class="update-modal-buttons">
+          <button type="button" id="update-modal-later" class="update-modal-secondary">後で</button>
+          <button type="button" id="update-modal-now" class="update-modal-primary">アップデート</button>
+        </div>
+      </div>
+    </div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>

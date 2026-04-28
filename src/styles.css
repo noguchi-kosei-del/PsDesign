@@ -2823,59 +2823,137 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   border-color: #c0392b;
 }
 
-/* ---- Auto-update banner ---- */
-.update-banner {
+/* ---- Auto-update modal dialog ---- */
+.update-modal {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
   display: flex;
   align-items: center;
-  gap: 12px;
-  padding: 6px 16px;
-  background: rgba(64, 130, 220, 0.18);
-  border-bottom: 1px solid rgba(64, 130, 220, 0.45);
-  color: var(--text);
-  font-size: 13px;
+  justify-content: center;
+  z-index: 350;
+  opacity: 0;
+  transition: opacity 0.2s ease;
+  pointer-events: none;
 }
-.update-banner[hidden] {
+.update-modal[hidden] {
   display: none;
 }
-.update-banner-text {
-  flex: 1 1 auto;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+.update-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
 }
-#update-banner-version {
-  font-weight: 700;
-  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
-}
-.update-banner-apply {
-  padding: 4px 12px;
-  background: var(--accent);
-  color: #fff;
-  border: 1px solid var(--accent);
-  border-radius: 4px;
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
-}
-.update-banner-apply:hover:not(:disabled) {
-  filter: brightness(1.08);
-}
-.update-banner-apply:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-.update-banner-dismiss {
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--text-muted);
+
+.update-modal-card {
+  background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 4px;
-  font-size: 12px;
-  cursor: pointer;
+  border-radius: 12px;
+  padding: 28px 36px 24px;
+  max-width: 420px;
+  width: calc(100% - 48px);
+  text-align: center;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+  transform: scale(0.96);
+  transition: transform 0.2s ease;
 }
-.update-banner-dismiss:hover {
+.update-modal.visible .update-modal-card {
+  transform: scale(1);
+}
+
+.update-modal-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 14px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(64, 130, 220, 0.15);
+  color: var(--accent);
+  transition: background 0.2s ease, color 0.2s ease;
+}
+.update-modal-icon-spin svg {
+  animation: update-modal-spin 1s linear infinite;
+}
+.update-modal-icon-success {
+  background: rgba(94, 198, 164, 0.18);
+  color: #5ec6a4;
+}
+.update-modal-icon-error {
+  background: rgba(196, 30, 58, 0.18);
+  color: #c41e3a;
+}
+@keyframes update-modal-spin {
+  to { transform: rotate(360deg); }
+}
+
+.update-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0 0 6px;
+}
+.update-modal-version {
+  font-size: 14px;
+  font-weight: 600;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+  color: var(--accent);
+  margin: 0 0 14px;
+  letter-spacing: 0.02em;
+}
+.update-modal-version[hidden] {
+  display: none;
+}
+.update-modal-message {
+  font-size: 13px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin: 0 0 22px;
+  white-space: pre-wrap;
+}
+
+.update-modal-buttons {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+.update-modal-buttons[hidden] {
+  display: none;
+}
+
+.update-modal-secondary {
+  padding: 8px 20px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text-muted);
+  font-size: 13px;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.update-modal .update-modal-secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.04);
   color: var(--text);
   border-color: var(--text-muted);
+}
+.update-modal-primary {
+  padding: 8px 22px;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  border-radius: 6px;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s ease, box-shadow 0.15s ease;
+}
+.update-modal .update-modal-primary:hover:not(:disabled) {
+  filter: brightness(1.08);
+  box-shadow: 0 4px 12px rgba(64, 130, 220, 0.35);
+}
+.update-modal-primary:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 
