@@ -1302,7 +1302,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   top: 100%;
   left: 50%;
   transform: translateX(-50%);
-  margin-top: 2px;
+  margin-top: 10px;
   background: #000;
   color: #fff;
   font: 700 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;

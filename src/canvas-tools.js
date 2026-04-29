@@ -347,7 +347,7 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       box.appendChild(createRotateHandle(ctx, layer.id));
-      box.appendChild(createSizeBadge(edit.sizePt ?? layer.fontSize ?? 24, page));
+      box.appendChild(createSizeBadge(edit.sizePt ?? layer.fontSize ?? 24, page, edit.fontPostScriptName ?? layer.font ?? null));
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });
@@ -382,7 +382,7 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
       box.appendChild(createRotateHandle(ctx, nl.tempId));
-      box.appendChild(createSizeBadge(nl.sizePt ?? 24, page));
+      box.appendChild(createSizeBadge(nl.sizePt ?? 24, page, nl.fontPostScriptName ?? null));
     }
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, nl.tempId), { passive: false });
@@ -449,13 +449,14 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings) {
   }
 }
 
-function createSizeBadge(sizePt, page) {
+function createSizeBadge(sizePt, page, fontPostScriptName) {
   const el = document.createElement("div");
   el.className = "layer-size-badge";
   // 基準PSD 比で換算した pt を表示。基準が 1 ページ目（または未読込）の場合は素のまま。
   const display = toDisplaySizePt(sizePt ?? 0, page);
   const rounded = Math.round((display ?? 0) * 10) / 10;
-  el.textContent = `${rounded}pt`;
+  const fontName = fontPostScriptName ? (getFontDisplayName(fontPostScriptName) ?? fontPostScriptName) : "";
+  el.textContent = fontName ? `${fontName} · ${rounded}pt` : `${rounded}pt`;
   return el;
 }
 
@@ -1169,16 +1170,22 @@ function startInPlaceEdit(ctx, target, options = {}) {
       setEditingContext({ ...editTargetMeta, currentLineIndex: lineIndex, totalLines, contents });
     },
     onCommit: (value) => {
+      // afterCommit 付き（原稿テキスト dblclick 経由など）はレイヤー編集と
+      // afterCommit 内の状態変更（setTxtSource など）を 1 つの history snapshot に
+      // 束ねる。これがないと Ctrl+Z で片方だけ巻き戻り原稿表示と乖離する。
+      const hasAfter = typeof options.afterCommit === "function";
+      if (hasAfter) beginHistoryTransient();
       if (target.kind === "existing") {
         setEdit(page.path, target.layer.id, { contents: value });
       } else {
         updateNewLayer(target.nl.tempId, { contents: value });
       }
+      if (hasAfter) {
+        try { options.afterCommit(value); } catch (e) { console.error("afterCommit error", e); }
+        commitHistoryTransient();
+      }
       refreshAllOverlays();
       rebuildLayerList();
-      if (typeof options.afterCommit === "function") {
-        try { options.afterCommit(value); } catch (e) { console.error("afterCommit error", e); }
-      }
     },
     onClose: () => setEditingContext(null),
   });

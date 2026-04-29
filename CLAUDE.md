@@ -1077,3 +1077,43 @@ K5. **ショートカット衝突警告** ([src/settings-ui.js](src/settings-ui.
 > - 旧: サイズ刻みは固定（ボタン ±1pt / ホイール ±1pt） → 新: 環境設定で 0.1 / 0.5 を選択、グリッドスナップ付き
 > - 旧: 完了通知は toast / プレーンタイトル + 絵文字 → 新: 中央モーダル + 緑チェック / オレンジ警告の SVG アイコン
 > - 旧: 画像スキャンは現在の見本を流用 → 新: 常にファイル選択（毎回意識的に対象を選ぶ）+ 結果は sourcePath 不問で再利用
+
+---
+
+## v1.4.1: 原稿テキスト編集の Undo 同期・サイズバッジにフォント併記
+
+### A. 原稿テキスト dblclick 編集の Undo/Redo 同期
+
+A1. **問題**: txt-source-viewer の段落を dblclick → in-place 編集 → 確定 で原稿テキスト側のブロックを書き換えた後に Ctrl+Z で巻き戻すと、テキストフレーム側は元のテキストに戻るが **txt-source-viewer の表示は新しいテキストのまま** で乖離する。原因は履歴スナップショット (`snapshotState`) が `edits / newLayers / nextTempId` のみを保存しており、`txtSource` が undo 対象外だったため。
+
+A2. **`state.txtSource` を履歴スナップショットに含める** ([src/state.js](src/state.js)):
+- `snapshotState()` に `txtSource: state.txtSource ? { ...state.txtSource } : null` を追加（name / content をシャローコピー）
+- `restoreSnapshot()` で `Object.prototype.hasOwnProperty.call(snap, "txtSource")` チェック付きで復元（古い snapshot との forward 互換）。`txtSourceEqual(a, b)` で同値判定し、変化があるときだけ `txtSelection` / `txtSelectedBlockIndex` をクリア + listener 発火（不要再描画を抑制）。
+- `setTxtSource` / `clearTxtSource` を内容変化時のみ listener 発火 + `pushHistorySnapshot()` 呼出に変更。`txtSourceListeners: new Set()` + `onTxtSourceChange(fn)` API を追加。
+- 副作用: TXT ファイルロード / clearTxtSource もこれで undo 可能になるが、history baseline は `clearPages()` 末尾の `resetHistoryBaseline()` で常にリセットされるため、PSD 切替後に古いロード履歴が残ることはない。
+
+A3. **txt-source.js の listener 購読** ([src/txt-source.js](src/txt-source.js)):
+- `initTxtSource()` で `onTxtSourceChange(() => renderViewer())` を購読 → undo/redo で `txtSource` が復元されたとき viewer が自動で再描画される。
+- `updateTxtSourceBlock` 内の明示 `renderViewer()` 呼出は撤去（listener 経由で同期描画されるため不要）。
+
+A4. **dblclick 編集の history transient 化** ([src/canvas-tools.js](src/canvas-tools.js) `startInPlaceEdit.onCommit`):
+- `options.afterCommit` が指定されているケース（dblclick 経由）は `beginHistoryTransient()` … `commitHistoryTransient()` で `setEdit` / `updateNewLayer` + `afterCommit(value)`（→ `setTxtSource`）を囲む。これにより**レイヤーテキスト編集と原稿テキスト書換が 1 つの history snapshot にまとまり、Ctrl+Z 1 回で両方同時に巻き戻る**。
+- afterCommit 無し（通常の T ツール in-place 編集など）は従来通り `setEdit` / `updateNewLayer` の中で個別 push される。
+
+### B. テキストフレーム下のサイズバッジ刷新
+
+B1. **フォント名を併記** ([src/canvas-tools.js](src/canvas-tools.js) `createSizeBadge`):
+- 引数を `(sizePt, page)` → `(sizePt, page, fontPostScriptName)` に拡張。呼出側で既存レイヤー = `edit.fontPostScriptName ?? layer.font ?? null`、新規レイヤー = `nl.fontPostScriptName ?? null` を渡す。
+- `getFontDisplayName(psName)` でフォントの表示名を解決し、`{フォント名} · {N}pt` 形式で表示。フォント未指定時は従来どおり `{N}pt` のみ。
+
+B2. **テキストフレームから余白を取る** ([src/styles.css](src/styles.css) `.layer-size-badge`):
+- `margin-top: 2px` → `10px`。バッジが枠に密着していて視認性が悪かったのを改善。`top: 100%` 基準で枠下中央外側に張り出す配置はそのまま。
+
+### バージョン
+
+C1. **1.4.0 → 1.4.1** ([package.json](package.json) / [src-tauri/Cargo.toml](src-tauri/Cargo.toml) / [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) を同期更新)。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: 履歴スナップショットは `edits / newLayers / nextTempId` のみ → 新: `txtSource` も含める。`onTxtSourceChange` listener で UI 再描画を駆動
+> - 旧: dblclick 編集は setEdit と setTxtSource が別々に snapshot を push → 新: `beginHistoryTransient` で 1 snapshot に束ね、Ctrl+Z 一発で両方巻き戻る
+> - 旧: サイズバッジ = `{N}pt` のみ、`margin-top: 2px` で枠に密着 → 新: `{フォント名} · {N}pt`、`margin-top: 10px` で枠から離して視認性向上

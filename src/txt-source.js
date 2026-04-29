@@ -8,6 +8,7 @@ import {
   getTxtSelection,
   getTxtSource,
   onPageIndexChange,
+  onTxtSourceChange,
   setTxtSelectedBlockIndex,
   setTxtSelection,
   setTxtSource,
@@ -188,8 +189,8 @@ function updateTxtSourceBlock(pageNumber, oldParagraph, newParagraph) {
   if (newContent == null || newContent === source.content) return false;
   // setTxtSource は txtSelection / txtSelectedBlockIndex をリセットするが
   // dblclick 経路ではすでにクリア済みなので問題なし。
+  // setTxtSource → onTxtSourceChange listener が renderViewer を呼ぶので明示呼出は不要。
   setTxtSource({ name: source.name, content: newContent });
-  renderViewer();
   return true;
 }
 
@@ -414,6 +415,10 @@ export function initTxtSource() {
     setTxtSelection("");
     renderViewer();
   });
+  // undo/redo で原稿テキストが復元されたとき viewer を再描画。
+  // setTxtSource からも同じ listener が発火する（loadTxtFromPath 等の呼び出し直後の
+  // 明示 renderViewer 呼出と二重実行になるが、いずれも同期描画なので副作用なし）。
+  onTxtSourceChange(() => renderViewer());
   $("clear-txt-btn").addEventListener("click", async () => {
     if (!getTxtSource()) return;
     const ok = await confirmDialog({

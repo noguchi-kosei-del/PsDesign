@@ -11,6 +11,7 @@ const state = {
   toolListeners: new Set(),
   nextTempId: 1,
   txtSource: null,
+  txtSourceListeners: new Set(),
   txtSelection: "",
   txtSelectedBlockIndex: null,
   textSize: 12,
@@ -193,7 +194,16 @@ function snapshotState() {
     edits: Array.from(state.edits.entries()).map(([k, v]) => [k, { ...v }]),
     newLayers: state.newLayers.map((l) => ({ ...l })),
     nextTempId: state.nextTempId,
+    // txt-source（原稿テキスト）の内容も undo/redo で復元する。dblclick 経由の
+    // in-place 編集が原稿側を書き換えるケースで、レイヤー編集と原稿変更を 1 ステップで巻き戻す。
+    txtSource: state.txtSource ? { ...state.txtSource } : null,
   };
+}
+
+function txtSourceEqual(a, b) {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return a.name === b.name && a.content === b.content;
 }
 
 function restoreSnapshot(snap) {
@@ -207,6 +217,17 @@ function restoreSnapshot(snap) {
     }
     return true;
   });
+  // txtSource を復元。古いスナップショット（フィールド未保存）は素通し。
+  if (Object.prototype.hasOwnProperty.call(snap, "txtSource")) {
+    const restored = snap.txtSource ? { ...snap.txtSource } : null;
+    if (!txtSourceEqual(state.txtSource, restored)) {
+      state.txtSource = restored;
+      // 復元先と現在で内容が変わるため、選択は無効になり得る。安全側に倒してクリア。
+      state.txtSelection = "";
+      state.txtSelectedBlockIndex = null;
+      for (const fn of state.txtSourceListeners) fn(state.txtSource);
+    }
+  }
   for (const fn of state.historyListeners) fn();
 }
 
@@ -480,15 +501,30 @@ export function getNewLayersForPsd(psdPath) {
 }
 
 export function setTxtSource(source) {
-  state.txtSource = source ? { name: source.name, content: source.content } : null;
+  const next = source ? { name: source.name, content: source.content } : null;
+  const same = txtSourceEqual(state.txtSource, next);
+  state.txtSource = next;
   state.txtSelection = "";
   state.txtSelectedBlockIndex = null;
+  if (!same) {
+    for (const fn of state.txtSourceListeners) fn(state.txtSource);
+    pushHistorySnapshot();
+  }
 }
 export function getTxtSource() { return state.txtSource; }
 export function clearTxtSource() {
+  const wasNonNull = state.txtSource !== null;
   state.txtSource = null;
   state.txtSelection = "";
   state.txtSelectedBlockIndex = null;
+  if (wasNonNull) {
+    for (const fn of state.txtSourceListeners) fn(null);
+    pushHistorySnapshot();
+  }
+}
+export function onTxtSourceChange(fn) {
+  state.txtSourceListeners.add(fn);
+  return () => state.txtSourceListeners.delete(fn);
 }
 
 export function setTxtSelection(s) { state.txtSelection = s || ""; }
