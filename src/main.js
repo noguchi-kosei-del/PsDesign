@@ -1,7 +1,7 @@
 import { loadPsdFromPath } from "./psd-loader.js";
 import { loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
-import { deleteSelectedLayers, nudgeSelectedLayers, refreshAllOverlays } from "./canvas-tools.js";
+import { deleteSelectedLayers, nudgeSelectedLayers, refreshAllOverlays, snapNextSize } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
 import {
@@ -15,6 +15,7 @@ import { bindAiInstallMenu } from "./ai-install.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
 import { bindAiPlaceButton } from "./ai-place.js";
 import { bindAutoUpdater } from "./auto-updater.js";
+import { bindProofreadUi } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   confirmDialog,
@@ -26,9 +27,11 @@ import {
 } from "./ui-feedback.js";
 import {
   findShortcutMatch,
+  getDefault,
   getPageDirectionInverted,
   getShortcut,
   matchShortcut,
+  onSettingsChange,
 } from "./settings.js";
 import { initSettingsUi } from "./settings-ui.js";
 import {
@@ -340,10 +343,11 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
     const hasWarn = typeof result === "string" && result.includes("警告:");
     hasSavedThisSession = true;
-    // 保存完了は中央モーダルで通知（ユーザー要望）。警告ありなら見出しに⚠を付与。
+    // 保存完了は中央モーダルで通知。警告有無で kind を切替（warning=オレンジ + 警告 SVG / success=緑 + チェック SVG）。
     await notifyDialog({
-      title: hasWarn ? "保存完了 ⚠ 警告あり" : "保存完了",
+      title: hasWarn ? "保存完了（警告あり）" : "保存完了",
       message: `${result}${suffix}`,
+      kind: hasWarn ? "warning" : "success",
     });
   } catch (e) {
     console.error(e);
@@ -473,8 +477,8 @@ function runShortcut(id) {
     case "zoomIn":     zoomActivePaneBy(1.15); break;
     case "zoomOut":    zoomActivePaneBy(1 / 1.15); break;
     case "zoomReset":  resetActivePaneZoom(); break;
-    case "sizeUp":     adjustTextSize(+2); break;
-    case "sizeDown":   adjustTextSize(-2); break;
+    case "sizeUp":     stepTextSize(+1, Math.max(1, Math.round(2 / getSizeStep()))); break;
+    case "sizeDown":   stepTextSize(-1, Math.max(1, Math.round(2 / getSizeStep()))); break;
     case "toggleRulers": toggleRulersVisible(); break;
     case "toggleFrames": toggleFramesVisible(); break;
   }
@@ -1080,8 +1084,18 @@ function applyTextSize(n) {
   }
 }
 
-function adjustTextSize(delta) {
-  applyTextSize(getTextSize() + delta);
+function getSizeStep() {
+  const v = Number(getDefault("textSizeStep"));
+  return v === 0.5 ? 0.5 : 0.1;
+}
+
+// +/- ボタンと [/] ショートカット用のサイズ調整。
+// 環境設定の baseStep（0.1 / 0.5）グリッドに揃える形でスナップする：
+// 例）0.5 刻み設定で現在 12.3pt → "+" で 12.5（13.0 ではない）／"-" で 12.0
+function stepTextSize(sign, multiplier = 1) {
+  const baseStep = getSizeStep();
+  const next = snapNextSize(getTextSize(), baseStep, sign, multiplier);
+  applyTextSize(next);
 }
 
 function bindSizeTool() {
@@ -1089,6 +1103,12 @@ function bindSizeTool() {
   const dec = document.getElementById("size-dec-btn");
   const inc = document.getElementById("size-inc-btn");
   if (!input || !dec || !inc) return;
+
+  const applyStepAttr = () => {
+    input.step = String(getSizeStep());
+  };
+  applyStepAttr();
+  onSettingsChange(applyStepAttr);
 
   input.value = String(getTextSize());
   onTextSizeChange((v) => {
@@ -1103,8 +1123,8 @@ function bindSizeTool() {
   input.addEventListener("blur", () => {
     input.value = String(getTextSize());
   });
-  dec.addEventListener("click", () => adjustTextSize(-1));
-  inc.addEventListener("click", () => adjustTextSize(+1));
+  dec.addEventListener("click", () => stepTextSize(-1));
+  inc.addEventListener("click", () => stepTextSize(+1));
 }
 
 // 行間を適用。in-place 編集中（editingContext あり）はカーソル行の per-line override に
@@ -1532,6 +1552,7 @@ function init() {
   bindAiInstallMenu();
   bindAiOcrButton();
   bindAiPlaceButton();
+  bindProofreadUi();
   bindAutoUpdater();
   bindPageNav();
   bindCollapseToggles();

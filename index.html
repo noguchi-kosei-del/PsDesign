@@ -10,7 +10,7 @@
     <div id="app" class="app">
       <header class="toolbar" data-tauri-drag-region>
         <h1 data-tauri-drag-region class="app-logo" aria-label="PsDesign" title="PsDesign">
-          <span class="app-logo-icon" aria-hidden="true">Pd</span>
+          <img class="app-logo-icon" src="/PsDesign_icon.png" alt="PsDesign" draggable="false" />
         </h1>
         <button id="hamburger-btn" class="icon-btn hamburger-btn" type="button" title="メニュー" aria-label="メニュー">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -189,6 +189,32 @@
                 </svg>
               </button>
               <div id="pdf-stage" class="pdf-stage"></div>
+              <div id="proofread-panel" class="proofread-panel" hidden>
+                <div class="proofread-panel-header">
+                  <div class="proofread-tabs" id="proofread-tabs" role="tablist">
+                    <button class="proofread-tab" data-tab="correctness" type="button" role="tab" aria-selected="false">正誤</button>
+                    <button class="proofread-tab" data-tab="proposal" type="button" role="tab" aria-selected="false">提案</button>
+                    <button class="proofread-tab active" data-tab="both" type="button" role="tab" aria-selected="true">全て</button>
+                  </div>
+                  <div class="proofread-browser-nav" id="proofread-browser-nav" hidden>
+                    <button id="proofread-browser-back-btn" class="proofread-nav-btn" type="button" title="戻る (上の階層へ)" aria-label="戻る">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="15 18 9 12 15 6"/>
+                      </svg>
+                    </button>
+                    <button id="proofread-browser-forward-btn" class="proofread-nav-btn" type="button" title="進む (戻る前の階層へ)" aria-label="進む">
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <polyline points="9 18 15 12 9 6"/>
+                      </svg>
+                    </button>
+                  </div>
+                  <div class="proofread-actions">
+                    <button id="proofread-browser-cancel-btn" class="proofread-browser-cancel" type="button" hidden>キャンセル</button>
+                    <button id="proofread-load-btn" class="proofread-load-btn" type="button">JSON読込</button>
+                  </div>
+                </div>
+                <div id="proofread-body" class="proofread-body"></div>
+              </div>
             </div>
             <div class="spreads-psd-area" id="spreads-psd-area">
               <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" hidden>
@@ -332,6 +358,13 @@
           <section class="panel-section txt-source" id="txt-source" data-section="txt">
             <h2 class="panel-section-h2">
               <span>原稿テキスト</span>
+              <button id="proofread-toggle-btn" class="panel-h2-action-btn" type="button" title="校正パネルを開閉" aria-pressed="false">
+                <svg class="panel-h2-action-icon" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M9 11l3 3L22 4"/>
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                </svg>
+                <span>校正</span>
+              </button>
               <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
                 <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="6 9 12 15 18 9"/>
@@ -589,6 +622,13 @@
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-text-size">文字サイズ (pt)</label>
               <input type="number" id="default-text-size" class="settings-default-input" min="6" max="999" step="0.1" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-text-size-step">文字サイズの刻み (pt)</label>
+              <select id="default-text-size-step" class="settings-default-input">
+                <option value="0.1">0.1 pt</option>
+                <option value="0.5">0.5 pt</option>
+              </select>
             </div>
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-leading-pct">行間 (%)</label>

@@ -906,3 +906,174 @@ C6. **layer-list 背景色を txt-source-viewer と統一** ([src/styles.css](sr
 > - 旧: フォントピッカーは選択中フレームのフォントを表示するだけのインスペクタ → 新: ユーザーがピックすれば「ブラシ」化し、move ツールでクリックしたフレームやマーキーで囲んだ全フレームに連続適用（同フォントは skip、Ctrl+Z で 1 ステップで戻る）
 > - 旧: 「編集」+「テキストレイヤー」 = 2 つの折り畳みセクション、サイドバーに縦横スイッチが共存 → 新: 「テキスト編集」 1 セクションに統合、縦横スイッチは layer-list の各行に分散
 > - 旧: layer-list 項目は `var(--panel)` 背景、新規行に `＋ ` プレフィックスと「新規テキスト 12pt」メタ → 新: `var(--bg)` 背景（txt-source-viewer と同色）、テキストのみのフラットな表示
+
+---
+
+## v1.4.0: 校正パネル・ブラシ系UX強化・絵文字SVG化
+
+### A. 自動配置ワークフローの強化
+
+A1. **同一テキスト警告ダイアログ** ([src/ai-place.js](src/ai-place.js)): 直近に適用したプランのテキスト内容を `lastPlacedFingerprint`（`JSON.stringify` 形式）で記録、次回ボタン押下時に内容が完全一致なら `confirmDialog`（「テキスト内容が同一です／前回と同じテキスト内容で自動配置しようとしています。自動配置を行いますか？」）を出して中断可能に。`applyPlan` 成功時のみ fingerprint を更新するので、ユーザーがキャンセルしたケースは次回も警告対象として残る。
+
+A2. **PSD 未読込時の自動誘導** ([src/ai-place.js](src/ai-place.js)): 自動配置押下時に PSD が無ければ `notifyDialog` で止めず、`pickPsdFiles()` → `loadPsdFilesByPaths()` を動的 import 経由で呼び、PSD 読込→確認モーダル→配置 へ一気通貫で進める。`main.js ↔ ai-place.js` の循環参照は `await import("./main.js")` で回避。
+
+A3. **OCR キャッシュなし時の自動グレーアウト** ([src/state.js](src/state.js) + [src/ai-place.js](src/ai-place.js)): `aiOcrDocListeners` を新設、`setAiOcrDoc` / `clearAiOcrDoc` が listener を発火（後者は冪等化）。`bindAiPlaceButton` で `onAiOcrDocChange` 購読 → ボタン disabled とツールチップを動的に切替（OCR 未実行時は「先に画像スキャンを実行してください」、実行後は通常文言）。
+
+A4. **OCR キャッシュ判定の sourcePath チェック撤廃** ([src/ai-place.js](src/ai-place.js)): 画像スキャンが「常にユーザーが明示的に選んだファイル」になったため、`cache.sourcePath === currentPdf` の一致チェックを削除。キャッシュにドキュメントとページがあれば常に有効扱いに。これで「画像スキャン後 → 自動配置」の流れで再 OCR が走らない（v1.2.0 の挙動を破壊していた sourcePath 不一致による再 OCR を完全解消）。
+
+### B. 文字サイズ刻みの環境設定
+
+B1. **設定値**: [src/settings.js](src/settings.js) の `DEFAULT_SETTINGS.defaults.textSizeStep = 0.1` を新設（version 2 → 維持、`migrate()` で 0.1 / 0.5 のみ受け入れる検証付き）。
+
+B2. **UI**: [src/settings-ui.js](src/settings-ui.js) + [index.html](index.html) のデフォルトタブに `<select id="default-text-size-step">` を追加。change で `setDefault("textSizeStep", v)` 保存。
+
+B3. **適用箇所**:
+- **+/- ボタン** ([src/main.js](src/main.js) `bindSizeTool`): `getSizeStep()` が `getDefault("textSizeStep")` を読み 0.1 / 0.5 を返す。+/- は `() => stepTextSize(±1)` で毎クリック評価。input の HTML `step` も同期。`onSettingsChange` 購読で設定変更時に `step` 属性を更新。
+- **マウスホイール** ([src/canvas-tools.js](src/canvas-tools.js) `onLayerWheel`): hardcoded `e.shiftKey ? 10 : 1` を `baseStep × multiplier` に置換。Shift で 10×（0.5 設定なら 5pt、0.1 設定なら 1pt）。
+- **`[`/`]` ショートカット**: ±2pt を維持しつつ `multiplier = round(2 / baseStep)` で小ステップ前提に折り合わせ（0.1×20、0.5×4）。
+
+B4. **オフグリッド値スナップ** ([src/canvas-tools.js](src/canvas-tools.js) `snapNextSize`): 既存 0.1 刻みで配置したテキスト（例：12.3pt）に後から 0.5 刻みを適用すると「現在 +0.5 = 12.8」のまま off-grid に取り残されるバグを修正。`snapNextSize(cur, baseStep, sign, multiplier)` を新設し、グリッド外の値を sign 方向の最寄りグリッドにスナップ（`Math.ceil` / `Math.floor`）してから multiplier−1 ぶん追加。`resizeSelectedLayers` も同関数経由でレイヤーごと独立スナップ。
+
+> 動作例（0.5 刻み・現在 12.3pt）: + で 12.5（13.0 ではない）、− で 12.0、Shift+ホイールで 17.5。
+
+### C. アプリアイコン
+
+C1. **ロゴ画像をアプリアイコンに反映**: [logo/PsDesign_icon.png](logo/PsDesign_icon.png) を [public/PsDesign_icon.png](public/PsDesign_icon.png) にコピー（Vite public で `/PsDesign_icon.png` 配信）。`tauri icon logo/PsDesign_icon.png` で [src-tauri/icons/](src-tauri/icons/) 配下の ico / icns / 各 PNG / Square*Logo / Android / iOS を一括再生成。
+
+C2. **アプリ内タイトルバーのロゴ** ([index.html](index.html) + [src/styles.css](src/styles.css)): 旧 `<span class="app-logo-icon">Pd</span>` の紫バッジ CSS 装飾を撤去。`<img src="/PsDesign_icon.png">` に置換、`object-fit: contain` + `border-radius: 5px` の素直な画像表示に。`pointer-events: none` でクリックは親 `<h1>` に上昇（`data-tauri-drag-region` を維持）。
+
+### D. OCR 進捗バーの安定化
+
+D1. **tqdm `\r`-only 出力対応** ([src-tauri/src/ocr.rs](src-tauri/src/ocr.rs)): mokuro が `\r` だけでバーを refresh するため、`BufReader::lines()`（`\n` 区切り）では mokuro 終了まで一行も yield されず UI が固まる問題を解消。`read_chunks_cr_lf<R, F>(reader, on_line)` を新設しバイト列を直接読みつつ `\n` / `\r` のいずれを区切りとしても chunk を `on_line` に流す。これで tqdm の 10Hz 更新がそのまま `ai_ocr:progress` イベントになる。`install_ai_models` 側は `\n` 終端の PowerShell 出力なので従来 `BufReader::lines()` のまま。
+
+D2. **tqdm `[time<eta]` の eta 抽出** ([src-tauri/src/ocr.rs](src-tauri/src/ocr.rs)): `parse_mokuro_progress` の戻り値を `(u32, u32, Option<String>)` に拡張、`segment` 内の `[...]` を rfind して eta 文字列を抽出。`ProgressEvent` に `eta: Option<String>` を追加（`#[serde(skip_serializing_if = "Option::is_none")]`）。
+
+D3. **JS 側の段階表示** ([src/ai-ocr.js](src/ai-ocr.js)): `phase` を `"pdf"` / `"starting"` / `"ocr"` に拡張。`ai_ocr:start` listener で「OCR エンジンを起動中…」、ログから `text detection model` / `OCR model` / `Processing volume` を `detectStartupPhase` で検知して順に詳細を更新。`formatEta` で `00:30` → `30秒` / `01:20` → `1分20秒` に整形。
+
+D4. **「未確定状態」の非表示** ([src/ai-ocr.js](src/ai-ocr.js)): tqdm 初期出力 `0/5 [00:00<?, ?it/s]` の `?` を含む eta は `formatEta` で空文字化し、未確定とみなして `OCR 実行中…` のみ indeterminate 表示（カウント・残り時間ともに非表示）。最初の正常 `[MM:SS<MM:SS, R.RRit/s]` で初めて `OCR 実行中… 1/5 (残り 2分)` の確定表示に切替。
+
+### E. OCR 失敗の安定化
+
+E1. **ファイル待ち合わせポーリング** ([src-tauri/src/ocr.rs](src-tauri/src/ocr.rs) `wait_for_mokuro_file`): mokuro 終了直後に `volume.mokuro` が見えないケース（Windows Defender スキャン / FS flush 遅延）対策で、最大 ~1.5 秒（150ms × 10 回）の rAF 風ポーリング。即時 `exists()` で諦めず一定時間待機する。
+
+E2. **fallback 検索** (`find_any_mokuro_file`): 期待パスに無い場合は親ディレクトリ内の `*.mokuro` を走査して同 volume_name を優先採用、なければ任意の `.mokuro` を採用（mokuro バージョン差対策）。
+
+E3. **診断情報付きエラー** (`list_dir_for_diag`): 上記でも見つからない場合、親ディレクトリの中身を列挙してエラーメッセージに含める（GPU メモリ不足 / 画像形式 / Defender ブロック等の原因切り分けを助ける）。
+
+### F. 見本ファイル拡張（PDF + JPEG + PNG + 複数）
+
+F1. **「見本を読み込み」ボタン化** ([index.html](index.html) + [src/pdf-view.js](src/pdf-view.js)): ツールバー `#open-pdf-btn` を「PDF」テキスト入りアイコンから lucide `FileImage` 4 パスに統一、ラベルを「見本を読み込み」に。`pdf-empty-icon` も同型に。
+
+F2. **JPEG / PNG 対応** ([src/pdf-loader.js](src/pdf-loader.js)): `pickPdfFile` のフィルタを `pdf, jpg, jpeg, png` に拡張。`makeImagePage(bitmap)` で ImageBitmap を pdfjs Page 互換オブジェクトに包む（`getViewport` で 90/270° 回転時 W/H swap、`render` で viewport 中心起点に `ctx.translate / ctx.rotate` → 中央配置 `drawImage`、cancel + `RenderingCancelledException` 模擬で `pdf-view.js` の `currentRenderTask.cancel()` パスとも互換）。
+
+F3. **複数ファイル合成 doc** (`makeCompositeDoc`): `sources = Array<{ type: "image", bitmap } | { type: "pdf", doc, pageNum }>` を受け取り `numPages = sources.length` の擬似 doc を返す。`getPage(n)` でソース別にディスパッチ、`destroy()` は `seenDocs` Set で重複排除して ImageBitmap.close() / pdfjs doc.destroy()。
+
+F4. **複数選択 + 自然順ソート** (`pickReferenceFiles` / `loadReferenceFiles`): `Intl.Collator(undefined, { numeric: true, sensitivity: "base" })` で `page1 → page2 → page10` 順にソートしてから順次読込。失敗ファイルは `failures[]` に積んで残りを継続、最終トーストで成功/失敗件数を通知。`setPdf(compositeDoc, sorted[0])` で path には先頭ファイルを入れる。
+
+F5. **PSD 複数 D&D も自然順** ([src/main.js](src/main.js) `loadPsdFilesByPaths` 冒頭): `Intl.Collator(numeric: true)` で basename 自然順ソート。Rust `list_psd_files` の字句順 `.sort()` が `page10 < page2` と並べる問題を JS 側で再ソートして解消。
+
+### G. 完了通知のグリーンチェックモーダル
+
+G1. **`notifyDialog` の `kind: "success"`** ([src/ui-feedback.js](src/ui-feedback.js)): タイトル要素に SVG check-circle + テキストを差し込み、`notify-title-success` クラスでタイトル色を緑（`#3ca86b`）に。cleanup で次回呼び出し用に plain テキスト状態へ復帰。
+
+G2. **画像スキャン完了** ([src/ai-ocr.js](src/ai-ocr.js)): `runAiOcr(files, { notifyOnComplete = false })` オプション追加。**画像スキャンボタン経由のとき** だけ `notifyOnComplete: true` で「画像スキャン完了 / テキスト抽出が完了しました。\n自動配置を行ってください。」モーダル表示。**自動配置から `runAiOcrForFiles(files)` 経由の自動トリガー時** は false（そのまま確認モーダルへ遷移）。
+
+G3. **自動配置完了** ([src/ai-place.js](src/ai-place.js)): 旧 toast を `notifyDialog({ title: "自動配置完了", message: "${added} 件のテキストレイヤーを追加しました。", kind: "success" })` に置換。`toast` import も撤去。
+
+### H. 画像スキャンは見本流用しない
+
+H1. **常にファイル選択ダイアログ** ([src/ai-ocr.js](src/ai-ocr.js)): `bindAiOcrButton` の click handler から `getPdfPath()` 優先ロジックを撤去し、毎回 `pickInputFiles()` を起動する運用に変更。「見本ビューアは表示用、OCR 対象は別ファイルを意識的に選ぶ」設計判断。ツールチップは「PDF / 画像を選択して AI で画像スキャン」固定文言に。`onPdfChange` 購読も撤去。
+
+H2. **ファイル選択ダイアログのタイトル**: 「テキストスキャンする見本画像を選択」に変更。
+
+### I. 原稿テキスト ダブルクリックで該当フレームを in-place 編集
+
+I1. **`enterInPlaceEditForLayer(pageIndex, layerKey, options)` 追加** ([src/canvas-tools.js](src/canvas-tools.js)): `startInPlaceEdit(ctx, target)` のラッパー。
+- ページ移動が必要なら `setCurrentPageIndex(pageIndex)` を呼び、`mounts.get(pageIndex)` を最大 10 frame の rAF ポーリングで待機（spread-view の rAF debounce で何 frame 後にレンダーされるかは決め打ちできないため、固定 rAF×N より polling が安全）
+- `layerKey` の型（数値 = 既存 / 文字列 = tempId）でターゲット構築
+- direction（縦/横）に応じて T/Y ツールへスイッチ（既存 in-place 編集と同じくコミット後はツールを戻さない）
+- `setSelectedLayer` でハイライト → `startInPlaceEdit(ctx, target, options)`
+
+I2. **`startInPlaceEdit` に afterCommit hook 追加**: `options.afterCommit?: (value: string) => void`。`createTextFloater` の `onCommit` で layer 更新後に呼ばれる（Esc キャンセル時は呼ばれない）。原稿テキスト側を同期するためのフック。
+
+I3. **`txt-source.js` の dblclick 配線** ([src/txt-source.js](src/txt-source.js)): 各 `.txt-block` に `dblclick` リスナー追加 → `runDoubleClickEdit(paragraph, pageNumber, viewer)` を呼ぶ。マッチ無しは `toast`、マッチ時は **TXT selection を明示クリア**（`onPageIndexChange` 経由のクリアは別ページ移動時のみ走るため、同ページ dblclick 後の「次クリックで再配置」事故を防ぐ）してから `enterInPlaceEditForLayer` を呼ぶ。
+
+I4. **`findPlacedLayerByText(text)`**: ページ：現在ページを最優先 → 残り index 昇順、ページ内：既存（PSD 元レイヤー）→ 新規（auto-place / T ツール配置）の順で線形検索。`normalizeForMatch`（CRLF→LF + 前後 \n の trim）で比較。複数マッチは `console.info` で記録（運用中の頻度把握用）。
+
+I5. **打ち換え後の txt-source-viewer 同期** ([src/txt-source.js](src/txt-source.js) `updateTxtSourceBlock` + `replaceBlockInContent`): in-place 編集確定時に `afterCommit` hook で原稿テキストの該当ブロックも置換。`replaceBlockInContent(content, pageNumber, oldText, newText)` でページマーカー範囲内（`<<NPage>>` で区切られたセクション）の最初の出現を置換、`setTxtSource` → `renderViewer()` で UI 更新。マーカー無し原稿は content 全体が対象。改行は内部で LF 統一して比較・置換。
+
+> 循環 import: `txt-source.js` ↔ `canvas-tools.js` は遅延参照（dblclick / canvas クリック内）でのみ使われるため、ES モジュールの live binding で正しく解決される。
+
+### J. 校正パネル（Comic-Bridge / MojiQ 互換）
+
+J1. **新規モジュール `src/proofread.js`**: Comic-Bridge `ProofreadPanel` 相当を pdf-stage 上にオーバーレイ表示する 約 500 行のモジュール。
+
+**JSON 形式（どちらにも対応）:**
+- ネスト形式: `{ work, checks: { simple: { items: [...] }, variation: { items: [...] } } }` — simple = correctness、variation = proposal
+- フラット配列: `[{ category, page, excerpt, content, checkKind }, ...]` — 全件 correctness 扱い、`checkKind` があれば優先
+
+**状態:**
+- `checkData`: 読込済み JSON のパース結果（title / fileName / filePath / allItems / correctnessItems / proposalItems）
+- `checkTabMode`: `"correctness" | "proposal" | "both"`
+- `viewMode`: `"empty" | "results" | "browser"`
+- `browserCurrentPath` / `browserNavStack` / `browserForwardStack`: フォルダブラウザ履歴（後述）
+
+**機能:**
+- 3 タブ切替（正誤 / 提案 / 全て）。`both` モードで 2 カラム並列表示
+- 項目行：カテゴリ色バッジ（10 色パレット、`getCategoryColor` で `^(\d+)\.` から index 抽出）+ ページ + 種別バッジ + excerpt + content
+- 項目クリック → `setCurrentPageIndex(parseInt(item.page) - 1)` で PSD ページ連動
+
+J2. **JSON 読込パスは MojiQ 互換** ([src/proofread.js](src/proofread.js)): `PROOFREAD_BASE_PATH = "G:\\共有ドライブ\\CLLENN\\編集部フォルダ\\編集企画部\\写植・校正用テキストログ"`（MojiQ `electron/main.js` の `TXT_FOLDER_BASE_PATH` と完全一致）。
+
+J3. **アプリ内フォルダブラウザ** (Tauri 環境では OS の `open()` を使わず自前 UI):
+- 新 Rust コマンド `list_directory_entries(path) -> Vec<DirEntry>` ([src-tauri/src/lib.rs](src-tauri/src/lib.rs))。`#[serde(rename = "isDirectory")]` 等で JS 側 camelCase で受け取り
+- `loadBrowserFolder(dirPath)`：純粋なロード関数（`list_directory_entries` で取得 → `renderBrowserList`）。スタック管理は呼出側へ委譲
+- `browserNavigateInto(dirPath)`：「直接降りる」エントリ。`navStack.push(current); forwardStack = [];`
+- `browserGoUp` / `browserGoForward`：戻る/進む（典型的なブラウザ履歴セマンティクス）
+- **MojiQ 互換の「校正チェックデータ」自動スキップ**: サブフォルダがそれ 1 つだけなら自動的に降りる
+
+J4. **校正トグルボタン** ([index.html](index.html) panel-section-h2): 原稿テキスト見出しに `<button id="proofread-toggle-btn" class="panel-h2-action-btn">` を追加。**MojiQ Pro と同じ check-square SVG**（[HeaderBar.tsx ProofreadingModeIcon](C:\Users\noguchi-kosei\Desktop\MojiQ_開発\MojiQ Pro_1.0\src\components\HeaderBar\HeaderBar.tsx#L233) と完全一致するパス）+ ラベル「校正」の inline-flex 構成。`aria-pressed="true"` で accent 塗り。
+
+J5. **proofread-panel-header 構成**:
+- 結果/空状態時: タブ（正誤/提案/全て）+ JSON読込ボタン
+- ブラウザモード時: 戻る ← / 進む → / キャンセル（`viewMode` 切替で `hidden` 属性を付け替え）
+- 閉じるボタン (×) は無し（校正トグルボタンで開閉できるため省略）
+- パンくず（`proofread-browser-breadcrumb`）も無し（ブラウザモードを最小構成に）
+
+J6. **proofread-empty 表示**: アイコン（**MojiQ ver_2.24 の `proofreadingLoadBtn` と同じ list-checks SVG**、64×64、`color: var(--text-muted); opacity: 0.55`）+ メッセージ「校正チェックJSONを読み込んでください」。読込ボタンは header に集約済みなのでここには置かない。
+
+J7. **CSS** ([src/styles.css](src/styles.css)): `.proofread-panel`（`position: absolute; inset: 0; z-index: 50` で `.spreads-pdf-area` を覆う overlay）、`.proofread-panel-header`、`.proofread-tabs / .proofread-tab`、`.proofread-actions`、`.proofread-load-btn`、`.proofread-browser-nav / .proofread-nav-btn`、`.proofread-browser-list / .proofread-browser-row`、`.proofread-2col / .proofread-col`、`.proofread-item`（カテゴリバッジ + page + kind + excerpt + content）、`.proofread-empty / .proofread-empty-icon` 等。
+
+### K. 絵文字を SVG アイコンに置換
+
+K1. **`notifyDialog` の `kind: "warning"` 追加** ([src/ui-feedback.js](src/ui-feedback.js) + [src/styles.css](src/styles.css)): 既存 `kind: "success"`（緑 + check-circle）の隣に warning（オレンジ `#d97706` + alert-triangle）を追加。cleanup で `notify-title-success` / `notify-title-warning` 両クラスをクリア。
+
+K2. **保存完了モーダル** ([src/main.js](src/main.js)): 旧 `title: "保存完了 ⚠ 警告あり"` を `kind: hasWarn ? "warning" : "success"` + title「保存完了 / 保存完了（警告あり）」に置換。⚠ 絵文字撤去。
+
+K3. **校正パネルの列見出し** ([src/proofread.js](src/proofread.js) `COL_ICON_SVG`): `✅ 正誤チェック` → check-circle SVG + 「正誤チェック」、`📝 提案チェック` → file-text SVG + 「提案チェック」。stroke は `currentColor` で既存色を継承。
+
+K4. **自動配置確認モーダル** ([src/ai-place.js](src/ai-place.js) `STATUS_LABEL`): `✓ 一致` → check SVG（緑）、`⚠ TXT 余 / 吹き出し余 / TXT なし / 吹き出しなし` → alert-triangle SVG（オレンジ）。`renderPlanReviewTable` の innerHTML 内で SVG を直接挿入、テキストは `<span class="ai-place-status-text">` 側に。
+
+K5. **ショートカット衝突警告** ([src/settings-ui.js](src/settings-ui.js) `refreshCaptureConflict`): `⚠ ...` テキスト → alert-triangle SVG + `<span>` テキスト。textContent → innerHTML（XSS 対策のため `description / with` の本文は span.textContent で挿入）。`.key-capture-conflict` を flex に拡張、icon 用クラス追加。
+
+> アイコンは全て **lucide ベース**（check / check-circle / file-text / alert-triangle / list-checks / check-square）で統一感を確保。`stroke="currentColor"` でテーマ色追従。`grep` で残存 emoji を検索してゼロ件確認済み。
+
+### L. その他のセッション内変更（細々したもの）
+
+- **画像スキャン中のファイル選択ダイアログタイトル**: 「OCR する PDF / 画像を選択」→「テキストスキャンする見本画像を選択」
+- **画像スキャン / 自動配置ボタンを横並びに**: サイドパネル先頭の `.ai-actions-row` で `flex: 1 1 0` の等幅 2 ボタン（画像スキャンの直右に自動配置）
+- **画像スキャンと自動配置のボタンスタイル統一**: `var(--panel-hover)` 背景 + `var(--border)` 枠で控えめに、ホバーで accent 色
+
+### この v1.4.0 で実装した「触らなかった既存機能」
+
+- Photoshop ExtendScript 経由の編集適用（[src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs) / [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)）
+- フォント列挙（[src-tauri/src/fonts.rs](src-tauri/src/fonts.rs)）
+- 既存ショートカット・ページ送り・テキストツール (V/T/Y)・ガイド・ルーラー
+- AI モデルインストール ([src-tauri/scripts/install-ai-models.ps1](src-tauri/scripts/install-ai-models.ps1))
+
+> **構造変更まとめ**:
+> - 旧: 校正データを表示する場所なし → 新: pdf-stage 上にオーバーレイする校正パネル（Comic-Bridge / MojiQ 互換 JSON）
+> - 旧: 原稿テキスト dblclick = ノーオペ → 新: 該当テキストフレームに移動 + in-place 編集起動 + 確定で原稿側も同期更新
+> - 旧: サイズ刻みは固定（ボタン ±1pt / ホイール ±1pt） → 新: 環境設定で 0.1 / 0.5 を選択、グリッドスナップ付き
+> - 旧: 完了通知は toast / プレーンタイトル + 絵文字 → 新: 中央モーダル + 緑チェック / オレンジ警告の SVG アイコン
+> - 旧: 画像スキャンは現在の見本を流用 → 新: 常にファイル選択（毎回意識的に対象を選ぶ）+ 結果は sourcePath 不問で再利用

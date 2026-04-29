@@ -102,10 +102,12 @@ function syncPageDirectionUi() {
 function syncDefaultsUi() {
   const d = getDefaults();
   const ts = $("default-text-size");
+  const tss = $("default-text-size-step");
   const lp = $("default-leading-pct");
   const sw = $("default-stroke-width");
   const ft = $("default-font");
   if (ts) ts.value = String(d.textSize ?? "");
+  if (tss) tss.value = String(d.textSizeStep ?? 0.1);
   if (lp) lp.value = String(d.leadingPct ?? "");
   if (sw) sw.value = String(d.strokeWidthPx ?? "");
   if (ft) ft.value = String(d.fontPostScriptName ?? "");
@@ -179,7 +181,17 @@ function refreshCaptureConflict() {
   const r = checkConflict(captureState.id, captureState.key, captureState.modifiers);
   if (r.conflict) {
     conflict.hidden = false;
-    conflict.textContent = `⚠ 「${r.description || r.with}」と重複しています。設定すると元の割当が動かなくなります。`;
+    // 警告アイコン (lucide alert-triangle) + 重複先の名称（XSS 防止のため textContent で挿入）
+    const safeName = r.description || r.with;
+    conflict.innerHTML =
+      '<svg class="key-capture-conflict-icon" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+      '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>' +
+      '<line x1="12" y1="9" x2="12" y2="13"/>' +
+      '<line x1="12" y1="17" x2="12.01" y2="17"/>' +
+      '</svg>' +
+      '<span class="key-capture-conflict-text"></span>';
+    const textEl = conflict.querySelector(".key-capture-conflict-text");
+    if (textEl) textEl.textContent = `「${safeName}」と重複しています。設定すると元の割当が動かなくなります。`;
   } else {
     conflict.hidden = true;
   }
@@ -325,6 +337,19 @@ function bindDefaultsInputs() {
   wireNumber("default-text-size",   "textSize");
   wireNumber("default-leading-pct", "leadingPct");
   wireNumber("default-stroke-width", "strokeWidthPx");
+
+  const tss = $("default-text-size-step");
+  if (tss) {
+    tss.addEventListener("change", () => {
+      const v = Number(tss.value);
+      if (v !== 0.1 && v !== 0.5) {
+        syncDefaultsUi();
+        return;
+      }
+      setDefault("textSizeStep", v);
+      applyToolDefaults();
+    });
+  }
 
   const ft = $("default-font");
   if (ft) {

@@ -22,7 +22,7 @@ import {
   getTxtSource,
 } from "./state.js";
 import { parsePages } from "./txt-source.js";
-import { notifyDialog, toast } from "./ui-feedback.js";
+import { notifyDialog, confirmDialog } from "./ui-feedback.js";
 import { runAiOcrForFiles } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
@@ -30,6 +30,17 @@ import { rebuildLayerList } from "./text-editor.js";
 const $ = (id) => document.getElementById(id);
 
 let runningPlace = false;
+// 直近に適用された配置プランのテキスト内容指紋。
+// 同一テキストで連続して自動配置するときに確認ダイアログを出すために使う。
+let lastPlacedFingerprint = null;
+
+function planFingerprint(plan) {
+  const seq = [];
+  for (const row of plan.pages) {
+    for (const layer of row.layers) seq.push(layer.contents ?? "");
+  }
+  return JSON.stringify(seq);
+}
 
 // ============================================================
 // 吹き出し読み順ソート (縦書き漫画: 右上 → 左下)
@@ -206,12 +217,26 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
 // ============================================================
 // 確認モーダル UI
 // ============================================================
+// ステータス用 SVG アイコン（lucide ベース）。
+// check（一致）と alert-triangle（警告）の 2 種類。stroke は currentColor で
+// .ai-place-status-ok / .ai-place-status-warn の色を継承する。
+const STATUS_ICON_SVG = {
+  ok:
+    '<svg class="ai-place-status-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<polyline points="20 6 9 17 4 12"/></svg>',
+  warn:
+    '<svg class="ai-place-status-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
+    '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>' +
+    '<line x1="12" y1="9" x2="12" y2="13"/>' +
+    '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
+};
+
 const STATUS_LABEL = {
-  "ok": { text: "✓ 一致", cls: "ai-place-status-ok" },
-  "warn-txt-extra": { text: "⚠ TXT 余", cls: "ai-place-status-warn" },
-  "warn-bubble-extra": { text: "⚠ 吹き出し余", cls: "ai-place-status-warn" },
-  "warn-empty-txt": { text: "⚠ TXT なし", cls: "ai-place-status-warn" },
-  "warn-empty-bubble": { text: "⚠ 吹き出しなし", cls: "ai-place-status-warn" },
+  "ok":               { text: "一致",          icon: STATUS_ICON_SVG.ok,   cls: "ai-place-status-ok" },
+  "warn-txt-extra":   { text: "TXT 余",        icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
+  "warn-bubble-extra":{ text: "吹き出し余",     icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
+  "warn-empty-txt":   { text: "TXT なし",      icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
+  "warn-empty-bubble":{ text: "吹き出しなし",   icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
 };
 
 function renderPlanReviewTable(plan) {
@@ -227,11 +252,11 @@ function renderPlanReviewTable(plan) {
       <td class="ai-place-col-num">${row.bubbleCount}</td>
       <td class="ai-place-col-num">${row.txtCount}</td>
       <td class="ai-place-col-num">${row.placedCount}</td>
-      <td class="ai-place-col-status ${meta.cls}">${meta.text}${
+      <td class="ai-place-col-status ${meta.cls}">${meta.icon}<span class="ai-place-status-text">${meta.text}${
         row.status === "warn-txt-extra" ? ` ${row.leftoverTxt.length}` :
         row.status === "warn-bubble-extra" ? ` ${row.leftoverBubbles.length}` :
         ""
-      }</td>
+      }</span></td>
     `;
     tbody.appendChild(tr);
   }
@@ -345,20 +370,19 @@ async function runAutoPlace() {
     const txtByPage = parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 
     // 2. OCR キャッシュ確認
-    //   - キャッシュ無効: 結果が無い / pages 0 件 / 現在の PDF と sourcePath 不一致
-    //   - 有効ならそのまま使う (再 OCR しない)
+    //   - キャッシュ有効: 結果あり & pages 1 件以上
+    //   - 画像スキャンは常に明示的なファイル選択で実行されるため、結果は常に
+    //     ユーザー意図そのもの。見本ビューア（getPdfPath）との一致は問わない。
+    //   - 無効ならその場で見本に対して画像スキャンを走らせる（自動配置の自動トリガー）。
     let cache = getAiOcrDoc();
-    const currentPdf = getPdfPath();
     const cacheValid = !!(
       cache &&
       cache.doc &&
       Array.isArray(cache.doc.pages) &&
-      cache.doc.pages.length > 0 &&
-      // sourcePath が記録されていない or 現在の PDF と一致するなら使う。
-      // (現在 PDF が無い場合も cache を温存 — 読み込み画像が一致している可能性を尊重)
-      (!cache.sourcePath || !currentPdf || cache.sourcePath === currentPdf)
+      cache.doc.pages.length > 0
     );
     if (!cacheValid) {
+      const currentPdf = getPdfPath();
       if (!currentPdf) {
         await notifyDialog({
           title: "自動配置できません",
@@ -394,13 +418,30 @@ async function runAutoPlace() {
       return;
     }
 
-    // 4. 確認モーダル
+    // 4. 直前と同じテキスト内容なら重複確認
+    const fingerprint = planFingerprint(plan);
+    if (lastPlacedFingerprint !== null && lastPlacedFingerprint === fingerprint) {
+      const proceed = await confirmDialog({
+        title: "テキスト内容が同一です",
+        message: "前回と同じテキスト内容で自動配置しようとしています。\n自動配置を行いますか？",
+        confirmLabel: "実行",
+        cancelLabel: "キャンセル",
+      });
+      if (!proceed) return;
+    }
+
+    // 5. 確認モーダル
     const ok = await showPlanReviewModal(plan);
     if (!ok) return;
 
-    // 5. 適用
+    // 6. 適用
     const added = applyPlan(plan);
-    toast(`自動配置: ${added} 件のテキストレイヤーを追加しました`, { kind: "info", duration: 3200 });
+    lastPlacedFingerprint = fingerprint;
+    await notifyDialog({
+      title: "自動配置完了",
+      message: `${added} 件のテキストレイヤーを追加しました。`,
+      kind: "success",
+    });
   } catch (e) {
     console.error(e);
     await notifyDialog({

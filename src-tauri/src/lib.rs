@@ -130,6 +130,49 @@ async fn list_psd_files(folder: String) -> Result<Vec<String>, String> {
     Ok(files)
 }
 
+#[derive(serde::Serialize)]
+struct DirEntry {
+    name: String,
+    path: String,
+    #[serde(rename = "isDirectory")]
+    is_directory: bool,
+    #[serde(rename = "isFile")]
+    is_file: bool,
+}
+
+// 校正パネルのカスタムフォルダブラウザ用に、ディレクトリの中身（フォルダ + ファイル）を返す。
+// 隠しファイル / シンボリックリンクの type 解決失敗は無視。サブツリー走査はしない（1 階層のみ）。
+#[tauri::command]
+async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
+    let entries =
+        std::fs::read_dir(&path).map_err(|e| format!("ディレクトリ読み取り失敗 {}: {}", path, e))?;
+    let mut out: Vec<DirEntry> = Vec::new();
+    for entry in entries.filter_map(|e| e.ok()) {
+        let p = entry.path();
+        let ft = entry.file_type().ok();
+        let is_dir = ft.as_ref().map(|t| t.is_dir()).unwrap_or(false);
+        let is_file = ft.as_ref().map(|t| t.is_file()).unwrap_or(false);
+        if !is_dir && !is_file {
+            continue;
+        }
+        let name = match p.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n.to_string(),
+            None => continue,
+        };
+        let path_str = match p.to_str() {
+            Some(s) => s.to_string(),
+            None => continue,
+        };
+        out.push(DirEntry {
+            name,
+            path: path_str,
+            is_directory: is_dir,
+            is_file,
+        });
+    }
+    Ok(out)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -142,6 +185,7 @@ pub fn run() {
             list_fonts,
             read_binary_file,
             list_psd_files,
+            list_directory_entries,
             ocr::check_ai_models,
             ocr::install_ai_models,
             ocr::cancel_ai_install,

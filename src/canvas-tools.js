@@ -5,6 +5,7 @@ import {
   beginHistoryTransient,
   commitHistoryTransient,
   getCurrentFont,
+  getCurrentPageIndex,
   getEdit,
   getFillColor,
   getFontDisplayName,
@@ -22,15 +23,18 @@ import {
   isLayerSelected,
   onToolChange,
   removeNewLayer,
+  setCurrentPageIndex,
   setEdit,
   setEditingContext,
   setSelectedLayer,
   setSelectedLayers,
+  setTool,
   toDisplaySizePt,
   toggleLayerSelected,
   updateNewLayer,
 } from "./state.js";
 import { ensureFontLoaded } from "./font-loader.js";
+import { getDefault } from "./settings.js";
 import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
 import { advanceTxtSelection, getActiveTxtSelection } from "./txt-source.js";
 
@@ -142,7 +146,26 @@ function clampSizePt(v) {
   return Math.max(6, Math.min(999, rounded));
 }
 
-export function resizeSelectedLayers(deltaPt) {
+// 現在値 cur から baseStep グリッド上の「次の」値を返す。
+// - グリッド上ぴったりなら sign 方向に 1 ステップ
+// - グリッド外（例：0.5 刻み設定で 12.3）なら sign 方向の最寄りグリッドへスナップ
+//   （+1 は ceil、-1 は floor）。これにより 12.3 + 0.5 step → 12.5（13.0 ではない）
+// - multiplier > 1（Shift+wheel 等）はスナップ後に追加でグリッドを進む。
+export function snapNextSize(cur, baseStep, sign, multiplier = 1) {
+  if (!Number.isFinite(cur) || !Number.isFinite(baseStep) || baseStep <= 0) return cur;
+  const ratio = cur / baseStep;
+  const onGrid = Math.abs(ratio - Math.round(ratio)) < 1e-9;
+  const firstStep = onGrid
+    ? Math.round(ratio) + sign
+    : (sign > 0 ? Math.ceil(ratio) : Math.floor(ratio));
+  const finalGrid = firstStep + sign * (Math.max(1, multiplier) - 1);
+  return Math.round(finalGrid * baseStep * 10) / 10;
+}
+
+// 選択中レイヤーをサイズ変更。sign（+1 / -1）と multiplier（Shift+wheel で 10）で
+// 各レイヤーの現在 sizePt を snapNextSize で次の baseStep グリッドへ移動する。
+// 中心固定のため矩形差の半分だけ x/y を補正するのは従来通り。
+export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
   const pages = getPages();
@@ -155,7 +178,7 @@ export function resizeSelectedLayers(deltaPt) {
       const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
       if (!nl) continue;
       const cur = nl.sizePt ?? 24;
-      const next = clampSizePt(cur + deltaPt);
+      const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
       if (next === cur) continue;
       const oldRect = layerRectForNew(page, nl);
       const newRect = layerRectForNew(page, { ...nl, sizePt: next });
@@ -168,7 +191,7 @@ export function resizeSelectedLayers(deltaPt) {
       if (!layer) continue;
       const edit = getEdit(page.path, sel.layerId) ?? {};
       const cur = edit.sizePt ?? layer.fontSize ?? 24;
-      const next = clampSizePt(cur + deltaPt);
+      const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
       if (next === cur) continue;
       const oldRect = layerRectForExisting(page, layer, edit);
       const newRect = layerRectForExisting(page, layer, { ...edit, sizePt: next });
@@ -668,9 +691,12 @@ function onLayerWheel(e, ctx, layerId) {
   if (!isLayerSelected(ctx.pageIndex, layerId)) return;
   e.preventDefault();
   e.stopPropagation();
-  const step = e.shiftKey ? 10 : 1;
-  const delta = e.deltaY < 0 ? +step : -step;
-  resizeSelectedLayers(delta);
+  // 環境設定の「文字サイズの刻み」（0.1 / 0.5）を baseStep に、Shift で 10 倍。
+  // off-grid な値（例：0.5 刻み設定で 12.3）は最寄りグリッドにスナップする。
+  const baseStep = Number(getDefault("textSizeStep")) === 0.5 ? 0.5 : 0.1;
+  const sign = e.deltaY < 0 ? +1 : -1;
+  const multiplier = e.shiftKey ? 10 : 1;
+  resizeSelectedLayers(baseStep, sign, multiplier);
 }
 
 // edit-font 欄でユーザーがフォントを選んだ後（fontPickerStuck === true）、move ツールでの
@@ -1101,7 +1127,7 @@ function createTextFloater(ctx, {
   return input;
 }
 
-function startInPlaceEdit(ctx, target) {
+function startInPlaceEdit(ctx, target, options = {}) {
   const { page } = ctx;
   let initialText = "";
   let x = 0;
@@ -1150,8 +1176,79 @@ function startInPlaceEdit(ctx, target) {
       }
       refreshAllOverlays();
       rebuildLayerList();
+      if (typeof options.afterCommit === "function") {
+        try { options.afterCommit(value); } catch (e) { console.error("afterCommit error", e); }
+      }
     },
     onClose: () => setEditingContext(null),
+  });
+}
+
+// 指定ページのレイヤー（既存 = 数値 layer.id / 新規 = 文字列 tempId）に対して
+// in-place 編集を起動する。原稿テキストパネルの dblclick ハンドラ等から呼ぶ。
+//
+// - ページが現在表示中でなければ setCurrentPageIndex で切替し、`mounts` Map に
+//   ctx が現れるまで rAF ポーリング（最大 ~10 frame）。spread-view の rAF debounce で
+//   レンダーが何 frame 後になるかは決め打ちできないため固定 rAF×N より polling が安全。
+// - direction（縦/横）に合わせて T/Y ツールへスイッチ（in-place 編集 textarea の見え方や
+//   その後のキャンバス操作の予測可能性のため。既存の startInPlaceEdit と同じく commit 後は
+//   ツールを戻さない＝既存挙動と一致）。
+//
+// options.afterCommit?: (value: string) => void — 編集確定（Ctrl+Enter / 外側クリック）後に
+//   新しい値で呼ばれる。Esc キャンセル時は呼ばれない。原稿テキストパネルからの呼び出し時に
+//   manuscript 側を同期するためのフック。
+//
+// 戻り値: 成功で true、ctx 取得失敗 / レイヤー不在 / page 不在で false。
+export async function enterInPlaceEditForLayer(pageIndex, layerKey, options = {}) {
+  if (!Number.isInteger(pageIndex) || pageIndex < 0) return false;
+
+  if (getCurrentPageIndex() !== pageIndex) {
+    setCurrentPageIndex(pageIndex);
+  }
+
+  const ctx = await waitForMountedCtx(pageIndex);
+  if (!ctx) return false;
+
+  const page = getPages()[pageIndex];
+  if (!page) return false;
+
+  let target;
+  let direction;
+  if (typeof layerKey === "string") {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === layerKey);
+    if (!nl) return false;
+    target = { kind: "new", nl };
+    direction = nl.direction ?? "vertical";
+  } else {
+    const layer = page.textLayers.find((l) => l.id === layerKey);
+    if (!layer) return false;
+    const edit = getEdit(page.path, layerKey);
+    target = { kind: "existing", layer };
+    // edit override 無しの既存レイヤーは layer.direction を採用。
+    // ag-psd 側で direction 不明だと "horizontal" が既定値になる仕様（縦書き想定でも
+    // text-h ツールへ遷移することがある）— 編集対象レイヤー自身の direction に従う方針。
+    direction = edit?.direction ?? layer.direction ?? "horizontal";
+  }
+
+  setTool(direction === "vertical" ? "text-v" : "text-h");
+  setSelectedLayer(pageIndex, layerKey);
+
+  startInPlaceEdit(ctx, target, { afterCommit: options.afterCommit });
+  return true;
+}
+
+// `mounts.get(pageIndex)` が non-null になるまで rAF を最大 maxFrames 回待つ。
+// 同期的にすでに mount 済みなら 0 frame で返る。
+function waitForMountedCtx(pageIndex, maxFrames = 10) {
+  return new Promise((resolve) => {
+    let frames = 0;
+    const tick = () => {
+      const ctx = mounts.get(pageIndex);
+      if (ctx) { resolve(ctx); return; }
+      if (frames++ >= maxFrames) { resolve(null); return; }
+      requestAnimationFrame(tick);
+    };
+    tick();
   });
 }
 

@@ -15,6 +15,7 @@ export const DEFAULT_SETTINGS = {
   // 新規テキストレイヤーの初期値。アプリ起動時 / clearPages 時に state.js へ反映される。
   defaults: {
     textSize: 12,           // pt（実 pt、表示は基準PSD換算）
+    textSizeStep: 0.1,      // pt（size +/- ボタンと size-input の step。0.1 / 0.5）
     leadingPct: 125,        // %（autoLeadingAmount）
     strokeWidthPx: 20,      // px（フチの太さ）
     fontPostScriptName: "", // 空文字 = 指定なし（system default）
@@ -70,6 +71,9 @@ function migrate(old) {
     const d = old.defaults;
     if (typeof d.textSize === "number" && Number.isFinite(d.textSize)) {
       out.defaults.textSize = d.textSize;
+    }
+    if (typeof d.textSizeStep === "number" && (d.textSizeStep === 0.1 || d.textSizeStep === 0.5)) {
+      out.defaults.textSizeStep = d.textSizeStep;
     }
     if (typeof d.leadingPct === "number" && Number.isFinite(d.leadingPct)) {
       out.defaults.leadingPct = d.leadingPct;

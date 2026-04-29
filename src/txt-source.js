@@ -1,6 +1,9 @@
 import {
   clearTxtSource,
   getCurrentPageIndex,
+  getEdit,
+  getNewLayersForPsd,
+  getPages,
   getTxtSelectedBlockIndex,
   getTxtSelection,
   getTxtSource,
@@ -10,6 +13,7 @@ import {
   setTxtSource,
 } from "./state.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
+import { enterInPlaceEditForLayer } from "./canvas-tools.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -141,8 +145,153 @@ function renderViewer() {
     el.textContent = paragraph;
     if (idx === selectedIdx) el.classList.add("selected");
     el.addEventListener("click", () => selectBlock(idx, paragraph));
+    el.addEventListener("dblclick", (e) => {
+      e.preventDefault(); // text selection の暴走を抑止
+      void runDoubleClickEdit(paragraph, pageNumber, viewer);
+    });
     viewer.appendChild(el);
   });
+}
+
+async function runDoubleClickEdit(paragraph, pageNumber, viewer) {
+  const match = findPlacedLayerByText(paragraph);
+  if (!match) {
+    toast("対応するテキストフレームが見つかりません", { kind: "info" });
+    return;
+  }
+  // 同ページでも TXT selection を明示クリア。click→click→dblclick の発火順で
+  // selectBlock が 2 回走った後でも、in-place 編集を Esc で抜けた直後にキャンバスを
+  // クリックすると「同じ段落をもう一度配置」が起きる事故を防ぐ。
+  setTxtSelectedBlockIndex(null);
+  setTxtSelection("");
+  if (viewer) {
+    for (const item of viewer.querySelectorAll(".txt-block")) {
+      item.classList.remove("selected");
+    }
+  }
+  // 編集確定時に原稿テキスト側の該当ブロックも置換し、viewer を再描画する。
+  await enterInPlaceEditForLayer(match.pageIndex, match.layerKey, {
+    afterCommit: (newValue) => {
+      updateTxtSourceBlock(pageNumber, paragraph, newValue);
+    },
+  });
+}
+
+// pageNumber（マーカー有り：1-based / 無し：null）の範囲内で oldParagraph を
+// newParagraph に置換し、setTxtSource → renderViewer で UI も更新する。
+// 同一テキスト or 一致なしのときは no-op で false。
+function updateTxtSourceBlock(pageNumber, oldParagraph, newParagraph) {
+  if (oldParagraph === newParagraph) return false;
+  const source = getTxtSource();
+  if (!source) return false;
+  const newContent = replaceBlockInContent(source.content, pageNumber, oldParagraph, newParagraph);
+  if (newContent == null || newContent === source.content) return false;
+  // setTxtSource は txtSelection / txtSelectedBlockIndex をリセットするが
+  // dblclick 経路ではすでにクリア済みなので問題なし。
+  setTxtSource({ name: source.name, content: newContent });
+  renderViewer();
+  return true;
+}
+
+// content をページマーカーで区切り、pageNumber に対応するセクション内で
+// oldText の最初の出現を newText に置換した結果を返す。一致しなければ null。
+// pageNumber == null（マーカー無し原稿）のときは content 全体を対象にする。
+// 改行は内部で LF 統一して比較・置換し、結果も LF で返す。
+function replaceBlockInContent(content, pageNumber, oldText, newText) {
+  const norm = (content ?? "").replace(/\r\n?/g, "\n");
+  const oldLF = (oldText ?? "").replace(/\r\n?/g, "\n");
+  if (!oldLF) return null;
+
+  if (pageNumber == null) {
+    const idx = norm.indexOf(oldLF);
+    if (idx < 0) return null;
+    return norm.slice(0, idx) + newText + norm.slice(idx + oldLF.length);
+  }
+
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let sectionStart = -1;
+  let sectionEnd = norm.length;
+  let inTargetPage = false;
+  let m;
+  while ((m = re.exec(norm)) !== null) {
+    const num = toHalfWidthInt(m[1]);
+    if (inTargetPage) {
+      sectionEnd = m.index;
+      break;
+    }
+    if (num === pageNumber) {
+      inTargetPage = true;
+      sectionStart = m.index + m[0].length;
+    }
+  }
+  if (!inTargetPage) return null;
+  const idx = norm.slice(sectionStart, sectionEnd).indexOf(oldLF);
+  if (idx < 0) return null;
+  const absStart = sectionStart + idx;
+  return norm.slice(0, absStart) + newText + norm.slice(absStart + oldLF.length);
+}
+
+function normalizeForMatch(s) {
+  return String(s ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/^\n+|\n+$/g, "");
+}
+
+// 段落テキストを既配置レイヤー全体から検索。検索順序：
+//   1. 現在ページ → その他ページ index 昇順
+//   2. ページ内：既存（PSD 元レイヤー）→ 新規（auto-place / T ツール配置）
+// 最初の一致を返し、複数あれば console.info で記録（運用中の頻度把握用）。
+function findPlacedLayerByText(text) {
+  const target = normalizeForMatch(text);
+  if (!target) return null;
+  const pages = getPages();
+  if (!pages || pages.length === 0) return null;
+  const cur = getCurrentPageIndex();
+  const order = [];
+  if (cur >= 0 && cur < pages.length) order.push(cur);
+  for (let i = 0; i < pages.length; i++) {
+    if (i !== cur) order.push(i);
+  }
+
+  let firstMatch = null;
+  let matchCount = 0;
+  for (const i of order) {
+    const page = pages[i];
+    if (!page) continue;
+    // 既存レイヤー（edit override 適用後の contents で比較）
+    for (const layer of page.textLayers ?? []) {
+      const edit = getEdit(page.path, layer.id);
+      const raw = edit?.contents ?? layer.text ?? "";
+      if (normalizeForMatch(raw) === target) {
+        matchCount++;
+        if (!firstMatch) {
+          firstMatch = {
+            pageIndex: i,
+            layerKey: layer.id,
+            direction: edit?.direction ?? layer.direction ?? "horizontal",
+          };
+        }
+      }
+    }
+    // 新規レイヤー
+    for (const nl of getNewLayersForPsd(page.path) ?? []) {
+      if (normalizeForMatch(nl.contents ?? "") === target) {
+        matchCount++;
+        if (!firstMatch) {
+          firstMatch = {
+            pageIndex: i,
+            layerKey: nl.tempId,
+            direction: nl.direction ?? "vertical",
+          };
+        }
+      }
+    }
+  }
+  if (matchCount > 1) {
+    console.info(`[txt-source] ${matchCount} matches for "${target.slice(0, 40)}${target.length > 40 ? "…" : ""}" — using first`);
+  }
+  return firstMatch;
 }
 
 function selectBlock(idx, text) {

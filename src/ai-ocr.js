@@ -17,7 +17,7 @@ import {
   notifyDialog,
   toast,
 } from "./ui-feedback.js";
-import { getPdfPath, setAiOcrDoc } from "./state.js";
+import { setAiOcrDoc } from "./state.js";
 import { loadTxtFromContent } from "./txt-source.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
 import { checkAiModelsStatus } from "./ai-install.js";
@@ -130,12 +130,23 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
       });
     } else if (p.phase === "ocr") {
       phase = "ocr";
-      const etaSuffix = p.eta ? ` (残り ${formatEta(p.eta)})` : "";
-      updateProgress({
-        detail: `OCR 実行中… ${p.current}/${p.total}${etaSuffix}`,
-        current: p.current,
-        total: p.total,
-      });
+      // tqdm の初期出力 "0/5 [00:00<?, ?it/s]" は残り時間が未確定（"?" を含む）。
+      // 残り時間が解析できる正常値になるまではカウントもバーも出さず indeterminate 表示。
+      const formattedEta = formatEta(p.eta);
+      const hasValidEta = !!formattedEta;
+      if (!hasValidEta) {
+        updateProgress({
+          detail: "OCR 実行中…",
+          current: null,
+          total: null,
+        });
+      } else {
+        updateProgress({
+          detail: `OCR 実行中… ${p.current}/${p.total} (残り ${formattedEta})`,
+          current: p.current,
+          total: p.total,
+        });
+      }
     }
   });
 
@@ -195,6 +206,7 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
     await notifyDialog({
       title: "画像スキャン完了",
       message: "テキスト抽出が完了しました。\n自動配置を行ってください。",
+      kind: "success",
     });
   }
 }
@@ -229,10 +241,14 @@ function detectStartupPhase(line) {
 }
 
 // tqdm の "[time<eta, rate]" 内 eta 部分 (e.g. "00:30") を「30秒」「1分20秒」に整形。
+// eta 未確定（"?" を含む / 0 秒 / 数値解析不可）のときは "" を返す。
+// 呼び出し側はこの戻り値を「ETA 確定済みかどうか」のフラグとしても使う。
 function formatEta(eta) {
   if (typeof eta !== "string") return "";
+  // tqdm 初期状態 "00:00<?, ?it/s" 等の「?」を含む eta は未確定なので非表示。
+  if (eta.includes("?")) return "";
   const m = eta.match(/<\s*(\d+):(\d+)(?::(\d+))?/);
-  if (!m) return eta.trim();
+  if (!m) return "";
   const h = m[3] ? parseInt(m[1], 10) : 0;
   const mm = parseInt(m[3] ? m[2] : m[1], 10);
   const ss = parseInt(m[3] ? m[3] : m[2], 10);
@@ -254,32 +270,20 @@ export function bindAiOcrButton() {
   if (!btn) return;
   btn.addEventListener("click", async () => {
     if (runningOcr) return;
-    // 1. 開いている PDF を優先
-    const pdfPath = getPdfPath();
-    let files = pdfPath ? [pdfPath] : [];
-    // 2. 何も開いてなければ選択ダイアログ
-    if (files.length === 0) {
-      try { files = await pickInputFiles(); }
-      catch (e) {
-        console.error(e);
-        toast(`ファイル選択失敗: ${e?.message ?? e}`, { kind: "error" });
-        return;
-      }
+    // 見本（PDF/画像）が開いていても流用せず、必ずファイル選択ダイアログを出す。
+    // 見本ビューアは表示用、OCR は別ファイルを意識的に選んで掛けたいケースを優先。
+    let files;
+    try { files = await pickInputFiles(); }
+    catch (e) {
+      console.error(e);
+      toast(`ファイル選択失敗: ${e?.message ?? e}`, { kind: "error" });
+      return;
     }
+    if (!files || files.length === 0) return; // ユーザーがキャンセル
     await runAiOcr(files, { notifyOnComplete: true });
   });
 
-  // PDF 読み込み有無に応じて enabled 切替
-  const refresh = () => {
-    const pdf = getPdfPath();
-    btn.disabled = false; // PDF が無くてもダイアログでも実行可
-    btn.title = pdf
-      ? `現在開いている PDF (${baseName(pdf)}) を AI で画像スキャン`
-      : "PDF / 画像を選択して AI で画像スキャン";
-  };
-  refresh();
-  // PDF 切替時にツールチップ更新 (state.js の onPdfChange を活用)
-  import("./state.js").then(({ onPdfChange }) => {
-    if (typeof onPdfChange === "function") onPdfChange(refresh);
-  });
+  // 押下時に必ずダイアログを開く運用に統一したため、ツールチップは固定文言。
+  btn.disabled = false;
+  btn.title = "PDF / 画像を選択して AI で画像スキャン";
 }

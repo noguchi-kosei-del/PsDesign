@@ -534,11 +534,13 @@ pub async fn run_ai_ocr(
     stderr_handle.join().ok();
 
     let mokuro_file = parent_dir.join(format!("{}.mokuro", volume_name));
-    let mokuro_file_exists = mokuro_file.exists();
+    // FS flush 遅延 / Defender リアルタイムスキャン / antivirus フックなどで
+    // mokuro 終了直後はファイルが見えないことが希にあるので最大 1.5 秒ポーリングする。
+    let mokuro_file_path = wait_for_mokuro_file(&parent_dir, &volume_name, &mokuro_file);
 
-    if !status.success() && !mokuro_file_exists {
+    if !status.success() && mokuro_file_path.is_none() {
         return Err(format!(
-            "mokuroが異常終了しました (exit code {:?})",
+            "mokuroが異常終了しました (exit code {:?}). 画像スキャンを再試行してください。\nもし繰り返し失敗する場合は、入力画像の枚数を減らすか、AIモデルを再インストールしてみてください。",
             status.code()
         ));
     }
@@ -558,10 +560,24 @@ pub async fn run_ai_ocr(
         .ok();
     }
 
-    let content = std::fs::read_to_string(&mokuro_file).map_err(|e| {
+    let mokuro_file_path = match mokuro_file_path {
+        Some(p) => p,
+        None => {
+            // status.success() = true だが .mokuro が無い稀なケース。
+            // 親ディレクトリの実態をログに出して原因切り分けを助ける。
+            let listing = list_dir_for_diag(&parent_dir);
+            return Err(format!(
+                ".mokuroファイル ({}) が見つかりませんでした。mokuro が画像を処理できなかった可能性があります（GPU メモリ不足 / 画像形式の不整合 / Defender ブロック等）。再試行してください。\n\nテンポラリ内容:\n{}",
+                mokuro_file.to_string_lossy(),
+                listing
+            ));
+        }
+    };
+
+    let content = std::fs::read_to_string(&mokuro_file_path).map_err(|e| {
         format!(
             "{}が読めませんでした: {}",
-            mokuro_file.to_string_lossy(),
+            mokuro_file_path.to_string_lossy(),
             e
         )
     })?;
@@ -570,6 +586,76 @@ pub async fn run_ai_ocr(
 
     Ok(doc)
     // _guard drops here → temp dir removed
+}
+
+// mokuro 終了直後に .mokuro が見えなくても少し待つと現れることがある（Windows の
+// Defender スキャン等）。最大 ~1.5 秒、150ms 刻みで存在確認をする。期待パスにも
+// 親ディレクトリのいずれかにも見つからなければ None。
+fn wait_for_mokuro_file(
+    parent_dir: &Path,
+    volume_name: &str,
+    expected: &Path,
+) -> Option<PathBuf> {
+    use std::thread::sleep;
+    use std::time::Duration;
+    for attempt in 0..10 {
+        if expected.exists() {
+            return Some(expected.to_path_buf());
+        }
+        // 念のため親ディレクトリ内の任意の <volume>.mokuro を fallback として走査。
+        // mokuro バージョンによってファイル名が微妙に変わる事故対策。
+        if let Some(found) = find_any_mokuro_file(parent_dir, volume_name) {
+            return Some(found);
+        }
+        if attempt < 9 {
+            sleep(Duration::from_millis(150));
+        }
+    }
+    None
+}
+
+fn find_any_mokuro_file(dir: &Path, volume_name: &str) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut best_match: Option<PathBuf> = None;
+    let mut any_match: Option<PathBuf> = None;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) == Some("mokuro") {
+            // 期待される volume_name と一致するものを優先（複数巻が紛れたケース対策）。
+            if path.file_stem().and_then(|s| s.to_str()) == Some(volume_name) {
+                best_match = Some(path);
+                break;
+            }
+            any_match.get_or_insert(path);
+        }
+    }
+    best_match.or(any_match)
+}
+
+fn list_dir_for_diag(dir: &Path) -> String {
+    let entries = match std::fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(e) => return format!("(読み取り失敗: {})", e),
+    };
+    let mut lines: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        let name = entry
+            .path()
+            .file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let is_dir = entry.file_type().map(|t| t.is_dir()).unwrap_or(false);
+        lines.push(if is_dir {
+            format!("  [dir]  {}", name)
+        } else {
+            format!("  [file] {}", name)
+        });
+    }
+    if lines.is_empty() {
+        "  (空)".to_string()
+    } else {
+        lines.join("\n")
+    }
 }
 
 #[tauri::command]
