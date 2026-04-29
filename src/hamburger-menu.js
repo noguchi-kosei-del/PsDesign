@@ -1,9 +1,11 @@
 import {
+  clearAiOcrDoc,
   clearPages,
   clearPdf,
   clearTxtSource,
   setActivePane,
   setFolder,
+  setFontPickerStuck,
   setParallelSyncMode,
   setPdfPageIndex,
   setPdfRotation,
@@ -15,6 +17,7 @@ import {
 } from "./state.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
+import { renderTxtSourceViewer } from "./txt-source.js";
 import { confirmDialog } from "./ui-feedback.js";
 import { openSettingsModal } from "./settings-ui.js";
 
@@ -106,6 +109,8 @@ async function goHome() {
   setFolder(null);
   clearPages();
   clearTxtSource();
+  clearAiOcrDoc();
+  setFontPickerStuck(false);
   clearPdf();
   setPdfRotation(0);
   setPsdRotation(0);
@@ -118,6 +123,7 @@ async function goHome() {
   setPsdZoom(1);
   renderAllSpreads();
   rebuildLayerList();
+  renderTxtSourceViewer();
   const saveBtn = document.getElementById("save-btn");
   if (saveBtn) {
     saveBtn.disabled = true;

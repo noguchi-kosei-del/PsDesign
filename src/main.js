@@ -1,5 +1,5 @@
 import { loadPsdFromPath } from "./psd-loader.js";
-import { loadPdfByPath, pickPdfFile } from "./pdf-loader.js";
+import { loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
 import { deleteSelectedLayers, nudgeSelectedLayers, refreshAllOverlays } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
@@ -109,7 +109,7 @@ import {
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
 
-async function pickPsdFiles() {
+export async function pickPsdFiles() {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({
     multiple: true,
@@ -132,9 +132,9 @@ async function handleOpenFiles() {
 }
 
 async function handleOpenPdf() {
-  const path = await pickPdfFile();
-  if (!path) return;
-  await loadPdfByPath(path);
+  const paths = await pickReferenceFiles();
+  if (!paths.length) return;
+  await loadReferenceFiles(paths);
 }
 
 function bindPdfWorkspaceToggle() {
@@ -202,8 +202,13 @@ function parentDir(p) {
   return m ? m[1] : null;
 }
 
-async function loadPsdFilesByPaths(files) {
+export async function loadPsdFilesByPaths(files) {
   if (!files || files.length === 0) return;
+  // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
+  // のいずれもページ番号順 (page1 → page2 → page10) で先頭から並ぶようにする。
+  // Rust 側の list_psd_files は字句順なので "page10" が "page2" より先に来てしまう。
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  files = [...files].sort((a, b) => collator.compare(baseName(a), baseName(b)));
   // 未保存の編集があるなら警告して確認を取る。clearPages() は state.edits / newLayers を
   // 黙って消すため、編集中のユーザーがファイル選択ダイアログ等から別 PSD を開いた瞬間に
   // 作業内容が無警告で失われる事故を防ぐ。
@@ -764,11 +769,12 @@ function bindCollapseToggles() {
   );
 }
 
-// サイドパネル内 3 セクション（原稿テキスト / 編集 / テキストレイヤー）の折り畳み。
+// サイドパネル内 2 セクション（原稿テキスト / テキスト編集）の折り畳み。
+// テキストレイヤー一覧は「テキスト編集」セクションに統合済みなのでトグルは持たない。
 // 各 .panel-section[data-section] の h2 内トグルボタンで開閉、状態は localStorage に保存。
 const SECTION_COLLAPSED_KEY = "psdesign_panel_section_collapsed";
 function loadSectionState() {
-  const defaults = { txt: false, editor: false, layers: false };
+  const defaults = { txt: false, editor: false };
   try {
     const raw = localStorage.getItem(SECTION_COLLAPSED_KEY);
     if (!raw) return defaults;
@@ -784,7 +790,7 @@ function saveSectionState(s) {
 }
 function bindSectionToggles() {
   const state = loadSectionState();
-  for (const id of ["txt", "editor", "layers"]) {
+  for (const id of ["txt", "editor"]) {
     const sec = document.querySelector(`.panel-section[data-section="${id}"]`);
     const btn = sec?.querySelector(":scope > .panel-section-h2 > .section-toggle-btn");
     if (!sec || !btn) continue;
@@ -1230,12 +1236,12 @@ async function handleDroppedPaths(paths) {
   if (!paths || paths.length === 0) return;
   const psdFiles = [];
   const txtFiles = [];
-  const pdfFiles = [];
+  const pdfFiles = []; // PDF / JPEG / PNG いずれも「見本」としてここに入れる
   const unknowns = []; // 拡張子なし ＝ おそらくフォルダ
   for (const p of paths) {
     if (/\.psd$/i.test(p)) psdFiles.push(p);
     else if (/\.txt$/i.test(p)) txtFiles.push(p);
-    else if (/\.pdf$/i.test(p)) pdfFiles.push(p);
+    else if (/\.(pdf|jpe?g|png)$/i.test(p)) pdfFiles.push(p);
     else unknowns.push(p);
   }
   // フォルダらしきものは中の .psd を展開して取り込む（従来の利便性を維持）。
@@ -1254,10 +1260,8 @@ async function handleDroppedPaths(paths) {
     await loadTxtFromPath(t);
   }
   if (pdfFiles.length > 0) {
-    if (pdfFiles.length > 1) {
-      toast("PDF は 1 つだけ読み込みました（先頭のみ）", { kind: "info", duration: 3000 });
-    }
-    await loadPdfByPath(pdfFiles[0]);
+    // 複数ファイルは合成 doc としてまとめて読み込む（自然順 = page1 → page2 → page10）。
+    await loadReferenceFiles(pdfFiles);
   }
 }
 

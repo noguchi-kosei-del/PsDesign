@@ -105,11 +105,12 @@
           </div>
         </div>
         <div class="toolbar-actions">
-          <button id="open-pdf-btn" class="icon-btn file-open-btn" title="PDF を開く" aria-label="PDF を開く">
+          <button id="open-pdf-btn" class="icon-btn file-open-btn" title="見本を読み込み" aria-label="見本を読み込み">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">PDF</text>
+              <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/>
+              <path d="M14 2v5a1 1 0 0 0 1 1h5"/>
+              <circle cx="10" cy="12" r="2"/>
+              <path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/>
             </svg>
           </button>
           <button id="open-folder-btn" class="icon-btn file-open-btn" title="PSD を開く" aria-label="PSD を開く">
@@ -303,27 +304,7 @@
               </svg>
             </button>
           </div>
-          <section class="panel-section txt-source" id="txt-source" data-section="txt">
-            <h2 class="panel-section-h2">
-              <span>原稿テキスト</span>
-              <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
-                <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
-            </h2>
-            <div id="txt-source-actions" class="txt-source-actions" hidden>
-              <span id="txt-source-name" class="txt-source-name"></span>
-              <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="テキストをクリア" aria-label="テキストをクリア" hidden>
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  <path d="M10 11v6"/>
-                  <path d="M14 11v6"/>
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                </svg>
-              </button>
-            </div>
+          <div class="ai-actions-row">
             <button id="ai-ocr-btn" class="ai-ocr-btn" type="button" title="開いている PDF / 画像から AI でセリフを抽出" aria-label="画像スキャン" disabled>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
@@ -347,6 +328,28 @@
               </svg>
               <span>自動配置</span>
             </button>
+          </div>
+          <section class="panel-section txt-source" id="txt-source" data-section="txt">
+            <h2 class="panel-section-h2">
+              <span>原稿テキスト</span>
+              <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
+                <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="6 9 12 15 18 9"/>
+                </svg>
+              </button>
+            </h2>
+            <div id="txt-source-actions" class="txt-source-actions" hidden>
+              <span id="txt-source-name" class="txt-source-name"></span>
+              <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="テキストをクリア" aria-label="テキストをクリア" hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/>
+                  <path d="M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </button>
+            </div>
             <div id="txt-source-dropzone" class="txt-source-dropzone">
               <div id="txt-source-viewer" class="txt-source-viewer" hidden></div>
               <div id="txt-source-empty" class="txt-source-empty">
@@ -361,7 +364,7 @@
           </section>
           <section class="panel-section" data-section="editor">
           <h2 class="panel-section-h2">
-            <span>編集</span>
+            <span>テキスト編集</span>
             <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
               <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <polyline points="6 9 12 15 18 9"/>
@@ -390,26 +393,6 @@
                     <input id="size-input" class="size-input" type="number" min="6" max="999" step="0.1" value="12" aria-label="サイズ" />
                     <span class="size-unit">pt</span>
                     <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
-                  </div>
-                  <div class="direction-toggle" role="group" aria-label="組方向">
-                    <button id="dir-vertical-btn" class="dir-toggle-btn" type="button" data-direction="vertical" title="縦組み" aria-label="縦組み">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <polyline points="2 6 2 3 12 3 12 6"/>
-                        <line x1="4" y1="20" x2="10" y2="20"/>
-                        <line x1="7" y1="3" x2="7" y2="20"/>
-                        <line x1="18" y1="5" x2="18" y2="19"/>
-                        <polyline points="14 15 18 19 22 15"/>
-                      </svg>
-                    </button>
-                    <button id="dir-horizontal-btn" class="dir-toggle-btn" type="button" data-direction="horizontal" title="横組み" aria-label="横組み">
-                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                        <polyline points="2 6 2 3 12 3 12 6"/>
-                        <line x1="4" y1="20" x2="10" y2="20"/>
-                        <line x1="7" y1="3" x2="7" y2="20"/>
-                        <line x1="13" y1="12" x2="22" y2="12"/>
-                        <polyline points="18 8 22 12 18 16"/>
-                      </svg>
-                    </button>
                   </div>
                 </div>
               </div>
@@ -445,16 +428,6 @@
               </div>
             </div>
           </div>
-          </section>
-          <section class="panel-section" data-section="layers">
-          <h2 class="panel-section-h2">
-            <span>テキストレイヤー</span>
-            <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
-              <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-          </h2>
           <ul id="layer-list" class="layer-list"></ul>
           <div class="layer-list-footer">
             <button id="delete-new-layer-btn" class="icon-btn layer-delete-btn" type="button" title="レイヤー削除" aria-label="レイヤー削除" disabled>

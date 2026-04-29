@@ -19,6 +19,7 @@ import {
   setCurrentPageIndex,
   setEdit,
   setFillColor,
+  setFontPickerStuck,
   setLeadingPct,
   setSelectedLayer,
   setSelectedLayers,
@@ -39,21 +40,12 @@ const fontEl = () => document.getElementById("edit-font");
 const fontComboboxEl = () => document.getElementById("edit-font-combobox");
 const fontToggleEl = () => document.getElementById("edit-font-toggle");
 const fontListEl = () => document.getElementById("edit-font-list");
-const dirVerticalBtnEl = () => document.getElementById("dir-vertical-btn");
-const dirHorizontalBtnEl = () => document.getElementById("dir-horizontal-btn");
 const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
 const strokeWidthInputEl = () => document.getElementById("stroke-width-input");
 const fillWhiteBtnEl = () => document.getElementById("fill-white-btn");
 const fillBlackBtnEl = () => document.getElementById("fill-black-btn");
-
-function syncDirectionToggle(direction) {
-  const v = dirVerticalBtnEl();
-  const h = dirHorizontalBtnEl();
-  if (v) v.classList.toggle("active", direction === "vertical");
-  if (h) h.classList.toggle("active", direction === "horizontal");
-}
 
 // color === null は「複数選択で値が混在している」状態。全ボタン非アクティブ。
 function syncStrokeToggle(color) {
@@ -98,6 +90,37 @@ function formatDisplayPt(actualPt, page) {
   return `${rounded}pt`;
 }
 
+// per-layer 縦／横トグルの SVG（lucide 由来、既存サイドバー版と同形）。
+const DIR_VERT_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 6 2 3 12 3 12 6"/><line x1="4" y1="20" x2="10" y2="20"/><line x1="7" y1="3" x2="7" y2="20"/><line x1="18" y1="5" x2="18" y2="19"/><polyline points="14 15 18 19 22 15"/></svg>`;
+const DIR_HORZ_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 6 2 3 12 3 12 6"/><line x1="4" y1="20" x2="10" y2="20"/><line x1="7" y1="3" x2="7" y2="20"/><line x1="13" y1="12" x2="22" y2="12"/><polyline points="18 8 22 12 18 16"/></svg>`;
+
+function dirToggleHtml(direction) {
+  const v = direction === "vertical" ? " active" : "";
+  const h = direction === "horizontal" ? " active" : "";
+  return `<div class="layer-dir-toggle" role="group" aria-label="組方向">`
+    + `<button type="button" class="layer-dir-btn${v}" data-direction="vertical" title="縦組み" aria-label="縦組み">${DIR_VERT_SVG}</button>`
+    + `<button type="button" class="layer-dir-btn${h}" data-direction="horizontal" title="横組み" aria-label="横組み">${DIR_HORZ_SVG}</button>`
+    + `</div>`;
+}
+
+// li 内 direction トグルのクリックは li 自身の選択ハンドラに伝播させない
+// （toggle 操作は選択変更を伴わず、対象レイヤーの direction のみ更新する）。
+function bindLayerDirToggle(li, kind, page, layerOrNl) {
+  for (const btn of li.querySelectorAll(".layer-dir-btn")) {
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      const direction = btn.dataset.direction;
+      if (kind === "existing") {
+        setEdit(page.path, layerOrNl.id, { direction });
+      } else {
+        updateNewLayer(layerOrNl.tempId, { direction });
+      }
+      rebuildLayerList();
+      refreshAllOverlays();
+    });
+  }
+}
+
 export function rebuildLayerList() {
   const ul = listEl();
   ul.innerHTML = "";
@@ -112,6 +135,7 @@ export function rebuildLayerList() {
   const page = pages[pageIndex];
 
   const header = document.createElement("li");
+  header.className = "layer-list-header";
   header.textContent = `— ${fileName(page.path)} —`;
   header.style.pointerEvents = "none";
   header.style.color = "var(--text-muted)";
@@ -127,11 +151,16 @@ export function rebuildLayerList() {
     const displayText = edit?.contents ?? layer.text;
     const movedMark = edit && (edit.dx || edit.dy) ? "・移動" : "";
     const editedMark = edit ? `• 編集済${movedMark}` : "";
+    const direction = edit?.direction ?? layer.direction ?? "horizontal";
     li.innerHTML = `
-      <div class="layer-text">${escapeHtml(truncate(displayText, 40))}</div>
-      <div class="layer-meta">${escapeHtml(layer.font || "")} ${formatDisplayPt(layer.fontSize, page)} ${editedMark}</div>
+      <div class="layer-item-body">
+        <div class="layer-text">${escapeHtml(truncate(displayText, 40))}</div>
+        <div class="layer-meta">${escapeHtml(layer.font || "")} ${formatDisplayPt(layer.fontSize, page)} ${editedMark}</div>
+      </div>
+      ${dirToggleHtml(direction)}
     `;
     li.addEventListener("click", (e) => selectLayer(pageIndex, layer.id, e));
+    bindLayerDirToggle(li, "existing", page, layer);
     ul.appendChild(li);
   }
 
@@ -141,11 +170,15 @@ export function rebuildLayerList() {
     li.dataset.pageIndex = String(pageIndex);
     li.dataset.layerId = nl.tempId;
     li.dataset.layerKind = "new";
+    const direction = nl.direction ?? "vertical";
     li.innerHTML = `
-      <div class="layer-text">＋ ${escapeHtml(truncate(nl.contents, 40))}</div>
-      <div class="layer-meta">新規テキスト ${formatDisplayPt(nl.sizePt, page)}</div>
+      <div class="layer-item-body">
+        <div class="layer-text">${escapeHtml(truncate(nl.contents, 40))}</div>
+      </div>
+      ${dirToggleHtml(direction)}
     `;
     li.addEventListener("click", (e) => selectLayer(pageIndex, nl.tempId, e));
+    bindLayerDirToggle(li, "new", page, nl);
     ul.appendChild(li);
   }
 
@@ -298,14 +331,12 @@ function populateEditor() {
 
     let effectiveSize = null;
     let effectiveFont = null;
-    let effectiveDirection = "vertical";
     let effectiveLeading = null;
     if (resolved.kind === "existing") {
       const { page, layer } = resolved;
       const edit = getEdit(page.path, layer.id) ?? {};
       effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
       effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
-      effectiveDirection = edit.direction ?? layer.direction ?? "horizontal";
       // 既存レイヤーは PSD から行間を読み戻していないため、edit に明示があれば
       // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
       effectiveLeading = edit.leadingPct ?? 125;
@@ -314,7 +345,6 @@ function populateEditor() {
       const { newLayer } = resolved;
       effectiveSize = newLayer.sizePt ?? null;
       effectiveFont = newLayer.fontPostScriptName ?? null;
-      effectiveDirection = newLayer.direction ?? "vertical";
       effectiveLeading = newLayer.leadingPct ?? 125;
       rebuildFontOptions(effectiveFont ?? "");
     }
@@ -322,7 +352,6 @@ function populateEditor() {
     if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
     if (effectiveFont) setCurrentFont(effectiveFont);
     if (Number.isFinite(effectiveLeading)) setLeadingPct(effectiveLeading);
-    syncDirectionToggle(effectiveDirection);
   }
 
   // フチ/文字色は単独/複数いずれでも共通値を表示。
@@ -464,6 +493,7 @@ function commitFont(font) {
   input.dataset.ps = font.postScriptName;
   ensureFontLoaded(font.postScriptName);
   setCurrentFont(font.postScriptName);
+  setFontPickerStuck(true);
   commitField("fontPostScriptName", font.postScriptName);
   closeCombo();
   // 選択直後は input からフォーカスを外して Space などのキーがキャンバス側に届くようにする。
@@ -608,16 +638,6 @@ export function bindEditorEvents() {
       refreshAllOverlays();
     });
   }
-  const bindDirButton = (btn, direction) => {
-    if (!btn) return;
-    btn.addEventListener("click", () => {
-      commitField("direction", direction);
-      syncDirectionToggle(direction);
-    });
-  };
-  bindDirButton(dirVerticalBtnEl(), "vertical");
-  bindDirButton(dirHorizontalBtnEl(), "horizontal");
-
   const bindStrokeButton = (btn, color) => {
     if (!btn) return;
     btn.addEventListener("click", () => {
@@ -720,6 +740,44 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
   if (mutated) commitHistoryTransient(); else abortHistoryTransient();
   rebuildLayerList();
   refreshAllOverlays();
+}
+
+// edit-font ブラシモード用: 選択中の全レイヤーに同じ postScriptName を書き込む。
+// 既に同フォントのレイヤーは skip して無駄な undo ステップを作らない。
+// 1 件以上書き込まれた場合だけ rebuildLayerList / refreshAllOverlays / commitHistoryTransient
+// を実行し true を返す（呼び出し側が二重 rebuild を避けられるようにするため）。
+export function commitFontToSelections(ps) {
+  if (!ps) return false;
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  let mutated = false;
+  beginHistoryTransient();
+  for (const sel of selections) {
+    const ref = resolveLayerRef(sel);
+    if (!ref) continue;
+    let cur;
+    if (ref.kind === "existing") {
+      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+      cur = edit.fontPostScriptName ?? ref.layer.font ?? null;
+    } else {
+      cur = ref.newLayer.fontPostScriptName ?? null;
+    }
+    if (cur === ps) continue;
+    if (ref.kind === "existing") {
+      setEdit(ref.page.path, ref.layer.id, { fontPostScriptName: ps });
+    } else {
+      updateNewLayer(ref.newLayer.tempId, { fontPostScriptName: ps });
+    }
+    mutated = true;
+  }
+  if (mutated) {
+    commitHistoryTransient();
+    rebuildLayerList();
+    refreshAllOverlays();
+  } else {
+    abortHistoryTransient();
+  }
+  return mutated;
 }
 
 // 文字色を選択中の全レイヤーに書き込む。

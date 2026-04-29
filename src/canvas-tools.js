@@ -8,6 +8,7 @@ import {
   getEdit,
   getFillColor,
   getFontDisplayName,
+  getFontPickerStuck,
   getLeadingPct,
   getNewLayersForPsd,
   getPages,
@@ -30,7 +31,7 @@ import {
   updateNewLayer,
 } from "./state.js";
 import { ensureFontLoaded } from "./font-loader.js";
-import { rebuildLayerList } from "./text-editor.js";
+import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
 import { advanceTxtSelection, getActiveTxtSelection } from "./txt-source.js";
 
 const mounts = new Map();
@@ -672,6 +673,17 @@ function onLayerWheel(e, ctx, layerId) {
   resizeSelectedLayers(delta);
 }
 
+// edit-font 欄でユーザーがフォントを選んだ後（fontPickerStuck === true）、move ツールでの
+// 単独クリック・shift クリック・マーキー選択など、選択集合が確定した直後に呼ぶ。
+// 現在の選択リスト全体に currentFont を一括適用し、1 件以上書き込まれたら true。
+// false（apply しなかった）の場合、呼び出し側が rebuildLayerList を行うこと。
+function maybeApplyStickyFont() {
+  if (!getFontPickerStuck()) return false;
+  const ps = getCurrentFont();
+  if (!ps) return false;
+  return commitFontToSelections(ps);
+}
+
 function onExistingLayerMouseDown(e, ctx, layer) {
   const tool = getTool();
   if (isTextTool(tool)) {
@@ -695,7 +707,7 @@ function onExistingLayerMouseDown(e, ctx, layer) {
   if (!isLayerSelected(ctx.pageIndex, layer.id)) {
     setSelectedLayer(ctx.pageIndex, layer.id);
     renderOverlay(ctx);
-    rebuildLayerList();
+    if (!maybeApplyStickyFont()) rebuildLayerList();
   }
   beginMultiLayerDrag(e, ctx);
 }
@@ -723,7 +735,7 @@ function onNewLayerMouseDown(e, ctx, nl) {
   if (!isLayerSelected(ctx.pageIndex, nl.tempId)) {
     setSelectedLayer(ctx.pageIndex, nl.tempId);
     renderOverlay(ctx);
-    rebuildLayerList();
+    if (!maybeApplyStickyFont()) rebuildLayerList();
   }
   beginMultiLayerDrag(e, ctx);
 }
@@ -996,7 +1008,7 @@ function finalizeMarquee() {
   }
   setSelectedLayers(final);
   renderOverlay(ctx);
-  rebuildLayerList();
+  if (!maybeApplyStickyFont()) rebuildLayerList();
 }
 
 function collectLayerHits(ctx, selRect) {

@@ -526,38 +526,6 @@ html, body, #app {
   gap: 10px;
 }
 
-.direction-toggle {
-  display: inline-flex;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  overflow: hidden;
-}
-.dir-toggle-btn {
-  min-width: 34px;
-  padding: 4px 10px;
-  background: transparent;
-  color: var(--text);
-  border: none;
-  font-size: 12px;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.1s;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-.dir-toggle-btn svg { display: block; }
-.dir-toggle-btn + .dir-toggle-btn {
-  border-left: 1px solid var(--border);
-}
-.dir-toggle-btn:hover:not(.active) {
-  background: var(--panel-hover);
-}
-.dir-toggle-btn.active {
-  background: var(--accent);
-  color: #fff;
-}
-
 /* ルビ有無トグル：方向トグルと同じ見た目で 2 段選択。テキストラベル用に幅を少し広く。 */
 .ruby-toggle {
   display: inline-flex;
@@ -1670,11 +1638,82 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg);
+}
+/* ファイル名見出し li（pointerEvents: none を持つ）はテキストのみで Flex 不要、
+   背景はパネル色のままにして区切りを明示する。 */
+.layer-list li.layer-list-header {
+  display: block;
+  background: var(--panel);
+}
+
+.layer-list .layer-item-body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.layer-list .layer-text {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .layer-list li:hover { background: var(--panel-hover); }
 .layer-list li.selected { background: var(--accent); }
 .layer-list .layer-meta { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
+
+/* レイヤー行右端の縦／横トグル（per-layer 組方向）。
+   旧サイドバーの .direction-toggle と同じ見た目だが、行に収まるよう小さめ。 */
+.layer-dir-toggle {
+  display: inline-flex;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--panel);
+}
+.layer-dir-btn {
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.1s;
+  flex-shrink: 0;
+}
+.layer-dir-btn svg { display: block; }
+.layer-dir-btn + .layer-dir-btn {
+  border-left: 1px solid var(--border);
+}
+.layer-dir-btn:hover:not(.active) {
+  background: var(--panel-hover);
+}
+.layer-dir-btn.active {
+  background: var(--accent);
+  color: #fff;
+}
+/* 選択中レイヤー（accent 背景）上では toggle の枠と背景を浮かせて視認性を確保 */
+.layer-list li.selected .layer-dir-toggle {
+  border-color: rgba(255, 255, 255, 0.4);
+  background: rgba(0, 0, 0, 0.18);
+}
+.layer-list li.selected .layer-dir-btn {
+  color: #fff;
+}
+.layer-list li.selected .layer-dir-btn + .layer-dir-btn {
+  border-left-color: rgba(255, 255, 255, 0.4);
+}
+.layer-list li.selected .layer-dir-btn.active {
+  background: #fff;
+  color: var(--accent);
+}
 
 .editor {
   padding: 12px;
@@ -1817,7 +1856,9 @@ body.frames-hidden .layer-box-existing:not(.selected) {
 /* テキストレイヤーセクションを残り高さいっぱいに広げ、内側の layer-list が
    flex:1 で伸び、footer (削除ボタン) が常にセクション最下部に固定されるようにする。
    min-height: 0 を入れないと flex 子が overflow:auto でも縮まない（仕様）。 */
-.panel-section[data-section="layers"] {
+/* テキスト編集セクションは layer-list を内包するため、
+   残余高をすべて吸収して layer-list がスクロール可能になるようにする。 */
+.panel-section[data-section="editor"] {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
@@ -2379,6 +2420,23 @@ body.frames-hidden .layer-box-existing:not(.selected) {
  * =========================================================================== */
 
 /* TXT パネル下の「AIで読み取り」ボタン */
+/* サイドパネル先頭の AI ボタン群 (画像スキャン + 自動配置)。panel-header の直下に
+   配置し、2 ボタンが等幅でサイドバーいっぱいに広がる。*/
+.ai-actions-row {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.ai-actions-row > .ai-ocr-btn,
+.ai-actions-row > .ai-place-btn {
+  flex: 1 1 0;
+  min-width: 0;
+  margin-top: 0;
+  justify-content: center;
+}
+
 .ai-ocr-btn {
   display: inline-flex;
   align-items: center;
@@ -2670,28 +2728,28 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   flex-shrink: 0;
 }
 
-/* TXT パネル下の「自動配置」ボタン (画像スキャンの隣)。
-   画像スキャンと同じ寸法・基本スタイルだが、確定アクションなのでアクセントを強める。 */
+/* TXT パネル下の「自動配置」ボタン (画像スキャンの直下)。
+   画像スキャンと寸法・配色を完全に揃える。 */
 .ai-place-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin-top: 4px;
-  margin-left: 6px;
+  margin-top: 6px;
   padding: 6px 12px;
-  background: var(--accent);
-  border: 1px solid var(--accent);
-  color: #fff;
+  background: var(--panel-hover);
+  border: 1px solid var(--border);
+  color: var(--text);
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
   font-weight: 600;
-  transition: background 0.15s, border-color 0.15s, opacity 0.15s;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .ai-place-btn:hover:not(:disabled) {
-  background: var(--accent-hover);
-  border-color: var(--accent-hover);
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 .ai-place-btn:disabled {
   opacity: 0.5;

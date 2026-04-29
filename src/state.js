@@ -19,6 +19,10 @@ const state = {
   leadingPctListeners: new Set(),
   currentFontPostScriptName: null,
   currentFontListeners: new Set(),
+  // edit-font 欄でユーザーが能動的にフォントを選んだ後、選択ツールでクリックした
+  // テキストフレームへ自動適用する「ブラシ」モードのフラグ。
+  // commitFont() で true、goHome() で false にリセット。
+  fontPickerStuck: false,
   strokeColor: "none", // "none" | "white" | "black"
   strokeColorListeners: new Set(),
   strokeWidthPx: 20,
@@ -68,6 +72,7 @@ const state = {
   // AI 画像スキャン (run_ai_ocr) の最新結果。自動配置 (ai-place.js) で参照する。
   // { doc: MokuroDocument, sourcePath: string } | null
   aiOcrDoc: null,
+  aiOcrDocListeners: new Set(),
 };
 
 const HISTORY_MAX = 100;
@@ -104,9 +109,18 @@ export function clearPages() {
 // 画像スキャン (run_ai_ocr) の結果を保持し、自動配置機能から参照する。
 export function setAiOcrDoc(doc, sourcePath) {
   state.aiOcrDoc = { doc, sourcePath: sourcePath || null };
+  for (const fn of state.aiOcrDocListeners) fn(state.aiOcrDoc);
 }
 export function getAiOcrDoc() { return state.aiOcrDoc; }
-export function clearAiOcrDoc() { state.aiOcrDoc = null; }
+export function clearAiOcrDoc() {
+  if (state.aiOcrDoc === null) return;
+  state.aiOcrDoc = null;
+  for (const fn of state.aiOcrDocListeners) fn(null);
+}
+export function onAiOcrDocChange(fn) {
+  state.aiOcrDocListeners.add(fn);
+  return () => state.aiOcrDocListeners.delete(fn);
+}
 
 // 環境設定 → 「デフォルト」の値を新規テキストレイヤー用ツール状態に反映する。
 // アプリ起動時 / clearPages 時 / 設定パネルでの値変更時に呼ぶ。
@@ -710,6 +724,9 @@ export function onCurrentFontChange(fn) {
   state.currentFontListeners.add(fn);
   return () => state.currentFontListeners.delete(fn);
 }
+
+export function getFontPickerStuck() { return state.fontPickerStuck; }
+export function setFontPickerStuck(v) { state.fontPickerStuck = !!v; }
 
 export function getStrokeColor() { return state.strokeColor; }
 export function setStrokeColor(color) {

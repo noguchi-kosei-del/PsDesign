@@ -10,6 +10,7 @@
 import {
   getPages,
   getAiOcrDoc,
+  onAiOcrDocChange,
   addNewLayer,
   getCurrentFont,
   getTextSize,
@@ -317,13 +318,20 @@ async function runAutoPlace() {
   runningPlace = true;
   try {
     // 1. PSD / TXT の事前確認
-    const psdPages = getPages();
+    //    PSD 未読込なら、ファイル選択ダイアログを起動して読み込みまで一気通貫で進める
+    //    (ユーザーがダイアログをキャンセルした場合は静かに戻る)。
+    let psdPages = getPages();
     if (!psdPages || psdPages.length === 0) {
-      await notifyDialog({
-        title: "自動配置できません",
-        message: "PSD ファイルが読み込まれていません。\n先に PSD フォルダを開いてください。",
-      });
-      return;
+      // main.js に対する循環参照を避けるため動的 import で取得
+      const mainMod = await import("./main.js");
+      const files = await mainMod.pickPsdFiles();
+      if (!files || files.length === 0) return;
+      await mainMod.loadPsdFilesByPaths(files);
+      psdPages = getPages();
+      if (!psdPages || psdPages.length === 0) {
+        // 読み込みが全件失敗 (loadPsdFilesByPaths が内部で notifyDialog を出す) 等
+        return;
+      }
     }
     const txtSrc = getTxtSource();
     if (!txtSrc || !txtSrc.content) {
@@ -411,7 +419,20 @@ export function bindAiPlaceButton() {
   const btn = $("ai-place-btn");
   if (!btn) return;
   btn.addEventListener("click", () => { void runAutoPlace(); });
-  // PSD/TXT/OCR の有無に応じた動的 enable は未実装 (常時押せる)。
-  // 不足時は notifyDialog で個別に案内する設計。
-  btn.disabled = false;
+  // OCR 結果が無いうちはグレーアウト。setAiOcrDoc / clearAiOcrDoc に追従。
+  const sync = () => {
+    const cache = getAiOcrDoc();
+    const hasOcr = !!(
+      cache &&
+      cache.doc &&
+      Array.isArray(cache.doc.pages) &&
+      cache.doc.pages.length > 0
+    );
+    btn.disabled = !hasOcr;
+    btn.title = hasOcr
+      ? "OCR 結果と原稿テキストを吹き出し位置に自動配置"
+      : "先に画像スキャンを実行してください";
+  };
+  onAiOcrDocChange(sync);
+  sync();
 }

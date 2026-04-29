@@ -81,11 +81,12 @@ export function mountPdfView() {
   emptyEl.className = "pdf-empty";
   emptyEl.innerHTML = `
     <svg class="pdf-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
-      <polyline points="14 2 14 8 20 8"/>
-      <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">PDF</text>
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/>
+      <path d="M14 2v5a1 1 0 0 0 1 1h5"/>
+      <circle cx="10" cy="12" r="2"/>
+      <path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/>
     </svg>
-    <p class="pdf-empty-text">「PDF を開く」で参照 PDF を選択、またはこのウィンドウにドロップしてください。</p>
+    <p class="pdf-empty-text">「見本を読み込み」で見本画像を選択、またはこのウィンドウにドロップしてください。（PDF、JPEG、PNG）</p>
   `;
   stageEl.appendChild(emptyEl);
 
@@ -186,11 +187,12 @@ function showOutOfRange(requested, total) {
   emptyEl.hidden = true;
   outOfRangeEl.innerHTML = `
     <svg class="pdf-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <circle cx="12" cy="12" r="10"/>
-      <line x1="12" y1="8" x2="12" y2="12"/>
-      <line x1="12" y1="16" x2="12.01" y2="16"/>
+      <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/>
+      <path d="M14 2v5a1 1 0 0 0 1 1h5"/>
+      <circle cx="10" cy="12" r="2"/>
+      <path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/>
     </svg>
-    <p class="pdf-empty-text">PDF にこのページはありません (${requested} / ${total})</p>
+    <p class="pdf-empty-text">見本にこのページはありません (${requested} / ${total})</p>
   `;
   outOfRangeEl.hidden = false;
 }

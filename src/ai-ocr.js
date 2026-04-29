@@ -8,7 +8,7 @@
 // イベント仕様 (Rust 側 ocr.rs):
 //   - ai_ocr:start    (payload: volume name 文字列)
 //   - ai_ocr:log      (payload: { line, stream })
-//   - ai_ocr:progress (payload: { phase: "pdf"|"ocr", current, total })
+//   - ai_ocr:progress (payload: { phase: "pdf"|"ocr", current, total, eta? })
 
 import {
   showProgress,
@@ -41,7 +41,7 @@ async function pickInputFiles() {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({
     multiple: true,
-    title: "OCR する PDF / 画像を選択",
+    title: "テキストスキャンする見本画像を選択",
     filters: [
       { name: "PDF / 画像", extensions: ["pdf", ...IMAGE_EXTS] },
     ],
@@ -75,7 +75,7 @@ function mokuroDocToText(doc, normalizeSettings) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
-async function runAiOcr(files) {
+async function runAiOcr(files, { notifyOnComplete = false } = {}) {
   if (runningOcr) return;
   if (!files || files.length === 0) return; // 何も選択されていない場合は静かに戻る
 
@@ -105,31 +105,55 @@ async function runAiOcr(files) {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
 
-  let lastPhase = "pdf";
+  // フェーズ: "pdf" → (mokuro 起動中の無音時間) → "ocr"
+  // 無音時間中は ai_ocr:log の行から既知マーカーを拾って detail に反映する。
+  let phase = "pdf";
+
+  const unsubStart = await listen("ai_ocr:start", () => {
+    // PDF 展開完了 → mokuro 起動。OCR の最初の tqdm 進捗が来るまで indeterminate。
+    phase = "starting";
+    updateProgress({
+      detail: "OCR エンジンを起動中…",
+      current: null,
+      total: null,
+    });
+  });
+
   const unsubProgress = await listen("ai_ocr:progress", (e) => {
     const p = e.payload || {};
     if (p.phase === "pdf") {
-      lastPhase = "pdf";
+      phase = "pdf";
       updateProgress({
         detail: `PDF 展開中… (${p.current}/${p.total})`,
         current: p.current,
         total: p.total,
       });
     } else if (p.phase === "ocr") {
-      lastPhase = "ocr";
+      phase = "ocr";
+      const etaSuffix = p.eta ? ` (残り ${formatEta(p.eta)})` : "";
       updateProgress({
-        detail: `OCR 実行中… (${p.current}/${p.total})`,
+        detail: `OCR 実行中… ${p.current}/${p.total}${etaSuffix}`,
         current: p.current,
         total: p.total,
       });
     }
   });
+
   const unsubLog = await listen("ai_ocr:log", (e) => {
-    // (現状ログは UI には流さず console のみ)
     const { line, stream } = e.payload || {};
-    if (typeof line === "string") {
-      if (stream === "stderr") console.warn("[ai_ocr]", line);
-      else console.log("[ai_ocr]", line);
+    if (typeof line !== "string") return;
+    if (stream === "stderr") console.warn("[ai_ocr]", line);
+    else console.log("[ai_ocr]", line);
+    // OCR の進捗イベントが流れるようになったら以降のログは UI に出さない
+    // (tqdm 行が高頻度で来るため、frame thrashing を避ける)。
+    if (phase === "ocr") return;
+    const marker = detectStartupPhase(line);
+    if (marker) {
+      updateProgress({
+        detail: marker,
+        current: null,
+        total: null,
+      });
     }
   });
 
@@ -140,6 +164,7 @@ async function runAiOcr(files) {
   } catch (e) {
     err = e;
   } finally {
+    try { unsubStart(); } catch (_) {}
     try { unsubProgress(); } catch (_) {}
     try { unsubLog(); } catch (_) {}
     hideProgress();
@@ -164,8 +189,58 @@ async function runAiOcr(files) {
     : `OCR-${files.length}件`;
   const name = `${baseLabel}_AI.txt`;
   loadTxtFromContent(name, content);
-  toast(`画像スキャン完了 (${doc?.pages?.length ?? 0} ページ)`, { kind: "info", duration: 3200 });
-  void lastPhase;
+  if (notifyOnComplete) {
+    // 画像スキャンボタン経由のとき: 次にやってほしいアクション (自動配置) を案内する。
+    // ai-place からの自動トリガー時はそのまま確認モーダルへ遷移するので案内は出さない。
+    await notifyDialog({
+      title: "画像スキャン完了",
+      message: "テキスト抽出が完了しました。\n自動配置を行ってください。",
+    });
+  }
+}
+
+// mokuro 起動中の標準出力からフェーズを推定。検出できない場合は null。
+// OCR の tqdm 進捗が始まる前の無音時間を埋めるためだけに使う。
+function detectStartupPhase(line) {
+  if (!line) return null;
+  const s = line.toLowerCase();
+  // text detection model (comic-text-detector)
+  if (
+    s.includes("text detection model") ||
+    s.includes("comic_text_detector") ||
+    s.includes("comic-text-detector") ||
+    /loading\b.*\bdetection/.test(s)
+  ) {
+    return "テキスト検出モデルを読み込み中…";
+  }
+  // OCR / recognition model (manga-ocr)
+  if (
+    s.includes("manga_ocr") ||
+    s.includes("manga-ocr") ||
+    /\bocr model\b/.test(s) ||
+    /loading\b.*\b(recognition|ocr)/.test(s)
+  ) {
+    return "OCR モデルを読み込み中…";
+  }
+  if (s.includes("processing volume")) {
+    return "ボリュームを処理中…";
+  }
+  return null;
+}
+
+// tqdm の "[time<eta, rate]" 内 eta 部分 (e.g. "00:30") を「30秒」「1分20秒」に整形。
+function formatEta(eta) {
+  if (typeof eta !== "string") return "";
+  const m = eta.match(/<\s*(\d+):(\d+)(?::(\d+))?/);
+  if (!m) return eta.trim();
+  const h = m[3] ? parseInt(m[1], 10) : 0;
+  const mm = parseInt(m[3] ? m[2] : m[1], 10);
+  const ss = parseInt(m[3] ? m[3] : m[2], 10);
+  const total = h * 3600 + mm * 60 + ss;
+  if (!Number.isFinite(total) || total <= 0) return "";
+  if (total >= 3600) return `${Math.floor(total / 3600)}時間${Math.floor((total % 3600) / 60)}分`;
+  if (total >= 60) return `${Math.floor(total / 60)}分${total % 60}秒`;
+  return `${total}秒`;
 }
 
 // 公開: ファイル群に対して画像スキャンを実行し、MokuroDocument を返す。
@@ -191,7 +266,7 @@ export function bindAiOcrButton() {
         return;
       }
     }
-    await runAiOcr(files);
+    await runAiOcr(files, { notifyOnComplete: true });
   });
 
   // PDF 読み込み有無に応じて enabled 切替

@@ -94,6 +94,10 @@ function getVisibleBlocks() {
   };
 }
 
+export function renderTxtSourceViewer() {
+  renderViewer();
+}
+
 function renderViewer() {
   const source = getTxtSource();
   const viewer = $("txt-source-viewer");

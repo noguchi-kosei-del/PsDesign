@@ -2,17 +2,10 @@ import * as pdfjsLib from "pdfjs-dist";
 import { setPdf, setPdfSplitMode } from "./state.js";
 import { showProgress, hideProgress, toast, updateProgress } from "./ui-feedback.js";
 
-// 1 ページ目の物理サイズで「横長原稿」と判定する。横長なら単ページ表示（左半分のみ）。
-async function detectLandscape(doc) {
-  try {
-    const page = await doc.getPage(1);
-    const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
-    const vp = page.getViewport({ scale: 1, rotation: baseRotation });
-    return vp.width > vp.height;
-  } catch (_) {
-    return false;
-  }
-}
+// 「見本」として読み込める拡張子。PDF（複数ページ）と、JPEG / PNG（単一画像）。
+export const REFERENCE_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"];
+export const REFERENCE_EXT_REGEX = /\.(pdf|jpe?g|png)$/i;
+const IMAGE_EXT_REGEX = /\.(jpe?g|png)$/i;
 
 let workerConfigured = false;
 function ensureWorker() {
@@ -34,81 +27,213 @@ async function readFileBytes(path) {
   return new Uint8Array(bytes);
 }
 
-export async function pickPdfFile() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
-    multiple: false,
-    title: "PDFを開く",
-    filters: [{ name: "PDF", extensions: ["pdf"] }],
-  });
-  if (!picked) return null;
-  return typeof picked === "string" ? picked : picked?.path ?? null;
+// 自然順ソート (page1 → page2 → page10、numeric collation)。
+function sortPathsNaturally(paths) {
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  return [...paths].sort((a, b) => collator.compare(basename(a), basename(b)));
 }
 
-export async function loadPdfByPath(path) {
-  if (!path) return;
-  ensureWorker();
-  const name = basename(path);
-  showProgress({ title: "PDF を読み込み中", detail: `${name}  ファイル読込`, current: 0, total: 100 });
-
-  // 目標値 target に向けて current を毎 30ms ずつ追従させる（遷移をごまかしなく可視化）。
-  let current = 0;
-  let target = 8;
-  const ticker = setInterval(() => {
-    if (current >= target) return;
-    const delta = target - current;
-    const step = Math.max(1, Math.ceil(delta * 0.18));
-    current = Math.min(target, current + step);
-    updateProgress({ current, total: 100 });
-  }, 30);
-
-  const setTarget = (v, detail) => {
-    target = Math.max(target, Math.min(100, v));
-    if (detail != null) {
-      updateProgress({ detail, current, total: 100 });
-    }
-  };
-  const waitUntilReached = async (threshold) => {
-    while (current < threshold) {
-      await new Promise((r) => setTimeout(r, 30));
-    }
-  };
-
+// 1 ページ目の物理サイズで「横長原稿」と判定する。横長なら単ページ表示（左右分割）。
+async function detectLandscape(doc) {
   try {
-    // Phase 1: ディスクからバイト読込
-    setTarget(40);
-    const bytes = await readFileBytes(path);
+    const page = await doc.getPage(1);
+    const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
+    const vp = page.getViewport({ scale: 1, rotation: baseRotation });
+    return vp.width > vp.height;
+  } catch (_) {
+    return false;
+  }
+}
 
-    // Phase 2: pdfjs パース
-    setTarget(70, `${name}  PDF 解析`);
-    const task = pdfjsLib.getDocument({ data: bytes });
-    task.onProgress = ({ loaded, total }) => {
-      if (typeof total === "number" && total > 0) {
-        const pct = 40 + Math.round((loaded / total) * 50);
-        setTarget(Math.min(90, pct));
+function makeRenderingCancelledException() {
+  const err = new Error("Rendering cancelled");
+  err.name = "RenderingCancelledException";
+  return err;
+}
+
+// ImageBitmap を pdfjs Page 互換オブジェクトに包む。
+// pdf-view.js が触れる API: page.rotate, page.getViewport({scale,rotation}), page.render({...})
+function makeImagePage(bitmap) {
+  const naturalW = bitmap.width;
+  const naturalH = bitmap.height;
+  return {
+    rotate: 0,
+    getViewport({ scale = 1, rotation = 0 } = {}) {
+      const r = ((Math.round(rotation) % 360) + 360) % 360;
+      const swap = r === 90 || r === 270;
+      const w = (swap ? naturalH : naturalW) * scale;
+      const h = (swap ? naturalW : naturalH) * scale;
+      return { width: w, height: h, scale, rotation: r };
+    },
+    render({ canvasContext, viewport }) {
+      let cancelled = false;
+      const promise = (async () => {
+        // microtask を 1 つ挟む — 連打時に上位の cancelInFlightRender() が
+        // .cancel() を呼ぶ余地を作る（呼ばれれば即 throw して描画スキップ）。
+        await Promise.resolve();
+        if (cancelled) throw makeRenderingCancelledException();
+        const { width, height, rotation, scale } = viewport;
+        const ctx = canvasContext;
+        ctx.save();
+        try {
+          ctx.imageSmoothingEnabled = true;
+          ctx.imageSmoothingQuality = "high";
+          ctx.clearRect(0, 0, width, height);
+          // viewport 中心を原点に取り、user 回転後にネイティブ寸法で描画。
+          ctx.translate(width / 2, height / 2);
+          ctx.rotate((rotation * Math.PI) / 180);
+          const drawW = naturalW * scale;
+          const drawH = naturalH * scale;
+          ctx.drawImage(bitmap, -drawW / 2, -drawH / 2, drawW, drawH);
+        } finally {
+          ctx.restore();
+        }
+      })();
+      return { promise, cancel() { cancelled = true; } };
+    },
+  };
+}
+
+// 複数ファイル（PDF / 画像）を 1 つの「合成 doc」にまとめる。
+//   sources: Array<{ type: "image", bitmap: ImageBitmap }
+//                  | { type: "pdf",   doc: pdfjsDoc, pageNum: number }>
+// pdf-view.js / pdf-pages.js は doc.numPages と doc.getPage(n) しか触らないので、
+// 各ソースを 1 ページずつ並べたフラットな配列にすれば従来コードに変更不要で動く。
+function makeCompositeDoc(sources) {
+  return {
+    numPages: sources.length,
+    getPage(n) {
+      const src = sources[n - 1];
+      if (!src) return Promise.reject(new Error(`ページ ${n} は存在しません`));
+      if (src.type === "image") return Promise.resolve(makeImagePage(src.bitmap));
+      // pdf — pdfjs Page をそのまま返す
+      return src.doc.getPage(src.pageNum);
+    },
+    destroy() {
+      const seenDocs = new Set();
+      for (const src of sources) {
+        if (src.type === "image") {
+          try { if (typeof src.bitmap?.close === "function") src.bitmap.close(); } catch (_) {}
+        } else if (src.type === "pdf" && !seenDocs.has(src.doc)) {
+          seenDocs.add(src.doc);
+          try { if (typeof src.doc.destroy === "function") src.doc.destroy(); } catch (_) {}
+        }
       }
-    };
-    const doc = await task.promise;
+    },
+  };
+}
 
-    // Phase 3: 先頭ページ先読み
-    setTarget(95, `${name}  先頭ページ読込`);
-    try {
-      await doc.getPage(1);
-    } catch (_) {
-      // 先読み失敗しても表示は続行
+// 単一画像ファイルを読み込み、ImageBitmap を返す。
+async function readImageBitmap(path) {
+  const bytes = await readFileBytes(path);
+  return await createImageBitmap(new Blob([bytes]));
+}
+
+// 単一 PDF ファイルを読み込み、pdfjs ドキュメントを返す。
+async function readPdfDocument(path) {
+  ensureWorker();
+  const bytes = await readFileBytes(path);
+  return await pdfjsLib.getDocument({ data: bytes }).promise;
+}
+
+// 見本ファイル（PDF / JPEG / PNG）を選択。複数選択可。
+export async function pickReferenceFiles() {
+  const { open } = await import("@tauri-apps/plugin-dialog");
+  const picked = await open({
+    multiple: true,
+    title: "見本を読み込み",
+    filters: [{ name: "見本 (PDF / JPEG / PNG)", extensions: REFERENCE_EXTENSIONS }],
+  });
+  if (!picked) return [];
+  const arr = Array.isArray(picked) ? picked : [picked];
+  return arr
+    .map((p) => (typeof p === "string" ? p : p?.path ?? null))
+    .filter(Boolean);
+}
+
+// 互換用エイリアス: 単一ファイル選択（既存コードからの呼び出し用）
+export async function pickPdfFile() {
+  const arr = await pickReferenceFiles();
+  return arr[0] ?? null;
+}
+
+// 複数の見本ファイル（PDF / 画像）を読み込み、1 つの合成 doc として表示する。
+// - PDF はその全ページが順に展開される
+// - 画像は 1 ファイル = 1 ページ
+// - 並び順はファイル名の自然順（page1.jpg → page2.jpg → page10.jpg）
+export async function loadReferenceFiles(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) return;
+  const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
+  if (filtered.length === 0) {
+    toast("PDF / JPEG / PNG ファイルを指定してください", { kind: "error", duration: 4000 });
+    return;
+  }
+  const sorted = sortPathsNaturally(filtered);
+  const total = sorted.length;
+  const headLabel = total === 1
+    ? basename(sorted[0])
+    : `${basename(sorted[0])} ほか ${total} 件`;
+
+  showProgress({
+    title: "見本を読み込み中",
+    detail: `${headLabel}  読込中`,
+    current: 0,
+    total,
+  });
+
+  const sources = [];
+  const failures = [];
+  try {
+    for (let i = 0; i < total; i++) {
+      const p = sorted[i];
+      const name = basename(p);
+      updateProgress({
+        detail: `${name} (${i + 1} / ${total})`,
+        current: i,
+        total,
+      });
+      try {
+        if (IMAGE_EXT_REGEX.test(p)) {
+          const bitmap = await readImageBitmap(p);
+          sources.push({ type: "image", bitmap });
+        } else {
+          const doc = await readPdfDocument(p);
+          for (let pn = 1; pn <= doc.numPages; pn++) {
+            sources.push({ type: "pdf", doc, pageNum: pn });
+          }
+        }
+      } catch (e) {
+        console.error(`見本ファイル読込失敗 (${name}):`, e);
+        failures.push({ name, error: e });
+      }
+    }
+    updateProgress({ detail: headLabel, current: total, total });
+
+    if (sources.length === 0) {
+      toast("有効な見本ファイルがありませんでした", { kind: "error", duration: 5000 });
+      return;
     }
 
-    setTarget(100);
-    await waitUntilReached(100);
-    // 横長原稿なら単ページ化を自動 ON、縦長なら OFF。setPdf より先に確定させて初回 redraw が正しいモードで走るようにする。
-    const isLandscape = await detectLandscape(doc);
+    const compositeDoc = makeCompositeDoc(sources);
+    // 横長判定は 1 ページ目（先頭ソース）で行い、PDF と同じく自動 split mode を設定。
+    const isLandscape = await detectLandscape(compositeDoc);
     setPdfSplitMode(isLandscape);
-    setPdf(doc, path);
-  } catch (e) {
-    console.error("PDF 読込失敗:", e);
-    toast(`PDF の読込に失敗しました: ${e?.message ?? e}`, { kind: "error", duration: 5000 });
+    // path は先頭ファイルパス。getPdfPath() を参照する ai-ocr / ai-place の既存連携を維持。
+    setPdf(compositeDoc, sorted[0]);
+
+    if (failures.length > 0) {
+      toast(
+        `見本 ${sources.length === 0 ? 0 : total - failures.length} / ${total} 件を読み込みました（${failures.length} 件失敗）`,
+        { kind: "info", duration: 5000 },
+      );
+    }
   } finally {
-    clearInterval(ticker);
     hideProgress();
   }
+}
+
+// 互換用エイリアス: 単一ファイル読込（既存コードからの呼び出し用）
+export async function loadPdfByPath(path) {
+  if (!path) return;
+  await loadReferenceFiles([path]);
 }

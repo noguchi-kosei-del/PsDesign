@@ -7,7 +7,7 @@
 //   - PowerShell スクリプトを install-ai-models.ps1 に変更
 //   - 構造体・関数を pub(crate) に整理し lib.rs から register
 
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -130,9 +130,11 @@ struct ProgressEvent {
     phase: &'static str,
     current: u32,
     total: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eta: Option<String>,
 }
 
-fn parse_mokuro_progress(line: &str) -> Option<(u32, u32)> {
+fn parse_mokuro_progress(line: &str) -> Option<(u32, u32, Option<String>)> {
     let key = "Processing pages";
     let pos = line.rfind(key)?;
     let rest = &line[pos + key.len()..];
@@ -147,7 +149,49 @@ fn parse_mokuro_progress(line: &str) -> Option<(u32, u32)> {
     let mut parts = frac.split('/');
     let n: u32 = parts.next()?.trim().parse().ok()?;
     let total: u32 = parts.next()?.trim().parse().ok()?;
-    Some((n, total))
+    let eta = segment.find('[').and_then(|s| {
+        segment[s..]
+            .find(']')
+            .map(|e| segment[s + 1..s + e].to_string())
+    });
+    Some((n, total, eta))
+}
+
+// stdout/stderr を `\n` だけでなく `\r` でも分割して chunk ごとにコールバック。
+// mokuro (tqdm) は `\r` でしか進捗バーを refresh しないため、std の
+// `BufReader::lines()` (`\n` 区切り) では mokuro が終了するまで一行も yield されず、
+// OCR 中の進捗がまったく UI に届かなくなる。これを回避するためのヘルパ。
+fn read_chunks_cr_lf<R: Read, F: FnMut(String)>(reader: R, mut on_line: F) {
+    let mut br = BufReader::with_capacity(4096, reader);
+    let mut leftover: Vec<u8> = Vec::with_capacity(256);
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = match br.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            Err(_) => break,
+        };
+        let mut start = 0usize;
+        for i in 0..n {
+            let b = buf[i];
+            if b == b'\n' || b == b'\r' {
+                leftover.extend_from_slice(&buf[start..i]);
+                if !leftover.is_empty() {
+                    let s = String::from_utf8_lossy(&leftover).into_owned();
+                    on_line(s);
+                    leftover.clear();
+                }
+                start = i + 1;
+            }
+        }
+        if start < n {
+            leftover.extend_from_slice(&buf[start..n]);
+        }
+    }
+    if !leftover.is_empty() {
+        let s = String::from_utf8_lossy(&leftover).into_owned();
+        on_line(s);
+    }
 }
 
 struct TempDirGuard {
@@ -271,6 +315,7 @@ fn render_pdf_pages(
                 phase: "pdf",
                 current: (base_index + i + 1) as u32,
                 total: overall_total,
+                eta: None,
             },
         )
         .ok();
@@ -352,6 +397,7 @@ fn make_temp_volume(
             phase: "pdf",
             current: 0,
             total: overall_total,
+            eta: None,
         },
     )
     .ok();
@@ -380,6 +426,7 @@ fn make_temp_volume(
                     phase: "pdf",
                     current: idx as u32,
                     total: overall_total,
+                    eta: None,
                 },
             )
             .ok();
@@ -426,9 +473,8 @@ pub async fn run_ai_ocr(
 
     let app_out = app.clone();
     let stdout_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        for line in reader.lines().map_while(Result::ok) {
-            if let Some((current, total)) = parse_mokuro_progress(&line) {
+        read_chunks_cr_lf(stdout, |line| {
+            if let Some((current, total, eta)) = parse_mokuro_progress(&line) {
                 app_out
                     .emit(
                         "ai_ocr:progress",
@@ -436,6 +482,7 @@ pub async fn run_ai_ocr(
                             phase: "ocr",
                             current,
                             total,
+                            eta,
                         },
                     )
                     .ok();
@@ -449,14 +496,13 @@ pub async fn run_ai_ocr(
                     },
                 )
                 .ok();
-        }
+        });
     });
 
     let app_err = app.clone();
     let stderr_handle = std::thread::spawn(move || {
-        let reader = BufReader::new(stderr);
-        for line in reader.lines().map_while(Result::ok) {
-            if let Some((current, total)) = parse_mokuro_progress(&line) {
+        read_chunks_cr_lf(stderr, |line| {
+            if let Some((current, total, eta)) = parse_mokuro_progress(&line) {
                 app_err
                     .emit(
                         "ai_ocr:progress",
@@ -464,6 +510,7 @@ pub async fn run_ai_ocr(
                             phase: "ocr",
                             current,
                             total,
+                            eta,
                         },
                     )
                     .ok();
@@ -477,7 +524,7 @@ pub async fn run_ai_ocr(
                     },
                 )
                 .ok();
-        }
+        });
     });
 
     let status = child
