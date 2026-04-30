@@ -1687,6 +1687,21 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   color: #fff;
 }
 .proofread-page { color: var(--text-muted); font-size: 10px; }
+/* MojiQ 風ハイパーリンク: クリック可能なページ番号を青 + ホバー下線で明示 */
+button.proofread-page-link {
+  color: var(--accent);
+  font-size: 10px;
+  font-weight: 500;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  line-height: 1;
+  font-family: inherit;
+}
+button.proofread-page-link:hover { text-decoration: underline; background: transparent; border: 0; }
+button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .proofread-kind { font-size: 10px; }
 .proofread-kind.correctness { color: #e74c3c; }
 .proofread-kind.proposal { color: #f39c12; }

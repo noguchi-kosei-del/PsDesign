@@ -11,6 +11,27 @@ import { notifyDialog } from "./ui-feedback.js";
 
 const $ = (id) => document.getElementById(id);
 
+// MojiQ proofreading-panel.js の formatPage / jumpToPage 互換のパース。
+// 「{N}ページ」「{N}P」を最優先で拾い、無ければ最初の数字。
+// "1巻 16ページ" → 16（「巻」の前の 1 を誤って拾わない）。
+// 旧実装は parseInt("1巻 16ページ", 10) で常に 1 を返していたため
+// 校正項目をクリックすると常に 1 ページ目に飛んでしまっていた。
+function parsePageNumber(pageStr) {
+  if (!pageStr) return null;
+  const s = String(pageStr);
+  const withSuffix = s.match(/(\d+)\s*(?:ページ|P|p)/);
+  if (withSuffix) {
+    const n = parseInt(withSuffix[1], 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  const head = s.match(/^\s*(\d+)/);
+  if (head) {
+    const n = parseInt(head[1], 10);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  }
+  return null;
+}
+
 // 校正 JSON の読み込み先ベースパス（MojiQ の calibration-panel と同じ共有ドライブ参照）。
 // ProGen が出力した校正チェックデータが置かれるフォルダ。Tauri の open() に
 // defaultPath として渡すので、ファイル選択ダイアログがこの場所で開く。
@@ -419,11 +440,27 @@ function renderItem(item) {
   badge.textContent = item.category || "—";
   meta.appendChild(badge);
 
+  const parsedPage = parsePageNumber(item.page);
   if (item.page) {
-    const p = document.createElement("span");
-    p.className = "proofread-page";
-    p.textContent = `p.${item.page}`;
-    meta.appendChild(p);
+    if (parsedPage !== null) {
+      // MojiQ 風ハイパーリンク: 青文字 + ホバー下線 + クリックでジャンプ
+      const p = document.createElement("button");
+      p.type = "button";
+      p.className = "proofread-page proofread-page-link";
+      p.textContent = `p.${item.page}`;
+      p.title = `ページ ${parsedPage} へジャンプ`;
+      p.addEventListener("click", (e) => {
+        e.stopPropagation(); // 行クリックとの二重発火を防止
+        setCurrentPageIndex(parsedPage - 1);
+      });
+      meta.appendChild(p);
+    } else {
+      // パース失敗時はリンクにせず通常表示（押せないリンクで誤解させない）
+      const p = document.createElement("span");
+      p.className = "proofread-page";
+      p.textContent = `p.${item.page}`;
+      meta.appendChild(p);
+    }
   }
 
   const kindEl = document.createElement("span");
@@ -448,8 +485,8 @@ function renderItem(item) {
 
   el.addEventListener("click", () => {
     if (!item.page) return;
-    const pn = parseInt(String(item.page), 10);
-    if (Number.isFinite(pn) && pn > 0) setCurrentPageIndex(pn - 1);
+    const pn = parsePageNumber(item.page);
+    if (pn !== null) setCurrentPageIndex(pn - 1);
   });
 
   return el;

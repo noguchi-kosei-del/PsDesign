@@ -1117,3 +1117,53 @@ C1. **1.4.0 → 1.4.1** ([package.json](package.json) / [src-tauri/Cargo.toml](s
 > - 旧: 履歴スナップショットは `edits / newLayers / nextTempId` のみ → 新: `txtSource` も含める。`onTxtSourceChange` listener で UI 再描画を駆動
 > - 旧: dblclick 編集は setEdit と setTxtSource が別々に snapshot を push → 新: `beginHistoryTransient` で 1 snapshot に束ね、Ctrl+Z 一発で両方巻き戻る
 > - 旧: サイズバッジ = `{N}pt` のみ、`margin-top: 2px` で枠に密着 → 新: `{フォント名} · {N}pt`、`margin-top: 10px` で枠から離して視認性向上
+
+---
+
+## v1.4.2: 画像スキャン オフライン化 + 校正パネル ページ番号ハイパーリンク
+
+### A. 画像スキャン (mokuro OCR) のネット切断耐性
+
+A1. **問題**: ネットを切断（または不安定な環境）で画像スキャンすると高確率で `_ocr/` フォルダだけ作成されて `.mokuro` が出ず「mokuro が画像を処理できなかった可能性があります」エラーで失敗する。原因は `manga-ocr` 内部の `transformers` ライブラリが、キャッシュ済みモデル（`~/.cache/huggingface/hub/models--kha-white--manga-ocr-base/`）を持っていても **起動時に毎回 HuggingFace Hub へ HEAD リクエスト**し、タイムアウトで `from_pretrained()` が落ちるため。
+
+A2. **mokuro 起動時にオフラインモードを強制** ([src-tauri/src/ocr.rs](src-tauri/src/ocr.rs) `run_ai_ocr`):
+- `Command::new(&mokuro_path)` の env に `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` を追加
+- これでキャッシュのみを使い HuggingFace へ一切問い合わせない動作になる。ネット切断・不安定どちらの環境でも安定。
+- 既存 env (`PYTHONUNBUFFERED=1` / `PYTHONUTF8=1`) と並列に追加するだけの最小修正
+
+A3. **インストール時にモデル重みを事前ダウンロード** ([src-tauri/scripts/install-ai-models.ps1](src-tauri/scripts/install-ai-models.ps1) Phase 6b 新設):
+- 旧 `install-ai-models.ps1` は **Python ライブラリ** (`manga-ocr` / `mokuro` / `torch` 等) しかインストールしておらず、AI モデルの重みファイル（~500MB）は初回スキャン時に遅延ダウンロードされる仕組みだった。A2 でオフライン強制したため、キャッシュが無いと永遠に動かない。
+- Phase 6 (Verify) 直後に Phase 6b を追加し、`& $PythonExe -u -c "from manga_ocr import MangaOcr; MangaOcr()"` を実行して **インストール時にネットがあるタイミングで重みを取得**しキャッシュ (`%USERPROFILE%\.cache\huggingface\`) に置く
+- 既にキャッシュ済みなら no-op で即終了。失敗時は `LASTEXITCODE` で throw
+
+> **運用結果**: 「インストール時のみネット必須／日常運用は完全オフライン」という分かりやすい構成になった。社内ネット不安定環境での画像スキャン失敗を根絶。
+
+### B. 校正パネル ページ番号ハイパーリンク化（MojiQ 互換）
+
+B1. **問題**: 校正項目をクリックするとどの行を選んでも常に **1 ページ目** に飛んでしまう（ジャンプ機能が事実上壊れていた）。
+- 校正 JSON の `page` フィールドは `"1巻 16ページ"` のような複合表記が一般的だが、旧 [proofread.js:451-452](src/proofread.js) は `parseInt("1巻 16ページ", 10)` で値を取っていた → JS の `parseInt` 仕様で先頭の `1` を返し、常に `setCurrentPageIndex(0)` を呼んでいた
+
+B2. **`parsePageNumber()` ヘルパー** ([src/proofread.js](src/proofread.js) 冒頭) — MojiQ `proofreading-panel.js` の `formatPage` / `jumpToPage` 互換:
+- `/(\d+)\s*(?:ページ|P|p)/` で「ページ」「P」サフィックス付き数字を最優先で拾う → `"1巻 16ページ"` → 16
+- マッチしない場合は `/^\s*(\d+)/` で先頭の数字を拾う → `"5"` → 5
+- 両方失敗で null（`""` / `"—"` 等の数値化不能な値はリンク化しない）
+
+B3. **ページ番号を `<button>` リンク化** ([src/proofread.js](src/proofread.js) `renderItem`):
+- 旧: `<span class="proofread-page">p.{item.page}</span>`（グレー、リンクに見えない）
+- 新: `<button class="proofread-page proofread-page-link">` に変更し、専用クリックハンドラに `e.stopPropagation()` を入れて行クリックとの二重発火を防止
+- `parsePageNumber` がパース失敗を返した場合は従来通り `<span>` で押せない通常表示にフォールバック（誤解防止）
+- 行 (`el`) 全体のクリックハンドラも `parsePageNumber` ベースに書き換え（行のどこをクリックしても正しいページに飛ぶ）
+
+B4. **CSS** ([src/styles.css](src/styles.css)):
+- `button.proofread-page-link` を追加: 青文字 (`color: var(--accent)` = `#0078d4`) + `cursor: pointer` + `hover { text-decoration: underline }` + transparent background + border 0 padding 0 で純粋テキストリンク化
+- 既存 `.proofread-page`（グレー）はパース失敗時のフォールバック用に温存
+
+### バージョン
+
+C1. **1.4.1 → 1.4.2** ([package.json](package.json) / [src-tauri/Cargo.toml](src-tauri/Cargo.toml) / [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) を同期更新)。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: mokuro は HuggingFace へ毎回 HEAD → ネット切断で from_pretrained 失敗 → 新: HF_HUB_OFFLINE=1 / TRANSFORMERS_OFFLINE=1 でキャッシュのみ使用
+> - 旧: モデル重みは初回スキャン時に遅延 DL → 新: install-ai-models.ps1 Phase 6b でインストール時に事前 DL
+> - 旧: 校正項目クリックは常に 1 ページ目 (`parseInt("1巻 16ページ")` = 1) → 新: `parsePageNumber()` で「ページ」「P」付き数字を最優先、`"1巻 16ページ"` → 16
+> - 旧: ページ番号 = グレー `<span>` (リンクに見えない) → 新: 青文字 `<button>` + ホバー下線 + stopPropagation で MojiQ 互換ハイパーリンク

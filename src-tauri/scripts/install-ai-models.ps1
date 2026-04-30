@@ -159,6 +159,22 @@ if (-not (Test-Path $mokuroExe)) {
 }
 
 # ---------------------------------------------------------------------------
+# Phase 6b. Pre-download AI model weights to ~/.cache/huggingface/
+# ---------------------------------------------------------------------------
+# manga-ocr / comic-text-detector の重みファイル (~500MB) は本来初回スキャン時に
+# 遅延ダウンロードされるが、本アプリは ocr.rs で HF_HUB_OFFLINE=1 を強制しているため
+# キャッシュが無いとスキャンが起動できない。インストール時にネットがある今のうちに
+# from_pretrained() を一度走らせて HuggingFace から取得しておく。
+# 既にキャッシュ済みなら no-op で即終了する。
+Write-Step "Phase 6b. Pre-downloading AI model weights"
+$env:PYTHONWARNINGS = "ignore::UserWarning"
+& $PythonExe -u -c "from manga_ocr import MangaOcr; MangaOcr()"
+Remove-Item Env:PYTHONWARNINGS -ErrorAction SilentlyContinue
+if ($LASTEXITCODE -ne 0) {
+    throw "Phase 6b: AIモデルの事前ダウンロードに失敗しました (exit $LASTEXITCODE). ネット接続を確認して再実行してください。"
+}
+
+# ---------------------------------------------------------------------------
 # 7. Report size
 # ---------------------------------------------------------------------------
 $size = (Get-ChildItem $RuntimeDir -Recurse -File | Measure-Object Length -Sum).Sum

@@ -457,6 +457,12 @@ pub async fn run_ai_ocr(
         .arg(parent_dir.as_os_str())
         .env("PYTHONUNBUFFERED", "1")
         .env("PYTHONUTF8", "1")
+        // キャッシュ済みモデルだけで動かし、HuggingFace Hub への HEAD/問い合わせを抑止する。
+        // 未設定だと transformers が起動時に毎回ハブへ更新確認しにいき、ネット切断・不安定時に
+        // timeout で from_pretrained が失敗する（_ocr/ は作られるが .mokuro が出ない症状）。
+        // 初回ダウンロードは install-ai-models.ps1 内の事前ロードで完了している前提。
+        .env("HF_HUB_OFFLINE", "1")
+        .env("TRANSFORMERS_OFFLINE", "1")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
