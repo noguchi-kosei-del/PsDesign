@@ -278,6 +278,65 @@ function setMode(mode) {
   renderPanel();
 }
 
+// 校正 JSON のパスから「作品フォルダ名」と「巻数」を推定する。
+// 想定パス例: .../<作品名>/<巻数>/校正チェックデータ/<file.json>
+//   - ファイル直近の親が "校正チェックデータ" なら 1 段スキップ（MojiQ 流の自動降下と整合）
+//   - その上の階層を「巻数」、さらに 1 段上を「フォルダ名」として扱う
+// 階層が浅いケースは取れた範囲だけ返す（不足は空文字）。
+function deriveProofreadMeta(filePath) {
+  if (!filePath) return { folder: "", volume: "" };
+  const parts = filePath.split(/[\\/]/).filter(Boolean);
+  if (parts.length < 2) return { folder: "", volume: "" };
+  // parts[last] = file.json なので、directory chain は last-1 から
+  let baseIdx = parts.length - 2;
+  if (parts[baseIdx] === "校正チェックデータ" && baseIdx > 0) baseIdx -= 1;
+  const volume = parts[baseIdx] || "";
+  const folder = baseIdx >= 1 ? (parts[baseIdx - 1] || "") : "";
+  return { folder, volume };
+}
+
+function renderProofreadMeta() {
+  const meta = $("proofread-meta");
+  if (!meta) return;
+  // browser ビュー or empty ビュー（checkData 無し）では非表示
+  if (!checkData || viewMode !== "results") {
+    meta.hidden = true;
+    meta.innerHTML = "";
+    return;
+  }
+  const { folder, volume } = deriveProofreadMeta(checkData.filePath);
+  meta.innerHTML = "";
+  // フォルダ + 巻数が両方取れない場合は、JSON 内の work 名 / ファイル名にフォールバック
+  // 表示。checkData がある以上は必ず何か出して「何が読み込まれているか」を可視化する。
+  if (!folder && !volume) {
+    const fallback = document.createElement("span");
+    fallback.className = "proofread-meta-folder";
+    fallback.textContent = checkData.title || checkData.fileName || "(読込済み)";
+    meta.appendChild(fallback);
+    meta.hidden = false;
+    return;
+  }
+  meta.hidden = false;
+  if (folder) {
+    const f = document.createElement("span");
+    f.className = "proofread-meta-folder";
+    f.textContent = folder;
+    meta.appendChild(f);
+  }
+  if (folder && volume) {
+    const sep = document.createElement("span");
+    sep.className = "proofread-meta-sep";
+    sep.textContent = "/";
+    meta.appendChild(sep);
+  }
+  if (volume) {
+    const v = document.createElement("span");
+    v.className = "proofread-meta-volume";
+    v.textContent = volume;
+    meta.appendChild(v);
+  }
+}
+
 function renderPanel() {
   // タブボタンの active 同期。browser 表示中はタブグループ自体を hidden に。
   const inBrowser = viewMode === "browser";
@@ -303,6 +362,9 @@ function renderPanel() {
   const body = $("proofread-body");
   if (!body) return;
   body.innerHTML = "";
+
+  // 読込済み JSON のメタ情報行を更新（results ビュー時のみ表示）
+  renderProofreadMeta();
 
   // ── フォルダブラウザビュー ──
   if (viewMode === "browser") {

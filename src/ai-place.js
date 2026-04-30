@@ -18,7 +18,7 @@ import {
   getStrokeColor,
   getStrokeWidthPx,
   getFillColor,
-  getPdfPath,
+  getPdfPaths,
   getTxtSource,
 } from "./state.js";
 import { parsePages } from "./txt-source.js";
@@ -370,10 +370,8 @@ async function runAutoPlace() {
     const txtByPage = parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 
     // 2. OCR キャッシュ確認
-    //   - キャッシュ有効: 結果あり & pages 1 件以上
-    //   - 画像スキャンは常に明示的なファイル選択で実行されるため、結果は常に
-    //     ユーザー意図そのもの。見本ビューア（getPdfPath）との一致は問わない。
-    //   - 無効ならその場で見本に対して画像スキャンを走らせる（自動配置の自動トリガー）。
+    //   - キャッシュ有効: 結果あり & pages 1 件以上 → そのまま再利用
+    //   - 無効なら、読込済み見本ファイル全てを対象に画像スキャンを自動トリガーする。
     let cache = getAiOcrDoc();
     const cacheValid = !!(
       cache &&
@@ -382,16 +380,17 @@ async function runAutoPlace() {
       cache.doc.pages.length > 0
     );
     if (!cacheValid) {
-      const currentPdf = getPdfPath();
-      if (!currentPdf) {
+      const loadedRefs = getPdfPaths();
+      if (loadedRefs.length === 0) {
         await notifyDialog({
           title: "自動配置できません",
           message: "OCR の元になる PDF / 画像が必要です。\n先に PDF を開くか、画像スキャンを実行してください。",
         });
         return;
       }
-      // 既存の画像スキャンフローを呼び出す (進捗モーダルは ai-ocr 側が出す)
-      await runAiOcrForFiles([currentPdf]);
+      // 既存の画像スキャンフローを呼び出す (進捗モーダルは ai-ocr 側が出す)。
+      // 読込済みの見本ファイル全てを OCR 対象にして自動配置の整合を取る。
+      await runAiOcrForFiles(loadedRefs);
       cache = getAiOcrDoc();
       if (!cache || !cache.doc) {
         // 画像スキャン側がエラー通知済みなのでここでは静かに戻る

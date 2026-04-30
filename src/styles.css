@@ -1534,6 +1534,23 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   overflow: hidden;
 }
 .proofread-panel[hidden] { display: none; }
+/* 読込済み JSON のフォルダ名 / 巻数を panel-header と body の間に表示。
+   results ビュー時のみ proofread.js が hidden 属性を外す。 */
+.proofread-meta {
+  flex: 0 0 auto;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text);
+  background: var(--panel);
+}
+.proofread-meta[hidden] { display: none; }
+.proofread-meta-folder { font-weight: 600; }
+.proofread-meta-volume { color: var(--text-muted); }
+.proofread-meta-sep { color: var(--text-muted); opacity: 0.6; }
 .proofread-panel-header {
   flex: 0 0 auto;
   padding: 6px 8px;
@@ -1859,6 +1876,14 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex: 0 0 auto;
 }
 
+/* テキスト編集セクションが折り畳まれているときは、原稿テキストが残余高を吸収する
+   （max-height 34vh の上限を解除して flex:1 で残り全部を埋める）。
+   原稿テキスト自身も折り畳まれている場合は上の collapsed.txt-source ルールを優先。 */
+.side-panel:has(.panel-section[data-section="editor"].collapsed) .panel-section[data-section="txt"]:not(.collapsed) {
+  max-height: none;
+  flex: 1 1 auto;
+}
+
 .txt-source {
   display: flex;
   flex-direction: column;
@@ -1970,6 +1995,16 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 
 .txt-source-empty[hidden] { display: none; }
 
+.txt-source-save-btn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.txt-source-save-btn:hover {
+  color: var(--accent);
+}
+
 .txt-source-clear-btn {
   width: 24px;
   height: 24px;
@@ -1978,6 +2013,28 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .txt-source-clear-btn:hover {
   color: var(--danger);
+}
+
+.txt-source-footer {
+  display: flex;
+  justify-content: flex-end;
+  padding: 6px 12px;
+  border-top: 1px solid var(--border);
+  flex-shrink: 0;
+}
+.txt-source-footer[hidden] { display: none; }
+.txt-block-delete-btn {
+  width: 28px;
+  height: 28px;
+  color: var(--text-muted);
+}
+.txt-block-delete-btn:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.12);
+  color: var(--danger);
+}
+.txt-block-delete-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 
 .layer-list {
@@ -2221,6 +2278,18 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   min-height: 0;
 }
 
+/* テキスト編集を折り畳んだとき、編集セクション (h2 のみ) は残余高を取らない。
+   さらに「原稿テキストが展開中」のときだけ margin-top:auto でサイドバー最底辺に貼り付け、
+   原稿テキストとの間にできる空き高を埋める（原稿テキストの :has() ルールで残余高を
+   吸収させる挙動と組み合わせ）。両方とも折り畳み中なら margin-top:auto は発動せず、
+   編集 h2 は原稿 h2 のすぐ下に並ぶ自然な配置になる。 */
+.side-panel .panel-section[data-section="editor"].collapsed {
+  flex: 0 0 auto;
+}
+.side-panel:has(.panel-section[data-section="txt"]:not(.collapsed)) .panel-section[data-section="editor"].collapsed {
+  margin-top: auto;
+}
+
 .layer-list-footer {
   display: flex;
   justify-content: flex-end;
@@ -2293,6 +2362,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: inline-flex;
   align-items: center;
   gap: 6px;
+}
+.progress-title.notify-title-danger {
+  color: var(--danger);
 }
 .progress-title.notify-title-warning .notify-title-icon {
   flex: 0 0 auto;
@@ -3118,16 +3190,17 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 
 /* TXT パネル下の「自動配置」ボタン (画像スキャンの直下)。
-   画像スキャンと寸法・配色を完全に揃える。 */
+   配色は MojiQ Pro の「作品仕様を読み込み」ボタンに統一（緑系パレット）。
+   背景は透過、border + 文字色だけ緑。ダークがデフォルト、ライトは下で切替。 */
 .ai-place-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-top: 6px;
   padding: 6px 12px;
-  background: var(--panel-hover);
-  border: 1px solid var(--border);
-  color: var(--text);
+  background: transparent;
+  border: 1px solid #4caf50;
+  color: #4caf50;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
@@ -3136,15 +3209,25 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .ai-place-btn:hover:not(:disabled) {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: #2e7d32;
+  border-color: #81c784;
+  color: #c8e6c9;
 }
 .ai-place-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-.ai-place-btn svg { flex-shrink: 0; }
+.ai-place-btn svg { flex-shrink: 0; stroke: currentColor; }
+
+:root[data-theme="light"] .ai-place-btn {
+  border-color: #2e7d32;
+  color: #2e7d32;
+}
+:root[data-theme="light"] .ai-place-btn:hover:not(:disabled) {
+  background: #a5d6a7;
+  border-color: #1b5e20;
+  color: #1b5e20;
+}
 
 /* 自動配置 — 確認モーダル */
 .ai-place-review-modal {

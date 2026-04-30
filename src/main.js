@@ -10,7 +10,7 @@ import {
   hasSelection,
   rebuildLayerList,
 } from "./text-editor.js";
-import { initTxtSource, loadTxtFromPath } from "./txt-source.js";
+import { deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { bindAiInstallMenu } from "./ai-install.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
 import { bindAiPlaceButton } from "./ai-place.js";
@@ -78,6 +78,7 @@ import {
   onPsdZoomChange,
   onTextSizeChange,
   onToolChange,
+  onTxtSourceChange,
   setActivePane,
   setCurrentPageIndex,
   setFolder,
@@ -630,8 +631,9 @@ function bindTools() {
       }
     }
 
-    // Delete / Backspace で選択中の追加テキストフレームを削除（修飾キーなし）。
+    // Delete / Backspace で選択中のものを削除（修飾キーなし）。
     // 入力欄やテキスト編集中（floater の textarea）には介入しない。
+    // 優先順: 原稿テキストブロック → 追加テキストフレーム
     if (
       (e.key === "Delete" || e.key === "Backspace") &&
       !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
@@ -640,6 +642,10 @@ function bindTools() {
       const isInput =
         t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
       if (!isInput) {
+        if (deleteSelectedTxtBlock()) {
+          e.preventDefault();
+          return;
+        }
         if (deleteSelectedLayers()) {
           e.preventDefault();
           return;
@@ -726,6 +732,15 @@ function bindPageChange() {
   onPdfSkipFirstBlankChange(() => updatePageNav());
   onParallelSyncModeChange(() => updatePageNav());
   onActivePaneChange(() => updatePageNav());
+  // TXT 単体運用時は TXT のマーカー数がページ総数になるので、TXT の読込/クリアでも
+  // ナビ表示を更新する。さらに新 TXT のページ数が現在 index を下回ったら 0 にクランプ。
+  onTxtSourceChange(() => {
+    if (getPages().length === 0 && getPdfVirtualPageCount() === 0) {
+      const total = getTxtPageCount();
+      if (total > 0 && getPdfPageIndex() > total - 1) setPdfPageIndex(0);
+    }
+    updatePageNav();
+  });
 }
 
 // サイドツールバー / サイドパネルの折り畳みトグル。localStorage に状態を保存して
@@ -827,20 +842,24 @@ function updatePageNav() {
   const label = document.getElementById("page-nav-label");
   const prev = document.getElementById("page-prev-btn");
   const next = document.getElementById("page-next-btn");
-  // ページバー廃止後の現在位置 / 総数表示。advancePage と同じターゲット決定ロジックを採用。
+  // advancePage と同じターゲット決定ロジック。PSD/PDF とも無ければ TXT マーカーへフォールバック。
   const psdCount = getPages().length;
   const pdfCount = getPdfVirtualPageCount();
+  const txtCount = getTxtPageCount();
   let total = 0;
   let current = 0;
   if (getParallelSyncMode()) {
     if (psdCount > 0) { total = psdCount; current = getCurrentPageIndex(); }
     else if (pdfCount > 0) { total = pdfCount; current = getPdfPageIndex(); }
+    else if (txtCount > 0) { total = txtCount; current = getPdfPageIndex(); }
   } else if (getActivePane() === "pdf" && pdfCount > 0) {
     total = pdfCount; current = getPdfPageIndex();
   } else if (psdCount > 0) {
     total = psdCount; current = getCurrentPageIndex();
   } else if (pdfCount > 0) {
     total = pdfCount; current = getPdfPageIndex();
+  } else if (txtCount > 0) {
+    total = txtCount; current = getPdfPageIndex();
   }
   if (label) {
     label.textContent = total > 0 ? `${current + 1} / ${total}` : "– / –";
@@ -861,19 +880,34 @@ function canAdvancePageNow() {
   return true;
 }
 
+// 「現在ページ」のソースを判定して { source, total, current } を返す。
+// 優先順: PSD pages → PDF 仮想ページ → TXT マーカーページ。null = どれも無し。
+// TXT 単体運用時は pdfPageIndex を「閲覧中ページ index」として流用する設計。
+function activePageSource() {
+  const psd = getPages().length;
+  if (psd > 0) return { source: "psd", total: psd, current: getCurrentPageIndex() };
+  const pdf = getPdfVirtualPageCount();
+  if (pdf > 0) return { source: "pdf", total: pdf, current: getPdfPageIndex() };
+  const txt = getTxtPageCount();
+  if (txt > 0) return { source: "txt", total: txt, current: getPdfPageIndex() };
+  return null;
+}
+
+function setActivePageIndex(source, idx) {
+  if (source === "psd") setCurrentPageIndex(idx);
+  else setPdfPageIndex(idx); // pdf / txt はどちらも pdfPageIndex 駆動
+}
+
 // ページ送り：同期モードなら両側、非同期ならアクティブペインだけ進める。
 // 同期中でも PSD 未読込の場合は PDF を直接駆動する（空の PSD index 経由だと
 // setCurrentPageIndex が「pages 0 件 → index 0 固定」で何も起こらないため）。
+// PDF も無ければ TXT マーカーページ数にフォールバック（pdfPageIndex を流用）。
 function advancePage(delta) {
   if (getParallelSyncMode()) {
-    if (getPages().length > 0) {
-      setCurrentPageIndex(getCurrentPageIndex() + delta);
-    } else {
-      const vcount = getPdfVirtualPageCount();
-      if (vcount === 0) return;
-      const clamped = Math.max(0, Math.min(vcount - 1, getPdfPageIndex() + delta));
-      setPdfPageIndex(clamped);
-    }
+    const info = activePageSource();
+    if (!info) return;
+    const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
+    setActivePageIndex(info.source, next);
     return;
   }
   if (getActivePane() === "pdf") {
@@ -881,31 +915,35 @@ function advancePage(delta) {
     const next = getPdfPageIndex() + delta;
     const clamped = Math.max(0, Math.min(Math.max(0, vcount - 1), next));
     setPdfPageIndex(clamped);
-  } else {
+  } else if (getPages().length > 0) {
     setCurrentPageIndex(getCurrentPageIndex() + delta);
+  } else {
+    // PSD 無し + PDF 無し時の TXT-only フォールバック（非同期 + activePane=psd の場合）
+    const info = activePageSource();
+    if (!info) return;
+    const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
+    setActivePageIndex(info.source, next);
   }
 }
 
 function jumpToEdge(where) {
   if (getParallelSyncMode()) {
-    const psdTotal = getPages().length;
-    if (psdTotal > 0) {
-      setCurrentPageIndex(where === "first" ? 0 : psdTotal - 1);
-      return;
-    }
-    const vcount = getPdfVirtualPageCount();
-    if (vcount === 0) return;
-    setPdfPageIndex(where === "first" ? 0 : vcount - 1);
+    const info = activePageSource();
+    if (!info) return;
+    setActivePageIndex(info.source, where === "first" ? 0 : info.total - 1);
     return;
   }
   if (getActivePane() === "pdf") {
     const vcount = getPdfVirtualPageCount();
     if (vcount === 0) return;
     setPdfPageIndex(where === "first" ? 0 : vcount - 1);
-  } else {
+  } else if (getPages().length > 0) {
     const total = getPages().length;
-    if (total === 0) return;
     setCurrentPageIndex(where === "first" ? 0 : total - 1);
+  } else {
+    const info = activePageSource();
+    if (!info) return;
+    setActivePageIndex(info.source, where === "first" ? 0 : info.total - 1);
   }
 }
 
@@ -1449,6 +1487,7 @@ let pageJumpTarget = "psd"; // "psd" | "pdf"
 function decidePageJumpTarget() {
   const psdHas = getPages().length > 0;
   const pdfHas = getPdfVirtualPageCount() > 0;
+  const txtHas = getTxtPageCount() > 0;
   const preferred = getActivePane();
   if (preferred === "pdf" && pdfHas) {
     return { kind: "pdf", total: getPdfVirtualPageCount(), current: getPdfPageIndex(), label: "PDF" };
@@ -1458,6 +1497,8 @@ function decidePageJumpTarget() {
   }
   if (psdHas) return { kind: "psd", total: getPages().length, current: getCurrentPageIndex(), label: "PSD" };
   if (pdfHas) return { kind: "pdf", total: getPdfVirtualPageCount(), current: getPdfPageIndex(), label: "PDF" };
+  // PSD/PDF とも無ければ TXT マーカーへフォールバック (pdfPageIndex を流用)
+  if (txtHas) return { kind: "pdf", total: getTxtPageCount(), current: getPdfPageIndex(), label: "テキスト" };
   return null;
 }
 

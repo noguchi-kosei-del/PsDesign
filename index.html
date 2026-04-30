@@ -213,6 +213,7 @@
                     <button id="proofread-load-btn" class="proofread-load-btn" type="button">JSON読込</button>
                   </div>
                 </div>
+                <div id="proofread-meta" class="proofread-meta" hidden></div>
                 <div id="proofread-body" class="proofread-body"></div>
               </div>
             </div>
@@ -373,7 +374,14 @@
             </h2>
             <div id="txt-source-actions" class="txt-source-actions" hidden>
               <span id="txt-source-name" class="txt-source-name"></span>
-              <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="テキストをクリア" aria-label="テキストをクリア" hidden>
+              <button id="save-txt-btn" class="icon-btn txt-source-save-btn" type="button" title="テキストを TXT ファイルとして保存" aria-label="テキストを TXT ファイルとして保存" hidden>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                  <polyline points="7 10 12 15 17 10"/>
+                  <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+              </button>
+              <button id="clear-txt-btn" class="icon-btn txt-source-clear-btn" type="button" title="テキストを削除" aria-label="テキストを削除" hidden>
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <polyline points="3 6 5 6 21 6"/>
                   <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
@@ -393,6 +401,17 @@
                 </svg>
                 <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
               </div>
+            </div>
+            <div id="txt-source-footer" class="txt-source-footer" hidden>
+              <button id="delete-txt-block-btn" class="icon-btn txt-block-delete-btn" type="button" title="選択中のテキストを削除 (Delete)" aria-label="選択中のテキストを削除" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/>
+                  <path d="M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </button>
             </div>
           </section>
           <section class="panel-section" data-section="editor">

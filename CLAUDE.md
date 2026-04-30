@@ -1237,3 +1237,123 @@ C1. **1.4.2 → 1.4.3** ([package.json](package.json) / [src-tauri/Cargo.toml](s
 > - 旧: PsDesign で配置したテキストはドキュメント直下にバラ撒かれていた → 新: 保存時に最上部へ「text」グループを毎回新規作成して格納
 > - 旧: 既存の "text" フォルダがあれば再利用＋可視化していた → 新: 既存フォルダは一切触らない（中身保持・可視性も変えない）
 > - 旧: `LayerSet.artLayers.add()` で直接フォルダ内に作成 (PS バージョン不安定) → 新: doc 直下に作成 → 設定 → `move(group, PLACEATBEGINNING)` の 2 段階パターン
+
+---
+
+## v1.4.4: 画像スキャン UX 改善・原稿テキスト管理強化・サイドバー / 校正パネル UI 拡張
+
+### A. 画像スキャン: 読込済み見本を優先
+
+A1. **state.js: 複数ファイルパスを保持** ([src/state.js](src/state.js))
+- `state.pdfPaths: []` を追加（loadReferenceFiles で読み込まれた全ファイルの自然順ソート済みパス配列）
+- `setPdf(doc, path, paths)` を 3 引数化。第 3 引数省略時は `path ? [path] : []` にフォールバック（既存呼び出し互換）
+- `getPdfPaths()` を新設・export（コピー返却）
+
+A2. **pdf-loader.js**: `loadReferenceFiles` の `setPdf(compositeDoc, sorted[0])` を `setPdf(compositeDoc, sorted[0], sorted)` に変更し、ソート済み全件を state に流す
+
+A3. **ai-ocr.js bindAiOcrButton**: クリックハンドラを「`getPdfPaths()` に何かあればそれで OCR、無ければ `pickInputFiles()`」のフォールバック方式に変更。v1.4.0 H1 で「常にダイアログ」にした方針を反転（ファイル選択ダイアログを毎回潜らせる UX が冗長との要望）。tooltip も「読込済み見本を AI でスキャン（未読込ならファイル選択）」に変更
+
+A4. **ai-place.js**: 自動配置の自動 OCR トリガーも `getPdfPaths()` で全ファイル対象。`runAiOcrForFiles([currentPdf])` の 1 件固定を撤去し、見本に複数ファイルを読み込んでいるとき全件を OCR にかける整合を取る。`getPdfPath` 単独の import は撤去
+
+> **構造変更**: 旧「画像スキャンは常にファイル選択ダイアログ」 → 新「読込済み見本があれば優先、未読込ならダイアログ」。ai-place.js も同じパスで複数ファイル全件対象。
+
+### B. 原稿テキストの保存機能
+
+B1. **TXT 保存ボタン**: TXT パネルの `txt-source-actions` 行に `#save-txt-btn`（lucide download アイコン、24×24）をゴミ箱ボタンの**左隣**に配置。`renderViewer` で TXT 読込中に表示、空なら hidden（クリアボタンと同パターン）
+
+B2. **`pickTxtSavePath(defaultName)`** ([src/txt-source.js](src/txt-source.js)): `@tauri-apps/plugin-dialog` の `save()` を起動。デフォルト filename は `getTxtSource().name`（OCR 結果なら `xxx_AI.txt` / `OCR-N件.txt`、TXT 読込なら元ファイル名）。`ensureTxtExtension()` で拡張子保証（`.txt` を消したら自動付与）
+
+B3. **既存 Rust コマンド `export_ai_text(content, output_path)` を再利用** ([src-tauri/src/ocr.rs](src-tauri/src/ocr.rs)): v1.1.0 で実装済みだが JS から未呼出だった。`invoke("export_ai_text", { content, outputPath })` で UTF-8 BOM 無し書き込み
+
+B4. **CSS** ([src/styles.css](src/styles.css)): `.txt-source-save-btn` を `.txt-source-clear-btn` 同パターン (24×24, flex-shrink:0)。hover 色は `--accent`（クリアの `--danger` と区別）
+
+### C. TXT パネルの PSD/PDF/TXT-only ページ送り連動
+
+C1. **PSD 未読込でも PDF / 画像のページ送りに TXT 連動** ([src/txt-source.js](src/txt-source.js))
+- `activePageNumber()` ヘルパー新設: PSD pages があれば PSD index、無ければ pdfPageIndex を流用（PDF 読込中も TXT 単体運用も同じ index を共有）
+- `onPdfPageIndexChange` / `onPdfChange` を購読。PSD 未読込時のみ viewer 再描画して二重描画を回避
+
+C2. **TXT 単体読込時のページ送り** ([src/main.js](src/main.js))
+- `getTxtPageCount()` 新設・export ([src/txt-source.js](src/txt-source.js)): `<<NPage>>` マーカーの最大ページ番号 (or 0)
+- `activePageSource()` / `setActivePageIndex(source, idx)` ヘルパーを追加: 「PSD → PDF → TXT」優先順で `{source, total, current}` を返し、適切な setter にディスパッチ
+- `advancePage` / `jumpToEdge` / `decidePageJumpTarget` / `updatePageNav` を全部この方式に書き換え。TXT 単体時は **pdfPageIndex を「閲覧中ページ index」として流用** する設計（新 state 追加なし）
+
+C3. **TXT 変更時のナビ更新 + index クランプ** ([src/main.js](src/main.js) `bindPageChange`): `onTxtSourceChange` を購読し、PSD/PDF とも空の状況で TXT が読まれたら updatePageNav 実行。新 TXT のページ数より index が大きければ `setPdfPageIndex(0)` で先頭に戻す
+
+> **TXT 単体運用フロー**: TXT のみ読込 → ←/→ キー / ▲▼ ボタン / Ctrl+J で TXT マーカーに沿ってページ送り → サイドバーラベル「3 / 10」等が表示。Ctrl+J ジャンプダイアログのラベルは「テキスト ページ」。
+
+### D. 原稿テキスト 1 段落削除
+
+D1. **`deleteBlockFromContent(content, pageNumber, idx)`** ([src/txt-source.js](src/txt-source.js)): マーカー無し原稿は全体、マーカー有りは該当ページセクション内の `idx` 番目パラグラフを削除し、両端の改行を整えて返す。`splitBlocksRaw` を使ってセクションテキストをパラグラフ列に分解 → splice → 再結合という流れで rebuild
+
+D2. **`deleteSelectedTxtBlock()` を export**: 選択中ブロックを削除 → 選択クリア → `setTxtSource` で listener 連動再描画。返値で削除成否を示す
+
+D3. **削除 UI** ([index.html](index.html) + [src/styles.css](src/styles.css)): TXT パネル内 `txt-source-dropzone` の直後に `<div class="txt-source-footer">` + `#delete-txt-block-btn`（ゴミ箱アイコン 28×28）。CSS は `.layer-list-footer` / `.layer-delete-btn` と同パターン（disabled で 0.35 透過、hover で `rgba(231,76,60,0.12)` 背景 + `--danger` 色）。`syncDeleteBlockBtn()` で footer 表示と button disabled 状態を `getTxtSource()` / `getTxtSelectedBlockIndex()` から導出、`renderViewer` 末尾と `selectBlock` 内で呼んで状態追従
+
+D4. **Delete / Backspace ショートカット** ([src/main.js](src/main.js)): 既存の `deleteSelectedLayers` 分岐より**前**に `deleteSelectedTxtBlock()` を試す優先順に変更。修飾キーなし + 入力欄外でのみ発火。「TXT 選択 → 削除」が「レイヤー選択 → 削除」より優先
+
+### E. 「テキストをクリア」を「テキストを削除」に文言変更
+
+E1. **confirmDialog に `kind: "danger"` 追加** ([src/ui-feedback.js](src/ui-feedback.js)): `notifyDialog` と同形の `kind` パラメータを export。`"danger"` で `notify-title-danger` クラスをタイトル要素に付与（cleanup で削除）。notifyDialog の cleanup 対象にも `notify-title-danger` を追加して副作用防止
+
+E2. **CSS** ([src/styles.css](src/styles.css)): `.progress-title.notify-title-danger { color: var(--danger); }` を追加
+
+E3. **テキストクリア → 削除** ([index.html](index.html) + [src/txt-source.js](src/txt-source.js)):
+- `#clear-txt-btn` の title / aria-label を「テキストをクリア」→「テキストを削除」
+- 確認ダイアログ: title「テキストの削除」（赤）/ message「読み込んだテキストを削除します。よろしいですか？」/ confirmLabel「削除」/ kind: `"danger"`
+- 完了 toast: 「テキストを削除しました」
+
+### F. サイドバーの折り畳み連動レイアウト
+
+F1. **テキスト編集 collapsed → 原稿テキスト拡張** ([src/styles.css](src/styles.css))
+- `:has()` セレクタで `.side-panel:has(.panel-section[data-section="editor"].collapsed) .panel-section[data-section="txt"]:not(.collapsed)` を狙い、`max-height: none; flex: 1 1 auto` を上書き
+- 原稿テキスト 34vh の上限を解除して残余高を全部吸収
+
+F2. **テキスト編集 collapsed → h2 が底辺貼り付き** ([src/styles.css](src/styles.css))
+- `.side-panel .panel-section[data-section="editor"].collapsed { flex: 0 0 auto; }` で残余高を取らない
+- `.side-panel:has(.panel-section[data-section="txt"]:not(.collapsed)) .panel-section[data-section="editor"].collapsed { margin-top: auto; }` で「原稿展開中 + 編集折畳中」のときだけ底辺貼り付き
+- **両方折り畳み時**: `margin-top: auto` が発動しないので、編集 h2 は原稿 h2 の直下に自然に並ぶ（ユーザー指摘で 2 段ルール化）
+
+> **動作マトリクス**:
+> | 原稿 | 編集 | レイアウト |
+> |---|---|---|
+> | 展開 | 展開 | 既定（原稿 34vh、編集 残り） |
+> | 展開 | 折畳 | 原稿が伸びて、編集 h2 が底辺貼り付き |
+> | 折畳 | 展開 | 原稿 h2 のみ上、編集が残り |
+> | 折畳 | 折畳 | 原稿 h2 → 編集 h2 が連続して上に並ぶ |
+
+### G. 校正パネルのフォルダ名 + 巻数表示
+
+G1. **DOM** ([index.html](index.html)): `proofread-panel-header` と `proofread-body` の間に `<div id="proofread-meta" class="proofread-meta" hidden>` を挿入
+
+G2. **`deriveProofreadMeta(filePath)`** ([src/proofread.js](src/proofread.js)): JSON パスを `[\\/]` で split し、想定構造 `.../<作品>/<巻>/校正チェックデータ/<json>` から「作品名 / 巻数」を導出
+- 直近の親が `校正チェックデータ` なら 1 段スキップ（MojiQ 流の自動降下と整合）
+- その上の階層を「巻数」、さらに 1 段上を「作品フォルダ名」として返す
+- 階層が浅いケースは取れる範囲だけ（不足は空文字）
+
+G3. **`renderProofreadMeta()`**: `renderPanel` の body 描画前に呼ぶ。results ビュー時のみ表示
+- フォルダ + 巻数が両方取れない場合は **JSON 内の `work` 名 → ファイル名 → "(読込済み)"** の順でフォールバック表示（checkData がある以上は何かしら可視化する）
+
+G4. **CSS** ([src/styles.css](src/styles.css)): `.proofread-meta`（panel-header と同 padding/border-bottom + flex-row + 12px font）、`.proofread-meta-folder`（太字）、`.proofread-meta-volume`（muted 色）、`.proofread-meta-sep`（細い区切り、opacity 0.6）
+
+### H. 自動配置ボタンの色を MojiQ Pro 緑系に
+
+H1. **配色変更** ([src/styles.css](src/styles.css) `.ai-place-btn`): MojiQ Pro `.preset-icon-btn.folder-btn` (PresetPanel.css) の緑系パレットに統一
+- ダーク: 通常 `transparent` bg / `#4caf50` border / `#4caf50` text、hover `#2e7d32` bg / `#81c784` border / `#c8e6c9` text
+- ライト: 通常 `transparent` / `#2e7d32` / `#2e7d32`、hover `#a5d6a7` bg / `#1b5e20` / `#1b5e20`
+- ユーザー要望で「背景色は不要」「ボタンテキストとアイコンの色をフチの色と合わせる」「ホバー時は緑背景」「ライトモードは色を濃く」の 4 段反復で確定
+- SVG アイコンは `stroke: currentColor` で文字色追従
+
+### バージョン
+
+I1. **1.4.3 → 1.4.4** ([package.json](package.json) / [src-tauri/Cargo.toml](src-tauri/Cargo.toml) / [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) を同期更新)。Cargo.lock も `cargo build` / `npm run tauri build` 経由で自動追従
+
+> **構造変更まとめ**:
+> - 旧: 画像スキャンは毎回ファイル選択ダイアログ → 新: 見本が読み込まれていれば即 OCR、未読込ならダイアログ。ai-place 自動 OCR も同じく全見本ファイル対象
+> - 旧: TXT は読込専用 → 新: パネル右上の保存ボタンで UTF-8 TXT 出力可能（OCR 結果も再保存可能）
+> - 旧: ページ送りは PSD / PDF どちらかが必須 → 新: TXT 単体読込でもマーカー数に従って ←/→ で送れる（pdfPageIndex を流用）
+> - 旧: TXT パラグラフ削除は手動編集のみ → 新: クリック選択 → 削除ボタン or Delete/Backspace で 1 段落削除（ページマーカー保持）
+> - 旧: 「テキストをクリア」 → 新: 「テキストを削除」 + 赤タイトル confirmDialog (`kind: "danger"`)
+> - 旧: 編集セクション折畳でも原稿テキストは 34vh で固定 → 新: `:has()` で原稿テキストが残余高を吸収、編集 h2 は底辺貼り付き
+> - 旧: 校正パネルは JSON 名のみ → 新: panel-header と body の間に「作品名 / 巻数」のメタ行を追加
+> - 旧: 自動配置ボタンは画像スキャンと同じグレー系 → 新: MojiQ Pro 互換の緑系（border + text 緑、hover 緑 bg）

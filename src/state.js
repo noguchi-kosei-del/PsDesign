@@ -38,6 +38,7 @@ const state = {
   psdZoomListeners: new Set(),
   pdfDoc: null,
   pdfPath: null,
+  pdfPaths: [], // loadReferenceFiles で読み込まれた全ファイルパス（自然順ソート済み）
   pdfPageCount: 0,
   pdfListeners: new Set(),
   pdfRotation: 0, // ユーザーが追加適用する回転（0/90/180/270）
@@ -621,14 +622,16 @@ export function onPsdZoomChange(fn) {
 
 export function getPdfDoc() { return state.pdfDoc; }
 export function getPdfPath() { return state.pdfPath; }
+export function getPdfPaths() { return [...state.pdfPaths]; }
 export function getPdfPageCount() { return state.pdfPageCount; }
-export function setPdf(doc, path) {
+export function setPdf(doc, path, paths) {
   const prev = state.pdfDoc;
   if (prev && prev !== doc && typeof prev.destroy === "function") {
     try { prev.destroy(); } catch (_) {}
   }
   state.pdfDoc = doc || null;
   state.pdfPath = path || null;
+  state.pdfPaths = Array.isArray(paths) ? [...paths] : (path ? [path] : []);
   state.pdfPageCount = doc && typeof doc.numPages === "number" ? doc.numPages : 0;
   // ユーザー回転は PDF 切替時も保持（同じワークフローの PDF は同じ向きの傾向があるため）。
   // リセットしたい場合はホームに戻るで clearPdf → clearPdfRotation を呼ぶ。

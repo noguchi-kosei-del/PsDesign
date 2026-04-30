@@ -34,11 +34,13 @@ export function hideProgress() {
   $("progress-count").textContent = "";
 }
 
+// kind: "default" (既定) | "danger" — "danger" でタイトルを赤文字に
 export function confirmDialog({
   title = "確認",
   message = "",
   confirmLabel = "OK",
   cancelLabel = "キャンセル",
+  kind = "default",
 } = {}) {
   return new Promise((resolve) => {
     const modal = $("confirm-modal");
@@ -50,7 +52,11 @@ export function confirmDialog({
       resolve(false);
       return;
     }
-    if (titleEl) titleEl.textContent = title;
+    if (titleEl) {
+      titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
+      titleEl.textContent = title;
+      if (kind === "danger") titleEl.classList.add("notify-title-danger");
+    }
     msgEl.textContent = message;
     okBtn.textContent = confirmLabel;
     cancelBtn.textContent = cancelLabel;
@@ -58,6 +64,7 @@ export function confirmDialog({
 
     const cleanup = (result) => {
       modal.hidden = true;
+      if (titleEl) titleEl.classList.remove("notify-title-danger");
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
       modal.removeEventListener("mousedown", onOverlay);
@@ -102,7 +109,7 @@ export function notifyDialog({
       return;
     }
     if (titleEl) {
-      titleEl.classList.remove("notify-title-success", "notify-title-warning");
+      titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
       if (kind === "success" || kind === "warning") {
         titleEl.classList.add(kind === "success" ? "notify-title-success" : "notify-title-warning");
         const iconSvg = kind === "success"
@@ -135,7 +142,7 @@ export function notifyDialog({
       if (cancelBtn) cancelBtn.hidden = prevCancelHidden;
       // タイトルを次回呼び出しのために plain テキスト状態に戻す。
       if (titleEl) {
-        titleEl.classList.remove("notify-title-success", "notify-title-warning");
+        titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
         titleEl.textContent = title;
       }
       okBtn.removeEventListener("click", onOk);

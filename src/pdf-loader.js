@@ -218,8 +218,9 @@ export async function loadReferenceFiles(paths) {
     // 横長判定は 1 ページ目（先頭ソース）で行い、PDF と同じく自動 split mode を設定。
     const isLandscape = await detectLandscape(compositeDoc);
     setPdfSplitMode(isLandscape);
-    // path は先頭ファイルパス。getPdfPath() を参照する ai-ocr / ai-place の既存連携を維持。
-    setPdf(compositeDoc, sorted[0]);
+    // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
+    // 画像スキャンや自動配置が複数ファイルを OCR 対象にできるようにする。
+    setPdf(compositeDoc, sorted[0], sorted);
 
     if (failures.length > 0) {
       toast(

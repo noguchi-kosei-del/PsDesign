@@ -4,10 +4,13 @@ import {
   getEdit,
   getNewLayersForPsd,
   getPages,
+  getPdfPageIndex,
   getTxtSelectedBlockIndex,
   getTxtSelection,
   getTxtSource,
   onPageIndexChange,
+  onPdfChange,
+  onPdfPageIndexChange,
   onTxtSourceChange,
   setTxtSelectedBlockIndex,
   setTxtSelection,
@@ -84,6 +87,30 @@ export function parsePages(content) {
   return { hasMarkers: false, all: splitBlocksRaw(normalized), byPage };
 }
 
+// 現在ページ番号 (1-indexed) を返す。
+// PSD が読み込まれていれば PSD の currentPageIndex を使い、
+// それ以外（見本のみ／TXT 単体）は pdfPageIndex を流用する。
+// PDF も TXT 単体も同じ pdfPageIndex を「閲覧中ページ」として共有する設計。
+function activePageNumber() {
+  if (getPages().length > 0) return getCurrentPageIndex() + 1;
+  return getPdfPageIndex() + 1;
+}
+
+// TXT 原稿に含まれる <<NPage>> マーカーの最大ページ番号を返す。
+// マーカー無し or TXT 未読込なら 0 を返す（ページ送り対象外）。
+// 「TXT 単体読み込み時のページ総数」として main.js のページナビが参照する。
+export function getTxtPageCount() {
+  const source = getTxtSource();
+  if (!source) return 0;
+  const parsed = parsePages(source.content);
+  if (!parsed.hasMarkers || parsed.byPage.size === 0) return 0;
+  let max = 0;
+  for (const k of parsed.byPage.keys()) {
+    if (k > max) max = k;
+  }
+  return max;
+}
+
 function getVisibleBlocks() {
   const source = getTxtSource();
   if (!source) return { blocks: [], hasMarkers: false, pageNumber: null };
@@ -91,7 +118,7 @@ function getVisibleBlocks() {
   if (!parsed.hasMarkers) {
     return { blocks: parsed.all, hasMarkers: false, pageNumber: null };
   }
-  const pageNumber = getCurrentPageIndex() + 1;
+  const pageNumber = activePageNumber();
   return {
     blocks: parsed.byPage.get(pageNumber) ?? [],
     hasMarkers: true,
@@ -103,12 +130,22 @@ export function renderTxtSourceViewer() {
   renderViewer();
 }
 
+function syncDeleteBlockBtn() {
+  const footer = $("txt-source-footer");
+  const btn = $("delete-txt-block-btn");
+  if (!btn || !footer) return;
+  const hasSource = !!getTxtSource();
+  footer.hidden = !hasSource;
+  btn.disabled = !hasSource || getTxtSelectedBlockIndex() == null;
+}
+
 function renderViewer() {
   const source = getTxtSource();
   const viewer = $("txt-source-viewer");
   const empty = $("txt-source-empty");
   const name = $("txt-source-name");
   const clearBtn = $("clear-txt-btn");
+  const saveBtn = $("save-txt-btn");
   const actions = $("txt-source-actions");
 
   viewer.innerHTML = "";
@@ -118,7 +155,9 @@ function renderViewer() {
     empty.hidden = false;
     name.textContent = "";
     clearBtn.hidden = true;
+    if (saveBtn) saveBtn.hidden = true;
     if (actions) actions.hidden = true;
+    syncDeleteBlockBtn();
     return;
   }
 
@@ -126,6 +165,7 @@ function renderViewer() {
   empty.hidden = true;
   name.textContent = source.name;
   clearBtn.hidden = false;
+  if (saveBtn) saveBtn.hidden = false;
   if (actions) actions.hidden = false;
 
   const { blocks, hasMarkers, pageNumber } = getVisibleBlocks();
@@ -135,6 +175,7 @@ function renderViewer() {
     info.className = "txt-block-empty-hint";
     info.textContent = `ページ ${pageNumber} のテキストはありません`;
     viewer.appendChild(info);
+    syncDeleteBlockBtn();
     return;
   }
 
@@ -152,6 +193,7 @@ function renderViewer() {
     });
     viewer.appendChild(el);
   });
+  syncDeleteBlockBtn();
 }
 
 async function runDoubleClickEdit(paragraph, pageNumber, viewer) {
@@ -190,6 +232,63 @@ function updateTxtSourceBlock(pageNumber, oldParagraph, newParagraph) {
   // setTxtSource は txtSelection / txtSelectedBlockIndex をリセットするが
   // dblclick 経路ではすでにクリア済みなので問題なし。
   // setTxtSource → onTxtSourceChange listener が renderViewer を呼ぶので明示呼出は不要。
+  setTxtSource({ name: source.name, content: newContent });
+  return true;
+}
+
+// pageNumber 範囲内の idx 番目（visible blocks 上の通し番号）のパラグラフを削除した
+// 新しい content を返す。一致しなければ null。
+function deleteBlockFromContent(content, pageNumber, idx) {
+  const norm = (content ?? "").replace(/\r\n?/g, "\n");
+  if (idx == null || idx < 0) return null;
+
+  // マーカー無し原稿: content 全体をパラグラフ列として扱う
+  if (pageNumber == null) {
+    const parts = splitBlocksRaw(norm);
+    if (idx >= parts.length) return null;
+    parts.splice(idx, 1);
+    return parts.join("\n\n");
+  }
+
+  // pageNumber が指すセクション範囲を特定
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let sectionStart = -1;
+  let sectionEnd = norm.length;
+  let inTargetPage = false;
+  let m;
+  while ((m = re.exec(norm)) !== null) {
+    const num = toHalfWidthInt(m[1]);
+    if (inTargetPage) { sectionEnd = m.index; break; }
+    if (num === pageNumber) {
+      inTargetPage = true;
+      sectionStart = m.index + m[0].length;
+    }
+  }
+  if (!inTargetPage) return null;
+
+  const sectionText = norm.slice(sectionStart, sectionEnd);
+  const parts = splitBlocksRaw(sectionText);
+  if (idx >= parts.length) return null;
+  parts.splice(idx, 1);
+  // セクション両端に改行を保ち、マーカー行とパラグラフを区切る
+  const newSection = parts.length === 0 ? "\n" : `\n${parts.join("\n\n")}\n`;
+  return norm.slice(0, sectionStart) + newSection + norm.slice(sectionEnd);
+}
+
+// 選択中の TXT ブロックを 1 件削除する。削除に成功すれば true。
+// (キーボード Delete/Backspace ハンドラとフッター削除ボタンの両方から呼ぶ)
+export function deleteSelectedTxtBlock() {
+  const source = getTxtSource();
+  if (!source) return false;
+  const idx = getTxtSelectedBlockIndex();
+  if (idx == null) return false;
+  const { blocks, pageNumber } = getVisibleBlocks();
+  if (!blocks || idx >= blocks.length) return false;
+  const newContent = deleteBlockFromContent(source.content, pageNumber, idx);
+  if (newContent == null || newContent === source.content) return false;
+  // 選択をクリアしてから setTxtSource → onTxtSourceChange listener で renderViewer
+  setTxtSelectedBlockIndex(null);
+  setTxtSelection("");
   setTxtSource({ name: source.name, content: newContent });
   return true;
 }
@@ -302,6 +401,7 @@ function selectBlock(idx, text) {
   for (const el of viewer.querySelectorAll(".txt-block")) {
     el.classList.toggle("selected", el.dataset.blockIndex === String(idx));
   }
+  syncDeleteBlockBtn();
 }
 
 async function pickTxtPath() {
@@ -312,6 +412,43 @@ async function pickTxtPath() {
     filters: [{ name: "Text", extensions: ["txt"] }],
   });
   return typeof picked === "string" ? picked : null;
+}
+
+async function pickTxtSavePath(defaultName) {
+  const { save } = await import("@tauri-apps/plugin-dialog");
+  const picked = await save({
+    title: "テキストを TXT として保存",
+    defaultPath: defaultName || "untitled.txt",
+    filters: [{ name: "Text", extensions: ["txt"] }],
+  });
+  return typeof picked === "string" ? picked : null;
+}
+
+function ensureTxtExtension(path) {
+  return /\.txt$/i.test(path) ? path : `${path}.txt`;
+}
+
+async function handleSaveBtn() {
+  const source = getTxtSource();
+  if (!source) return;
+  let outputPath;
+  try {
+    outputPath = await pickTxtSavePath(source.name);
+  } catch (e) {
+    console.error(e);
+    toast(`保存先選択失敗: ${e?.message ?? e}`, { kind: "error" });
+    return;
+  }
+  if (!outputPath) return;
+  outputPath = ensureTxtExtension(outputPath);
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("export_ai_text", { content: source.content, outputPath });
+    toast("テキストを保存しました", { kind: "success", duration: 2000 });
+  } catch (e) {
+    console.error(e);
+    toast(`保存失敗: ${e?.message ?? e}`, { kind: "error" });
+  }
 }
 
 async function readTxtFromPath(path) {
@@ -415,6 +552,20 @@ export function initTxtSource() {
     setTxtSelection("");
     renderViewer();
   });
+  // PSD 未読込で見本 (PDF/画像) のみ開いているケースの TXT 連動。
+  // PSD 読込中は onPageIndexChange が同期ブリッジ経由でも本体側も発火するため、
+  // ここでは PSD 無しのときだけ働かせて二重描画を避ける。
+  onPdfPageIndexChange(() => {
+    if (getPages().length > 0) return;
+    setTxtSelectedBlockIndex(null);
+    setTxtSelection("");
+    renderViewer();
+  });
+  // PDF doc 自体の読込/解除でも viewer を更新（見本の有無で activePageNumber の判定先が変わるため）。
+  onPdfChange(() => {
+    if (getPages().length > 0) return;
+    renderViewer();
+  });
   // undo/redo で原稿テキストが復元されたとき viewer を再描画。
   // setTxtSource からも同じ listener が発火する（loadTxtFromPath 等の呼び出し直後の
   // 明示 renderViewer 呼出と二重実行になるが、いずれも同期描画なので副作用なし）。
@@ -422,14 +573,20 @@ export function initTxtSource() {
   $("clear-txt-btn").addEventListener("click", async () => {
     if (!getTxtSource()) return;
     const ok = await confirmDialog({
-      title: "テキストのクリア",
-      message: "読み込んだテキストをリセットします。よろしいですか？",
-      confirmLabel: "クリア",
+      title: "テキストの削除",
+      message: "読み込んだテキストを削除します。よろしいですか？",
+      confirmLabel: "削除",
+      kind: "danger",
     });
     if (!ok) return;
     clearTxtSource();
     renderViewer();
-    toast("テキストをクリアしました", { kind: "info", duration: 1500 });
+    toast("テキストを削除しました", { kind: "info", duration: 1500 });
+  });
+  $("save-txt-btn").addEventListener("click", handleSaveBtn);
+  $("delete-txt-block-btn").addEventListener("click", () => {
+    if (!deleteSelectedTxtBlock()) return;
+    toast("選択中のテキストを削除しました", { kind: "info", duration: 1500 });
   });
   bindDropzone();
   renderViewer();

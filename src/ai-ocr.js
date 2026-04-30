@@ -17,7 +17,7 @@ import {
   notifyDialog,
   toast,
 } from "./ui-feedback.js";
-import { setAiOcrDoc } from "./state.js";
+import { setAiOcrDoc, getPdfPaths } from "./state.js";
 import { loadTxtFromContent } from "./txt-source.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
 import { checkAiModelsStatus } from "./ai-install.js";
@@ -270,8 +270,13 @@ export function bindAiOcrButton() {
   if (!btn) return;
   btn.addEventListener("click", async () => {
     if (runningOcr) return;
-    // 見本（PDF/画像）が開いていても流用せず、必ずファイル選択ダイアログを出す。
-    // 見本ビューアは表示用、OCR は別ファイルを意識的に選んで掛けたいケースを優先。
+    // 読込済み見本（PDF / 画像）があればそれを優先して OCR にかける。
+    // 未読込のときだけファイル選択ダイアログを出す。
+    const loaded = getPdfPaths();
+    if (loaded.length > 0) {
+      await runAiOcr(loaded, { notifyOnComplete: true });
+      return;
+    }
     let files;
     try { files = await pickInputFiles(); }
     catch (e) {
@@ -283,7 +288,6 @@ export function bindAiOcrButton() {
     await runAiOcr(files, { notifyOnComplete: true });
   });
 
-  // 押下時に必ずダイアログを開く運用に統一したため、ツールチップは固定文言。
   btn.disabled = false;
-  btn.title = "PDF / 画像を選択して AI で画像スキャン";
+  btn.title = "読込済み見本を AI でスキャン（未読込ならファイル選択）";
 }
