@@ -320,6 +320,39 @@ function findLayerById(doc, id) {
   return walk(doc);
 }
 
+// PsDesign で配置した新規テキストレイヤーは、毎回ドキュメント直下に
+// 新しいグループ ("text") を作って格納する。既存の "text" フォルダ
+// （特に非表示にされているもの）はユーザーの意図的な構成なので
+// 再利用しない / 可視化しない / 中身を触らない。重複名は Photoshop 側が
+// "text 2" 等に自動採番してくれることがある（しなくても運用上問題なし）。
+// 失敗時は null を返し、呼び出し側で doc 直下にフォールバックさせる。
+function createNewTextGroupAtTop(doc) {
+  var created = null;
+  try {
+    created = doc.layerSets.add();
+  } catch (eAdd) {
+    addWarning("text グループ作成に失敗: " + eAdd);
+    return null;
+  }
+  // 先に最上部へ移動 → その後 名前 / 可視化 を設定する順にすると、
+  // 一部 PS バージョンで move 後に name が "グループ N" にリセットされる
+  // 不具合を回避できる。
+  try {
+    created.move(doc, ElementPlacement.PLACEATBEGINNING);
+  } catch (eMove) {
+    addWarning("text グループの最上部配置に失敗: " + eMove);
+  }
+  try {
+    created.name = "text";
+  } catch (eName) {
+    addWarning("text グループの名前設定に失敗: " + eName);
+  }
+  try {
+    created.visible = true;
+  } catch (eVis) {}
+  return created;
+}
+
 // ===== Photoshop Action Manager 用 string ID ラッパ =====
 // Adobe 公式は CS6 以降 stringIDToTypeID を推奨。charID（4 文字コード）は
 // 互換レイヤーで将来削除の可能性あり。ここで string ID ベースに統一して
@@ -564,6 +597,12 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
       }
     }
     if (newLayers && newLayers.length > 0) {
+      // PsDesign が追加するテキストレイヤーは「毎回新しい text グループ」
+      // を最上部に作って格納する。既存の非表示 "text" フォルダ等はユーザー
+      // 構成なので一切触らない。配置 → 設定 → 最後に group へ move する
+      // 2 段階方式（LayerSet.artLayers.add() が PS バージョンで不安定な
+      // ケースを避ける。座標は document 絶対なので group 内でも位置不変）。
+      var __textGroup = createNewTextGroupAtTop(doc);
       for (var j = 0; j < newLayers.length; j++) {
         var nl = newLayers[j];
         var layerRef = doc.artLayers.add();
@@ -651,6 +690,23 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
             addWarning("新規レイヤー回転の適用に失敗: " + eRotNew);
           }
         }
+        // 全設定が完了したら "text" フォルダへ移動（座標は document 絶対なので
+        // 表示位置は変わらない）。group 確保に失敗していた場合は doc 直下のまま。
+        if (__textGroup) {
+          try {
+            layerRef.move(__textGroup, ElementPlacement.PLACEATBEGINNING);
+          } catch (eMoveNL) {
+            addWarning("text フォルダへの移動に失敗 (新規レイヤー): " + eMoveNL);
+          }
+        }
+        // 念のため可視化（一部 PS で move 後に visible=false になるケースを補正）
+        try { layerRef.visible = true; } catch (eVisNL) {}
+      }
+      // 全レイヤー処理後、新規作成したグループ自身を可視に揃える（既存
+      // フォルダは触らない方針なので、ここで触るのは createNewTextGroupAtTop
+      // が返した「新規作成 LayerSet」のみ）。
+      if (__textGroup) {
+        try { __textGroup.visible = true; } catch (eVisG) {}
       }
     }
     if (typeof savePath === "string" && savePath.length > 0) {

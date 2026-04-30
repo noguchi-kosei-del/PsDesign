@@ -104,32 +104,125 @@ function extractStroke(layer) {
   return { strokeColor, strokeWidthPx };
 }
 
-function collectTextLayers(layer, out = []) {
+// PSD 上で非表示になっているレイヤー / フォルダ（およびその子孫）は
+// 「読み込みから除外したものとして扱う」ため、collectTextLayers では親フォルダ
+// の可視性を伝播し、テキストレイヤー本体 or 上位グループのいずれかが非表示
+// であればテキスト一覧に含めない。
+function collectTextLayers(layer, out = [], parentVisible = true) {
+  const effectiveVisible = parentVisible && !layer.hidden;
   if (layer.text && typeof layer.id === "number") {
-    const style = layer.text.style ?? {};
-    const orientation = layer.text.orientation;
-    const { strokeColor, strokeWidthPx } = extractStroke(layer);
-    const fillColor = extractFillColor(layer);
-    out.push({
-      id: layer.id,
-      name: layer.name ?? "",
-      text: layer.text.text ?? "",
-      font: style.font?.name ?? "",
-      fontSize: style.fontSize ?? null,
-      left: layer.left ?? 0,
-      top: layer.top ?? 0,
-      right: layer.right ?? 0,
-      bottom: layer.bottom ?? 0,
-      direction: orientation === "vertical" ? "vertical" : "horizontal",
-      strokeColor,
-      strokeWidthPx,
-      fillColor,
-    });
+    if (!effectiveVisible) {
+      // 非表示テキストはスキップ（子は持たない想定だがネストにも備えて return しない）
+    } else {
+      const style = layer.text.style ?? {};
+      const orientation = layer.text.orientation;
+      const { strokeColor, strokeWidthPx } = extractStroke(layer);
+      const fillColor = extractFillColor(layer);
+      out.push({
+        id: layer.id,
+        name: layer.name ?? "",
+        text: layer.text.text ?? "",
+        font: style.font?.name ?? "",
+        fontSize: style.fontSize ?? null,
+        left: layer.left ?? 0,
+        top: layer.top ?? 0,
+        right: layer.right ?? 0,
+        bottom: layer.bottom ?? 0,
+        direction: orientation === "vertical" ? "vertical" : "horizontal",
+        strokeColor,
+        strokeWidthPx,
+        fillColor,
+      });
+    }
   }
   if (Array.isArray(layer.children)) {
-    for (const child of layer.children) collectTextLayers(child, out);
+    for (const child of layer.children) {
+      collectTextLayers(child, out, effectiveVisible);
+    }
   }
   return out;
+}
+
+// 非表示レイヤーのうち、ag-psd がラスタライズして canvas を持っている
+// もの（テキストレイヤー / 通常ラスター / スマートオブジェクトの一部）を
+// 再帰的に集める。親グループが非表示でも子の canvas を独立に拾うため、
+// 「フォルダごと非表示にされたテキスト群」も個別に削れる。
+// canvas を持たないレイヤー（調整レイヤー等）はそもそも合成済み
+// psd.canvas でも独立した「物体」として焼き込まれていないので無視して
+// よい（裏側の絵柄を白で潰す副作用も無くなる）。
+function collectHiddenLayersForMasking(layer, parentVisible, out) {
+  const selfHidden = !!layer.hidden;
+  const effectiveVisible = parentVisible && !selfHidden;
+
+  if (
+    !effectiveVisible &&
+    layer.canvas &&
+    layer.canvas.width > 0 &&
+    layer.canvas.height > 0
+  ) {
+    out.push({
+      canvas: layer.canvas,
+      left: layer.left ?? 0,
+      top: layer.top ?? 0,
+      name: layer.name,
+    });
+  }
+
+  // 親が非表示でも子は個別に canvas を持っている可能性があるので必ず再帰する。
+  if (Array.isArray(layer.children)) {
+    for (const child of layer.children) {
+      collectHiddenLayersForMasking(child, effectiveVisible, out);
+    }
+  }
+}
+
+// 各「非表示レイヤー canvas」のアルファをマスクとして、psd.canvas の
+// 該当ピクセル（= 実際にそのレイヤーが寄与している形状の画素）だけを
+// 白で塗りつぶしたコピーを返す。矩形ではなく「文字の輪郭ぴったり」
+// で消すので、レイヤーの裏側にあった絵柄は欠けない。
+//
+// 仕組み:
+//   1) main canvas に psd.canvas をコピー
+//   2) レイヤーごとに同サイズの一時 canvas を用意
+//   3) 一時 canvas を白で塗る
+//   4) globalCompositeOperation = "destination-in" + そのレイヤーの canvas を描画
+//      → 一時 canvas は「白×レイヤー alpha」になる（テキスト形状のみ白で残る）
+//   5) 一時 canvas を main canvas の (left, top) に重ね描画
+function maskHiddenLayersOnComposite(psd, hiddenLayers) {
+  try {
+    const src = psd.canvas;
+    if (!src || !src.width || !src.height) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = src.width;
+    canvas.height = src.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(src, 0, 0);
+
+    for (const item of hiddenLayers) {
+      const lc = item.canvas;
+      if (!lc || lc.width === 0 || lc.height === 0) continue;
+
+      // レイヤーと同サイズの一時 canvas に「白で塗る → destination-in でレイヤー
+      // 形状にクリップ」した画像を作る
+      const tmp = document.createElement("canvas");
+      tmp.width = lc.width;
+      tmp.height = lc.height;
+      const tctx = tmp.getContext("2d");
+      if (!tctx) continue;
+      tctx.fillStyle = "#ffffff";
+      tctx.fillRect(0, 0, tmp.width, tmp.height);
+      tctx.globalCompositeOperation = "destination-in";
+      tctx.drawImage(lc, 0, 0);
+
+      // main canvas の該当位置に重ね描き
+      ctx.drawImage(tmp, item.left, item.top);
+    }
+    return canvas;
+  } catch (e) {
+    console.warn("maskHiddenLayersOnComposite failed:", e);
+    return null;
+  }
 }
 
 export async function loadPsdFromPath(path) {
@@ -141,14 +234,31 @@ export async function loadPsdFromPath(path) {
   });
   const textLayers = [];
   if (Array.isArray(psd.children)) {
-    for (const child of psd.children) collectTextLayers(child, textLayers);
+    for (const child of psd.children) collectTextLayers(child, textLayers, true);
   }
   const dpi = psd.imageResources?.resolutionInfo?.horizontalResolution ?? 72;
+
+  // 非表示レイヤー / フォルダが存在するなら、ag-psd の合成済み canvas には
+  // 当時の状態（= 表示時の焼き込み）が残っている可能性が高い。
+  // 各非表示レイヤー自身の canvas を「形状マスク」として利用し、その輪郭
+  // 部分だけを白で塗ることで、裏側の絵柄を保ったままレイヤー本体だけ消す。
+  let canvas = psd.canvas;
+  if (Array.isArray(psd.children) && canvas) {
+    const hiddenLayers = [];
+    for (const child of psd.children) {
+      collectHiddenLayersForMasking(child, true, hiddenLayers);
+    }
+    if (hiddenLayers.length > 0) {
+      const masked = maskHiddenLayersOnComposite(psd, hiddenLayers);
+      if (masked) canvas = masked;
+    }
+  }
+
   return {
     path,
     width: psd.width,
     height: psd.height,
-    canvas: psd.canvas,
+    canvas,
     textLayers,
     dpi,
   };

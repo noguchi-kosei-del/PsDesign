@@ -1167,3 +1167,73 @@ C1. **1.4.1 → 1.4.2** ([package.json](package.json) / [src-tauri/Cargo.toml](s
 > - 旧: モデル重みは初回スキャン時に遅延 DL → 新: install-ai-models.ps1 Phase 6b でインストール時に事前 DL
 > - 旧: 校正項目クリックは常に 1 ページ目 (`parseInt("1巻 16ページ")` = 1) → 新: `parsePageNumber()` で「ページ」「P」付き数字を最優先、`"1巻 16ページ"` → 16
 > - 旧: ページ番号 = グレー `<span>` (リンクに見えない) → 新: 青文字 `<button>` + ホバー下線 + stopPropagation で MojiQ 互換ハイパーリンク
+
+## v1.4.3 — 非表示レイヤーのプレビュー除外 + 配置テキストの "text" グループ格納
+
+### A. 非表示レイヤー（テキスト含む）をプレビューから除外
+[src/psd-loader.js](src/psd-loader.js)
+
+**問題**: PSD 上で非表示にしているテキストレイヤー（あるいはそれを内包する非表示フォルダ）が、PsDesign のキャンバス上に薄く描画されてしまう。Photoshop の「互換性を最大に」で保存された合成画像 (`psd.canvas`) には、保存時点で可視だったレイヤーが焼き込まれているため、後から非表示にしたテキストが残ったまま見える状態になっていた。
+
+**A1. `collectTextLayers` の親可視性伝播** ([psd-loader.js](src/psd-loader.js))
+- 引数に `parentVisible` を追加し、親フォルダが非表示なら子テキストも textLayers 配列に含めない
+- `effectiveVisible = parentVisible && !layer.hidden` で実効可視を判定し、テキストレイヤーは可視時のみ push
+- グループへの再帰時に `effectiveVisible` を渡して再帰的に伝播（深いネストでも親の非表示が効く）
+
+**A2. 非表示レイヤーごとに「形状マスク」で psd.canvas を上書き** (`collectHiddenLayersForMasking` + `maskHiddenLayersOnComposite`)
+- 第一案の「非表示矩形を白塗り」では文字裏側の絵柄まで欠ける問題があり、第二案の「全レイヤー再合成」では ag-psd が canvas を生成しないレイヤー（スマートオブジェクト/調整レイヤー/フィルレイヤー等）が大量にある PSD で画面真っ白になる問題があった
+- 採用案: **`psd.canvas` をベースにコピー → 各非表示レイヤーの `layer.canvas` 自身を destination-in アルファマスクとして利用 → 文字／レイヤー形状そのものの輪郭ぴったりだけ白で塗りつぶす**
+  ```
+  一時 canvas (= レイヤーと同サイズの白い矩形)
+    .globalCompositeOperation = "destination-in"
+    .drawImage(layer.canvas)        // 一時 canvas が「文字形状の白」だけになる
+  本 canvas.drawImage(一時 canvas, layer.left, layer.top)
+  ```
+- canvas を持たない非表示レイヤー（調整 / 一部 SO 等）はそもそも合成済み psd.canvas に独立した「物体」として焼き込まれていないため無視で OK
+- 親グループが非表示でも子に再帰し、子個別の canvas があれば独立にマスクするので「フォルダごと非表示」でもテキストだけ正確に消える
+- 失敗時は元の `psd.canvas` をそのまま使うフォールバック
+
+**A3. `loadPsdFromPath` のフロー**
+- `collectTextLayers(child, [], true)` で実効可視のテキストのみ収集
+- `collectHiddenLayersForMasking` で非表示レイヤー候補を集め、1 件以上あれば `maskHiddenLayersOnComposite` で `psd.canvas` のマスク済みコピーを返す
+- 非表示が無ければ `psd.canvas` をそのまま使用（速度劣化なし）
+
+### B. 配置テキスト保存時に "text" グループへ格納（既存フォルダは触らない）
+[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)
+
+**B1. `createNewTextGroupAtTop(doc)` を HEADER に新設**
+- **毎回新規 LayerSet を生成** し、最上部に移動 → 名前 "text" → `visible = true` を設定
+- 既存の "text" フォルダは **検索しない / 再利用しない / 中身に触らない**: ユーザー側の意図的な構成（特に非表示にしてある旧テキスト群）を完全に保持
+- 順序のコツ: `add` → `move(doc, PLACEATBEGINNING)` → `name = "text"` → `visible = true` の順（一部 Photoshop バージョンで `move()` 後に name がリセットされる挙動があるため move を先に）
+
+**B2. `applyToPsd` 内 newLayers 処理を 2 段階パターンに変更**
+- 旧: `LayerSet.artLayers.add()` でフォルダ内に直接作成 → PS バージョンによって不安定だった
+- 新: **`doc.artLayers.add()` で document 直下に作成 → 全プロパティ設定 → 最後に `layerRef.move(__textGroup, PLACEATBEGINNING)` でフォルダへ移動** という安定パターン
+- 座標は document 絶対指定なので group へ入れても表示位置は変わらない
+- 各レイヤーの move 直後 / 全件処理後の 3 段で `visible = true` を呼んで、PS 側の生成時非表示挙動を補正
+
+**B3. 既存の `edits`（既存テキストへの編集）は触らない方針を維持**
+- group 内に取り込まない / 元の階層のままテキスト・フォント・座標などを更新
+- group 化対象は **PsDesign で新規配置したレイヤー (`newLayers`) のみ**
+
+**期待される保存後 PSD 構造**:
+```
+レイヤーパネル（上から）:
+├─ text                  ← 今回保存で新規作成された可視グループ
+│  ├─ 配置テキスト 1     ← stroke 効果付き / 可視
+│  └─ 配置テキスト 2
+├─ text                  ← 既存非表示の "text" フォルダ（中身ごと完全保持）
+├─ セリフ                ← 既存非表示レイヤー（保持）
+└─ 線画                  ← 既存可視レイヤー（保持）
+```
+重複名 "text" は Photoshop で許容され、必要に応じて自動採番されるケースもある。
+
+### バージョン
+
+C1. **1.4.2 → 1.4.3** ([package.json](package.json) / [src-tauri/Cargo.toml](src-tauri/Cargo.toml) / [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) を同期更新)。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: psd 上の非表示テキスト/フォルダがプレビューに焼き込み画像経由で残って見える → 新: 各非表示レイヤーの canvas をアルファマスクとして利用し、文字輪郭ぴったりだけを白塗り（裏側の絵柄は保持）
+> - 旧: PsDesign で配置したテキストはドキュメント直下にバラ撒かれていた → 新: 保存時に最上部へ「text」グループを毎回新規作成して格納
+> - 旧: 既存の "text" フォルダがあれば再利用＋可視化していた → 新: 既存フォルダは一切触らない（中身保持・可視性も変えない）
+> - 旧: `LayerSet.artLayers.add()` で直接フォルダ内に作成 (PS バージョン不安定) → 新: doc 直下に作成 → 設定 → `move(group, PLACEATBEGINNING)` の 2 段階パターン

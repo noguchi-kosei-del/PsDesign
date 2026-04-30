@@ -3072,7 +3072,7 @@ dependencies = [
 
 [[package]]
 name = "psdesign"
-version = "1.4.1"
+version = "1.4.3"
 dependencies = [
  "image",
  "pdfium-render",
