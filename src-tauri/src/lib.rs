@@ -140,6 +140,120 @@ struct DirEntry {
     is_file: bool,
 }
 
+#[derive(serde::Serialize)]
+struct DriveInfo {
+    letter: String,
+    path: String,
+}
+
+// カスタムファイル選択ダイアログのドライブ切替 UI 用。Windows は A:〜Z: のうち存在するルートを
+// 列挙し、ネットワーク／クラウドドライブを除外する：
+//   - DRIVE_REMOTE（4） … 通常のネットワークドライブ
+//   - DRIVE_NO_ROOT_DIR（1） / DRIVE_UNKNOWN（0） … 不明・マウント不能
+//   - Google Drive for Desktop / OneDrive / Dropbox 等の仮想クラウドドライブは DRIVE_FIXED で
+//     報告されるため、GetVolumeInformationW でボリュームラベルと FS 名を取得して
+//     既知のクラウド系名前パターンに該当するものを除外する。
+// Unix 系は "/" のみを返す。
+#[tauri::command]
+async fn list_drives() -> Result<Vec<DriveInfo>, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use winapi::um::fileapi::{GetDriveTypeW, GetVolumeInformationW};
+        const DRIVE_UNKNOWN: u32 = 0;
+        const DRIVE_NO_ROOT_DIR: u32 = 1;
+        const DRIVE_REMOTE: u32 = 4;
+
+        fn u16_buf_to_string(buf: &[u16]) -> String {
+            let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+            String::from_utf16_lossy(&buf[..len])
+        }
+
+        // 既知のクラウドドライブ名（小文字で含有チェック）。Google Drive for Desktop は
+        // ボリュームラベルが "Google Drive"、FS 名は "DriveFS" や "Google Drive Filesystem"
+        // などになる。OneDrive / Dropbox / Box も同様に label / FS から検知する。
+        const CLOUD_PATTERNS: &[&str] = &[
+            "google drive",
+            "googledrive",
+            "drivefs",
+            "onedrive",
+            "dropbox",
+            "box drive",
+            "boxdrive",
+        ];
+
+        let mut out = Vec::new();
+        for c in b'A'..=b'Z' {
+            let letter = format!("{}:", c as char);
+            let root = format!("{}\\", letter);
+            if !std::path::Path::new(&root).exists() {
+                continue;
+            }
+            // GetDriveTypeW は wide string 終端の \0 を要求する。
+            let wide: Vec<u16> = OsStr::new(&root)
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let drive_type = unsafe { GetDriveTypeW(wide.as_ptr()) };
+            if drive_type == DRIVE_REMOTE
+                || drive_type == DRIVE_UNKNOWN
+                || drive_type == DRIVE_NO_ROOT_DIR
+            {
+                continue;
+            }
+
+            // ボリュームラベル / FS 名でクラウドドライブを除外。
+            let mut vol_name_buf = [0u16; 261]; // MAX_PATH + 1
+            let mut fs_name_buf = [0u16; 261];
+            let info_ok = unsafe {
+                GetVolumeInformationW(
+                    wide.as_ptr(),
+                    vol_name_buf.as_mut_ptr(),
+                    vol_name_buf.len() as u32,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    fs_name_buf.as_mut_ptr(),
+                    fs_name_buf.len() as u32,
+                )
+            } != 0;
+            if info_ok {
+                let label = u16_buf_to_string(&vol_name_buf).to_lowercase();
+                let fs = u16_buf_to_string(&fs_name_buf).to_lowercase();
+                let is_cloud = CLOUD_PATTERNS
+                    .iter()
+                    .any(|pat| label.contains(pat) || fs.contains(pat));
+                if is_cloud {
+                    continue;
+                }
+            }
+
+            out.push(DriveInfo { letter, path: root });
+        }
+        Ok(out)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(vec![DriveInfo { letter: "/".into(), path: "/".into() }])
+    }
+}
+
+// ホームディレクトリのパスを返す。カスタムファイル選択ダイアログが remember 値も
+// defaultPath も無いときの起点として使用。Windows は USERPROFILE、Unix は HOME を採用。
+#[tauri::command]
+async fn home_dir() -> Result<String, String> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("USERPROFILE")
+            .map_err(|_| "USERPROFILE 環境変数が取得できません".to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("HOME").map_err(|_| "HOME 環境変数が取得できません".to_string())
+    }
+}
+
 // 校正パネルのカスタムフォルダブラウザ用に、ディレクトリの中身（フォルダ + ファイル）を返す。
 // 隠しファイル / シンボリックリンクの type 解決失敗は無視。サブツリー走査はしない（1 階層のみ）。
 #[tauri::command]
@@ -186,6 +300,8 @@ pub fn run() {
             read_binary_file,
             list_psd_files,
             list_directory_entries,
+            list_drives,
+            home_dir,
             ocr::check_ai_models,
             ocr::install_ai_models,
             ocr::cancel_ai_install,

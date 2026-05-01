@@ -21,6 +21,7 @@ import {
 } from "./settings.js";
 import { applyToolDefaults, getFonts } from "./state.js";
 import { onFontsRegistered } from "./font-loader.js";
+import { hideModalAnimated, showModalAnimated } from "./ui-feedback.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -30,7 +31,7 @@ let captureState = null; // { id, key, modifiers, onCommit }
 function openModal() {
   const m = $("settings-modal");
   if (!m) return;
-  m.hidden = false;
+  showModalAnimated(m);
   modalOpen = true;
   // 開くたびに最新値で再描画（外部から setPageDirectionInverted が呼ばれた等を反映）。
   renderShortcutList();
@@ -43,7 +44,7 @@ function openModal() {
 function closeModal() {
   const m = $("settings-modal");
   if (!m) return;
-  m.hidden = true;
+  hideModalAnimated(m);
   modalOpen = false;
 }
 
@@ -145,7 +146,7 @@ function openKeyCapture(id, sc) {
   refreshCaptureDisplay();
   if (conflict) conflict.hidden = true;
   ok.disabled = false;
-  m.hidden = false;
+  showModalAnimated(m);
   // キャプチャモーダル表示中のキーは window keydown を capture して横取り。
   window.addEventListener("keydown", onCaptureKeyDown, true);
 }
@@ -153,7 +154,7 @@ function openKeyCapture(id, sc) {
 function closeKeyCapture() {
   const m = $("key-capture-modal");
   if (!m) return;
-  m.hidden = true;
+  hideModalAnimated(m);
   captureState = null;
   window.removeEventListener("keydown", onCaptureKeyDown, true);
 }

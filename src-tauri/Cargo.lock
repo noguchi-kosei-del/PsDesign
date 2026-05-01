@@ -3072,7 +3072,7 @@ dependencies = [
 
 [[package]]
 name = "psdesign"
-version = "1.5.0"
+version = "1.6.0"
 dependencies = [
  "image",
  "pdfium-render",
@@ -3086,6 +3086,7 @@ dependencies = [
  "tauri-plugin-updater",
  "thiserror 1.0.69",
  "ttf-parser",
+ "winapi",
  "winreg 0.52.0",
 ]
 

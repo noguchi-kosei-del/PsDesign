@@ -1,28 +1,69 @@
 const $ = (id) => document.getElementById(id);
 
+// CSS の transition と一致させる。閉じるアニメーション完了後に hidden=true とする。
+export const MODAL_ANIM_MS = 220;
+
+// 中央モーダルを「奥から手前」アニメーションで開閉するヘルパー。
+// CSS 側で `.<modal-class> { opacity:0; transition:opacity }` と
+// `.<modal-class>.visible { opacity:1 }`、`.card { transform: scale(0.92); transition:transform }` と
+// `.<modal-class>.visible .card { transform: scale(1) }` を定義しておく前提。
+//
+// 連続呼び出し時の競合（fade-out 中に次の open が来る）に耐えるため、
+// hideModalAnimated は最後に .visible を持っていなければ hidden=true、持っていれば
+// 次の open に上書きされたとみなして hidden を維持する。
+export function showModalAnimated(el) {
+  if (!el) return;
+  el.hidden = false;
+  // hidden 解除と同フレームに .visible を付けるとブラウザが初期状態を確定する前に
+  // 終端状態へ飛んで transition が効かないため、2 フレーム遅らせる。
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      el.classList.add("visible");
+    });
+  });
+}
+
+export function hideModalAnimated(el, ms = MODAL_ANIM_MS) {
+  if (!el) return;
+  el.classList.remove("visible");
+  setTimeout(() => {
+    if (!el.classList.contains("visible")) el.hidden = true;
+  }, ms);
+}
+
 export function showProgress({ title, detail, current, total, showCount } = {}) {
   const modal = $("progress-modal");
   if (!modal) return;
-  modal.hidden = false;
+  showModalAnimated(modal);
   if (title != null) $("progress-title").textContent = title;
   updateProgress({ detail, current, total, showCount });
 }
 
-// showCount: 既定 true。false を渡すと右下のカウント表示 (e.g. "1 / 6") を抑止する
+// showCount: 既定 true。false を渡すと右下のカウント表示を抑止する
 // （AI 画像スキャンのように detail テキスト側で進捗を見せている場合の重複防止）。
-// バー自体は current/total から計算したものをそのまま出す。
+// バー幅は current/total から計算し fill.style.width に直接反映する（実進捗駆動）。
+// 現在/総数が無い場合は .indeterminate を付与してバー満タン表示にし、フラッシュで進行感を出す。
 export function updateProgress({ detail, current, total, showCount = true } = {}) {
   if (detail != null) $("progress-detail").textContent = detail;
   const fill = $("progress-fill");
   const count = $("progress-count");
   if (typeof current === "number" && typeof total === "number" && total > 0) {
     const pct = Math.max(0, Math.min(100, (current / total) * 100));
-    fill.style.width = `${pct}%`;
-    fill.classList.remove("indeterminate");
-    count.textContent = showCount ? `${current} / ${total}` : "";
+    if (fill) {
+      fill.style.width = `${pct}%`;
+      fill.classList.remove("indeterminate");
+    }
+    if (showCount) {
+      const remaining = Math.max(0, total - current);
+      count.textContent = `残り ${remaining} ページ ・ ${Math.round(pct)} %`;
+    } else {
+      count.textContent = "";
+    }
   } else {
-    fill.style.width = "100%";
-    fill.classList.add("indeterminate");
+    if (fill) {
+      fill.style.width = "";
+      fill.classList.add("indeterminate");
+    }
     count.textContent = "";
   }
 }
@@ -30,9 +71,13 @@ export function updateProgress({ detail, current, total, showCount = true } = {}
 export function hideProgress() {
   const modal = $("progress-modal");
   if (!modal) return;
-  modal.hidden = true;
-  $("progress-fill").classList.remove("indeterminate");
-  $("progress-fill").style.width = "0%";
+  hideModalAnimated(modal);
+  // 次回 open 時に 0% から再開するため fill 幅と indeterminate クラスを明示リセット。
+  const fill = $("progress-fill");
+  if (fill) {
+    fill.classList.remove("indeterminate");
+    fill.style.width = "0%";
+  }
   $("progress-detail").textContent = "";
   $("progress-count").textContent = "";
 }
@@ -99,10 +144,10 @@ export function confirmDialog({
     okBtn.classList.remove("page-jump-btn-primary", "page-jump-btn-place");
     if (confirmKind === "place") okBtn.classList.add("page-jump-btn-place");
     else okBtn.classList.add("page-jump-btn-primary");
-    modal.hidden = false;
+    showModalAnimated(modal);
 
     const cleanup = (result) => {
-      modal.hidden = true;
+      hideModalAnimated(modal);
       // 次回呼び出し時の干渉を避けるため、success/warning/danger の class とアイコン HTML を全リセット。
       if (titleEl) {
         titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
@@ -161,16 +206,19 @@ export function notifyDialog({
     // 復帰するよう cleanup で元の hidden 状態に戻す。
     const prevCancelHidden = cancelBtn ? cancelBtn.hidden : false;
     if (cancelBtn) cancelBtn.hidden = true;
-    modal.hidden = false;
+    showModalAnimated(modal);
 
     const cleanup = () => {
-      modal.hidden = true;
-      if (cancelBtn) cancelBtn.hidden = prevCancelHidden;
-      // タイトルを次回呼び出しのために plain テキスト状態に戻す。
-      if (titleEl) {
-        titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
-        titleEl.textContent = title;
-      }
+      hideModalAnimated(modal);
+      // Cancel ボタン復帰 / タイトルリセットはフェード完了後に。フェード中に Cancel が
+      // 現れたりタイトルが平文に戻るチラつきを避ける。
+      setTimeout(() => {
+        if (cancelBtn) cancelBtn.hidden = prevCancelHidden;
+        if (titleEl) {
+          titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
+          titleEl.textContent = title;
+        }
+      }, MODAL_ANIM_MS);
       okBtn.removeEventListener("click", onOk);
       modal.removeEventListener("mousedown", onOverlay);
       document.removeEventListener("keydown", onKey);
@@ -232,11 +280,15 @@ export function promptDialog({
     // OK ボタンは notify-success スタイル等の干渉を避けるため primary に揃える。
     okBtn.classList.remove("page-jump-btn-place");
     if (!okBtn.classList.contains("page-jump-btn-primary")) okBtn.classList.add("page-jump-btn-primary");
-    modal.hidden = false;
+    showModalAnimated(modal);
 
     const cleanup = (result) => {
-      modal.hidden = true;
-      if (input.parentNode) input.parentNode.removeChild(input);
+      hideModalAnimated(modal);
+      // input 要素の DOM 除去はフェード完了後に。フェード中に input が消えると
+      // 「ダイアログから input だけ先に消える」見た目になって違和感が出る。
+      setTimeout(() => {
+        if (input.parentNode) input.parentNode.removeChild(input);
+      }, MODAL_ANIM_MS);
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
       modal.removeEventListener("mousedown", onOverlay);

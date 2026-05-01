@@ -1,5 +1,6 @@
 import {
   withHistoryTransient,
+  getCurrentFont,
   getCurrentPageIndex,
   getEdit,
   getFillColor,
@@ -11,6 +12,7 @@ import {
   getSelectedLayers,
   getStrokeColor,
   getStrokeWidthPx,
+  onCurrentFontChange,
   onFillColorChange,
   removeNewLayer,
   setCurrentFont,
@@ -29,7 +31,7 @@ import {
   updateNewLayer,
 } from "./state.js";
 import { refreshAllOverlays } from "./canvas-tools.js";
-import { ensureFontLoaded } from "./font-loader.js";
+import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { confirmDialog } from "./ui-feedback.js";
 
 const listEl = () => document.getElementById("layer-list");
@@ -701,6 +703,24 @@ export function bindEditorEvents() {
   const widthInc = document.getElementById("stroke-width-inc-btn");
   if (widthDec) widthDec.addEventListener("click", () => adjustStrokeWidth(-0.5));
   if (widthInc) widthInc.addEventListener("click", () => adjustStrokeWidth(+0.5));
+
+  // 起動時 / 環境設定の「デフォルト」変更時に、選択が無くてもフォント欄に
+  // 現在の state.currentFontPostScriptName を表示する。フォント一覧は font-loader が
+  // 非同期で揃えるので、登録完了後にも再同期して display name 解決を確定させる。
+  syncFontInputFromState();
+  onCurrentFontChange(() => {
+    if (getSelectedLayers().length === 0) syncFontInputFromState();
+  });
+  onFontsRegistered(() => {
+    if (getSelectedLayers().length === 0) syncFontInputFromState();
+  });
+}
+
+// state.currentFontPostScriptName を edit-font 入力欄に反映する。
+// 何も選択されていない初期状態でも環境設定で指定したデフォルトフォント名が見えるようにする。
+function syncFontInputFromState() {
+  const ps = getCurrentFont();
+  rebuildFontOptions(ps || "");
 }
 
 // colorOrNull / widthOrNull に null を渡すと「各レイヤーの現在値を保持」の意味。

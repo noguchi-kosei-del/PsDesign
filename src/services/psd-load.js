@@ -15,11 +15,13 @@ import { setHasSavedThisSession, updateSaveButton } from "../bind/save.js";
 import { baseName, parentDir } from "../utils/path.js";
 
 export async function pickPsdFiles() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
+  const { openFileDialog } = await import("../file-picker.js");
+  const picked = await openFileDialog({
+    mode: "open",
     multiple: true,
     title: "PSDを開く",
     filters: [{ name: "Photoshop Document", extensions: ["psd"] }],
+    rememberKey: "psd-open",
   });
   if (!picked) return [];
   return Array.isArray(picked) ? picked : [picked];

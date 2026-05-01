@@ -18,7 +18,9 @@ import { bindProofreadUi, openProofread, closeProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   confirmDialog,
+  hideModalAnimated,
   hideProgress,
+  showModalAnimated,
   showProgress,
   toast,
 } from "./ui-feedback.js";
@@ -782,14 +784,14 @@ let resyncResolver = null;
 function openResyncModal() {
   const modal = document.getElementById("resync-modal");
   if (!modal) return Promise.resolve(null);
-  modal.hidden = false;
+  showModalAnimated(modal);
   return new Promise((resolve) => {
     resyncResolver = resolve;
   });
 }
 function closeResyncModal(result) {
   const modal = document.getElementById("resync-modal");
-  if (modal) modal.hidden = true;
+  if (modal) hideModalAnimated(modal);
   if (resyncResolver) {
     const r = resyncResolver;
     resyncResolver = null;
@@ -1357,7 +1359,7 @@ function openPageJumpDialog() {
   input.max = String(target.total);
   input.value = String(target.current + 1);
   if (hint) hint.textContent = `${target.label} ページ：1 〜 ${target.total} を入力してください`;
-  modal.hidden = false;
+  showModalAnimated(modal);
   requestAnimationFrame(() => {
     input.focus();
     input.select();
@@ -1366,7 +1368,7 @@ function openPageJumpDialog() {
 
 function closePageJumpDialog() {
   const modal = document.getElementById("page-jump-modal");
-  if (modal) modal.hidden = true;
+  if (modal) hideModalAnimated(modal);
 }
 
 function commitPageJump() {

@@ -1,6 +1,6 @@
 [package]
 name = "psdesign"
-version = "1.5.0"
+version = "1.6.0"
 description = "PSD spread editor with Photoshop apply-back, AI OCR, and auto-placement (mokuro)"
 edition = "2021"
 rust-version = "1.77"
@@ -27,6 +27,7 @@ pdfium-render = "0.8"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
+winapi = { version = "0.3", features = ["fileapi"] }
 
 [profile.dev.package.pdfium-render]
 opt-level = 3

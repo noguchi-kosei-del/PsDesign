@@ -31,11 +31,11 @@ export function updateSaveButton() {
 }
 
 async function pickSaveParentDir() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
-    directory: true,
-    multiple: false,
+  const { openFileDialog } = await import("../file-picker.js");
+  const picked = await openFileDialog({
+    mode: "openFolder",
     title: "別名で保存：親フォルダを選択（この中に新規フォルダを作成します）",
+    rememberKey: "save-as-parent",
   });
   return typeof picked === "string" ? picked : null;
 }

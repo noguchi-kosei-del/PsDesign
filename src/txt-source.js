@@ -1,6 +1,6 @@
 import {
-  clearTxtSource,
   getCurrentPageIndex,
+  getNewLayers,
   getPages,
   getPdfPageIndex,
   getTxtSelectedBlockIndex,
@@ -10,13 +10,18 @@ import {
   onPdfChange,
   onPdfPageIndexChange,
   onTxtSourceChange,
+  removeNewLayer,
   setTxtDirty,
   setTxtFilePath,
   setTxtSelectedBlockIndex,
   setTxtSelection,
   setTxtSource,
+  updateNewLayer,
+  withHistoryTransient,
 } from "./state.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
+import { refreshAllOverlays } from "./canvas-tools.js";
+import { rebuildLayerList } from "./text-editor.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -129,15 +134,6 @@ export function renderTxtSourceViewer() {
   renderViewer();
 }
 
-function syncDeleteBlockBtn() {
-  const footer = $("txt-source-footer");
-  const btn = $("delete-txt-block-btn");
-  if (!btn || !footer) return;
-  const hasSource = !!getTxtSource();
-  footer.hidden = !hasSource;
-  btn.disabled = !hasSource || getTxtSelectedBlockIndex() == null;
-}
-
 function renderViewer() {
   const source = getTxtSource();
   const viewer = $("txt-source-viewer");
@@ -151,6 +147,7 @@ function renderViewer() {
 
   // txt-source-actions 内 3 ボタン (保存 / 削除 / 再読み込み) は常時表示し、
   // TXT 未読込時は disabled でグレーアウトする（global の button:disabled ルール）。
+  // 「テキストを削除」は選択中ブロックがある時だけ有効にする。
   if (!source) {
     viewer.hidden = true;
     empty.hidden = false;
@@ -158,7 +155,6 @@ function renderViewer() {
     clearBtn.disabled = true;
     if (saveBtn) saveBtn.disabled = true;
     if (deleteBtn) deleteBtn.disabled = true;
-    syncDeleteBlockBtn();
     return;
   }
 
@@ -167,7 +163,7 @@ function renderViewer() {
   name.textContent = source.name;
   clearBtn.disabled = false;
   if (saveBtn) saveBtn.disabled = false;
-  if (deleteBtn) deleteBtn.disabled = false;
+  if (deleteBtn) deleteBtn.disabled = getTxtSelectedBlockIndex() == null;
 
   const { blocks, hasMarkers, pageNumber } = getVisibleBlocks();
 
@@ -176,7 +172,6 @@ function renderViewer() {
     info.className = "txt-block-empty-hint";
     info.textContent = `ページ ${pageNumber} のテキストはありません`;
     viewer.appendChild(info);
-    syncDeleteBlockBtn();
     return;
   }
 
@@ -194,7 +189,6 @@ function renderViewer() {
     });
     viewer.appendChild(el);
   });
-  syncDeleteBlockBtn();
 }
 
 // dblclick 時に該当の .txt-block を contenteditable にして直接編集できるようにする。
@@ -312,7 +306,14 @@ function deleteBlockFromContent(content, pageNumber, idx) {
 }
 
 // 選択中の TXT ブロックを 1 件削除する。削除に成功すれば true。
-// (キーボード Delete/Backspace ハンドラとフッター削除ボタンの両方から呼ぶ)
+// (キーボード Delete/Backspace ハンドラから呼ぶ)
+//
+// 自動配置済みレイヤーには `sourceTxtRef = { pageNumber, paragraphIndex }` が埋まっており、
+// 単に setTxtSource だけ呼ぶと paragraphIndex が削除位置以降のレイヤーで 1 つズレて
+// 「PSD 上のテキストが消えず、別段落の内容で重複する」状態になる。これを防ぐために:
+//   - 削除対象段落を sourceTxtRef で参照していたレイヤーは removeNewLayer で消す
+//   - 後続段落（paragraphIndex > idx）を参照していたレイヤーは paragraphIndex を 1 デクリメント
+// すべて withHistoryTransient で 1 つの undo スナップショットにまとめる。
 export function deleteSelectedTxtBlock() {
   const source = getTxtSource();
   if (!source) return false;
@@ -325,7 +326,38 @@ export function deleteSelectedTxtBlock() {
   // 選択をクリアしてから setTxtSource → onTxtSourceChange listener で renderViewer
   setTxtSelectedBlockIndex(null);
   setTxtSelection("");
-  setTxtSource({ name: source.name, content: newContent });
+
+  let layerRemoved = false;
+  withHistoryTransient(() => {
+    // sourceTxtRef.pageNumber は parsePages の hasMarkers 有無で
+    // null（マーカー無し原稿）or 数値（マーカー有り）。getVisibleBlocks の pageNumber と
+    // 厳密一致するもののみ対象にする。
+    const targetPage = pageNumber ?? null;
+    // removeNewLayer は state.newLayers をフィルタで作り直すので、走査中に変更しても
+    // 元配列は壊れないようスナップショット化（slice）してから iterate する。
+    for (const layer of getNewLayers().slice()) {
+      const ref = layer?.sourceTxtRef;
+      if (!ref) continue;
+      const refPage = ref.pageNumber ?? null;
+      if (refPage !== targetPage) continue;
+      if (ref.paragraphIndex === idx) {
+        removeNewLayer(layer.tempId);
+        layerRemoved = true;
+      } else if (ref.paragraphIndex > idx) {
+        updateNewLayer(layer.tempId, {
+          sourceTxtRef: { ...ref, paragraphIndex: ref.paragraphIndex - 1 },
+        });
+      }
+    }
+    setTxtSource({ name: source.name, content: newContent });
+  });
+  // setTxtSource が onTxtSourceChange listener (ai-place の syncPlacedFromTxt) を
+  // 発火するが、こちらは contents 変更時だけ rebuild する作りなので、レイヤーが
+  // 1 件削除されただけのケースでは UI が古いまま残る。手動で同期させる。
+  if (layerRemoved) {
+    try { refreshAllOverlays(); } catch (_) {}
+    try { rebuildLayerList(); } catch (_) {}
+  }
   return true;
 }
 
@@ -374,25 +406,31 @@ function selectBlock(idx, text) {
   for (const el of viewer.querySelectorAll(".txt-block")) {
     el.classList.toggle("selected", el.dataset.blockIndex === String(idx));
   }
-  syncDeleteBlockBtn();
+  // 削除ボタン (#delete-txt-btn) は選択中ブロックがある時だけ有効。
+  const deleteBtn = $("delete-txt-btn");
+  if (deleteBtn) deleteBtn.disabled = idx == null;
 }
 
 export async function pickTxtPath() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
+  const { openFileDialog } = await import("./file-picker.js");
+  const picked = await openFileDialog({
+    mode: "open",
     multiple: false,
     title: "テキストを開く",
     filters: [{ name: "Text", extensions: ["txt"] }],
+    rememberKey: "txt-open",
   });
   return typeof picked === "string" ? picked : null;
 }
 
 export async function pickTxtSavePath(defaultName) {
-  const { save } = await import("@tauri-apps/plugin-dialog");
-  const picked = await save({
+  const { openFileDialog } = await import("./file-picker.js");
+  const picked = await openFileDialog({
+    mode: "save",
     title: "テキストを TXT として保存",
-    defaultPath: defaultName || "untitled.txt",
+    defaultName: defaultName || "untitled.txt",
     filters: [{ name: "Text", extensions: ["txt"] }],
+    rememberKey: "txt-save",
   });
   return typeof picked === "string" ? picked : null;
 }
@@ -572,17 +610,14 @@ export function initTxtSource() {
   $("save-txt-btn").addEventListener("click", handleSaveBtn);
   $("delete-txt-btn").addEventListener("click", async () => {
     if (!getTxtSource()) return;
+    if (getTxtSelectedBlockIndex() == null) return;
     const ok = await confirmDialog({
       title: "テキストの削除",
-      message: "読み込んだテキストを削除します。よろしいですか？",
+      message: "選択中のテキストを削除します。よろしいですか？",
       confirmLabel: "削除",
       kind: "danger",
     });
     if (!ok) return;
-    clearTxtSource();
-    toast("テキストを削除しました", { kind: "info", duration: 1500 });
-  });
-  $("delete-txt-block-btn").addEventListener("click", () => {
     if (!deleteSelectedTxtBlock()) return;
     toast("選択中のテキストを削除しました", { kind: "info", duration: 1500 });
   });

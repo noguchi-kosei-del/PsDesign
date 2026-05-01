@@ -78,6 +78,10 @@
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
+  /* height: auto ↔ 0 の transition を有効化（Chromium 129+）。
+     パネルセクション折り畳みアニメーションに必須。未対応ブラウザでは
+     instant に切り替わるが致命的な見た目崩れはしないため安全に使える。 */
+  interpolate-size: allow-keywords;
 }
 
 * { box-sizing: border-box; }
@@ -789,7 +793,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   width: 24px;
   padding: 0;
 }
-.side-toolbar.collapsed > *:not(.panel-header) { display: none; }
+.side-toolbar > *:not(.panel-header) {
+  transition: opacity 0.18s ease, visibility 0s linear 0s;
+}
+.side-toolbar.collapsed > *:not(.panel-header) {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+}
 
 /* 折り畳み用ヘッダ：パネル先頭の 24px 帯にトグルボタン（>>）を配置 */
 .panel-header {
@@ -1611,7 +1622,14 @@ body.frames-hidden .layer-box-existing:not(.selected) {
 .side-panel.collapsed {
   width: 24px;
 }
-.side-panel.collapsed > *:not(.panel-header) { display: none; }
+.side-panel > *:not(.panel-header) {
+  transition: opacity 0.18s ease, visibility 0s linear 0s;
+}
+.side-panel.collapsed > *:not(.panel-header) {
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.18s ease, visibility 0s linear 0.18s;
+}
 
 .side-panel h2, .side-panel h3 {
   margin: 0;
@@ -1677,7 +1695,52 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   transition: transform 0.15s ease;
 }
 .panel-section.collapsed .section-chevron { transform: rotate(180deg); }
-.panel-section.collapsed > *:not(.panel-section-h2) { display: none; }
+
+/* セクション折り畳みアニメーション。h2 以外の子要素の高さを auto ↔ 0 に
+   トランジションさせる（interpolate-size: allow-keywords が前提）。
+   padding / margin / border-width も同時に 0 へ縮めて違和感のない収束に。
+   visibility は transition 完了後に hidden、再展開時は即時 visible。 */
+.panel-section > *:not(.panel-section-h2) {
+  overflow: hidden;
+  transition:
+    height 0.25s ease,
+    opacity 0.18s ease,
+    padding-top 0.25s ease,
+    padding-bottom 0.25s ease,
+    margin-top 0.25s ease,
+    margin-bottom 0.25s ease,
+    border-top-width 0.25s ease,
+    border-bottom-width 0.25s ease,
+    visibility 0s linear 0s;
+}
+.panel-section.collapsed > *:not(.panel-section-h2) {
+  height: 0;
+  /* min-height（例: txt-source-dropzone の 80px）と flex-grow（flex:1）が height:0 を
+     上書きしてくる子要素があるため、collapsed 時は両方とも 0 にして h2 直下まで
+     ぴったり閉じるようにする。 */
+  min-height: 0;
+  flex: 0 0 0;
+  opacity: 0;
+  padding-top: 0;
+  padding-bottom: 0;
+  margin-top: 0;
+  margin-bottom: 0;
+  border-top-width: 0;
+  border-bottom-width: 0;
+  /* tab フォーカスや支援技術から外す。transition 終了後に visibility:hidden を遅らせて
+     反転（展開）時はすぐ操作可能にする。 */
+  visibility: hidden;
+  transition:
+    height 0.25s ease,
+    opacity 0.18s ease,
+    padding-top 0.25s ease,
+    padding-bottom 0.25s ease,
+    margin-top 0.25s ease,
+    margin-bottom 0.25s ease,
+    border-top-width 0.25s ease,
+    border-bottom-width 0.25s ease,
+    visibility 0s linear 0.25s;
+}
 
 /* 校正パネル開閉ボタン（txt-source-actions の左端、TXT 保存ボタンの隣）。
    24×24 アイコンのみ。TXT 未読込時の save/reload グレーアウトとは独立に常時アクティブな
@@ -2369,28 +2432,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--danger);
 }
 
-.txt-source-footer {
-  display: flex;
-  justify-content: flex-end;
-  padding: 6px 12px;
-  border-top: 1px solid var(--border);
-  flex-shrink: 0;
-}
-.txt-source-footer[hidden] { display: none; }
-.txt-block-delete-btn {
-  width: 28px;
-  height: 28px;
-  color: var(--text-muted);
-}
-.txt-block-delete-btn:hover:not(:disabled) {
-  background: rgba(231, 76, 60, 0.12);
-  color: var(--danger);
-}
-.txt-block-delete-btn:disabled {
-  opacity: 0.35;
-  cursor: not-allowed;
-}
-
 .layer-list {
   list-style: none;
   margin: 0;
@@ -2675,9 +2716,16 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   justify-content: center;
   z-index: 100;
   backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  pointer-events: none;
 }
 
 .progress-modal[hidden] { display: none; }
+.progress-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
 
 /* 確認ダイアログはハンバーガーメニュー (z-index 151) から呼ばれることがあるので、
    必ずその上に表示させる。 */
@@ -2694,6 +2742,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 10px;
+  transform: scale(0.92);
+  transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1.0);
+}
+.progress-modal.visible .progress-card {
+  transform: scale(1);
 }
 
 .progress-title {
@@ -2817,31 +2870,92 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   min-height: 14px;
 }
 
+/* #progress-modal だけサイズを少し大きく。共有 .progress-card を直接膨らませると
+   confirm/resync/page-jump など他モーダルまで巻き込むため ID スコープで限定。 */
+#progress-modal .progress-card {
+  min-width: 440px;
+  max-width: 600px;
+  padding: 24px 28px;
+  gap: 14px;
+}
+
 .progress-track {
   position: relative;
   width: 100%;
-  height: 6px;
-  background: var(--bg);
-  border-radius: 3px;
+  height: 32px;
+  background: #d0d0d0;
+  border-radius: 4px;
   overflow: hidden;
-  border: 1px solid var(--border);
 }
 
 .progress-fill {
-  height: 100%;
+  position: absolute;
+  top: 0;
+  left: 0;
+  bottom: 0;
   width: 0%;
-  background: var(--accent);
-  transition: width 0.2s ease;
+  background: linear-gradient(90deg, #2e6cd6 0%, #5fa1ff 100%);
+  overflow: hidden;  /* フラッシュ ::after をバーの可視領域内にクリップ */
+  transition: width 0.3s ease-out;
 }
 
-@keyframes progress-indeterminate {
-  0%   { transform: translateX(-100%); }
-  100% { transform: translateX(100%); }
+/* バー上を左から右に流れるフラッシュ（光沢）。
+   ::after を fill の中で translateX し、fill の overflow:hidden で輪郭にクリップされる。
+   無限ループだが、後半 40% は画面外で待機するので脈動感が出る。 */
+.progress-fill::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 35%;
+  background: linear-gradient(
+    105deg,
+    transparent 25%,
+    rgba(255, 255, 255, 0.55) 50%,
+    transparent 75%
+  );
+  transform: translateX(-120%);
+  pointer-events: none;
 }
 
+@keyframes progress-flash {
+  0%   { transform: translateX(-120%); }
+  60%  { transform: translateX(320%); }
+  100% { transform: translateX(320%); }
+}
+
+/* track 背景と同色で初期は透明。青いバーが下を通過した部分だけ
+   「青背景 × グレー文字」のコントラストで自然に浮き上がる。 */
+.progress-loading-text {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.18em;
+  color: #d0d0d0;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* バー幅は JS の updateProgress 経由で fill.style.width に反映される。
+   現在/総数が無いケース（Photoshop 反映中など）は .indeterminate を付けて
+   バーを満タン表示し、左→右に流れるフラッシュ ::after で「動いている」感を伝える。 */
 .progress-fill.indeterminate {
-  width: 40% !important;
-  animation: progress-indeterminate 1.2s ease-in-out infinite;
+  width: 100%;
+}
+
+/* フラッシュは .visible 中だけループ。閉じる際は .visible が外れて animation:none に戻り、
+   次回開いたときに再付与されて先頭から流れる。 */
+.progress-modal .progress-fill::after {
+  animation: none;
+}
+.progress-modal.visible .progress-fill::after {
+  animation: progress-flash 2.2s linear infinite;
 }
 
 .progress-count {
@@ -2948,8 +3062,15 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   justify-content: center;
   z-index: 200;
   backdrop-filter: blur(2px);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  pointer-events: none;
 }
 .settings-modal[hidden] { display: none; }
+.settings-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
 #key-capture-modal { z-index: 320; }
 
 .settings-card {
@@ -2966,6 +3087,14 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
+  transform: scale(0.92);
+  transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1.0);
+}
+.settings-modal.visible .settings-card {
+  transform: scale(1);
+}
+.settings-modal.visible .key-capture-card {
+  transform: scale(1);
 }
 
 .settings-header {
@@ -3193,6 +3322,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   min-height: 0;
   text-align: center;
   padding-bottom: 12px;
+  transform: scale(0.92);
+  transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1.0);
 }
 .key-capture-card .settings-header {
   border-bottom: none;
@@ -3923,6 +4054,293 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .update-modal-primary:disabled {
   opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* ===== Custom file picker modal ===== */
+.file-picker-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 250;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  pointer-events: none;
+}
+.file-picker-modal[hidden] { display: none; }
+.file-picker-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.file-picker-card {
+  width: min(720px, 100%);
+  height: min(560px, 90vh);
+  background: var(--panel-body);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: scale(0.92);
+  transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1.0);
+}
+.file-picker-modal.visible .file-picker-card {
+  transform: scale(1);
+}
+.file-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.file-picker-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-picker-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-muted);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.file-picker-close-btn:hover {
+  background: var(--panel-hover);
+  color: var(--text);
+  border-color: var(--border);
+}
+.file-picker-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  overflow: hidden;
+}
+.file-picker-drives {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.file-picker-drive-btn {
+  padding: 4px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.file-picker-drive-btn:hover {
+  background: var(--panel-hover);
+}
+.file-picker-drive-btn.active {
+  background: rgba(0, 120, 212, 0.15);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.file-picker-nav {
+  display: flex;
+  gap: 4px;
+  flex: 0 0 auto;
+}
+.file-picker-nav-btn {
+  width: 28px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 16px;
+  font-weight: 700;
+  line-height: 1;
+  font-family: "Segoe UI Symbol", "Apple Symbols", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  padding: 0;
+}
+.file-picker-nav-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+.file-picker-nav-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.file-picker-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  user-select: text;
+}
+.file-picker-list {
+  flex: 1 1 auto;
+  overflow: auto;
+  background: var(--bg);
+  outline: none;
+}
+.file-picker-list:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+.file-picker-loading,
+.file-picker-empty,
+.file-picker-error {
+  padding: 20px 16px;
+  font-size: 13px;
+  color: var(--text-muted);
+  text-align: center;
+}
+.file-picker-error {
+  color: var(--danger, #e74c3c);
+}
+.file-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 14px;
+  font-size: 14px;
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+}
+.file-picker-row:hover {
+  background: var(--panel-hover);
+}
+.file-picker-row.selected {
+  background: var(--accent);
+  color: #fff;
+}
+.file-picker-row.selected .file-picker-row-icon {
+  color: #fff;
+}
+.file-picker-row.disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.file-picker-row.disabled:hover {
+  background: transparent;
+}
+.file-picker-row-icon {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+}
+.file-picker-row.folder .file-picker-row-icon {
+  color: var(--accent);
+}
+.file-picker-row.selected .file-picker-row-icon {
+  color: #fff;
+}
+.file-picker-row-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.file-picker-savebar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.file-picker-savebar-label {
+  font-size: 13px;
+  color: var(--text);
+  flex: 0 0 auto;
+}
+.file-picker-name-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 5px 10px;
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 3px;
+}
+.file-picker-name-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.25);
+}
+.file-picker-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border-top: 1px solid var(--border);
+  flex: 0 0 auto;
+}
+.file-picker-counter {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.file-picker-cancel-btn,
+.file-picker-confirm-btn {
+  padding: 6px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 3px;
+  cursor: pointer;
+  border: 1px solid var(--border);
+}
+.file-picker-cancel-btn {
+  background: transparent;
+  color: var(--text);
+}
+.file-picker-cancel-btn:hover {
+  background: var(--panel-hover);
+}
+.file-picker-confirm-btn {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.file-picker-confirm-btn:hover:not(:disabled) {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+.file-picker-confirm-btn:disabled {
+  opacity: 0.45;
   cursor: not-allowed;
 }
 

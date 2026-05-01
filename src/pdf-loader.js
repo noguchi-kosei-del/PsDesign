@@ -138,11 +138,13 @@ async function readPdfDocument(path) {
 
 // 見本ファイル（PDF / JPEG / PNG）を選択。複数選択可。
 export async function pickReferenceFiles() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
+  const { openFileDialog } = await import("./file-picker.js");
+  const picked = await openFileDialog({
+    mode: "open",
     multiple: true,
     title: "見本を読み込み",
     filters: [{ name: "見本 (PDF / JPEG / PNG)", extensions: REFERENCE_EXTENSIONS }],
+    rememberKey: "reference-open",
   });
   if (!picked) return [];
   const arr = Array.isArray(picked) ? picked : [picked];

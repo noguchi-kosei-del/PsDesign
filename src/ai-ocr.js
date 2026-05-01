@@ -4,7 +4,7 @@
 // mokuro OCR を実行し、結果を normalize.js で整形して TXT パネルに流し込む。
 //
 // 依存: @tauri-apps/api/core (invoke), @tauri-apps/api/event (listen),
-//       @tauri-apps/plugin-dialog (open)
+//       file-picker.js (カスタムファイル選択ダイアログ)
 // イベント仕様 (Rust 側 ocr.rs):
 //   - ai_ocr:start    (payload: volume name 文字列)
 //   - ai_ocr:log      (payload: { line, stream })
@@ -17,7 +17,7 @@ import {
   hideProgress,
   toast,
 } from "./ui-feedback.js";
-import { getTxtSource, setAiOcrDoc, getPdfPaths } from "./state.js";
+import { getTxtSource, setAiOcrDoc } from "./state.js";
 import { loadTxtFromContent } from "./txt-source.js";
 import { loadReferenceFiles } from "./pdf-loader.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
@@ -39,13 +39,15 @@ function stripExt(s) {
 }
 
 async function pickInputFiles() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
+  const { openFileDialog } = await import("./file-picker.js");
+  const picked = await openFileDialog({
+    mode: "open",
     multiple: true,
     title: "テキストスキャンする見本画像を選択",
     filters: [
       { name: "PDF / 画像", extensions: ["pdf", ...IMAGE_EXTS] },
     ],
+    rememberKey: "ai-ocr-open",
   });
   if (Array.isArray(picked)) return picked;
   if (typeof picked === "string") return [picked];
@@ -319,13 +321,8 @@ export function bindAiOcrButton() {
       });
       if (!ok) return;
     }
-    // 読込済み見本（PDF / 画像）があればそれを優先して OCR にかける。
-    // 未読込のときだけファイル選択ダイアログを出す。
-    const loaded = getPdfPaths();
-    if (loaded.length > 0) {
-      await runAiOcr(loaded, { notifyOnComplete: true });
-      return;
-    }
+    // 画像スキャンは毎回ファイル選択からやり直す。読込済み見本があれば
+    // loadReferenceFiles で上書き破棄され、選び直した新しい見本で OCR が走る。
     let files;
     try { files = await pickInputFiles(); }
     catch (e) {
@@ -348,5 +345,5 @@ export function bindAiOcrButton() {
   });
 
   btn.disabled = false;
-  btn.title = "読込済み見本を AI でスキャン（未読込ならファイル選択）";
+  btn.title = "ファイルを選択して AI で画像スキャン";
 }
