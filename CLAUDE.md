@@ -1357,3 +1357,297 @@ I1. **1.4.3 → 1.4.4** ([package.json](package.json) / [src-tauri/Cargo.toml](s
 > - 旧: 編集セクション折畳でも原稿テキストは 34vh で固定 → 新: `:has()` で原稿テキストが残余高を吸収、編集 h2 は底辺貼り付き
 > - 旧: 校正パネルは JSON 名のみ → 新: panel-header と body の間に「作品名 / 巻数」のメタ行を追加
 > - 旧: 自動配置ボタンは画像スキャンと同じグレー系 → 新: MojiQ Pro 互換の緑系（border + text 緑、hover 緑 bg）
+
+---
+
+## v1.5.0: 大規模リファクタ + テキストエディタモード + view-mode 3 値化 + 校正パネル機能拡張
+
+### 概要
+
+このバージョンは 3 つの柱から成る:
+1. **コードベース全面リファクタ** (history transient 安全化 / state.js factory 化 / main.js 機能別分割)
+2. **テキストエディタモードの新設** (view-mode-segment を `parallel | proofread | editor` の 3 値化)
+3. **校正パネルの MojiQ 互換機能拡張** (カテゴリトグル / チェックボックス / 「済」バッジ)
+
+加えて自動配置・テキスト編集・各種 UI の細かい改善を多数含む。
+
+---
+
+### A. コードベース全面リファクタ
+
+#### A1. `withHistoryTransient(fn)` ヘルパー (履歴の安全化)
+
+[src/state.js](src/state.js) に `withHistoryTransient(fn)` を新設し、以下のパターンを置換:
+```js
+// 旧: try/finally なしで 8〜12 箇所に散在
+beginHistoryTransient();
+try { ... } finally { /* commit / abort 手動 */ }
+
+// 新:
+withHistoryTransient(() => { ... });
+```
+
+仕様:
+- depth カウンタを保ったまま fn を実行
+- fn が `false` を返したら push をスキップ（mutation なし）
+- fn が throw → depth を巻き戻して再 throw（履歴が壊れない）
+
+置換対象: [src/canvas-tools.js](src/canvas-tools.js) の `nudgeSelectedLayers` / `deleteSelectedLayers` / `resizeSelectedLayers` / in-place 編集 afterCommit、[src/text-editor.js](src/text-editor.js) の `commitStrokeFields` / `commitFontToSelections` / `commitFillField` / レイヤー削除。drag handlers (rotate / multi-drag) は begin/commit が別イベントに跨るので imperative API のまま残置。
+
+#### A2. main.js の機能別分割
+
+1655 行 / 25 個の `bindXxx` がほぼ平坦に並んでいた [src/main.js](src/main.js) から、保存系と PSD 読込系を独立モジュールへ:
+
+- [src/utils/path.js](src/utils/path.js) — `baseName` / `parentDir` / `joinPath`（純粋ユーティリティ）
+- [src/bind/save.js](src/bind/save.js) — `bindSaveMenu` / `handleOverwriteSave` / `handleSaveAs` / `runSaveWithMode` + 内部 state（`hasSavedThisSession` / `saveMenuOpen` / `saveInflight`）
+- [src/services/psd-load.js](src/services/psd-load.js) — `pickPsdFiles` / `loadPsdFilesByPaths` / `handleOpenFiles` / `listPsdFilesInFolder`
+
+[src/ai-place.js](src/ai-place.js) → main.js の `await import("./main.js")` 動的 import を **静的 import に置換** して循環参照を解消。`services/psd-load.js` 経由で `pickPsdFiles` / `loadPsdFilesByPaths` を直接 import。
+
+UI 同期は `psdesign:psd-loaded` CustomEvent 経由で疎結合化（main.js 側で listener 登録 → updatePageNav / updatePsdRotateVisibility / updatePsdGuidesLockVisibility を呼ぶ）。
+
+main.js: 1655 → **1403 行** (-252 行)。bind/save.js + services/psd-load.js + utils/path.js で計 303 行に分割。
+
+#### A3. state.js の listener factory 化
+
+[src/state.js](src/state.js) に `createObservable(initial, normalize)` ファクトリを新設し、24 個の `*Listeners: new Set()` + 97 個の `get/set/on*` ペアの手動コピペを排除。
+
+```js
+const $tool = createObservable("move", _normTool);
+export const getTool = $tool.get;
+export const setTool = $tool.set;
+export const onToolChange = $tool.on;
+```
+
+19 個の単純スロットを factory 化:
+- tool / textSize / leadingPct / currentFont / strokeColor / strokeWidthPx / fillColor
+- pdfZoom / psdZoom / pdfRotation / psdRotation / pdfPageIndex
+- pdfSplitMode / pdfSkipFirstBlank / parallelSyncMode / activePane / parallelViewMode / framesVisible
+
+`state` object から該当フィールドを撤去し、定義の重複コピペが消滅。state.js: 807 → **716 行** (-91 行)。
+
+複合状態 (currentPageIndex / pdfDoc / aiOcrDoc / editingContext / txtSource / history) は意図的に factory 化せず元のまま（factory では表現しづらいセマンティクスを持つため）。
+
+---
+
+### B. テキストエディタモード（新規）
+
+#### B1. view-mode-segment を 3 値化
+
+ヘッダーの `.sync-segment.view-mode-segment` を `parallel | proofread | editor` の 3 ボタン構成に拡張。`#view-psd-only-btn` は廃止（旧 `"psdOnly"` 値は state.js の `_normParallelViewMode` で `"parallel"` にフォールバック）。
+
+| mode | pdf-area | psd-area | proofread overlay | editor-area | サイドバー類 |
+|---|---|---|---|---|---|
+| **parallel** | 表示 | 表示 | 閉じる | 非表示 | 表示 |
+| **proofread** | 表示 | 表示 | **pdf-stage 上に overlay** | 非表示 | 表示 |
+| **editor** | 非表示 | 非表示 | spreads-proofread-area の flex pane へ移動 | 表示 | 非表示（編集に集中）|
+
+editor モードでは workspace に `editor-mode` class を付与し、CSS で `.spreads-pdf-area` / `.spreads-psd-area` / `.side-toolbar` / `.side-panel` を `display: none !important` にして編集に集中できるレイアウトにする。
+
+#### B2. proofread-panel の DOM 移動方式
+
+校正パネルは単一 DOM。view-mode によって配置先と class を切替える:
+
+- **proofread モード**: `.spreads-pdf-area` 内 `position: absolute; inset: 0; z-index: 50` の overlay (`.proofread-overlay` class)
+- **editor モード**: `.spreads-proofread-area` 内 `position: relative; flex: 1` の通常 pane (`.proofread-pane` class)
+- **parallel モード**: pdf-area 内に置いておく（hidden 属性で非表示）
+
+`bindParallelViewMode` の sync() で `proofreadPanel.parentElement` を比較しながら `appendChild` で移動 + class 付替え。同じ DOM を共有することで、読込済み JSON / 折り畳み状態 / タブモードがモード切替後も保持される。
+
+#### B3. spreads-editor-area + editor-pane.js
+
+新規ペイン構成:
+- [index.html](index.html): `.spreads-editor-area` に filename row + editor-toolbar-row2 + textarea + footer
+- [src/bind/editor-pane.js](src/bind/editor-pane.js) — エディタ全体の DOM 配線
+  - **共有バッファ**: `state.txtSource` を直接読み書き（サイドパネル `txt-source-viewer` と双方向同期）
+  - **suppressInput フラグ**: 外部 setTxtSource → textarea 反映時の再帰 input イベントを抑止
+  - **focus 中のカーソル位置保持**: 外部更新でも `selectionStart` / `End` / `scrollTop` を保存・復元
+  - **handleSaveAuto**: 元ファイルパスがあれば上書き、無ければ別名保存（path-less 経路でも初回保存可）
+
+state.js に新規 observable 2 つ追加:
+- `$txtFilePath` — TXT の元ファイルパス（loadTxtFromPath で set / OCR / browser D&D 経路は null）
+- `$txtDirty` — 未保存変更フラグ（textarea input で true、保存 / 読込で false）
+
+#### B4. promptDialog ヘルパー
+
+[src/ui-feedback.js](src/ui-feedback.js) に `promptDialog({title, message, defaultValue, placeholder})` を新設。confirm-modal の DOM を流用して `<input>` を動的挿入、`Promise<string | null>` を返す。エディタの「ルビ付け」でふりがな入力ダイアログとして使用。
+
+#### B5. editor-textarea 空状態表示
+
+textarea が空のときは `txt-source-empty` と同じデザイン（書類アイコン + TXT 文字 + メッセージ）を **pointer-events: none の overlay** として `position: absolute; inset: 0` で乗せる。下層の textarea がクリックを受けるので、ユーザーがクリックすると自然に textarea にフォーカス → 入力で content が変わり overlay は自動的に非表示。
+
+`.editor-textarea-wrap` でラップして `position: relative` を anchor に提供。
+
+#### B6. editor-toolbar-row2
+
+ファイル操作 row1 (開く / 保存 / 別名 / コピー / クリア) を撤去し、編集操作 row2 にスリム化:
+- ルビ付けボタン（lucide ruby icon）— 選択文字列を「親（ふりがな）」形式に置換
+- テキスト保存ボタン（lucide download icon）— 元ファイル有り → 上書き、無し → 別名保存に自動分岐
+
+旧 `// 削除マーク` ボタンと `editor-toolbar-row1` は仕様変更により削除済み。
+
+---
+
+### C. 校正パネル機能拡張（MojiQ 互換）
+
+#### C1. カテゴリ トグル化（折り畳み）
+
+[src/proofread.js](src/proofread.js) の `renderItemsGrouped(items)` を新設し、フラット項目リストを `item.category` でグループ化。各カテゴリは `proofread-category` ヘッダー + body 構造に:
+
+- ヘッダー: チェックボックス + ▼ 矢印 + カテゴリ名 + 件数 + 「済」バッジ
+- ボディ: 各 `proofread-item` をネスト
+- ヘッダークリックで `.collapsed` トグル → body 非表示
+- `collapsedCategories: Set<string>` でユーザーの開閉状態を renderPanel 再生成後も保持
+- カテゴリ名 50 音順ソート（`Intl.Collator("ja")`）
+- 各カテゴリの border-left に `getCategoryColor()` 由来の色（10 色パレット）
+
+#### C2. カテゴリ + アイテム チェックボックス
+
+`createCheckbox({checked, cssClass, iconClass, onChange})` ヘルパー（hidden input + 装飾 span パターン）。MojiQ 互換のスタイル:
+- カテゴリ用 11×11、アイテム用 14×14
+- 通常: 透明背景 + muted border
+- チェック時: 緑塗り（`#4caf50`）+ 白チェックマーク（45° 鍵型）
+
+state:
+- `checkedCategories: Set<string>` — チェック済みカテゴリ
+- `checkedItems: Set<string>` — `${cat}|${idx}` 形式のキーでチェック済み項目
+
+#### C3. 「済」バッジ + 連動同期
+
+カテゴリヘッダー右端に緑の「済」バッジ。**双方向自動同期**:
+
+| 操作 | カテゴリ ☑ | 各項目 ☑ | 折り畳み | 済バッジ |
+|---|---|---|---|---|
+| カテゴリ ☑ チェック | ☑ | **全 ☑（自動）** | 自動畳み | 表示 |
+| カテゴリ ☑ 解除 | ☐ | **全 ☐（自動）** | 維持 | 非表示 |
+| 項目を 1 つずつ ☑ | 全件達成で ☑（自動） | 個別 | 全件達成で自動畳み | 全件達成で表示 |
+| 項目を 1 つ ☐ | **☐（自動）** | 個別 | 維持 | 非表示 |
+
+`refreshDoneBadge(source)` を `"init" | "item" | "category"` の 3 値で呼び分け、`source === "item"` のときだけカテゴリ↔項目の相互同期と自動畳みを実行。`itemRefs` 配列に各項目の `{itemKey, el, input}` を保持してカテゴリ変更時の一括 ON/OFF を可能に。
+
+#### C4. その他
+
+- `proofread-cat-badge` / `proofread-kind` 表示を撤去（カテゴリトグル化で重複情報を排除）
+- `proofread-page-link` を **薄い青 + 13px** に変更（ダーク `#64b5f6` / ライト `#1976d2`、hover で更に濃く）
+- `proofread-empty-icon` のサイズを 64×64 → **40×40** に縮小（`txt-source-empty-icon` と統一）
+- empty 状態のアイコン↔メッセージ間隔を `gap: 12px → 4px` に縮小
+- `proofread-col-header` の文字サイズを 10px → **13px** に拡大
+
+---
+
+### D. 自動配置・テキスト編集機能の強化
+
+#### D1. 配置済みレイヤーへの編集追従
+
+[src/state.js](src/state.js) `addNewLayer` に `sourceTxtRef: { pageNumber, paragraphIndex } | null` を追加。自動配置時に各レイヤーへ「元 TXT 段落への参照」を埋め込む。
+
+[src/ai-place.js](src/ai-place.js) `syncPlacedFromTxt()`:
+- `onTxtSourceChange` listener で発火
+- `parsePages` で TXT を再パース → `sourceTxtRef` を持つ各レイヤーの `paragraphs[paragraphIndex]` を取り出して contents を更新
+- **中心固定で位置再計算**: contents 変化で `estimateLayerSize` の bbox サイズが変わるため、旧 contents の bbox 中心を計算し、新 contents の bbox を中心起点で再配置（左上ずれを防止）
+- `beginHistoryTransient` / `abortHistoryTransient` で履歴 push を 1 件にまとめる
+
+#### D2. テキストフレーム見切れバグ修正
+
+[src/canvas-tools.js](src/canvas-tools.js) `layerRectForExisting` / `layerRectForNew` と [src/ai-place.js](src/ai-place.js) `estimateLayerSize` の `thick` 式に **0.4em の安全余白** を加算（CJK 縦書きで小書き仮名・stroke の outset 半分が見切れる問題を解消）。
+
+CSS で内側テキスト要素に padding を追加してテキストを bbox 中央に視覚配置:
+- 縦書き: `padding-left: 0.2em; padding-right: 0.2em;`
+- 横書き: `padding-top: 0.2em; padding-bottom: 0.2em;`
+
+bbox がどれだけ広がっても、`box-sizing: border-box` のためコンテンツ領域は旧サイズ（leadingFactor × lineCount）と一致し、視覚位置は不変。
+
+#### D3. 原稿テキスト dblclick で contenteditable 編集
+
+[src/txt-source.js](src/txt-source.js) の dblclick 経路を「配置済みフレームの in-place 編集」から **「viewer 内で contenteditable 直接編集」** に変更。`startInlineEdit(el, originalText, pageNumber)`:
+
+- 該当 `.txt-block` に `contentEditable="true"` + `.editing` class
+- 全文選択してフォーカス
+- **Ctrl+Enter / Cmd+Enter** または **blur** で確定 → `updateTxtSourceBlock` で原稿全体を書換 → `onTxtSourceChange` 経由で配置済みレイヤーも自動同期
+- **Esc** で取消（元テキストに戻す）
+- 通常 Enter は改行（contenteditable のデフォルト挙動）
+
+CSS `.txt-block.editing`: accent 枠 + cursor: text + user-select: text。
+
+廃止: `findPlacedLayerByText` / `normalizeForMatch` / `enterInPlaceEditForLayer` import。
+
+---
+
+### E. 画像スキャン UX 改善
+
+#### E1. 完了ダイアログ + 「自動配置」即遷移
+
+[src/ai-ocr.js](src/ai-ocr.js) の完了通知を `notifyDialog` から **`confirmDialog`（2 ボタン）** に変更:
+- title「画像スキャン完了」、緑チェック SVG
+- 左「戻る」（cancel） / 右「自動配置」（緑塗り primary）
+- 「自動配置」を押すと `#ai-place-btn` の click を発火 → 既存の自動配置確認モーダルへ遷移
+
+[src/ui-feedback.js](src/ui-feedback.js) `confirmDialog` を拡張:
+- `kind: "success" | "warning" | "danger" | "default"` をサポート（タイトルアイコン + 色）
+- `confirmKind: "primary" | "place"` で OK ボタンスタイル切替（`.page-jump-btn-primary`（青塗り）/ `.page-jump-btn-place`（緑枠、ai-place 互換））
+- `applyTitleIcon` ヘルパーで `notifyDialog` と icon ロジックを共有
+
+#### E2. 「現在のテキストは破棄されます」事前警告
+
+画像スキャンボタン押下時に既に TXT が読み込まれている場合、ファイル選択 / OCR 実行のコストが発生する前に `confirmDialog` (kind: danger) で警告。キャンセルなら静かに戻る。
+
+#### E3. 進捗ダイアログ改善
+
+- タイトル: 「画像スキャン」→ **「画像スキャン実行中」**
+- 各フェーズの detail に **完了見積時間**（`約 N 分`）を併記。`estimateRemainingSeconds(fileCount)` = `15 + fileCount * 30` 秒（CPU/GPU・ページ数で大きくぶれるので「約」付き）
+- OCR 実行中で tqdm eta が確定したら実値（残り 30秒 / 1分20秒）に切替
+- 右下のページ数表示（`1 / N`）を画像スキャン時のみ抑止（detail テキスト側で進捗を見せているため重複）。`updateProgress({showCount: false})` オプションで他モーダル（PSD 読込・Photoshop 保存）には影響なし
+
+#### E4. 見本ファイル loadReferenceFiles 連携
+
+画像スキャンボタンから `pickInputFiles` で PDF / 画像を選択した場合、OCR 開始前に **`loadReferenceFiles(files)` で pdf-stage に表示** 。ユーザーが OCR の進捗中にも見本を確認できる。失敗時は toast で通知して OCR は継続。
+
+---
+
+### F. ページナビゲーション・操作系
+
+#### F1. マウススクロールでページ送り
+
+[src/main.js](src/main.js) `bindWheelPageNav()`: `.spreads-pdf-area` / `.spreads-psd-area` に wheel リスナーを追加。
+
+- **同期モード**: どちらのペインでスクロールしても `advancePage(±1)` で両ペインが同時に移動
+- **非同期モード**: スクロールしたペインだけが動く（`getActivePane` に依存しない）
+
+Alt / Ctrl / Meta は通過（既存ズーム / ブラウザ既定に委ねる）。120ms のリーディングエッジ throttle で連続スクロール暴走を抑止。`onLayerWheel` が選択レイヤー上で `stopPropagation` するため、レイヤー枠上は従来通りサイズ変更が優先。
+
+#### F2. ガイドロックボタンの disabled 制御
+
+[src/rulers.js](src/rulers.js) に `onGuidesChange(fn)` listener と `hasAnyGuide(psdPath?)` を新設。`addGuide` / `moveGuide` / `removeGuide` で発火。
+
+[src/main.js](src/main.js) `bindPsdGuidesLock`: ガイドが 1 本も引かれていなければ `btn.disabled = true`（global の `button:disabled { opacity: 0.5; cursor: not-allowed }` でグレーアウト）。`onPageIndexChange` 購読で対象 PSD のガイド有無に追従。
+
+---
+
+### G. その他 UI・スタイル整理
+
+- TXT actions の保存 / 削除 / 再読み込みボタンを整理:
+  - **テキスト削除ボタン**（trash-2 アイコン、保存と再読み込みの間）— `confirmDialog kind: danger` → `clearTxtSource`
+  - **テキスト再読み込みボタン**（rotate-cw アイコン）— 確認後 `pickTxtPath` → 新ファイルで上書き
+  - **テキスト保存ボタン**（download アイコン）— `pickTxtSavePath` → `setTxtFilePath` 更新
+  - 全て常時表示、TXT 未読込時は disabled でグレーアウト
+- 画像スキャンボタンを MojiQ 互換の **青枠透明背景** デザインに（`.panel-load-btn` 同等、hover で薄い青 bg）
+- `editor-mode` button アイコンを `pen-square` から **`check-square`** に変更（校正トグルボタンと統一）
+- `editor-mode` button を `view-proofread-btn` の右隣に配置（parallel → proofread → editor の順）
+- `editor-toolbar-row1` を撤去（開く / 保存 / 別名 / コピー / クリアボタンは旧仕様、row2 に統合）
+
+---
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.5.0`** に揃え。Cargo.lock も `cargo build` 経由で自動追従。
+
+> **構造変更まとめ**:
+> - 旧: state.js が 24 個の listener Set + 97 個のコピペ get/set/on で 807 行 → 新: createObservable factory で 19 スロットを宣言的に定義し 716 行
+> - 旧: main.js 1655 行に bindXxx 25 個が平坦に並ぶ → 新: bind/save.js + services/psd-load.js + utils/path.js に分割し main.js は 1403 行
+> - 旧: history transient の begin/commit/abort 3 連が手書き 8〜12 箇所 → 新: withHistoryTransient(fn) で例外時も depth が壊れない安全 API
+> - 旧: view-mode-segment は parallel / psdOnly の 2 値 → 新: parallel / proofread / editor の 3 値 + workspace.editor-mode CSS で側ペイン格納
+> - 旧: 校正パネルはフラット項目リスト + cat-badge + kind ラベル → 新: カテゴリトグル + チェックボックス + 「済」バッジ + 双方向同期（MojiQ 互換）
+> - 旧: 自動配置レイヤーは TXT 編集後も古い contents のまま → 新: sourceTxtRef + onTxtSourceChange で自動追従、bbox 中心固定で位置維持
+> - 旧: 縦書き小書き仮名・stroke が見切れる → 新: thick + 0.4em 余白 + CSS padding でテキスト中央配置（位置不変）
+> - 旧: 画像スキャン進捗は detail テキストに残り時間のみ → 新: 完了見積（約 N 分）+ tqdm eta 確定後は実値に切替、右下カウント抑止
+> - 旧: 見本上の wheel = ペインスクロール → 新: wheel = ページ送り（同期 / 非同期で動作切替）、Alt+wheel ズームは従来通り

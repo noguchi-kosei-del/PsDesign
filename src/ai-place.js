@@ -20,9 +20,15 @@ import {
   getFillColor,
   getPdfPaths,
   getTxtSource,
+  onTxtSourceChange,
+  getNewLayers,
+  updateNewLayer,
+  beginHistoryTransient,
+  abortHistoryTransient,
 } from "./state.js";
 import { parsePages } from "./txt-source.js";
 import { notifyDialog, confirmDialog } from "./ui-feedback.js";
+import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runAiOcrForFiles } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
@@ -94,13 +100,14 @@ function countLines(s) {
   return String(s).split(/\r?\n/).length;
 }
 // canvas-tools.js layerRectForNew の幅・高さ計算と同一ロジック (px は PSD 座標)。
+// thick の安全余白 (+0.4em) も canvas-tools.js と揃える。
 function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const dpi = psdPage.dpi ?? 72;
   const ptInPsdPx = sizePt * (dpi / 72);
   const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
   const leadingFactor = (leadingPct ?? 125) / 100;
-  const thick = Math.max(24, ptInPsdPx * leadingFactor * lineCount);
+  const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + 0.4));
   const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.05 * chars);
   const isVertical = direction !== "horizontal";
   const maxLong = isVertical ? psdPage.height * 0.95 : psdPage.width * 0.95;
@@ -111,7 +118,7 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   };
 }
 
-function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults) {
+function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef) {
   const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
   const sy = psdPage.height / Math.max(mokuroPage.img_height, 1);
   const direction = block.vertical ? "vertical" : "horizontal";
@@ -138,6 +145,7 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults) {
     strokeColor: defaults.strokeColor,
     strokeWidthPx: defaults.strokeWidthPx,
     fillColor: defaults.fillColor,
+    sourceTxtRef,
   };
 }
 
@@ -176,7 +184,12 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
     const placedCount = Math.min(txt.length, sorted.length);
     const layers = [];
     for (let j = 0; j < placedCount; j++) {
-      layers.push(mapBlockToNewLayer(sorted[j], mokuro, psd, txt[j], defaults));
+      // sourceTxtRef は TXT 編集時にレイヤー contents を追従させるための紐付け。
+      // pageNumber は 1-based、paragraphIndex はそのページ内 0-based。
+      layers.push(mapBlockToNewLayer(
+        sorted[j], mokuro, psd, txt[j], defaults,
+        { pageNumber: i + 1, paragraphIndex: j },
+      ));
     }
     const leftoverTxt = txt.slice(placedCount);
     const leftoverBubbles = sorted.slice(placedCount).map((b) =>
@@ -347,11 +360,9 @@ async function runAutoPlace() {
     //    (ユーザーがダイアログをキャンセルした場合は静かに戻る)。
     let psdPages = getPages();
     if (!psdPages || psdPages.length === 0) {
-      // main.js に対する循環参照を避けるため動的 import で取得
-      const mainMod = await import("./main.js");
-      const files = await mainMod.pickPsdFiles();
+      const files = await pickPsdFiles();
       if (!files || files.length === 0) return;
-      await mainMod.loadPsdFilesByPaths(files);
+      await loadPsdFilesByPaths(files);
       psdPages = getPages();
       if (!psdPages || psdPages.length === 0) {
         // 読み込みが全件失敗 (loadPsdFilesByPaths が内部で notifyDialog を出す) 等
@@ -453,6 +464,69 @@ async function runAutoPlace() {
 }
 
 // ============================================================
+// 自動配置済みレイヤーの TXT 追従同期
+// ============================================================
+// 自動配置時に各レイヤーへ sourceTxtRef = { pageNumber, paragraphIndex } を埋めている。
+// TXT が編集されたら、現在の TXT を再パースして該当段落を見つけ、レイヤー contents を
+// 上書きする。手動配置レイヤー（sourceTxtRef なし）は触らない。
+//
+// 履歴: setTxtSource が listener 末尾で pushHistorySnapshot を呼ぶので、ここでの
+// updateNewLayer による snapshot push は不要。begin/abortHistoryTransient で抑制する。
+function syncPlacedFromTxt() {
+  const txtSrc = getTxtSource();
+  if (!txtSrc?.content) return;
+  const layers = getNewLayers();
+  // 自動配置レイヤーが 1 件も無ければ早期 return（パースコスト回避）。
+  if (!layers.some((l) => l && l.sourceTxtRef)) return;
+  const parsed = parsePages(txtSrc.content);
+  const txtByPage = parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
+  // psdPath → page object のルックアップ。中心固定の x/y 再計算で page.dpi が必要。
+  const pagesByPath = new Map();
+  for (const p of getPages()) {
+    if (p?.path) pagesByPath.set(p.path, p);
+  }
+
+  beginHistoryTransient();
+  let changed = false;
+  try {
+    for (const layer of layers) {
+      const ref = layer?.sourceTxtRef;
+      if (!ref) continue;
+      const paragraphs = txtByPage.get(ref.pageNumber);
+      if (!paragraphs) continue;
+      const next = paragraphs[ref.paragraphIndex];
+      if (next == null) continue;
+      if (next === layer.contents) continue;
+
+      // contents 変更で推定 width/height が変わるため、x/y をそのままにすると
+      // bbox top-left 固定 → 旧中心からズレて見える（上左に寄ったように見える）。
+      // 旧 contents の bbox 中心を求め、新 contents の bbox を中心起点で再配置する。
+      const updates = { contents: next };
+      const psdPage = pagesByPath.get(layer.psdPath);
+      if (psdPage) {
+        const sizePt = layer.sizePt ?? 24;
+        const leadingPct = layer.leadingPct ?? 125;
+        const direction = layer.direction ?? "horizontal";
+        const oldRect = estimateLayerSize(psdPage, sizePt, layer.contents ?? "", leadingPct, direction);
+        const newRect = estimateLayerSize(psdPage, sizePt, next, leadingPct, direction);
+        const cx = (layer.x ?? 0) + oldRect.width / 2;
+        const cy = (layer.y ?? 0) + oldRect.height / 2;
+        updates.x = cx - newRect.width / 2;
+        updates.y = cy - newRect.height / 2;
+      }
+      updateNewLayer(layer.tempId, updates);
+      changed = true;
+    }
+  } finally {
+    abortHistoryTransient();
+  }
+  if (changed) {
+    try { renderAllSpreads(); } catch (_) {}
+    try { rebuildLayerList(); } catch (_) {}
+  }
+}
+
+// ============================================================
 // バインド
 // ============================================================
 export function bindAiPlaceButton() {
@@ -475,4 +549,8 @@ export function bindAiPlaceButton() {
   };
   onAiOcrDocChange(sync);
   sync();
+
+  // TXT 編集 → 自動配置済みレイヤー contents を追従。
+  // 編集はサイドパネル dblclick 編集 / エディタ textarea / undo/redo 経由で発生する。
+  onTxtSourceChange(syncPlacedFromTxt);
 }

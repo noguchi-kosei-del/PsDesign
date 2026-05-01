@@ -1,8 +1,6 @@
 import {
   clearTxtSource,
   getCurrentPageIndex,
-  getEdit,
-  getNewLayersForPsd,
   getPages,
   getPdfPageIndex,
   getTxtSelectedBlockIndex,
@@ -12,12 +10,13 @@ import {
   onPdfChange,
   onPdfPageIndexChange,
   onTxtSourceChange,
+  setTxtDirty,
+  setTxtFilePath,
   setTxtSelectedBlockIndex,
   setTxtSelection,
   setTxtSource,
 } from "./state.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
-import { enterInPlaceEditForLayer } from "./canvas-tools.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -146,17 +145,19 @@ function renderViewer() {
   const name = $("txt-source-name");
   const clearBtn = $("clear-txt-btn");
   const saveBtn = $("save-txt-btn");
-  const actions = $("txt-source-actions");
+  const deleteBtn = $("delete-txt-btn");
 
   viewer.innerHTML = "";
 
+  // txt-source-actions 内 3 ボタン (保存 / 削除 / 再読み込み) は常時表示し、
+  // TXT 未読込時は disabled でグレーアウトする（global の button:disabled ルール）。
   if (!source) {
     viewer.hidden = true;
     empty.hidden = false;
     name.textContent = "";
-    clearBtn.hidden = true;
-    if (saveBtn) saveBtn.hidden = true;
-    if (actions) actions.hidden = true;
+    clearBtn.disabled = true;
+    if (saveBtn) saveBtn.disabled = true;
+    if (deleteBtn) deleteBtn.disabled = true;
     syncDeleteBlockBtn();
     return;
   }
@@ -164,9 +165,9 @@ function renderViewer() {
   viewer.hidden = false;
   empty.hidden = true;
   name.textContent = source.name;
-  clearBtn.hidden = false;
-  if (saveBtn) saveBtn.hidden = false;
-  if (actions) actions.hidden = false;
+  clearBtn.disabled = false;
+  if (saveBtn) saveBtn.disabled = false;
+  if (deleteBtn) deleteBtn.disabled = false;
 
   const { blocks, hasMarkers, pageNumber } = getVisibleBlocks();
 
@@ -189,35 +190,70 @@ function renderViewer() {
     el.addEventListener("click", () => selectBlock(idx, paragraph));
     el.addEventListener("dblclick", (e) => {
       e.preventDefault(); // text selection の暴走を抑止
-      void runDoubleClickEdit(paragraph, pageNumber, viewer);
+      startInlineEdit(el, paragraph, pageNumber);
     });
     viewer.appendChild(el);
   });
   syncDeleteBlockBtn();
 }
 
-async function runDoubleClickEdit(paragraph, pageNumber, viewer) {
-  const match = findPlacedLayerByText(paragraph);
-  if (!match) {
-    toast("対応するテキストフレームが見つかりません", { kind: "info" });
-    return;
-  }
-  // 同ページでも TXT selection を明示クリア。click→click→dblclick の発火順で
-  // selectBlock が 2 回走った後でも、in-place 編集を Esc で抜けた直後にキャンバスを
-  // クリックすると「同じ段落をもう一度配置」が起きる事故を防ぐ。
-  setTxtSelectedBlockIndex(null);
-  setTxtSelection("");
-  if (viewer) {
-    for (const item of viewer.querySelectorAll(".txt-block")) {
-      item.classList.remove("selected");
+// dblclick 時に該当の .txt-block を contenteditable にして直接編集できるようにする。
+// 確定: blur / Ctrl+Enter / Cmd+Enter
+// 取消: Escape
+// 改行: Enter（contenteditable のデフォルト挙動）
+// 確定で更新があれば updateTxtSourceBlock 経由で原稿全体を書換 → setTxtSource → 自動配置済み
+// レイヤーへの追従は ai-place.js の onTxtSourceChange listener が担当する。
+function startInlineEdit(el, originalText, pageNumber) {
+  if (!el || el.classList.contains("editing")) return;
+  el.contentEditable = "true";
+  el.classList.add("editing");
+  el.focus();
+  // 全選択（編集開始時にカーソルを末尾でなく全選択にすると上書きが楽）。
+  const range = document.createRange();
+  range.selectNodeContents(el);
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  sel.addRange(range);
+
+  let aborted = false;
+  let finalized = false;
+
+  const cleanup = () => {
+    if (finalized) return;
+    finalized = true;
+    el.contentEditable = "false";
+    el.classList.remove("editing");
+    el.removeEventListener("keydown", onKey);
+    el.removeEventListener("blur", onBlur);
+    if (aborted) {
+      // 元テキストに戻す。setTxtSource は呼ばないので listener も発火せず、
+      // 他の編集状態 (txtSelection 等) も保持される。
+      el.textContent = originalText;
+      return;
     }
-  }
-  // 編集確定時に原稿テキスト側の該当ブロックも置換し、viewer を再描画する。
-  await enterInPlaceEditForLayer(match.pageIndex, match.layerKey, {
-    afterCommit: (newValue) => {
-      updateTxtSourceBlock(pageNumber, paragraph, newValue);
-    },
-  });
+    // contenteditable の改行は browser によって <br> / <div> になり得るため、
+    // textContent ではなく innerText で取得して LF 正規化したテキストを得る。
+    const newText = (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n");
+    if (newText !== originalText) {
+      updateTxtSourceBlock(pageNumber, originalText, newText);
+      // setTxtSource → onTxtSourceChange → renderViewer で DOM 再構築されるため
+      // この el への以降の操作は不要。
+    }
+  };
+
+  const onBlur = () => cleanup();
+  const onKey = (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      el.blur(); // → onBlur → cleanup（commit）
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      aborted = true;
+      el.blur(); // → onBlur → cleanup（revert）
+    }
+  };
+  el.addEventListener("blur", onBlur);
+  el.addEventListener("keydown", onKey);
 }
 
 // pageNumber（マーカー有り：1-based / 無し：null）の範囲内で oldParagraph を
@@ -331,69 +367,6 @@ function replaceBlockInContent(content, pageNumber, oldText, newText) {
   return norm.slice(0, absStart) + newText + norm.slice(absStart + oldLF.length);
 }
 
-function normalizeForMatch(s) {
-  return String(s ?? "")
-    .replace(/\r\n/g, "\n")
-    .replace(/\r/g, "\n")
-    .replace(/^\n+|\n+$/g, "");
-}
-
-// 段落テキストを既配置レイヤー全体から検索。検索順序：
-//   1. 現在ページ → その他ページ index 昇順
-//   2. ページ内：既存（PSD 元レイヤー）→ 新規（auto-place / T ツール配置）
-// 最初の一致を返し、複数あれば console.info で記録（運用中の頻度把握用）。
-function findPlacedLayerByText(text) {
-  const target = normalizeForMatch(text);
-  if (!target) return null;
-  const pages = getPages();
-  if (!pages || pages.length === 0) return null;
-  const cur = getCurrentPageIndex();
-  const order = [];
-  if (cur >= 0 && cur < pages.length) order.push(cur);
-  for (let i = 0; i < pages.length; i++) {
-    if (i !== cur) order.push(i);
-  }
-
-  let firstMatch = null;
-  let matchCount = 0;
-  for (const i of order) {
-    const page = pages[i];
-    if (!page) continue;
-    // 既存レイヤー（edit override 適用後の contents で比較）
-    for (const layer of page.textLayers ?? []) {
-      const edit = getEdit(page.path, layer.id);
-      const raw = edit?.contents ?? layer.text ?? "";
-      if (normalizeForMatch(raw) === target) {
-        matchCount++;
-        if (!firstMatch) {
-          firstMatch = {
-            pageIndex: i,
-            layerKey: layer.id,
-            direction: edit?.direction ?? layer.direction ?? "horizontal",
-          };
-        }
-      }
-    }
-    // 新規レイヤー
-    for (const nl of getNewLayersForPsd(page.path) ?? []) {
-      if (normalizeForMatch(nl.contents ?? "") === target) {
-        matchCount++;
-        if (!firstMatch) {
-          firstMatch = {
-            pageIndex: i,
-            layerKey: nl.tempId,
-            direction: nl.direction ?? "vertical",
-          };
-        }
-      }
-    }
-  }
-  if (matchCount > 1) {
-    console.info(`[txt-source] ${matchCount} matches for "${target.slice(0, 40)}${target.length > 40 ? "…" : ""}" — using first`);
-  }
-  return firstMatch;
-}
-
 function selectBlock(idx, text) {
   setTxtSelectedBlockIndex(idx);
   setTxtSelection(text);
@@ -404,7 +377,7 @@ function selectBlock(idx, text) {
   syncDeleteBlockBtn();
 }
 
-async function pickTxtPath() {
+export async function pickTxtPath() {
   const { open } = await import("@tauri-apps/plugin-dialog");
   const picked = await open({
     multiple: false,
@@ -414,7 +387,7 @@ async function pickTxtPath() {
   return typeof picked === "string" ? picked : null;
 }
 
-async function pickTxtSavePath(defaultName) {
+export async function pickTxtSavePath(defaultName) {
   const { save } = await import("@tauri-apps/plugin-dialog");
   const picked = await save({
     title: "テキストを TXT として保存",
@@ -424,7 +397,7 @@ async function pickTxtSavePath(defaultName) {
   return typeof picked === "string" ? picked : null;
 }
 
-function ensureTxtExtension(path) {
+export function ensureTxtExtension(path) {
   return /\.txt$/i.test(path) ? path : `${path}.txt`;
 }
 
@@ -444,6 +417,9 @@ async function handleSaveBtn() {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("export_ai_text", { content: source.content, outputPath });
+    // 保存先を以後の「保存（上書き）」のターゲットとして state に記憶。
+    setTxtFilePath(outputPath);
+    setTxtDirty(false);
     toast("テキストを保存しました", { kind: "success", duration: 2000 });
   } catch (e) {
     console.error(e);
@@ -477,6 +453,9 @@ export async function loadTxtFromPath(path) {
   try {
     const content = await readTxtFromPath(path);
     setTxtSource({ name: baseName(path), content });
+    // ファイル経由はパスが取れるので、エディタの「保存」（上書き）対象として記憶。
+    setTxtFilePath(path);
+    setTxtDirty(false);
     renderViewer();
   } catch (e) {
     console.error(e);
@@ -488,6 +467,9 @@ export async function loadTxtFromPath(path) {
 // AI OCR 結果 (ai-ocr.js) や、その他のプログラム生成テキストから呼ぶ。
 export function loadTxtFromContent(name, content) {
   setTxtSource({ name: name || "untitled.txt", content: content || "" });
+  // 元ファイルが無い経路（OCR 結果など）。エディタは「別名で保存」だけが利用可。
+  setTxtFilePath(null);
+  setTxtDirty(false);
   renderViewer();
 }
 
@@ -496,6 +478,9 @@ async function handleFileDropped(file) {
     const buf = await file.arrayBuffer();
     const content = decodeBytes(new Uint8Array(buf));
     setTxtSource({ name: file.name, content });
+    // ブラウザ File API 経由は full path が取れない。エディタは「別名で保存」のみ。
+    setTxtFilePath(null);
+    setTxtDirty(false);
     renderViewer();
   } catch (e) {
     console.error(e);
@@ -573,6 +558,21 @@ export function initTxtSource() {
   $("clear-txt-btn").addEventListener("click", async () => {
     if (!getTxtSource()) return;
     const ok = await confirmDialog({
+      title: "テキストの再読み込み",
+      message: "現在のテキストは破棄され、新しいテキストファイルを選択します。続行しますか？",
+      confirmLabel: "選び直す",
+      kind: "danger",
+    });
+    if (!ok) return;
+    const path = await pickTxtPath();
+    // ファイル選択をキャンセルした場合は現在のテキストを保持して何もしない。
+    if (!path) return;
+    await loadTxtFromPath(path);
+  });
+  $("save-txt-btn").addEventListener("click", handleSaveBtn);
+  $("delete-txt-btn").addEventListener("click", async () => {
+    if (!getTxtSource()) return;
+    const ok = await confirmDialog({
       title: "テキストの削除",
       message: "読み込んだテキストを削除します。よろしいですか？",
       confirmLabel: "削除",
@@ -580,10 +580,8 @@ export function initTxtSource() {
     });
     if (!ok) return;
     clearTxtSource();
-    renderViewer();
     toast("テキストを削除しました", { kind: "info", duration: 1500 });
   });
-  $("save-txt-btn").addEventListener("click", handleSaveBtn);
   $("delete-txt-block-btn").addEventListener("click", () => {
     if (!deleteSelectedTxtBlock()) return;
     toast("選択中のテキストを削除しました", { kind: "info", duration: 1500 });

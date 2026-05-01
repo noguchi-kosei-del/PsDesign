@@ -1,7 +1,5 @@
 import {
-  abortHistoryTransient,
-  beginHistoryTransient,
-  commitHistoryTransient,
+  withHistoryTransient,
   getCurrentPageIndex,
   getEdit,
   getFillColor,
@@ -629,9 +627,9 @@ export function bindEditorEvents() {
         confirmLabel: "削除",
       });
       if (!ok) return;
-      beginHistoryTransient();
-      for (const id of tempIds) removeNewLayer(id);
-      commitHistoryTransient();
+      withHistoryTransient(() => {
+        for (const id of tempIds) removeNewLayer(id);
+      });
       // 既存レイヤーは残し、新規分だけを選択から除外。
       setSelectedLayers(selections.filter((s) => typeof s.layerId !== "string"));
       rebuildLayerList();
@@ -712,91 +710,92 @@ export function bindEditorEvents() {
 function commitStrokeFields(colorOrNull, widthOrNull) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return;
-  let mutated = false;
-  beginHistoryTransient();
-  for (const sel of selections) {
-    const ref = resolveLayerRef(sel);
-    if (!ref) continue;
-    let curColor, curWidth;
-    if (ref.kind === "existing") {
-      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
-      curColor = edit.strokeColor ?? ref.layer.strokeColor ?? "none";
-      curWidth = edit.strokeWidthPx ?? ref.layer.strokeWidthPx ?? 20;
-    } else {
-      curColor = ref.newLayer.strokeColor ?? "none";
-      curWidth = ref.newLayer.strokeWidthPx ?? 20;
+  withHistoryTransient(() => {
+    let mutated = false;
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      let curColor, curWidth;
+      if (ref.kind === "existing") {
+        const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+        curColor = edit.strokeColor ?? ref.layer.strokeColor ?? "none";
+        curWidth = edit.strokeWidthPx ?? ref.layer.strokeWidthPx ?? 20;
+      } else {
+        curColor = ref.newLayer.strokeColor ?? "none";
+        curWidth = ref.newLayer.strokeWidthPx ?? 20;
+      }
+      const changes = {
+        strokeColor: colorOrNull !== null ? colorOrNull : curColor,
+        strokeWidthPx: widthOrNull !== null ? widthOrNull : curWidth,
+      };
+      if (ref.kind === "existing") {
+        setEdit(ref.page.path, ref.layer.id, changes);
+      } else {
+        updateNewLayer(ref.newLayer.tempId, changes);
+      }
+      mutated = true;
     }
-    const changes = {
-      strokeColor: colorOrNull !== null ? colorOrNull : curColor,
-      strokeWidthPx: widthOrNull !== null ? widthOrNull : curWidth,
-    };
-    if (ref.kind === "existing") {
-      setEdit(ref.page.path, ref.layer.id, changes);
-    } else {
-      updateNewLayer(ref.newLayer.tempId, changes);
-    }
-    mutated = true;
-  }
-  if (mutated) commitHistoryTransient(); else abortHistoryTransient();
+    return mutated || false;
+  });
   rebuildLayerList();
   refreshAllOverlays();
 }
 
 // edit-font ブラシモード用: 選択中の全レイヤーに同じ postScriptName を書き込む。
 // 既に同フォントのレイヤーは skip して無駄な undo ステップを作らない。
-// 1 件以上書き込まれた場合だけ rebuildLayerList / refreshAllOverlays / commitHistoryTransient
-// を実行し true を返す（呼び出し側が二重 rebuild を避けられるようにするため）。
+// 1 件以上書き込まれた場合だけ rebuildLayerList / refreshAllOverlays を実行し true を
+// 返す（呼び出し側が二重 rebuild を避けられるようにするため）。
 export function commitFontToSelections(ps) {
   if (!ps) return false;
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
-  let mutated = false;
-  beginHistoryTransient();
-  for (const sel of selections) {
-    const ref = resolveLayerRef(sel);
-    if (!ref) continue;
-    let cur;
-    if (ref.kind === "existing") {
-      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
-      cur = edit.fontPostScriptName ?? ref.layer.font ?? null;
-    } else {
-      cur = ref.newLayer.fontPostScriptName ?? null;
+  const mutated = withHistoryTransient(() => {
+    let any = false;
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      let cur;
+      if (ref.kind === "existing") {
+        const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+        cur = edit.fontPostScriptName ?? ref.layer.font ?? null;
+      } else {
+        cur = ref.newLayer.fontPostScriptName ?? null;
+      }
+      if (cur === ps) continue;
+      if (ref.kind === "existing") {
+        setEdit(ref.page.path, ref.layer.id, { fontPostScriptName: ps });
+      } else {
+        updateNewLayer(ref.newLayer.tempId, { fontPostScriptName: ps });
+      }
+      any = true;
     }
-    if (cur === ps) continue;
-    if (ref.kind === "existing") {
-      setEdit(ref.page.path, ref.layer.id, { fontPostScriptName: ps });
-    } else {
-      updateNewLayer(ref.newLayer.tempId, { fontPostScriptName: ps });
-    }
-    mutated = true;
-  }
+    return any || false;
+  });
   if (mutated) {
-    commitHistoryTransient();
     rebuildLayerList();
     refreshAllOverlays();
-  } else {
-    abortHistoryTransient();
   }
-  return mutated;
+  return !!mutated;
 }
 
 // 文字色を選択中の全レイヤーに書き込む。
 function commitFillField(color) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return;
-  let mutated = false;
-  beginHistoryTransient();
-  for (const sel of selections) {
-    const ref = resolveLayerRef(sel);
-    if (!ref) continue;
-    if (ref.kind === "existing") {
-      setEdit(ref.page.path, ref.layer.id, { fillColor: color });
-    } else {
-      updateNewLayer(ref.newLayer.tempId, { fillColor: color });
+  withHistoryTransient(() => {
+    let mutated = false;
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      if (ref.kind === "existing") {
+        setEdit(ref.page.path, ref.layer.id, { fillColor: color });
+      } else {
+        updateNewLayer(ref.newLayer.tempId, { fillColor: color });
+      }
+      mutated = true;
     }
-    mutated = true;
-  }
-  if (mutated) commitHistoryTransient(); else abortHistoryTransient();
+    return mutated || false;
+  });
   rebuildLayerList();
   refreshAllOverlays();
 }

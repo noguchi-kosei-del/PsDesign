@@ -31,6 +31,25 @@ let rulersVisible = loadVisible();
 const visibleListeners = new Set();
 let guidesLocked = loadLocked();
 const lockedListeners = new Set();
+// guides 配列が変化（追加 / 移動 / 削除）したときに発火する listener。
+// ガイドロックボタンの disabled 状態を「ガイドが 1 本以上引かれているか」と連動させる用途。
+const guidesChangeListeners = new Set();
+function emitGuidesChange(psdPath) {
+  for (const fn of guidesChangeListeners) {
+    try { fn(psdPath); } catch (e) { console.error(e); }
+  }
+}
+export function onGuidesChange(fn) {
+  guidesChangeListeners.add(fn);
+  return () => guidesChangeListeners.delete(fn);
+}
+// 指定 PSD（省略時: 現在ページ）に水平 / 垂直のガイドが 1 本でも引かれているか。
+export function hasAnyGuide(psdPath) {
+  const path = psdPath ?? getCurrentPsdPath();
+  if (!path) return false;
+  const g = guidesByPsd.get(path);
+  return !!g && ((g.h?.length ?? 0) + (g.v?.length ?? 0) > 0);
+}
 
 function loadVisible() {
   try { return localStorage.getItem(VISIBLE_KEY) === "1"; } catch { return false; }
@@ -118,6 +137,7 @@ export function addGuide(psdPath, axis, psdValue) {
   const list = axis === "h" ? g.h : g.v;
   list.push(Math.round(psdValue * 100) / 100);
   requestRulerRedraw();
+  emitGuidesChange(psdPath);
 }
 
 export function moveGuide(psdPath, axis, index, psdValue) {
@@ -127,6 +147,8 @@ export function moveGuide(psdPath, axis, index, psdValue) {
   if (index < 0 || index >= list.length) return;
   list[index] = Math.round(psdValue * 100) / 100;
   requestRulerRedraw();
+  // 個数は変わらないが、座標は変わったので位置依存の UI（将来的なミニマップ等）のため通知。
+  emitGuidesChange(psdPath);
 }
 
 export function removeGuide(psdPath, axis, index) {
@@ -136,6 +158,7 @@ export function removeGuide(psdPath, axis, index) {
   if (index < 0 || index >= list.length) return;
   list.splice(index, 1);
   requestRulerRedraw();
+  emitGuidesChange(psdPath);
 }
 
 // ===== Mount =====

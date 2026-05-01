@@ -1,5 +1,15 @@
 import { getDefaults } from "./settings.js";
 
+// 単純な observable スロット (tool, textSize, leadingPct, currentFont, stroke/fill,
+// zoom, rotation, pdfPageIndex, pdfSplitMode, pdfSkipFirstBlank, parallelSyncMode,
+// activePane, parallelViewMode, framesVisible) は createObservable ファクトリで管理し、
+// 下に並ぶ $tool / $textSize ... 経由で get/set/on を提供する。
+// state object には:
+//   - 配列 / Map / 複合状態（pages, edits, newLayers, selectedLayers, fonts, txtSource, ...）
+//   - currentPageIndex（ pages.length に依存して clamp が必要、factory では表現しづらい）
+//   - aiOcrDoc / editingContext / pdfDoc 系（複数フィールドが連動）
+//   - history（push/restore セマンティクス）
+// のみが残る。
 const state = {
   folder: null,
   pages: [],
@@ -7,56 +17,18 @@ const state = {
   newLayers: [],
   selectedLayers: [], // Array<{pageIndex, layerId}>
   fonts: [],
-  tool: "move",
-  toolListeners: new Set(),
   nextTempId: 1,
   txtSource: null,
   txtSourceListeners: new Set(),
   txtSelection: "",
   txtSelectedBlockIndex: null,
-  textSize: 12,
-  textSizeListeners: new Set(),
-  leadingPct: 125, // 行間（autoLeadingAmount %）。Photoshop の自動行送り 125% を既定。
-  leadingPctListeners: new Set(),
-  currentFontPostScriptName: null,
-  currentFontListeners: new Set(),
-  // edit-font 欄でユーザーが能動的にフォントを選んだ後、選択ツールでクリックした
-  // テキストフレームへ自動適用する「ブラシ」モードのフラグ。
-  // commitFont() で true、goHome() で false にリセット。
-  fontPickerStuck: false,
-  strokeColor: "none", // "none" | "white" | "black"
-  strokeColorListeners: new Set(),
-  strokeWidthPx: 20,
-  strokeWidthListeners: new Set(),
-  fillColor: "default", // "default" | "white" | "black"
-  fillColorListeners: new Set(),
   currentPageIndex: 0,
   pageIndexListeners: new Set(),
-  pdfZoom: 1,
-  pdfZoomListeners: new Set(),
-  psdZoom: 1,
-  psdZoomListeners: new Set(),
   pdfDoc: null,
   pdfPath: null,
   pdfPaths: [], // loadReferenceFiles で読み込まれた全ファイルパス（自然順ソート済み）
   pdfPageCount: 0,
   pdfListeners: new Set(),
-  pdfRotation: 0, // ユーザーが追加適用する回転（0/90/180/270）
-  pdfRotationListeners: new Set(),
-  psdRotation: 0, // PSD 表示のビュー回転（0/90/180/270、表示専用）
-  psdRotationListeners: new Set(),
-  pdfPageIndex: 0, // PDF 側の virtual page index（単ページ化時は物理ページと 1:1 ではない）
-  pdfPageIndexListeners: new Set(),
-  pdfSplitMode: false, // 単ページ化（横長 PDF の左ページのみを表示）
-  pdfSplitModeListeners: new Set(),
-  pdfSkipFirstBlank: false, // 先頭白紙ページを除外（単ページ化時のみ意味を持つ）
-  pdfSkipFirstBlankListeners: new Set(),
-  parallelSyncMode: true, // PDF / PSD の同期モード
-  parallelSyncModeListeners: new Set(),
-  activePane: "psd", // "pdf" | "psd"（非同期時に矢印キー/ホイールが効くペイン）
-  activePaneListeners: new Set(),
-  parallelViewMode: "parallel", // "parallel" | "psdOnly"
-  parallelViewModeListeners: new Set(),
   // 編集の undo / redo 履歴。スナップショット（edits + newLayers）配列。
   history: [],
   historyIndex: -1,
@@ -67,10 +39,6 @@ const state = {
   // 行間コントロールはこれが set のとき per-line override に書き込み、unset のとき global に書く。
   editingContext: null,
   editingContextListeners: new Set(),
-  // テキストフレーム（overlay 内のレイヤーボックス全体）表示フラグ。
-  // false のとき renderOverlay は中身を出さない（プレビューに集中したいとき用、Ctrl+H）。
-  framesVisible: true,
-  framesVisibleListeners: new Set(),
   // AI 画像スキャン (run_ai_ocr) の最新結果。自動配置 (ai-place.js) で参照する。
   // { doc: MokuroDocument, sourcePath: string } | null
   aiOcrDoc: null,
@@ -83,6 +51,102 @@ export const ZOOM_MIN = 0.1;
 export const ZOOM_MAX = 8;
 
 export function getState() { return state; }
+
+// 単純な observable スロットの factory。
+// - normalize(v): 入力を最終値に正規化する。undefined を返したら「reject」として set を no-op にする。
+// - 変化時のみ listener を発火（同値再代入は黙ってスキップ）。
+// - on は unsubscribe 関数を返す。
+function createObservable(initial, normalize) {
+  let value = initial;
+  const listeners = new Set();
+  return {
+    get: () => value,
+    set: (next) => {
+      const norm = normalize ? normalize(next, value) : next;
+      if (norm === undefined) return;
+      if (value === norm) return;
+      value = norm;
+      for (const fn of listeners) fn(value);
+    },
+    on: (fn) => {
+      listeners.add(fn);
+      return () => listeners.delete(fn);
+    },
+  };
+}
+
+// よく使うバリデータ群（factory 引数として渡す）。
+const _normBool = (v) => !!v;
+const _normFontPs = (v) => v || null;
+const _norm90 = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return ((Math.round(n / 90) * 90) % 360 + 360) % 360;
+};
+const _normPageIndex = (v) => {
+  if (!Number.isFinite(v)) return undefined;
+  return Math.max(0, Math.round(v));
+};
+const _normSize = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  const r = Math.round(n * 10) / 10;
+  return Math.max(6, Math.min(999, r));
+};
+const _normLeading = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.max(50, Math.min(500, Math.round(n)));
+};
+const _normStrokeWidth = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  const r = Math.round(n * 10) / 10;
+  return Math.max(0, Math.min(999, r));
+};
+const _normTool = (v) =>
+  v === "move" || v === "text-v" || v === "text-h" || v === "pan" ? v : undefined;
+const _normStrokeColor = (v) => (v === "white" || v === "black" ? v : "none");
+const _normFillColor = (v) => (v === "white" || v === "black" ? v : "default");
+const _normActivePane = (v) => (v === "pdf" ? "pdf" : "psd");
+// "psdOnly" モードは廃止。3 モード ("parallel" | "proofread" | "editor") のみ受け入れ、
+// それ以外（旧 "psdOnly" 等）は "parallel" にフォールバックする。
+const _normParallelViewMode = (v) =>
+  v === "editor" ? "editor" : v === "proofread" ? "proofread" : "parallel";
+
+// === Observable スロット定義 ===
+// state object の同名フィールド + 同名 Listeners Set のペアを置き換える。
+// 旧 state.tool / state.toolListeners 等の直接参照は本ファイル内でも撤去済み。
+const $tool = createObservable("move", _normTool);
+const $textSize = createObservable(12, _normSize);
+const $leadingPct = createObservable(125, _normLeading);
+const $currentFont = createObservable(null, _normFontPs);
+const $strokeColor = createObservable("none", _normStrokeColor);
+const $strokeWidthPx = createObservable(20, _normStrokeWidth);
+const $fillColor = createObservable("default", _normFillColor);
+const $pdfZoom = createObservable(1, (v) => clampZoom(v) ?? undefined);
+const $psdZoom = createObservable(1, (v) => clampZoom(v) ?? undefined);
+const $pdfRotation = createObservable(0, _norm90);
+const $psdRotation = createObservable(0, _norm90);
+const $pdfPageIndex = createObservable(0, _normPageIndex);
+const $pdfSplitMode = createObservable(false, _normBool);
+const $pdfSkipFirstBlank = createObservable(false, _normBool);
+const $parallelSyncMode = createObservable(true, _normBool);
+const $activePane = createObservable("psd", _normActivePane);
+const $parallelViewMode = createObservable("parallel", _normParallelViewMode);
+const $framesVisible = createObservable(true, _normBool);
+// テキストエディタ用: 現在編集中の TXT の元ファイルパス（読込元 / 上書き先）。
+// 「開く」「別名で保存」で更新。OCR 結果や browser D&D など path が無い経路は null。
+const $txtFilePath = createObservable(null, (v) => (v == null ? null : String(v)));
+// テキストエディタ用: 未保存変更フラグ。textarea 入力で true、保存 / 読込で false。
+const $txtDirty = createObservable(false, _normBool);
+
+function clampZoom(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, n));
+  return Math.round(clamped * 1000) / 1000;
+}
 
 export function setFolder(folder) { state.folder = folder; }
 export function getFolder() { return state.folder; }
@@ -176,18 +240,10 @@ export function onEditingContextChange(fn) {
 }
 
 // テキストフレーム（layer-box overlay）表示。Ctrl+H から切り替え。
-export function getFramesVisible() { return state.framesVisible; }
-export function setFramesVisible(v) {
-  const next = !!v;
-  if (state.framesVisible === next) return;
-  state.framesVisible = next;
-  for (const fn of state.framesVisibleListeners) fn(next);
-}
-export function toggleFramesVisible() { setFramesVisible(!state.framesVisible); }
-export function onFramesVisibleChange(fn) {
-  state.framesVisibleListeners.add(fn);
-  return () => state.framesVisibleListeners.delete(fn);
-}
+export const getFramesVisible = $framesVisible.get;
+export const setFramesVisible = $framesVisible.set;
+export const onFramesVisibleChange = $framesVisible.on;
+export function toggleFramesVisible() { setFramesVisible(!getFramesVisible()); }
 
 // ===== Undo / Redo 履歴 =====
 function snapshotState() {
@@ -285,6 +341,26 @@ export function commitHistoryTransient() {
 }
 export function abortHistoryTransient() {
   if (state.historyTransientDepth > 0) state.historyTransientDepth--;
+}
+
+// 同期スコープの transient ラッパ。begin/commit/abort の 3 連を try/finally 不要で
+// 安全に書ける。fn が false を返した場合は push せず（mutation なしの意）、
+// 例外を投げた場合は depth だけ戻して再 throw。それ以外は depth を戻して push する。
+// ドラッグのように begin と commit が別イベントに跨る用途では imperative API を直接使う。
+export function withHistoryTransient(fn) {
+  state.historyTransientDepth++;
+  let result;
+  try {
+    result = fn();
+  } catch (err) {
+    if (state.historyTransientDepth > 0) state.historyTransientDepth--;
+    throw err;
+  }
+  if (state.historyTransientDepth > 0) state.historyTransientDepth--;
+  if (result !== false && state.historyTransientDepth === 0) {
+    pushHistorySnapshot();
+  }
+  return result;
 }
 
 export function onHistoryChange(fn) {
@@ -432,17 +508,9 @@ export function getFontDisplayName(psName) {
   return hit?.name ?? psName;
 }
 
-export function getTool() { return state.tool; }
-export function setTool(tool) {
-  if (tool !== "move" && tool !== "text-v" && tool !== "text-h" && tool !== "pan") return;
-  if (state.tool === tool) return;
-  state.tool = tool;
-  for (const fn of state.toolListeners) fn(tool);
-}
-export function onToolChange(fn) {
-  state.toolListeners.add(fn);
-  return () => state.toolListeners.delete(fn);
-}
+export const getTool = $tool.get;
+export const setTool = $tool.set;
+export const onToolChange = $tool.on;
 
 export function addNewLayer({
   psdPath,
@@ -457,6 +525,7 @@ export function addNewLayer({
   fillColor,
   rotation,
   leadingPct,
+  sourceTxtRef,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -476,6 +545,10 @@ export function addNewLayer({
     // 行ごとの行間オーバーライド。キーは 0-based の行番号、値は %。
     // 未指定の行は層の leadingPct（autoLeading）を使う。
     lineLeadings: {},
+    // 自動配置 (ai-place.js) で生成されたレイヤーは元 TXT 段落への参照を持つ。
+    // { pageNumber, paragraphIndex } を保持し、後から TXT が編集されたときに
+    // syncPlacedFromTxt が contents を追従させる。手動配置レイヤーは null。
+    sourceTxtRef: sourceTxtRef ?? null,
   };
   state.newLayers.push(layer);
   pushHistorySnapshot();
@@ -518,6 +591,9 @@ export function clearTxtSource() {
   state.txtSource = null;
   state.txtSelection = "";
   state.txtSelectedBlockIndex = null;
+  // 元ファイルパス / ダーティフラグも一緒にリセット（履歴対象外なので個別に呼ぶ）。
+  $txtFilePath.set(null);
+  $txtDirty.set(false);
   if (wasNonNull) {
     for (const fn of state.txtSourceListeners) fn(null);
     pushHistorySnapshot();
@@ -557,68 +633,21 @@ export function onPageIndexChange(fn) {
   return () => state.pageIndexListeners.delete(fn);
 }
 
-export function getTextSize() { return state.textSize; }
-export function setTextSize(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return;
-  const rounded = Math.round(v * 10) / 10;
-  const clamped = Math.max(6, Math.min(999, rounded));
-  if (state.textSize === clamped) return;
-  state.textSize = clamped;
-  for (const fn of state.textSizeListeners) fn(clamped);
-}
-export function onTextSizeChange(fn) {
-  state.textSizeListeners.add(fn);
-  return () => state.textSizeListeners.delete(fn);
-}
+export const getTextSize = $textSize.get;
+export const setTextSize = $textSize.set;
+export const onTextSizeChange = $textSize.on;
 
-export function getLeadingPct() { return state.leadingPct; }
-export function setLeadingPct(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return;
-  const rounded = Math.round(v);
-  const clamped = Math.max(50, Math.min(500, rounded));
-  if (state.leadingPct === clamped) return;
-  state.leadingPct = clamped;
-  for (const fn of state.leadingPctListeners) fn(clamped);
-}
-export function onLeadingPctChange(fn) {
-  state.leadingPctListeners.add(fn);
-  return () => state.leadingPctListeners.delete(fn);
-}
+export const getLeadingPct = $leadingPct.get;
+export const setLeadingPct = $leadingPct.set;
+export const onLeadingPctChange = $leadingPct.on;
 
-function clampZoom(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-  const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, n));
-  return Math.round(clamped * 1000) / 1000;
-}
+export const getPdfZoom = $pdfZoom.get;
+export const setPdfZoom = $pdfZoom.set;
+export const onPdfZoomChange = $pdfZoom.on;
 
-export function getPdfZoom() { return state.pdfZoom; }
-export function setPdfZoom(z) {
-  const rounded = clampZoom(z);
-  if (rounded == null) return;
-  if (state.pdfZoom === rounded) return;
-  state.pdfZoom = rounded;
-  for (const fn of state.pdfZoomListeners) fn(rounded);
-}
-export function onPdfZoomChange(fn) {
-  state.pdfZoomListeners.add(fn);
-  return () => state.pdfZoomListeners.delete(fn);
-}
-
-export function getPsdZoom() { return state.psdZoom; }
-export function setPsdZoom(z) {
-  const rounded = clampZoom(z);
-  if (rounded == null) return;
-  if (state.psdZoom === rounded) return;
-  state.psdZoom = rounded;
-  for (const fn of state.psdZoomListeners) fn(rounded);
-}
-export function onPsdZoomChange(fn) {
-  state.psdZoomListeners.add(fn);
-  return () => state.psdZoomListeners.delete(fn);
-}
+export const getPsdZoom = $psdZoom.get;
+export const setPsdZoom = $psdZoom.set;
+export const onPsdZoomChange = $psdZoom.on;
 
 export function getPdfDoc() { return state.pdfDoc; }
 export function getPdfPath() { return state.pdfPath; }
@@ -636,10 +665,7 @@ export function setPdf(doc, path, paths) {
   // ユーザー回転は PDF 切替時も保持（同じワークフローの PDF は同じ向きの傾向があるため）。
   // リセットしたい場合はホームに戻るで clearPdf → clearPdfRotation を呼ぶ。
   // pdfPageIndex は新 PDF 読込時に 0 にリセット（旧 PDF の仮想ページ数とは無関係のため）。
-  if (state.pdfPageIndex !== 0) {
-    state.pdfPageIndex = 0;
-    for (const fn of state.pdfPageIndexListeners) fn(0);
-  }
+  setPdfPageIndex(0);
   for (const fn of state.pdfListeners) fn(state.pdfDoc);
 }
 export function clearPdf() {
@@ -651,157 +677,64 @@ export function onPdfChange(fn) {
   return () => state.pdfListeners.delete(fn);
 }
 
-export function getPdfRotation() { return state.pdfRotation; }
-export function setPdfRotation(deg) {
-  const n = Number(deg);
-  if (!Number.isFinite(n)) return;
-  const normalized = ((Math.round(n / 90) * 90) % 360 + 360) % 360;
-  if (state.pdfRotation === normalized) return;
-  state.pdfRotation = normalized;
-  for (const fn of state.pdfRotationListeners) fn(normalized);
-}
-export function onPdfRotationChange(fn) {
-  state.pdfRotationListeners.add(fn);
-  return () => state.pdfRotationListeners.delete(fn);
-}
+export const getPdfRotation = $pdfRotation.get;
+export const setPdfRotation = $pdfRotation.set;
+export const onPdfRotationChange = $pdfRotation.on;
 
-export function getPsdRotation() { return state.psdRotation; }
-export function setPsdRotation(deg) {
-  const n = Number(deg);
-  if (!Number.isFinite(n)) return;
-  const normalized = ((Math.round(n / 90) * 90) % 360 + 360) % 360;
-  if (state.psdRotation === normalized) return;
-  state.psdRotation = normalized;
-  for (const fn of state.psdRotationListeners) fn(normalized);
-}
-export function onPsdRotationChange(fn) {
-  state.psdRotationListeners.add(fn);
-  return () => state.psdRotationListeners.delete(fn);
-}
+export const getPsdRotation = $psdRotation.get;
+export const setPsdRotation = $psdRotation.set;
+export const onPsdRotationChange = $psdRotation.on;
 
-export function getPdfPageIndex() { return state.pdfPageIndex; }
-export function setPdfPageIndex(i) {
-  if (!Number.isFinite(i)) return;
-  const clamped = Math.max(0, Math.round(i));
-  if (state.pdfPageIndex === clamped) return;
-  state.pdfPageIndex = clamped;
-  for (const fn of state.pdfPageIndexListeners) fn(clamped);
-}
-export function onPdfPageIndexChange(fn) {
-  state.pdfPageIndexListeners.add(fn);
-  return () => state.pdfPageIndexListeners.delete(fn);
-}
+export const getPdfPageIndex = $pdfPageIndex.get;
+export const setPdfPageIndex = $pdfPageIndex.set;
+export const onPdfPageIndexChange = $pdfPageIndex.on;
 
-export function getPdfSplitMode() { return state.pdfSplitMode; }
-export function setPdfSplitMode(on) {
-  const v = !!on;
-  if (state.pdfSplitMode === v) return;
-  state.pdfSplitMode = v;
-  for (const fn of state.pdfSplitModeListeners) fn(v);
-}
-export function onPdfSplitModeChange(fn) {
-  state.pdfSplitModeListeners.add(fn);
-  return () => state.pdfSplitModeListeners.delete(fn);
-}
+export const getPdfSplitMode = $pdfSplitMode.get;
+export const setPdfSplitMode = $pdfSplitMode.set;
+export const onPdfSplitModeChange = $pdfSplitMode.on;
 
-export function getPdfSkipFirstBlank() { return state.pdfSkipFirstBlank; }
-export function setPdfSkipFirstBlank(on) {
-  const v = !!on;
-  if (state.pdfSkipFirstBlank === v) return;
-  state.pdfSkipFirstBlank = v;
-  for (const fn of state.pdfSkipFirstBlankListeners) fn(v);
-}
-export function onPdfSkipFirstBlankChange(fn) {
-  state.pdfSkipFirstBlankListeners.add(fn);
-  return () => state.pdfSkipFirstBlankListeners.delete(fn);
-}
+export const getPdfSkipFirstBlank = $pdfSkipFirstBlank.get;
+export const setPdfSkipFirstBlank = $pdfSkipFirstBlank.set;
+export const onPdfSkipFirstBlankChange = $pdfSkipFirstBlank.on;
 
-export function getParallelSyncMode() { return state.parallelSyncMode; }
-export function setParallelSyncMode(on) {
-  const v = !!on;
-  if (state.parallelSyncMode === v) return;
-  state.parallelSyncMode = v;
-  for (const fn of state.parallelSyncModeListeners) fn(v);
-}
-export function onParallelSyncModeChange(fn) {
-  state.parallelSyncModeListeners.add(fn);
-  return () => state.parallelSyncModeListeners.delete(fn);
-}
+export const getParallelSyncMode = $parallelSyncMode.get;
+export const setParallelSyncMode = $parallelSyncMode.set;
+export const onParallelSyncModeChange = $parallelSyncMode.on;
 
-export function getActivePane() { return state.activePane; }
-export function setActivePane(pane) {
-  const v = pane === "pdf" ? "pdf" : "psd";
-  if (state.activePane === v) return;
-  state.activePane = v;
-  for (const fn of state.activePaneListeners) fn(v);
-}
-export function onActivePaneChange(fn) {
-  state.activePaneListeners.add(fn);
-  return () => state.activePaneListeners.delete(fn);
-}
+export const getActivePane = $activePane.get;
+export const setActivePane = $activePane.set;
+export const onActivePaneChange = $activePane.on;
 
-export function getParallelViewMode() { return state.parallelViewMode; }
-export function setParallelViewMode(mode) {
-  const v = mode === "psdOnly" ? "psdOnly" : "parallel";
-  if (state.parallelViewMode === v) return;
-  state.parallelViewMode = v;
-  for (const fn of state.parallelViewModeListeners) fn(v);
-}
-export function onParallelViewModeChange(fn) {
-  state.parallelViewModeListeners.add(fn);
-  return () => state.parallelViewModeListeners.delete(fn);
-}
+export const getParallelViewMode = $parallelViewMode.get;
+export const setParallelViewMode = $parallelViewMode.set;
+export const onParallelViewModeChange = $parallelViewMode.on;
 
-export function getCurrentFont() { return state.currentFontPostScriptName; }
-export function setCurrentFont(psName) {
-  const v = psName || null;
-  if (state.currentFontPostScriptName === v) return;
-  state.currentFontPostScriptName = v;
-  for (const fn of state.currentFontListeners) fn(v);
-}
-export function onCurrentFontChange(fn) {
-  state.currentFontListeners.add(fn);
-  return () => state.currentFontListeners.delete(fn);
-}
+export const getCurrentFont = $currentFont.get;
+export const setCurrentFont = $currentFont.set;
+export const onCurrentFontChange = $currentFont.on;
 
-export function getFontPickerStuck() { return state.fontPickerStuck; }
-export function setFontPickerStuck(v) { state.fontPickerStuck = !!v; }
+// fontPickerStuck はリスナー不要のシンプルなブール状態（commitFont で true、goHome で false）。
+// observable factory を使わず、モジュールスコープのプリミティブで保持する。
+let _fontPickerStuck = false;
+export function getFontPickerStuck() { return _fontPickerStuck; }
+export function setFontPickerStuck(v) { _fontPickerStuck = !!v; }
 
-export function getStrokeColor() { return state.strokeColor; }
-export function setStrokeColor(color) {
-  const v = color === "white" || color === "black" ? color : "none";
-  if (state.strokeColor === v) return;
-  state.strokeColor = v;
-  for (const fn of state.strokeColorListeners) fn(v);
-}
-export function onStrokeColorChange(fn) {
-  state.strokeColorListeners.add(fn);
-  return () => state.strokeColorListeners.delete(fn);
-}
+export const getStrokeColor = $strokeColor.get;
+export const setStrokeColor = $strokeColor.set;
+export const onStrokeColorChange = $strokeColor.on;
 
-export function getStrokeWidthPx() { return state.strokeWidthPx; }
-export function setStrokeWidthPx(n) {
-  const v = Number(n);
-  if (!Number.isFinite(v)) return;
-  const rounded = Math.round(v * 10) / 10;
-  const clamped = Math.max(0, Math.min(999, rounded));
-  if (state.strokeWidthPx === clamped) return;
-  state.strokeWidthPx = clamped;
-  for (const fn of state.strokeWidthListeners) fn(clamped);
-}
-export function onStrokeWidthChange(fn) {
-  state.strokeWidthListeners.add(fn);
-  return () => state.strokeWidthListeners.delete(fn);
-}
+export const getStrokeWidthPx = $strokeWidthPx.get;
+export const setStrokeWidthPx = $strokeWidthPx.set;
+export const onStrokeWidthChange = $strokeWidthPx.on;
 
-export function getFillColor() { return state.fillColor; }
-export function setFillColor(color) {
-  const v = color === "white" || color === "black" ? color : "default";
-  if (state.fillColor === v) return;
-  state.fillColor = v;
-  for (const fn of state.fillColorListeners) fn(v);
-}
-export function onFillColorChange(fn) {
-  state.fillColorListeners.add(fn);
-  return () => state.fillColorListeners.delete(fn);
-}
+export const getFillColor = $fillColor.get;
+export const setFillColor = $fillColor.set;
+export const onFillColorChange = $fillColor.on;
+
+export const getTxtFilePath = $txtFilePath.get;
+export const setTxtFilePath = $txtFilePath.set;
+export const onTxtFilePathChange = $txtFilePath.on;
+
+export const getTxtDirty = $txtDirty.get;
+export const setTxtDirty = $txtDirty.set;
+export const onTxtDirtyChange = $txtDirty.on;

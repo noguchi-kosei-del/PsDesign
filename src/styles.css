@@ -999,6 +999,179 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .spreads-psd-area {
   position: relative;
 }
+/* shared base ルールが display: flex を当てているため、user-agent の `[hidden]`
+   既定 (display: none) を上書きしてしまう。明示的に [hidden] を効かせる。 */
+.spreads-psd-area[hidden] { display: none; }
+
+/* ===== テキストエディタペイン =====
+   view-mode-segment の "editor" モード時のみ表示。.spreads-pdf-area と隣接する
+   flex: 1 のペインで、左ペイン (proofread overlay 利用) と並ぶ縦 flex column。 */
+.spreads-editor-area {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--border);
+  background: var(--panel);
+}
+.spreads-editor-area[hidden] { display: none; }
+
+/* proofread モードは parallel と同じレイアウト（PDF + PSD）。校正パネルは pdf-area 内
+   absolute overlay として出るため pdf-stage 領域だけを覆い、psd 側は通常表示される。
+   サイドバー類は parallel と同じく表示。 */
+
+/* editor モード: 校正パネル（左）+ editor-area（右）の 2 ペイン。
+   pdf-area / psd-area / 側ツールバー / サイドパネル を全て隠して編集に集中。 */
+.workspace.editor-mode .spreads-pdf-area,
+.workspace.editor-mode .spreads-psd-area,
+.workspace.editor-mode .side-toolbar,
+.workspace.editor-mode .side-panel {
+  display: none !important;
+}
+
+.editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+
+.editor-toolbar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.editor-toolbar-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.editor-toolbar-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.editor-toolbar-btn svg { flex-shrink: 0; stroke: currentColor; }
+.editor-toolbar-btn-danger:hover:not(:disabled) {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.editor-filename-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.editor-filename-icon {
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.editor-filename {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.editor-dirty-dot {
+  flex-shrink: 0;
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.editor-dirty-dot[hidden] { display: none; }
+
+/* textarea + empty placeholder を重ねるラッパー。empty は absolute overlay で
+   pointer-events:none → 下の textarea が常にクリックを受ける（クリックで自然に
+   フォーカス → ユーザーが入力開始 → empty は content 空判定で自動非表示）。 */
+.editor-textarea-wrap {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.editor-textarea {
+  flex: 1;
+  min-height: 0;
+  resize: none;
+  padding: 8px 10px;
+  font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre;
+  background: var(--bg);
+  color: var(--text);
+  border: 0;
+  outline: 0;
+  overflow: auto;
+}
+.editor-empty {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: var(--bg);
+}
+.editor-empty[hidden] { display: none; }
+
+.editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 10px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.editor-footer-dirty {
+  color: var(--accent);
+  font-weight: 600;
+}
+.editor-footer-dirty[hidden] { display: none; }
+
+/* promptDialog 用に confirm-modal 内へ動的挿入される `<input>`。 */
+.prompt-modal-input {
+  display: block;
+  width: 100%;
+  margin: 8px 0 0;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  outline: none;
+}
+.prompt-modal-input:focus {
+  border-color: var(--accent);
+}
 
 /* ===== ルーラー / ガイド =====
    ペイン直下に固定配置。rulers-on のとき #psd-stage を ruler 厚ぶん押し出して
@@ -1297,6 +1470,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-orientation: mixed;
 }
 
+/* layerRectFor* の THICK_SAFETY (= 0.4em) と対応する内側 padding。
+   bbox が広がった分だけ padding を入れ、テキスト本体を bbox 中央に視覚配置する。
+   これにより bbox サイズ変更でテキスト位置がずれない。
+   - 縦書き: 列方向 (左右) に 0.2em ずつ
+   - 横書き: 行方向 (上下) に 0.2em ずつ */
+.layer-box-new[data-direction="vertical"] .new-layer-text,
+.layer-box-existing[data-direction="vertical"] .existing-layer-text {
+  padding-left: 0.2em;
+  padding-right: 0.2em;
+}
+.layer-box-new[data-direction="horizontal"] .new-layer-text,
+.layer-box-existing[data-direction="horizontal"] .existing-layer-text {
+  padding-top: 0.2em;
+  padding-bottom: 0.2em;
+}
+
 .layer-size-badge {
   position: absolute;
   top: 100%;
@@ -1490,50 +1679,46 @@ body.frames-hidden .layer-box-existing:not(.selected) {
 .panel-section.collapsed .section-chevron { transform: rotate(180deg); }
 .panel-section.collapsed > *:not(.panel-section-h2) { display: none; }
 
-/* panel-section-h2 内のアクションボタン（例：校正パネル開閉）。
-   section-toggle-btn の隣に小さく押すボタン。アイコン + ラベルの横並び。 */
-.panel-h2-action-btn {
-  font-size: 11px;
-  font-weight: 600;
-  padding: 2px 8px;
-  background: transparent;
-  color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 3px;
-  cursor: pointer;
-  flex-shrink: 0;
-  line-height: 1.4;
-  position: relative;
-  z-index: 1; /* h2::after グラデの上に重ねる */
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.panel-h2-action-icon {
-  flex: 0 0 auto;
-  display: block;
-}
-.panel-h2-action-btn:hover {
-  background: var(--panel-hover);
-  color: var(--text);
-}
-.panel-h2-action-btn[aria-pressed="true"] {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
-/* 校正パネル — pdf-stage 上にオーバーレイで表示（PDF を覆う） */
+/* 校正パネル開閉ボタン（txt-source-actions の左端、TXT 保存ボタンの隣）。
+   24×24 アイコンのみ。TXT 未読込時の save/reload グレーアウトとは独立に常時アクティブな
+   見た目を保つため、デフォルト色を muted ではなく通常 text 色にしている。
+   aria-pressed="true" で accent 塗り。 */
+/* 校正パネル — editor モード時に .spreads-proofread-area に flex で全域表示。 */
+/* 校正パネル: モードに応じて 2 通りの配置を切り替える単一 DOM。
+   - .proofread-overlay: spreads-pdf-area 内 absolute overlay（proofread モード）
+   - .proofread-pane:    spreads-proofread-area 内 flex pane（editor モード）
+   bindParallelViewMode が proofread-panel の親と class を切替える。 */
 .proofread-panel {
-  position: absolute;
-  inset: 0;
-  z-index: 50;
   background: var(--panel-body);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
+.proofread-panel.proofread-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 50;
+}
+.proofread-panel.proofread-pane {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
 .proofread-panel[hidden] { display: none; }
+
+/* editor モード時の左ペイン。proofread-panel が flex pane として中に乗る。 */
+.spreads-proofread-area {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--border);
+  background: var(--panel-body);
+}
+.spreads-proofread-area[hidden] { display: none; }
 /* 読込済み JSON のフォルダ名 / 巻数を panel-header と body の間に表示。
    results ビュー時のみ proofread.js が hidden 属性を外す。 */
 .proofread-meta {
@@ -1621,7 +1806,7 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 4px;
   color: var(--text-muted);
   padding: 24px;
 }
@@ -1631,18 +1816,168 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   align-items: center;
   justify-content: center;
   color: var(--text-muted);
-  opacity: 0.55;
 }
 .proofread-empty-icon {
-  width: 64px;
-  height: 64px;
+  width: 40px;
+  height: 40px;
   display: block;
+  opacity: 0.6;
 }
 
 .proofread-list {
   flex: 1;
   min-height: 0;
   overflow: auto;
+}
+
+/* MojiQ 風 カテゴリ折り畳みグループ。proofread-cat-badge を廃止した代わりに、
+   カテゴリを 1 単位として header (▼ + 名前 + 件数) + body (項目群) を作る。
+   header クリックで .collapsed トグル → body 非表示。
+   border-left の色は getCategoryColor で項目数字（"1.誤字" 等）から導出。 */
+.proofread-category {
+  border-bottom: 1px solid var(--border);
+}
+.proofread-category-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: var(--panel);
+  cursor: pointer;
+  user-select: none;
+  font-size: 12px;
+}
+.proofread-category-header:hover {
+  background: var(--panel-hover);
+}
+.proofread-category-toggle {
+  font-size: 9px;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+  flex-shrink: 0;
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+}
+.proofread-category.collapsed .proofread-category-toggle {
+  transform: rotate(-90deg);
+}
+.proofread-category-name {
+  flex: 1;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.proofread-category-count {
+  color: var(--text-muted);
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* カテゴリ ヘッダー右端の「済」バッジ。
+   - カテゴリ チェックボックスがチェック済み
+   - もしくはカテゴリ内の全項目チェックボックスがチェック済み
+   のいずれかで表示される。緑の小さい角丸バッジで「確認完了」を示す。 */
+.proofread-category-done-badge {
+  flex-shrink: 0;
+  margin-left: 4px;
+  padding: 1px 6px;
+  font-size: 10px;
+  font-weight: 600;
+  color: #fff;
+  background: #4caf50;
+  border-radius: 8px;
+  line-height: 1.4;
+  letter-spacing: 0.5px;
+}
+.proofread-category-done-badge[hidden] { display: none; }
+.proofread-category-body {
+  padding: 0;
+}
+.proofread-category.collapsed .proofread-category-body {
+  display: none;
+}
+
+/* MojiQ 風 確認済みチェックボックス: hidden input + 装飾 span。
+   カテゴリ用は 11×11、項目用は 14×14。チェック時は緑塗り + 白チェックマーク。 */
+.proofread-category-checkbox,
+.proofread-item-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.proofread-category-checkbox { margin-right: 4px; }
+.proofread-item-checkbox { margin-right: 8px; margin-top: 2px; }
+
+.proofread-category-checkbox input[type="checkbox"],
+.proofread-item-checkbox input[type="checkbox"] {
+  display: none;
+}
+
+.proofread-checkbox-icon {
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 2px;
+  background: transparent;
+  position: relative;
+  transition: all 0.15s ease;
+}
+.proofread-item-checkbox-icon {
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid var(--text-muted);
+  border-radius: 3px;
+  background: transparent;
+  position: relative;
+  transition: all 0.15s ease;
+}
+.proofread-category-checkbox:hover .proofread-checkbox-icon,
+.proofread-item-checkbox:hover .proofread-item-checkbox-icon {
+  border-color: var(--text);
+}
+.proofread-category-checkbox input[type="checkbox"]:checked + .proofread-checkbox-icon,
+.proofread-item-checkbox input[type="checkbox"]:checked + .proofread-item-checkbox-icon {
+  background: #4caf50;
+  border-color: #4caf50;
+}
+/* チェックマーク (白で角度 45° の鍵型) */
+.proofread-category-checkbox input[type="checkbox"]:checked + .proofread-checkbox-icon::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  top: 0px;
+  width: 3px;
+  height: 6px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+.proofread-item-checkbox input[type="checkbox"]:checked + .proofread-item-checkbox-icon::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #fff;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+/* 確認済み状態の見た目（opacity ではなく文字色を薄くする MojiQ 流）。 */
+.proofread-category.checked .proofread-category-name,
+.proofread-category.checked .proofread-category-count {
+  color: var(--text-muted);
+  text-decoration: line-through;
+}
+.proofread-item.checked .proofread-excerpt,
+.proofread-item.checked .proofread-content {
+  color: var(--text-muted);
 }
 .proofread-2col {
   flex: 1;
@@ -1661,13 +1996,13 @@ body.frames-hidden .layer-box-existing:not(.selected) {
 .proofread-col:last-child { border-right: none; }
 .proofread-col-header {
   flex: 0 0 auto;
-  padding: 4px 8px;
-  font-size: 10px;
+  padding: 6px 10px;
+  font-size: 13px;
   font-weight: 600;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 6px;
 }
 .proofread-col-header.correctness { color: #e74c3c; background: rgba(231, 76, 60, 0.06); }
 .proofread-col-header.proposal { color: #f39c12; background: rgba(243, 156, 18, 0.06); }
@@ -1683,12 +2018,19 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   overflow: auto;
 }
 .proofread-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 0;
   padding: 6px 10px;
   border-bottom: 1px solid var(--border);
   cursor: pointer;
   font-size: 11px;
 }
 .proofread-item:hover { background: var(--panel-hover); }
+.proofread-item-body {
+  flex: 1;
+  min-width: 0;
+}
 .proofread-item-meta {
   display: flex;
   align-items: center;
@@ -1696,32 +2038,24 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   margin-bottom: 2px;
   flex-wrap: wrap;
 }
-.proofread-cat-badge {
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 10px;
-  font-weight: 500;
-  color: #fff;
-}
-.proofread-page { color: var(--text-muted); font-size: 10px; }
-/* MojiQ 風ハイパーリンク: クリック可能なページ番号を青 + ホバー下線で明示 */
+.proofread-page { color: var(--text-muted); font-size: 13px; }
+/* MojiQ 風ハイパーリンク: クリック可能なページ番号を薄い青 + ホバー下線で明示 */
 button.proofread-page-link {
-  color: var(--accent);
-  font-size: 10px;
-  font-weight: 500;
+  color: #64b5f6;
+  font-size: 13px;
+  font-weight: 600;
   background: transparent;
   border: 0;
   padding: 0;
   margin: 0;
   cursor: pointer;
-  line-height: 1;
+  line-height: 1.2;
   font-family: inherit;
 }
-button.proofread-page-link:hover { text-decoration: underline; background: transparent; border: 0; }
+button.proofread-page-link:hover { text-decoration: underline; background: transparent; border: 0; color: #90caf9; }
 button.proofread-page-link:focus { outline: none; text-decoration: underline; }
-.proofread-kind { font-size: 10px; }
-.proofread-kind.correctness { color: #e74c3c; }
-.proofread-kind.proposal { color: #f39c12; }
+:root[data-theme="light"] button.proofread-page-link { color: #1976d2; }
+:root[data-theme="light"] button.proofread-page-link:hover { color: #1565c0; }
 .proofread-excerpt {
   color: var(--text);
   font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
@@ -1953,6 +2287,15 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: var(--panel-hover);
   border-color: var(--border);
 }
+/* dblclick で contenteditable=true になり、ユーザーが直接編集できる状態。
+   accent 枠 + 入力可能を示すカーソル / 文字選択を許可する。 */
+.txt-block.editing {
+  cursor: text;
+  user-select: text;
+  background: var(--bg);
+  border-color: var(--accent);
+  outline: none;
+}
 
 .txt-block.selected {
   background: rgba(0, 120, 212, 0.25);
@@ -2012,6 +2355,17 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
 }
 .txt-source-clear-btn:hover {
+  color: var(--accent);
+}
+
+/* 原稿テキスト全体を削除するボタン（保存と再読み込みの間に配置）。 */
+.txt-source-delete-btn {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--text-muted);
+}
+.txt-source-delete-btn:hover {
   color: var(--danger);
 }
 
@@ -2425,6 +2779,32 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .page-jump-btn-primary:hover {
   background: #1385e3;
   border-color: #1385e3;
+}
+
+/* confirmDialog の OK ボタンに「サイドバーの自動配置 (.ai-place-btn) と同じ緑枠デザイン」を当てる
+   ためのバリアント。confirmKind: "place" で primary の代わりに付与される。
+   global の `button:hover:not(:disabled) { background: var(--accent) }` (specificity 0,2,1) に
+   勝つため hover 側は :not(:disabled) を付けて 0,3,0 にしておく。 */
+.page-jump-btn-place {
+  background: transparent;
+  border: 1px solid #4caf50;
+  color: #4caf50;
+  font-weight: 600;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.page-jump-btn-place:hover:not(:disabled) {
+  background: #2e7d32;
+  border-color: #81c784;
+  color: #c8e6c9;
+}
+:root[data-theme="light"] .page-jump-btn-place {
+  border-color: #2e7d32;
+  color: #2e7d32;
+}
+:root[data-theme="light"] .page-jump-btn-place:hover:not(:disabled) {
+  background: #a5d6a7;
+  border-color: #1b5e20;
+  color: #1b5e20;
 }
 
 .progress-detail {
@@ -2898,26 +3278,31 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   justify-content: center;
 }
 
+/* MojiQ Pro の .panel-load-btn (校正チェックを読み込み) と同デザインの青アクセント枠。
+   ダーク既定: #64b5f6 系 / ライト: #1976d2 系。
+   .ai-actions-row > .ai-ocr-btn は flex: 1 1 0 + justify-content: center で row 内に等幅展開される。 */
+/* MojiQ Pro の .panel-load-btn (校正チェックを読み込み) と同デザインの青アクセント枠。
+   背景は transparent、ダーク既定: #64b5f6 系 / ライト: #1976d2 系。
+   .ai-actions-row > .ai-ocr-btn は flex: 1 1 0 + justify-content: center で row 内に等幅展開される。 */
 .ai-ocr-btn {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   margin-top: 6px;
-  padding: 6px 12px;
-  background: var(--panel-hover);
-  border: 1px solid var(--border);
-  color: var(--text);
+  padding: 10px 12px;
+  background: transparent;
+  border: 1px solid #64b5f6;
+  color: #64b5f6;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
-  font-weight: 600;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
 .ai-ocr-btn:hover:not(:disabled) {
-  background: var(--accent);
-  border-color: var(--accent);
-  color: #fff;
+  background: rgba(100, 181, 246, 0.15);
+  border-color: #90caf9;
+  color: #90caf9;
 }
 .ai-ocr-btn:disabled {
   opacity: 0.5;
@@ -2925,6 +3310,17 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .ai-ocr-btn svg {
   flex-shrink: 0;
+  stroke: currentColor;
+}
+
+:root[data-theme="light"] .ai-ocr-btn {
+  border-color: #1976d2;
+  color: #1976d2;
+}
+:root[data-theme="light"] .ai-ocr-btn:hover:not(:disabled) {
+  background: rgba(25, 118, 210, 0.1);
+  border-color: #1565c0;
+  color: #1565c0;
 }
 
 /* ハンバーガーメニュー footer の AIインストール ボタンに小バッジ */

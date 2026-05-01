@@ -4,6 +4,7 @@ import {
   addNewLayer,
   beginHistoryTransient,
   commitHistoryTransient,
+  withHistoryTransient,
   getCurrentFont,
   getCurrentPageIndex,
   getEdit,
@@ -93,9 +94,8 @@ export function nudgeSelectedLayers(dx, dy) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
   const pages = getPages();
-  let moved = false;
-  beginHistoryTransient();
-  try {
+  const moved = withHistoryTransient(() => {
+    let any = false;
     for (const sel of selections) {
       const page = pages[sel.pageIndex];
       if (!page) continue;
@@ -103,22 +103,21 @@ export function nudgeSelectedLayers(dx, dy) {
         const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
         if (!nl) continue;
         updateNewLayer(sel.layerId, { x: nl.x + dx, y: nl.y + dy });
-        moved = true;
+        any = true;
       } else {
         const layer = page.textLayers.find((l) => l.id === sel.layerId);
         if (!layer) continue;
         addEditOffset(page.path, sel.layerId, dx, dy);
-        moved = true;
+        any = true;
       }
     }
-  } finally {
-    if (moved) commitHistoryTransient(); else abortHistoryTransient();
-  }
+    return any || false;
+  });
   if (moved) {
     refreshAllOverlays();
     rebuildLayerList();
   }
-  return moved;
+  return !!moved;
 }
 
 // 選択中のレイヤーを削除する（Delete / Backspace から呼ばれる想定）。
@@ -131,9 +130,9 @@ export function deleteSelectedLayers() {
     .filter((s) => typeof s.layerId === "string")
     .map((s) => s.layerId);
   if (tempIds.length === 0) return false;
-  beginHistoryTransient();
-  for (const id of tempIds) removeNewLayer(id);
-  commitHistoryTransient();
+  withHistoryTransient(() => {
+    for (const id of tempIds) removeNewLayer(id);
+  });
   // 既存 PSD レイヤーの選択は維持し、新規分のみ選択から外す。
   setSelectedLayers(selections.filter((s) => typeof s.layerId !== "string"));
   refreshAllOverlays();
@@ -169,48 +168,49 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
   const pages = getPages();
-  let changed = false;
-  beginHistoryTransient();
-  for (const sel of selections) {
-    const page = pages[sel.pageIndex];
-    if (!page) continue;
-    if (typeof sel.layerId === "string") {
-      const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
-      if (!nl) continue;
-      const cur = nl.sizePt ?? 24;
-      const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
-      if (next === cur) continue;
-      const oldRect = layerRectForNew(page, nl);
-      const newRect = layerRectForNew(page, { ...nl, sizePt: next });
-      const dx = (oldRect.width - newRect.width) / 2;
-      const dy = (oldRect.height - newRect.height) / 2;
-      updateNewLayer(sel.layerId, { sizePt: next, x: nl.x + dx, y: nl.y + dy });
-      changed = true;
-    } else {
-      const layer = page.textLayers.find((l) => l.id === sel.layerId);
-      if (!layer) continue;
-      const edit = getEdit(page.path, sel.layerId) ?? {};
-      const cur = edit.sizePt ?? layer.fontSize ?? 24;
-      const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
-      if (next === cur) continue;
-      const oldRect = layerRectForExisting(page, layer, edit);
-      const newRect = layerRectForExisting(page, layer, { ...edit, sizePt: next });
-      const ddx = (oldRect.width - newRect.width) / 2;
-      const ddy = (oldRect.height - newRect.height) / 2;
-      setEdit(page.path, sel.layerId, {
-        sizePt: next,
-        dx: (edit.dx ?? 0) + ddx,
-        dy: (edit.dy ?? 0) + ddy,
-      });
-      changed = true;
+  const changed = withHistoryTransient(() => {
+    let any = false;
+    for (const sel of selections) {
+      const page = pages[sel.pageIndex];
+      if (!page) continue;
+      if (typeof sel.layerId === "string") {
+        const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+        if (!nl) continue;
+        const cur = nl.sizePt ?? 24;
+        const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
+        if (next === cur) continue;
+        const oldRect = layerRectForNew(page, nl);
+        const newRect = layerRectForNew(page, { ...nl, sizePt: next });
+        const dx = (oldRect.width - newRect.width) / 2;
+        const dy = (oldRect.height - newRect.height) / 2;
+        updateNewLayer(sel.layerId, { sizePt: next, x: nl.x + dx, y: nl.y + dy });
+        any = true;
+      } else {
+        const layer = page.textLayers.find((l) => l.id === sel.layerId);
+        if (!layer) continue;
+        const edit = getEdit(page.path, sel.layerId) ?? {};
+        const cur = edit.sizePt ?? layer.fontSize ?? 24;
+        const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
+        if (next === cur) continue;
+        const oldRect = layerRectForExisting(page, layer, edit);
+        const newRect = layerRectForExisting(page, layer, { ...edit, sizePt: next });
+        const ddx = (oldRect.width - newRect.width) / 2;
+        const ddy = (oldRect.height - newRect.height) / 2;
+        setEdit(page.path, sel.layerId, {
+          sizePt: next,
+          dx: (edit.dx ?? 0) + ddx,
+          dy: (edit.dy ?? 0) + ddy,
+        });
+        any = true;
+      }
     }
-  }
-  if (changed) commitHistoryTransient(); else abortHistoryTransient();
+    return any || false;
+  });
   if (changed) {
     refreshAllOverlays();
     rebuildLayerList();
   }
-  return changed;
+  return !!changed;
 }
 
 function isTextTool(tool) {
@@ -247,9 +247,14 @@ function layerRectForExisting(page, layer, edit) {
   // 行間 (autoLeadingAmount %) を厚み（行スタック方向）の係数に反映。125% を最低値として
   // 設定しても既存の見た目より細くしないように clamp。
   const leadingFactor = Math.max(1.25, ((edit.leadingPct ?? 125) / 100));
-  const fallbackThick = ptInPsdPx * leadingFactor * lineCount;
+  // CJK 縦書きで小書き仮名（ょ・っ・ゃ等）や glyph の line-box overhang、
+  // text-stroke の outset 半分（stroke 既定 20 PSD px → ~0.16em）を吸収するため
+  // 列方向に 0.4em の安全余白を足す。テキスト本体は CSS で bbox 中央に配置するので
+  // bbox が広がっても視覚位置は不変。
+  const THICK_SAFETY = 0.4;
+  const fallbackThick = ptInPsdPx * (leadingFactor * lineCount + THICK_SAFETY);
   const fallbackLong = ptInPsdPx * 1.05 * chars;
-  const minThick = Math.max(ptInPsdPx * leadingFactor, 20);
+  const minThick = Math.max(ptInPsdPx * (leadingFactor + THICK_SAFETY), 20);
   const minLong = Math.max(ptInPsdPx * 2, 48);
 
   let width;
@@ -276,8 +281,10 @@ function layerRectForNew(page, nl) {
   const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
   // 行間 (%) を厚み係数に反映。125 が既定。
+  // 小書き仮名 + stroke overhang を吸収する 0.4em の安全余白を加算。テキスト本体は
+  // CSS padding で bbox 中央に配置されるので、bbox が広がっても視覚位置は変わらない。
   const leadingFactor = (nl.leadingPct ?? 125) / 100;
-  const thick = Math.max(24, ptInPsdPx * leadingFactor * lineCount);
+  const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + 0.4));
   const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.05 * chars);
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
@@ -1174,16 +1181,18 @@ function startInPlaceEdit(ctx, target, options = {}) {
       // afterCommit 内の状態変更（setTxtSource など）を 1 つの history snapshot に
       // 束ねる。これがないと Ctrl+Z で片方だけ巻き戻り原稿表示と乖離する。
       const hasAfter = typeof options.afterCommit === "function";
-      if (hasAfter) beginHistoryTransient();
-      if (target.kind === "existing") {
-        setEdit(page.path, target.layer.id, { contents: value });
-      } else {
-        updateNewLayer(target.nl.tempId, { contents: value });
-      }
-      if (hasAfter) {
-        try { options.afterCommit(value); } catch (e) { console.error("afterCommit error", e); }
-        commitHistoryTransient();
-      }
+      const writeLayer = () => {
+        if (target.kind === "existing") {
+          setEdit(page.path, target.layer.id, { contents: value });
+        } else {
+          updateNewLayer(target.nl.tempId, { contents: value });
+        }
+        if (hasAfter) {
+          try { options.afterCommit(value); } catch (e) { console.error("afterCommit error", e); }
+        }
+      };
+      if (hasAfter) withHistoryTransient(writeLayer);
+      else writeLayer();
       refreshAllOverlays();
       rebuildLayerList();
     },

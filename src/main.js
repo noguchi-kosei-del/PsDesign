@@ -1,4 +1,3 @@
-import { loadPsdFromPath } from "./psd-loader.js";
 import { loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
 import { deleteSelectedLayers, nudgeSelectedLayers, refreshAllOverlays, snapNextSize } from "./canvas-tools.js";
@@ -15,16 +14,28 @@ import { bindAiInstallMenu } from "./ai-install.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
 import { bindAiPlaceButton } from "./ai-place.js";
 import { bindAutoUpdater } from "./auto-updater.js";
-import { bindProofreadUi } from "./proofread.js";
+import { bindProofreadUi, openProofread, closeProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   confirmDialog,
   hideProgress,
-  notifyDialog,
   showProgress,
   toast,
-  updateProgress,
 } from "./ui-feedback.js";
+import {
+  bindSaveMenu,
+  handleOverwriteSave,
+  handleSaveAs,
+  setHasSavedThisSession,
+  updateSaveButton,
+} from "./bind/save.js";
+import { bindEditorPane, focusEditor } from "./bind/editor-pane.js";
+import {
+  handleOpenFiles,
+  listPsdFilesInFolder,
+  loadPsdFilesByPaths,
+  pickPsdFiles,
+} from "./services/psd-load.js";
 import {
   findShortcutMatch,
   getDefault,
@@ -42,6 +53,8 @@ import {
   getGuidesLocked,
   toggleGuidesLocked,
   onGuidesLockedChange,
+  hasAnyGuide,
+  onGuidesChange,
 } from "./rulers.js";
 import {
   addPage,
@@ -49,10 +62,8 @@ import {
   canUndo,
   clearAllEdits,
   clearPages,
-  exportEdits,
   getActivePane,
   getCurrentPageIndex,
-  getFolder,
   getPages,
   getParallelSyncMode,
   getParallelViewMode,
@@ -81,7 +92,6 @@ import {
   onTxtSourceChange,
   setActivePane,
   setCurrentPageIndex,
-  setFolder,
   setFonts,
   setParallelSyncMode,
   setParallelViewMode,
@@ -112,28 +122,6 @@ import {
   getPdfVirtualPageAt,
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
-
-export async function pickPsdFiles() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
-    multiple: true,
-    title: "PSDを開く",
-    filters: [{ name: "Photoshop Document", extensions: ["psd"] }],
-  });
-  if (!picked) return [];
-  return Array.isArray(picked) ? picked : [picked];
-}
-
-async function listPsdFilesInFolder(folder) {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke("list_psd_files", { folder });
-}
-
-async function handleOpenFiles() {
-  const files = await pickPsdFiles();
-  if (!files.length) return;
-  await loadPsdFilesByPaths(files);
-}
 
 async function handleOpenPdf() {
   const paths = await pickReferenceFiles();
@@ -176,15 +164,23 @@ function updatePsdRotateVisibility() {
 function bindPsdGuidesLock() {
   const btn = document.getElementById("psd-guides-lock-btn");
   if (!btn) return;
-  const sync = () => {
+  const syncPressed = () => {
     const locked = getGuidesLocked();
     btn.setAttribute("aria-pressed", locked ? "true" : "false");
     btn.title = locked ? "ガイドのロック解除" : "ガイドをロック";
     btn.setAttribute("aria-label", btn.title);
   };
+  // ガイドが 1 本も引かれていなければボタンをグレーアウト（ロック対象がないため）。
+  // 表示/非表示はルーラー有無 + PSD 有無で別途制御。
+  const syncDisabled = () => {
+    btn.disabled = !hasAnyGuide();
+  };
   btn.addEventListener("click", () => toggleGuidesLocked());
-  onGuidesLockedChange(sync);
-  sync();
+  onGuidesLockedChange(syncPressed);
+  onGuidesChange(syncDisabled);
+  onPageIndexChange(syncDisabled); // ページ切替で対象 PSD のガイド有無が変わる
+  syncPressed();
+  syncDisabled();
   // ガイド表示と連動して表示/非表示。ルーラー OFF または PSD 未読込時は隠す。
   const updateVis = () => {
     btn.hidden = !getRulersVisible() || getPages().length === 0;
@@ -193,252 +189,12 @@ function bindPsdGuidesLock() {
   updateVis();
 }
 
-// ガイドロックボタンの「ファイル読込みあり」条件を、PSD ロード/クリア時に同期。
+// ガイドロックボタンの「ファイル読込みあり」条件 + ガイド有無を、PSD ロード/クリア時に同期。
 function updatePsdGuidesLockVisibility() {
   const btn = document.getElementById("psd-guides-lock-btn");
   if (!btn) return;
   btn.hidden = !getRulersVisible() || getPages().length === 0;
-}
-
-function parentDir(p) {
-  if (!p) return null;
-  const m = p.match(/^(.+)[\\/][^\\/]+$/);
-  return m ? m[1] : null;
-}
-
-export async function loadPsdFilesByPaths(files) {
-  if (!files || files.length === 0) return;
-  // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
-  // のいずれもページ番号順 (page1 → page2 → page10) で先頭から並ぶようにする。
-  // Rust 側の list_psd_files は字句順なので "page10" が "page2" より先に来てしまう。
-  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
-  files = [...files].sort((a, b) => collator.compare(baseName(a), baseName(b)));
-  // 未保存の編集があるなら警告して確認を取る。clearPages() は state.edits / newLayers を
-  // 黙って消すため、編集中のユーザーがファイル選択ダイアログ等から別 PSD を開いた瞬間に
-  // 作業内容が無警告で失われる事故を防ぐ。
-  if (hasEdits()) {
-    const ok = await confirmDialog({
-      title: "未保存の編集があります",
-      message: "現在の編集内容は破棄されます。続行しますか？",
-      confirmLabel: "破棄して開く",
-    });
-    if (!ok) return;
-  }
-  // 最初に選んだファイルの親ディレクトリを「別名で保存」の既定フォルダ名算出に使う。
-  setFolder(parentDir(files[0]) ?? null);
-  hasSavedThisSession = false;
-
-  showProgress({
-    title: "PSD を読み込み中",
-    detail: baseName(files[0]),
-    current: 0,
-    total: files.length,
-  });
-
-  clearPages();
-  renderAllSpreads();
-  rebuildLayerList();
-  updatePageNav();
-
-  const failures = [];
-  for (let i = 0; i < files.length; i++) {
-    const path = files[i];
-    updateProgress({
-      detail: baseName(path),
-      current: i,
-      total: files.length,
-    });
-    try {
-      const page = await loadPsdFromPath(path);
-      addPage(page);
-      renderAllSpreads();
-      rebuildLayerList();
-      updatePageNav();
-    } catch (e) {
-      console.error(e);
-      failures.push({ path, error: e });
-    }
-    updateProgress({
-      detail: baseName(path),
-      current: i + 1,
-      total: files.length,
-    });
-  }
-
-  updateSaveButton();
-  updatePsdRotateVisibility();
-  updatePsdGuidesLockVisibility();
-  hideProgress();
-  if (failures.length) {
-    const first = failures[0];
-    const msg =
-      failures.length === 1
-        ? `読込失敗 ${baseName(first.path)}: ${first.error?.message ?? first.error}`
-        : `読込失敗 ${failures.length} 件（${baseName(first.path)} 他）`;
-    toast(msg, { kind: "error", duration: 5000 });
-  }
-}
-
-function updateSaveButton() {
-  const btn = document.getElementById("save-btn");
-  btn.disabled = getPages().length === 0;
-}
-
-let hasSavedThisSession = false;
-let saveMenuOpen = false;
-// Photoshop への保存 invoke が走っている間は true。Ctrl+S や保存ボタンの連打で
-// 同じ PSD に対して invoke が並行実行されると Photoshop 側で開くドキュメントが
-// 競合し、片方の編集が失われる / セッションが破壊されるためガードする。
-let saveInflight = false;
-
-async function pickSaveParentDir() {
-  const { open } = await import("@tauri-apps/plugin-dialog");
-  const picked = await open({
-    directory: true,
-    multiple: false,
-    title: "別名で保存：親フォルダを選択（この中に新規フォルダを作成します）",
-  });
-  return typeof picked === "string" ? picked : null;
-}
-
-function generateSaveFolderName() {
-  const src = getFolder();
-  const base = src ? baseName(src) : "PsDesign";
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const ts =
-    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-    `_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `${base}_${ts}`;
-}
-
-function joinPath(parent, child) {
-  if (!parent) return child;
-  const sep = /[\\/]$/.test(parent) ? "" : "/";
-  return `${parent}${sep}${child}`;
-}
-
-async function runSaveWithMode({ saveMode, targetDir }) {
-  if (saveInflight) {
-    toast("保存処理中です。完了までお待ちください", { kind: "info", duration: 2200 });
-    return;
-  }
-  if (!hasEdits()) {
-    toast("編集内容がありません", { kind: "info" });
-    return;
-  }
-  const base = exportEdits();
-  const payload = {
-    ...base,
-    saveMode,
-    targetDir: targetDir ?? null,
-  };
-  saveInflight = true;
-  const saveBtn = document.getElementById("save-btn");
-  if (saveBtn) saveBtn.disabled = true;
-  showProgress({ title: "Photoshop に反映中", detail: "スクリプトを実行しています..." });
-  try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const result = await invoke("apply_edits_via_photoshop", { payload });
-    hideProgress();
-    const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
-    const hasWarn = typeof result === "string" && result.includes("警告:");
-    hasSavedThisSession = true;
-    // 保存完了は中央モーダルで通知。警告有無で kind を切替（warning=オレンジ + 警告 SVG / success=緑 + チェック SVG）。
-    await notifyDialog({
-      title: hasWarn ? "保存完了（警告あり）" : "保存完了",
-      message: `${result}${suffix}`,
-      kind: hasWarn ? "warning" : "success",
-    });
-  } catch (e) {
-    console.error(e);
-    hideProgress();
-    toast(`保存失敗: ${e.message ?? e}`, { kind: "error", duration: 5000 });
-  } finally {
-    saveInflight = false;
-    // pages 0 件なら disabled のまま。ある場合のみ復帰。
-    if (saveBtn) saveBtn.disabled = getPages().length === 0;
-  }
-}
-
-async function handleOverwriteSave() {
-  if (getPages().length === 0) return;
-  if (!hasSavedThisSession) {
-    await handleSaveAs();
-    return;
-  }
-  await runSaveWithMode({ saveMode: "overwrite" });
-}
-
-async function handleExplicitOverwrite() {
-  if (getPages().length === 0) return;
-  await runSaveWithMode({ saveMode: "overwrite" });
-}
-
-async function handleSaveAs() {
-  if (getPages().length === 0) return;
-  const parent = await pickSaveParentDir();
-  if (!parent) return;
-  const targetDir = joinPath(parent, generateSaveFolderName());
-  await runSaveWithMode({ saveMode: "saveAs", targetDir });
-}
-
-function openSaveMenu() {
-  const menu = document.getElementById("save-menu");
-  const btn = document.getElementById("save-btn");
-  if (!menu || !btn) return;
-  if (btn.disabled) return;
-  menu.hidden = false;
-  btn.setAttribute("aria-expanded", "true");
-  saveMenuOpen = true;
-}
-
-function closeSaveMenu() {
-  if (!saveMenuOpen) return;
-  const menu = document.getElementById("save-menu");
-  const btn = document.getElementById("save-btn");
-  if (menu) menu.hidden = true;
-  if (btn) btn.setAttribute("aria-expanded", "false");
-  saveMenuOpen = false;
-}
-
-function toggleSaveMenu() {
-  if (saveMenuOpen) closeSaveMenu();
-  else openSaveMenu();
-}
-
-function bindSaveMenu() {
-  const btn = document.getElementById("save-btn");
-  const overwrite = document.getElementById("save-overwrite-btn");
-  const saveAs = document.getElementById("save-as-btn");
-  const container = document.getElementById("save-container");
-  if (!btn || !overwrite || !saveAs || !container) return;
-
-  btn.addEventListener("click", (e) => {
-    e.stopPropagation();
-    toggleSaveMenu();
-  });
-  overwrite.addEventListener("click", (e) => {
-    e.stopPropagation();
-    closeSaveMenu();
-    handleExplicitOverwrite();
-  });
-  saveAs.addEventListener("click", (e) => {
-    e.stopPropagation();
-    closeSaveMenu();
-    handleSaveAs();
-  });
-  document.addEventListener("mousedown", (e) => {
-    if (!saveMenuOpen) return;
-    if (container.contains(e.target)) return;
-    closeSaveMenu();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && saveMenuOpen) {
-      e.preventDefault();
-      closeSaveMenu();
-    }
-  });
+  btn.disabled = !hasAnyGuide();
 }
 
 async function loadFontsFromBackend() {
@@ -449,11 +205,6 @@ async function loadFontsFromBackend() {
   } catch (e) {
     console.warn("フォント一覧の取得に失敗:", e);
   }
-}
-
-function baseName(p) {
-  const m = p && p.match(/[\\/]([^\\/]+)$/);
-  return m ? m[1] : p;
 }
 
 let panPreviousTool = null;
@@ -947,6 +698,48 @@ function jumpToEdge(where) {
   }
 }
 
+// 見本 / PSD ペイン上のマウススクロールでページを送る。
+// 同期モード: advancePage で両ペインがブリッジ越しに同時に動く。
+// 非同期モード: スクロールしたペインだけを動かす（getActivePane には依存しない）。
+// Alt+wheel はズーム、選択レイヤー上の wheel は onLayerWheel がサイズ変更で stopPropagation
+// するため、それ以外の wheel イベントだけここで page nav に使う。
+function bindWheelPageNav() {
+  const pdfArea = document.getElementById("spreads-pdf-area");
+  const psdArea = document.getElementById("spreads-psd-area");
+  let lastWheelMs = 0;
+  const throttleMs = 120;
+
+  const navigate = (pane, delta) => {
+    if (getParallelSyncMode()) {
+      advancePage(delta);
+      return;
+    }
+    if (pane === "pdf") {
+      const vcount = getPdfVirtualPageCount();
+      if (vcount > 0) {
+        const next = Math.max(0, Math.min(vcount - 1, getPdfPageIndex() + delta));
+        setPdfPageIndex(next);
+      }
+    } else if (getPages().length > 0) {
+      setCurrentPageIndex(getCurrentPageIndex() + delta);
+    }
+  };
+
+  const onWheel = (pane) => (e) => {
+    // Alt / Ctrl / Meta は他のハンドラ（ズーム / ブラウザ既定）に委ねる。
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    const now = Date.now();
+    if (now - lastWheelMs < throttleMs) return;
+    lastWheelMs = now;
+    const delta = e.deltaY > 0 ? +1 : -1;
+    navigate(pane, delta);
+  };
+
+  if (pdfArea) pdfArea.addEventListener("wheel", onWheel("pdf"), { passive: false });
+  if (psdArea) psdArea.addEventListener("wheel", onWheel("psd"), { passive: false });
+}
+
 // 同期モード中は currentPageIndex（PSD）と pdfPageIndex を相互にミラーする。
 // 非同期中は各側が独立して動く。再入防止にフラグで一方向の反映に限定。
 let syncBridgeBusy = false;
@@ -1086,30 +879,78 @@ const VIEW_MODE_LS_KEY = "psdesign_parallel_view_mode";
 
 function bindParallelViewMode() {
   const parallelBtn = document.getElementById("view-parallel-btn");
-  const psdOnlyBtn = document.getElementById("view-psd-only-btn");
+  const proofreadBtn = document.getElementById("view-proofread-btn");
+  const editorBtn = document.getElementById("view-editor-btn");
   const pdfArea = document.getElementById("spreads-pdf-area");
-  if (!parallelBtn || !psdOnlyBtn || !pdfArea) return;
+  const psdArea = document.getElementById("spreads-psd-area");
+  const editorArea = document.getElementById("spreads-editor-area");
+  const proofreadArea = document.getElementById("spreads-proofread-area");
+  const proofreadPanel = document.getElementById("proofread-panel");
+  if (!parallelBtn || !proofreadBtn || !editorBtn || !pdfArea || !psdArea || !editorArea || !proofreadArea || !proofreadPanel) return;
 
   try {
     const saved = localStorage.getItem(VIEW_MODE_LS_KEY);
-    if (saved === "parallel" || saved === "psdOnly") setParallelViewMode(saved);
+    if (saved === "parallel" || saved === "proofread" || saved === "editor") {
+      setParallelViewMode(saved);
+    }
   } catch {}
 
   parallelBtn.addEventListener("click", () => setParallelViewMode("parallel"));
-  psdOnlyBtn.addEventListener("click", () => {
-    setParallelViewMode("psdOnly");
-    if (getActivePane() === "pdf") setActivePane("psd");
-  });
+  proofreadBtn.addEventListener("click", () => setParallelViewMode("proofread"));
+  editorBtn.addEventListener("click", () => setParallelViewMode("editor"));
 
+  // 3 モード構成:
+  //   parallel:  PDF + PSD（サイドバー類 表示、proofread 閉じる）
+  //   proofread: PDF + PSD（parallel と同レイアウト）+ pdf-stage 上に校正パネル overlay
+  //   editor:    校正パネル（左）+ エディタ（右）の 2 ペイン。pdf / psd / サイドバー類 非表示
+  //
+  // proofread-panel は単一 DOM。mode によって配置先と class を切替える:
+  //   - proofread モード: pdfArea 内 absolute overlay（.proofread-overlay、pdf-stage 領域のみを覆う）
+  //   - editor モード:    proofreadArea 内 flex pane（.proofread-pane）
+  //   - parallel モード:  pdfArea 内に置いておく（hidden 属性で非表示）
+  const workspace = document.querySelector(".workspace");
   const sync = () => {
     const mode = getParallelViewMode();
-    const isParallel = mode === "parallel";
-    pdfArea.toggleAttribute("hidden", !isParallel);
-    parallelBtn.classList.toggle("active", isParallel);
-    psdOnlyBtn.classList.toggle("active", !isParallel);
-    parallelBtn.setAttribute("aria-pressed", isParallel ? "true" : "false");
-    psdOnlyBtn.setAttribute("aria-pressed", !isParallel ? "true" : "false");
+    const showEditor = mode === "editor";
+    const showProofread = mode === "proofread";
+    if (workspace) {
+      workspace.classList.toggle("editor-mode", showEditor);
+      workspace.classList.toggle("proofread-mode", showProofread);
+    }
+    // proofread モードは parallel と同レイアウト（pdf + psd 並び）。
+    // proofread overlay は pdfArea 内に出るので pdf-stage 領域のみ覆う。
+    pdfArea.toggleAttribute("hidden", showEditor);
+    psdArea.toggleAttribute("hidden", showEditor);
+    editorArea.toggleAttribute("hidden", !showEditor);
+    proofreadArea.toggleAttribute("hidden", !showEditor);
+    parallelBtn.classList.toggle("active", mode === "parallel");
+    proofreadBtn.classList.toggle("active", mode === "proofread");
+    editorBtn.classList.toggle("active", mode === "editor");
+    parallelBtn.setAttribute("aria-pressed", mode === "parallel" ? "true" : "false");
+    proofreadBtn.setAttribute("aria-pressed", mode === "proofread" ? "true" : "false");
+    editorBtn.setAttribute("aria-pressed", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
+
+    // proofread-panel の親と class を mode に応じて切替える。
+    if (showEditor) {
+      // editor モード → 左ペインの spreads-proofread-area へ flex pane として配置
+      if (proofreadPanel.parentElement !== proofreadArea) {
+        proofreadArea.appendChild(proofreadPanel);
+      }
+      proofreadPanel.classList.add("proofread-pane");
+      proofreadPanel.classList.remove("proofread-overlay");
+      openProofread();
+    } else {
+      // parallel / proofread モード → pdfArea 内に absolute overlay として配置
+      if (proofreadPanel.parentElement !== pdfArea) {
+        pdfArea.appendChild(proofreadPanel);
+      }
+      proofreadPanel.classList.add("proofread-overlay");
+      proofreadPanel.classList.remove("proofread-pane");
+      if (showProofread) openProofread();
+      else closeProofread();
+    }
+    if (showEditor) focusEditor();
   };
   onParallelViewModeChange(sync);
   sync();
@@ -1607,9 +1448,14 @@ function init() {
   mountPdfView();
   setupTauriDragDrop();
   bindParallelSync();
+  bindWheelPageNav();
   bindActivePaneTracking();
   bindResyncModal();
   bindViewModeControls();
+  // editor pane の初期化を view-mode 切替より先に行う。
+  // bindParallelViewMode の sync() が editor モードで focusEditor() を呼ぶ前に
+  // textarea を syncFromState() で正しい状態にしておく。
+  bindEditorPane();
   bindParallelViewMode();
   initSettingsUi();
   // 環境設定の「デフォルト」（文字サイズ・行間・フチ太さ・フォント）をツール初期値に反映。
@@ -1622,6 +1468,15 @@ function init() {
   initRulers();
   bindRulerToggle();
   bindFramesToggle();
+  // services/psd-load.js から読込フェーズの節目で投げられるイベントを購読し、
+  // ページバー / 回転ボタン / ガイドロックボタンの可視状態を同期する。
+  // psd-load.js 側は main.js を直接 import しないので、循環参照を避けつつ
+  // UI 更新フックを差し込めるようにこの 1 箇所に集約している。
+  window.addEventListener("psdesign:psd-loaded", () => {
+    updatePageNav();
+    updatePsdRotateVisibility();
+    updatePsdGuidesLockVisibility();
+  });
 }
 
 // INPUT/TEXTAREA/contenteditable 以外をクリックしたら、現在フォーカス中のテキスト入力から

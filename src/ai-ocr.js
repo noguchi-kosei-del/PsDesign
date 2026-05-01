@@ -11,14 +11,15 @@
 //   - ai_ocr:progress (payload: { phase: "pdf"|"ocr", current, total, eta? })
 
 import {
+  confirmDialog,
   showProgress,
   updateProgress,
   hideProgress,
-  notifyDialog,
   toast,
 } from "./ui-feedback.js";
-import { setAiOcrDoc, getPdfPaths } from "./state.js";
+import { getTxtSource, setAiOcrDoc, getPdfPaths } from "./state.js";
 import { loadTxtFromContent } from "./txt-source.js";
+import { loadReferenceFiles } from "./pdf-loader.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
 import { checkAiModelsStatus } from "./ai-install.js";
 
@@ -95,11 +96,18 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
   const btn = $("ai-ocr-btn");
   if (btn) btn.disabled = true;
 
+  // 起動時の大雑把な所要時間見積（モデル読込 ~15 秒 + ファイル数 × ~30 秒）。
+  // 実 ETA が tqdm から来るまでの「OCR エンジンを起動中…」「PDF 展開中…」の間、
+  // ユーザーに完了までの目安を伝えるために表示する。CPU/GPU・ページ数で大きくぶれるため
+  // 「約 N 分」の vague 表記。
+  const approxLabel = formatApproxDuration(estimateRemainingSeconds(files.length));
+
   showProgress({
-    title: "画像スキャン",
-    detail: `${baseName(files[0])} ほか ${files.length} 件`,
+    title: "画像スキャン実行中",
+    detail: `${baseName(files[0])} ほか ${files.length} 件 (完了まで${approxLabel})`,
     current: 0,
     total: 1,
+    showCount: false,
   });
 
   const { invoke } = await import("@tauri-apps/api/core");
@@ -113,9 +121,10 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
     // PDF 展開完了 → mokuro 起動。OCR の最初の tqdm 進捗が来るまで indeterminate。
     phase = "starting";
     updateProgress({
-      detail: "OCR エンジンを起動中…",
+      detail: `OCR エンジンを起動中… (完了まで${approxLabel})`,
       current: null,
       total: null,
+      showCount: false,
     });
   });
 
@@ -124,27 +133,30 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
     if (p.phase === "pdf") {
       phase = "pdf";
       updateProgress({
-        detail: `PDF 展開中… (${p.current}/${p.total})`,
+        detail: `PDF 展開中… (${p.current}/${p.total}) (完了まで${approxLabel})`,
         current: p.current,
         total: p.total,
+        showCount: false,
       });
     } else if (p.phase === "ocr") {
       phase = "ocr";
       // tqdm の初期出力 "0/5 [00:00<?, ?it/s]" は残り時間が未確定（"?" を含む）。
-      // 残り時間が解析できる正常値になるまではカウントもバーも出さず indeterminate 表示。
+      // 残り時間が解析できる正常値になるまでは見積を出しておく。
       const formattedEta = formatEta(p.eta);
       const hasValidEta = !!formattedEta;
       if (!hasValidEta) {
         updateProgress({
-          detail: "OCR 実行中…",
+          detail: `OCR 実行中… (完了まで${approxLabel})`,
           current: null,
           total: null,
+          showCount: false,
         });
       } else {
         updateProgress({
           detail: `OCR 実行中… ${p.current}/${p.total} (残り ${formattedEta})`,
           current: p.current,
           total: p.total,
+          showCount: false,
         });
       }
     }
@@ -161,9 +173,10 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
     const marker = detectStartupPhase(line);
     if (marker) {
       updateProgress({
-        detail: marker,
+        detail: `${marker} (完了まで${approxLabel})`,
         current: null,
         total: null,
+        showCount: false,
       });
     }
   });
@@ -202,12 +215,23 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
   loadTxtFromContent(name, content);
   if (notifyOnComplete) {
     // 画像スキャンボタン経由のとき: 次にやってほしいアクション (自動配置) を案内する。
+    // 戻る (false) でただ閉じる、自動配置 (true) でそのままサイドパネルの自動配置ボタンを発火。
     // ai-place からの自動トリガー時はそのまま確認モーダルへ遷移するので案内は出さない。
-    await notifyDialog({
+    const goPlace = await confirmDialog({
       title: "画像スキャン完了",
       message: "テキスト抽出が完了しました。\n自動配置を行ってください。",
       kind: "success",
+      confirmLabel: "自動配置",
+      cancelLabel: "戻る",
+      confirmKind: "place",
     });
+    if (goPlace) {
+      // ai-place.js は ai-ocr.js を import しており逆方向 import は循環参照になる。
+      // ボタンの DOM クリックを介してハンドラを発火させ循環を避ける。
+      // setAiOcrDoc は既に上で呼び済みなので onAiOcrDocChange 経由で disabled は解除済み。
+      const placeBtn = $("ai-place-btn");
+      if (placeBtn && !placeBtn.disabled) placeBtn.click();
+    }
   }
 }
 
@@ -240,6 +264,20 @@ function detectStartupPhase(line) {
   return null;
 }
 
+// 起動時の所要時間ざっくり見積。tqdm からの実 ETA が来るまでの「OCR 起動中」表示で使う。
+// 起動 / モデル読込: ~15 秒 (CPU/GPU 共通でほぼ固定)
+// ファイルあたり: ~30 秒 (ページ数や CPU/GPU で大きくぶれるのであくまで目安)。
+function estimateRemainingSeconds(fileCount) {
+  return 15 + Math.max(1, fileCount | 0) * 30;
+}
+
+// 「約 N 秒」「約 N 分」の vague 表記（10 秒単位 / 1 分単位で丸める）。
+function formatApproxDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "数十秒";
+  if (seconds < 60) return `約 ${Math.max(10, Math.ceil(seconds / 10) * 10)} 秒`;
+  return `約 ${Math.ceil(seconds / 60)} 分`;
+}
+
 // tqdm の "[time<eta, rate]" 内 eta 部分 (e.g. "00:30") を「30秒」「1分20秒」に整形。
 // eta 未確定（"?" を含む / 0 秒 / 数値解析不可）のときは "" を返す。
 // 呼び出し側はこの戻り値を「ETA 確定済みかどうか」のフラグとしても使う。
@@ -270,6 +308,17 @@ export function bindAiOcrButton() {
   if (!btn) return;
   btn.addEventListener("click", async () => {
     if (runningOcr) return;
+    // テキストが既に読み込まれている場合は OCR 結果で上書きする旨を事前に警告する。
+    // ファイル選択や OCR 実行のコストが発生する前にキャンセル可能にするため、最初に確認する。
+    if (getTxtSource()) {
+      const ok = await confirmDialog({
+        title: "画像スキャン",
+        message: "現在のテキストは破棄されます。よろしいですか？",
+        confirmLabel: "実行",
+        kind: "danger",
+      });
+      if (!ok) return;
+    }
     // 読込済み見本（PDF / 画像）があればそれを優先して OCR にかける。
     // 未読込のときだけファイル選択ダイアログを出す。
     const loaded = getPdfPaths();
@@ -285,6 +334,16 @@ export function bindAiOcrButton() {
       return;
     }
     if (!files || files.length === 0) return; // ユーザーがキャンセル
+    // 選択した PDF / 画像を pdf-stage の見本としても表示する。
+    // OCR はファイルパス配列を直接 mokuro に渡すので、先に loadReferenceFiles を await して
+    // 見本表示を確定させてから OCR フェーズに進む（ユーザーが進捗中も画像確認可）。
+    try {
+      await loadReferenceFiles(files);
+    } catch (e) {
+      console.error("loadReferenceFiles failed:", e);
+      // 見本表示に失敗しても OCR 自体は継続できるので、エラー toast だけ出して進行。
+      toast(`見本表示に失敗: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
+    }
     await runAiOcr(files, { notifyOnComplete: true });
   });
 

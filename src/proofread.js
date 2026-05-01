@@ -56,6 +56,14 @@ let checkData = null;
 // "correctness" | "proposal" | "both"
 let checkTabMode = "both";
 
+// MojiQ のカテゴリ折り畳み状態を保持。Set にカテゴリ名を入れたら collapsed。
+// renderPanel() で DOM が再生成されてもユーザーの開閉状態を保持するためモジュール変数。
+const collapsedCategories = new Set();
+// MojiQ 風「確認済みチェックボックス」の状態。カテゴリ名 / 項目キーを Set に保持する。
+// 項目キーは `${category}|${index}`（カテゴリ内の表示順）。
+const checkedCategories = new Set();
+const checkedItems = new Set();
+
 // ビュー：未読込 / 結果表示 / フォルダブラウザ
 // "results" は checkData がある通常表示、"browser" は MojiQ 風のフォルダ選択 UI、
 // "empty" は何も読み込まれていない初期状態（読込ボタン付きの案内）。
@@ -469,7 +477,7 @@ function renderColumn(kind, title, items) {
     empty.textContent = "該当なし";
     list.appendChild(empty);
   } else {
-    for (const item of items) list.appendChild(renderItem(item));
+    list.appendChild(renderItemsGrouped(items));
   }
   col.appendChild(list);
   return col;
@@ -485,27 +493,223 @@ function renderList(items) {
     list.appendChild(empty);
     return list;
   }
-  for (const item of items) list.appendChild(renderItem(item));
+  list.appendChild(renderItemsGrouped(items));
   return list;
 }
 
-function renderItem(item) {
+// MojiQ 風: カテゴリごとに項目をグループ化して折り畳み可能なヘッダー付きグループに。
+// item.category（例: "1.誤字"）でグループキー、未指定は "未分類"。
+// グループ ヘッダーをクリック → ▼/▶ トグル + 中身の表示/非表示。
+// 開閉状態は collapsedCategories（Set<string>）に保持し、renderPanel 再実行後も維持。
+function renderItemsGrouped(items) {
+  const fragment = document.createDocumentFragment();
+  if (!items || items.length === 0) return fragment;
+
+  const grouped = new Map();
+  for (const item of items) {
+    const cat = item.category || "未分類";
+    if (!grouped.has(cat)) grouped.set(cat, []);
+    grouped.get(cat).push(item);
+  }
+  const sortedCats = [...grouped.keys()].sort((a, b) => a.localeCompare(b, "ja"));
+
+  for (const cat of sortedCats) {
+    const catItems = grouped.get(cat);
+    const isCollapsed = collapsedCategories.has(cat);
+    const isChecked = checkedCategories.has(cat);
+
+    const groupEl = document.createElement("div");
+    groupEl.className = "proofread-category"
+      + (isCollapsed ? " collapsed" : "")
+      + (isChecked ? " checked" : "");
+    groupEl.dataset.category = cat;
+
+    const header = document.createElement("div");
+    header.className = "proofread-category-header";
+    header.style.borderLeft = `3px solid ${getCategoryColor(cat)}`;
+
+    // カテゴリ ヘッダー右端に出る「済」バッジ。
+    //   - カテゴリ チェックボックスがチェック済み → 表示
+    //   - 全項目チェック済み                     → 表示（カテゴリチェックも自動 ON）
+    //   - 1 件でも外す                           → カテゴリチェックも自動 OFF + バッジ消失
+    const doneBadge = document.createElement("span");
+    doneBadge.className = "proofread-category-done-badge";
+    doneBadge.textContent = "済";
+    doneBadge.hidden = true;
+
+    // 配下の各項目への参照。カテゴリ チェックボックス onChange でまとめて
+    // ON/OFF するために使う。renderItem 後に push される。
+    const itemRefs = [];
+
+    // カテゴリ確認済みチェックボックス（MojiQ 風）。
+    // チェック ON  → カテゴリ確認済み + 配下全項目も自動チェック ON + 自動畳み
+    // チェック OFF → カテゴリ確認済み解除 + 配下全項目も自動チェック OFF
+    const catCb = createCheckbox({
+      checked: isChecked,
+      cssClass: "proofread-category-checkbox",
+      iconClass: "proofread-checkbox-icon",
+      onChange: (checked) => {
+        if (checked) {
+          checkedCategories.add(cat);
+          groupEl.classList.add("checked");
+          collapsedCategories.add(cat);
+          groupEl.classList.add("collapsed");
+          for (const ref of itemRefs) {
+            checkedItems.add(ref.itemKey);
+            ref.el.classList.add("checked");
+            if (ref.input) ref.input.checked = true;
+          }
+        } else {
+          checkedCategories.delete(cat);
+          groupEl.classList.remove("checked");
+          for (const ref of itemRefs) {
+            checkedItems.delete(ref.itemKey);
+            ref.el.classList.remove("checked");
+            if (ref.input) ref.input.checked = false;
+          }
+        }
+        refreshDoneBadge("category");
+      },
+    });
+    // 後段のロジックでカテゴリ チェックボックスの input を制御するための参照。
+    const catCbInput = catCb.querySelector('input[type="checkbox"]');
+
+    // source: "init" | "item" | "category"
+    //   - "item":     項目チェック変化時 → 全件 ON で カテゴリチェックを自動 ON + 自動畳み、
+    //                 1 件でも OFF なら カテゴリチェックも自動 OFF
+    //   - "category": カテゴリチェック変化時 → 状態は onChange で更新済み、badge のみ再評価
+    //   - "init":     初期 render 時 → badge 更新のみ（自動畳み / 自動 ON はしない）
+    const refreshDoneBadge = (source = "init") => {
+      const allItemsChecked = catItems.length > 0
+        && catItems.every((_, idx) => checkedItems.has(`${cat}|${idx}`));
+      if (source === "item") {
+        if (allItemsChecked && !checkedCategories.has(cat)) {
+          checkedCategories.add(cat);
+          groupEl.classList.add("checked");
+          if (catCbInput) catCbInput.checked = true;
+          if (!collapsedCategories.has(cat)) {
+            collapsedCategories.add(cat);
+            groupEl.classList.add("collapsed");
+          }
+        } else if (!allItemsChecked && checkedCategories.has(cat)) {
+          checkedCategories.delete(cat);
+          groupEl.classList.remove("checked");
+          if (catCbInput) catCbInput.checked = false;
+        }
+      }
+      const catChecked = checkedCategories.has(cat);
+      doneBadge.hidden = !(catChecked || allItemsChecked);
+    };
+
+    const toggle = document.createElement("span");
+    toggle.className = "proofread-category-toggle";
+    toggle.textContent = "▼";
+
+    const name = document.createElement("span");
+    name.className = "proofread-category-name";
+    name.textContent = cat;
+
+    const count = document.createElement("span");
+    count.className = "proofread-category-count";
+    count.textContent = `(${catItems.length})`;
+
+    header.appendChild(catCb);
+    header.appendChild(toggle);
+    header.appendChild(name);
+    header.appendChild(count);
+    header.appendChild(doneBadge);
+    header.addEventListener("click", (e) => {
+      // チェックボックス上のクリックは折り畳みトグルに伝搬させない（捕捉済みだが念のため）。
+      if (e.target.closest(".proofread-category-checkbox")) return;
+      if (collapsedCategories.has(cat)) {
+        collapsedCategories.delete(cat);
+        groupEl.classList.remove("collapsed");
+      } else {
+        collapsedCategories.add(cat);
+        groupEl.classList.add("collapsed");
+      }
+    });
+
+    const body = document.createElement("div");
+    body.className = "proofread-category-body";
+    catItems.forEach((item, idx) => {
+      const itemKey = `${cat}|${idx}`;
+      // 項目チェック変化時 → refreshDoneBadge("item") で
+      // カテゴリチェック / collapsed / 「済」バッジ を一括同期する。
+      const itemEl = renderItem(item, itemKey, () => refreshDoneBadge("item"));
+      // カテゴリ チェックボックス onChange から各項目を一括 ON/OFF するため、
+      // 要素と input への参照を保持する。
+      const input = itemEl.querySelector('.proofread-item-checkbox input[type="checkbox"]');
+      itemRefs.push({ itemKey, el: itemEl, input });
+      body.appendChild(itemEl);
+    });
+
+    groupEl.appendChild(header);
+    groupEl.appendChild(body);
+    fragment.appendChild(groupEl);
+    // 初期状態でバッジ判定（renderPanel 再生成時にも前回の状態が反映される）。
+    refreshDoneBadge();
+  }
+  return fragment;
+}
+
+// MojiQ 風スタイルのチェックボックスを生成（hidden input + 装飾用 span）。
+// onChange はチェック状態 (boolean) を受け取り、外部の Set を更新する。
+function createCheckbox({ checked, cssClass, iconClass, onChange }) {
+  const label = document.createElement("label");
+  label.className = cssClass;
+  // ラベル全体のクリックがヘッダー / 行のクリックハンドラへ伝搬しないようにする。
+  label.addEventListener("click", (e) => e.stopPropagation());
+  const input = document.createElement("input");
+  input.type = "checkbox";
+  input.checked = !!checked;
+  input.addEventListener("change", () => {
+    onChange(input.checked);
+  });
+  const icon = document.createElement("span");
+  icon.className = iconClass;
+  label.appendChild(input);
+  label.appendChild(icon);
+  return label;
+}
+
+function renderItem(item, itemKey, notifyChange) {
   const el = document.createElement("div");
-  el.className = "proofread-item";
+  const isChecked = !!(itemKey && checkedItems.has(itemKey));
+  el.className = "proofread-item" + (isChecked ? " checked" : "");
+
+  // 確認済みチェックボックス（MojiQ 風）。本文 body の左に配置、行 click より優先。
+  // チェック ON/OFF 後、notifyChange を呼んでカテゴリ ヘッダーの「済」バッジを再評価する。
+  if (itemKey) {
+    const itemCb = createCheckbox({
+      checked: isChecked,
+      cssClass: "proofread-item-checkbox",
+      iconClass: "proofread-item-checkbox-icon",
+      onChange: (checked) => {
+        if (checked) {
+          checkedItems.add(itemKey);
+          el.classList.add("checked");
+        } else {
+          checkedItems.delete(itemKey);
+          el.classList.remove("checked");
+        }
+        if (typeof notifyChange === "function") notifyChange();
+      },
+    });
+    el.appendChild(itemCb);
+  }
+
+  // 既存の meta / excerpt / content を 1 つの body に包む。flex row でチェックボックスの右に並ぶ。
+  const body = document.createElement("div");
+  body.className = "proofread-item-body";
 
   const meta = document.createElement("div");
   meta.className = "proofread-item-meta";
 
-  const badge = document.createElement("span");
-  badge.className = "proofread-cat-badge";
-  badge.style.backgroundColor = getCategoryColor(item.category);
-  badge.textContent = item.category || "—";
-  meta.appendChild(badge);
-
   const parsedPage = parsePageNumber(item.page);
   if (item.page) {
     if (parsedPage !== null) {
-      // MojiQ 風ハイパーリンク: 青文字 + ホバー下線 + クリックでジャンプ
+      // MojiQ 風ハイパーリンク: 薄い青 + ホバー下線 + クリックでジャンプ
       const p = document.createElement("button");
       p.type = "button";
       p.className = "proofread-page proofread-page-link";
@@ -525,27 +729,26 @@ function renderItem(item) {
     }
   }
 
-  const kindEl = document.createElement("span");
-  kindEl.className = `proofread-kind ${item.checkKind}`;
-  kindEl.textContent = item.checkKind === "correctness" ? "正誤" : "提案";
-  meta.appendChild(kindEl);
-
-  el.appendChild(meta);
+  body.appendChild(meta);
 
   if (item.excerpt) {
     const ex = document.createElement("div");
     ex.className = "proofread-excerpt";
     ex.textContent = item.excerpt;
-    el.appendChild(ex);
+    body.appendChild(ex);
   }
   if (item.content) {
     const c = document.createElement("div");
     c.className = "proofread-content";
     c.textContent = item.content;
-    el.appendChild(c);
+    body.appendChild(c);
   }
 
-  el.addEventListener("click", () => {
+  el.appendChild(body);
+
+  el.addEventListener("click", (e) => {
+    // チェックボックス上のクリックは行ジャンプに使わない。
+    if (e.target.closest(".proofread-item-checkbox")) return;
     if (!item.page) return;
     const pn = parsePageNumber(item.page);
     if (pn !== null) setCurrentPageIndex(pn - 1);
@@ -554,6 +757,9 @@ function renderItem(item) {
   return el;
 }
 
+// 校正パネルの表示制御は view-mode-segment の "editor" モードに連動する。
+// editor モード = pdf-area 内に absolute オーバーレイで表示、parallel モード = 隠す。
+// トグルボタンは無く、main.js の bindParallelViewMode が openProofread/closeProofread を呼ぶ。
 function isPanelOpen() {
   const panel = $("proofread-panel");
   return !!panel && !panel.hidden;
@@ -561,32 +767,23 @@ function isPanelOpen() {
 
 function setPanelOpen(open) {
   const panel = $("proofread-panel");
-  const toggleBtn = $("proofread-toggle-btn");
   if (!panel) return;
   panel.hidden = !open;
-  if (toggleBtn) toggleBtn.setAttribute("aria-pressed", open ? "true" : "false");
   if (open) {
-    // パネルを開いた時点で適切な viewMode を選ぶ。
+    // パネルを開いた時点で適切な viewMode を選ぶ。data 未読込なら empty、
+    // 既にデータがあれば results、フォルダブラウザ中なら browser を維持。
     if (!checkData) viewMode = "empty";
     else if (viewMode !== "browser") viewMode = "results";
     renderPanel();
   }
 }
 
-function togglePanel() {
-  setPanelOpen(!isPanelOpen());
-}
+export function openProofread() { setPanelOpen(true); }
+export function closeProofread() { setPanelOpen(false); }
+export function isProofreadVisible() { return isPanelOpen(); }
 
 export function bindProofreadUi() {
-  const toggleBtn = $("proofread-toggle-btn");
-  if (toggleBtn) {
-    toggleBtn.addEventListener("click", (e) => {
-      e.stopPropagation();
-      togglePanel();
-    });
-  }
-
-  // 閉じるボタンは廃止（校正トグルボタンで開閉できるため不要）
+  // 校正パネルのトグルボタンは撤去済み。表示制御は view-mode-segment "editor" のみ。
 
   // ヘッダーの「JSON読込」: フォルダブラウザを開く（既存 openBrowser に直結）。
   const loadBtn = $("proofread-load-btn");
