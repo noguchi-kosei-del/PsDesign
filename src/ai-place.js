@@ -32,6 +32,7 @@ import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runAiOcrForFiles } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
+import { getDefault } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -100,7 +101,7 @@ function countLines(s) {
   return String(s).split(/\r?\n/).length;
 }
 // canvas-tools.js layerRectForNew の幅・高さ計算と同一ロジック (px は PSD 座標)。
-// thick の安全余白 (+0.4em) も canvas-tools.js と揃える。
+// thick / long の安全余白 (+0.4em) も canvas-tools.js と揃える。
 function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const dpi = psdPage.dpi ?? 72;
   const ptInPsdPx = sizePt * (dpi / 72);
@@ -108,7 +109,7 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const lineCount = Math.max(1, countLines(contents));
   const leadingFactor = (leadingPct ?? 125) / 100;
   const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + 0.4));
-  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.05 * chars);
+  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (1.05 * chars + 0.4));
   const isVertical = direction !== "horizontal";
   const maxLong = isVertical ? psdPage.height * 0.95 : psdPage.width * 0.95;
   const long = Math.min(longRaw, maxLong);
@@ -116,6 +117,56 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
     width:  isVertical ? thick : long,
     height: isVertical ? long  : thick,
   };
+}
+
+// comic-text-detector が吹き出しごとに推定した font_size（OCR 入力画像のピクセル）を、
+// 対象 PSD の物理座標系での pt に換算する。
+// 換算式: pt = (font_size_px × 画像→PSD スケール) × 72 / psd.dpi
+//   - スケールは sx, sy の小さい方を採用（縦書き / 横書きどちらでも安全側になる）
+//   - キャリブレーション係数 0.92: comic-text-detector の font_size は em-box（行送り・上下余白を含む）
+//     寄りに出る傾向があるので、グリフ相当に揃えるべく約 8% 縮める。
+//     ※ あまり大きく縮めると 1 行吹き出し（detector が比較的正確）で過小化するため控えめに。
+//   - bbox 上限キャップ: 検出された吹き出しの "厚み" 軸（縦書き=横幅、横書き=縦高）から
+//     leading=1.25 を仮定して em 1 つ分の物理上限を逆算。多列吹き出しでの過大検出を抑える。
+//   - 環境設定の textSizeStep（0.1 / 0.5）に丸め、[6, 999] にクランプ。
+//   - font_size が無効値のときは null を返してフォールバック。
+const FONT_SIZE_CALIBRATION = 0.92;
+const ASSUMED_LEADING_FACTOR = 1.25;
+
+function detectSizePtFromBlock(block, mokuroPage, psdPage) {
+  const fs = block?.font_size;
+  if (!Number.isFinite(fs) || fs <= 0) return null;
+  const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
+  const sy = psdPage.height / Math.max(mokuroPage.img_height, 1);
+  const scale = Math.min(sx, sy);
+  if (!(scale > 0)) return null;
+  const dpi = psdPage.dpi ?? 72;
+
+  // 1) detector の font_size を PSD pt に換算 + 軽いキャリブレーション
+  let pt = ((fs * scale) * 72) / dpi * FONT_SIZE_CALIBRATION;
+
+  // 2) bbox の "厚み" から物理的な上限 pt を算出して上から押さえる。
+  //    縦書きは横幅 = (1 + (n-1) × leading) × em の関係で em を逆算。横書きは縦高で同様。
+  //    1 行は denom=1（bbox とほぼ等価）、2 行は denom=2.25、3 行は 3.5 …と多列ほど厳しく。
+  const lines = Array.isArray(block.lines) ? block.lines : [];
+  const lineCount = Math.max(1, lines.length);
+  const isVertical = !!block.vertical;
+  const thickPsdPx = isVertical
+    ? (block.box[2] - block.box[0]) * sx
+    : (block.box[3] - block.box[1]) * sy;
+  if (Number.isFinite(thickPsdPx) && thickPsdPx > 0) {
+    const denom = 1 + Math.max(0, lineCount - 1) * ASSUMED_LEADING_FACTOR;
+    const maxPt = ((thickPsdPx / denom) * 72) / dpi;
+    if (Number.isFinite(maxPt) && maxPt > 0) pt = Math.min(pt, maxPt);
+  }
+
+  if (!Number.isFinite(pt) || pt <= 0) return null;
+  // 環境設定の刻み（0.1 / 0.5）にスナップ。
+  const step = Number(getDefault("textSizeStep")) === 0.5 ? 0.5 : 0.1;
+  const snapped = Math.round(pt / step) * step;
+  // クランプ範囲は state.js setTextSize と一致させる。
+  const clamped = Math.max(6, Math.min(999, snapped));
+  return Math.round(clamped * 10) / 10;
 }
 
 function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef) {
@@ -128,8 +179,11 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   // 推定レイヤー矩形サイズ → top-left を中心合わせで算出
   // (canvas-tools.js: centerTopLeft = clickX - width/2, clickY - height/2)
   const text = contents ?? "";
+  // 検出フォントサイズが取れた吹き出しは見本に合わせる、取れなければデフォルトにフォールバック。
+  const detectedPt = detectSizePtFromBlock(block, mokuroPage, psdPage);
+  const sizePt = detectedPt ?? defaults.sizePt ?? 24;
   const { width, height } = estimateLayerSize(
-    psdPage, defaults.sizePt ?? 24, text, defaults.leadingPct ?? 125, direction,
+    psdPage, sizePt, text, defaults.leadingPct ?? 125, direction,
   );
   const x = cx - width / 2;
   const y = cy - height / 2;
@@ -140,7 +194,7 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
     contents: text,
     direction,
     fontPostScriptName: defaults.fontPostScriptName,
-    sizePt: defaults.sizePt,
+    sizePt,
     leadingPct: defaults.leadingPct,
     strokeColor: defaults.strokeColor,
     strokeWidthPx: defaults.strokeWidthPx,

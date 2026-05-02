@@ -821,6 +821,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   justify-content: center;
   padding: 0;
 }
+/* side-toolbar は padding:0 6px 10px を持つため、その中の .panel-header の border-bottom が
+   端まで届かない。負マージン + width 拡張で親パディングを相殺し、サイドパネル側と同じく
+   ヘッダ下の区切り線を端から端まで伸ばす。collapsed 時は親 padding=0 なので相殺不要。 */
+.side-toolbar > .panel-header {
+  margin-left: -6px;
+  margin-right: -6px;
+  width: calc(100% + 12px);
+}
+.side-toolbar.collapsed > .panel-header {
+  margin-left: 0;
+  margin-right: 0;
+  width: 100%;
+}
 /* 反転時はサイドバーが左にあるので、>> アイコンの向きを反転 */
 .workspace.flipped .side-toolbar > .panel-header .icon-collapse,
 .workspace.flipped .side-toolbar > .panel-header .icon-expand,
@@ -1266,14 +1279,28 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .psd-guide[data-axis="h"] { height: 1px; cursor: ns-resize; }
 .psd-guide[data-axis="v"] { width: 1px;  cursor: ew-resize; }
-/* ホバー/ドラッグ時に強調 */
+/* ホバー/ドラッグ時に強調（色だけ変える。box-shadow による太さ強調は使わない） */
 .psd-guide:hover, .psd-guide.dragging {
   background: var(--accent);
   opacity: 1;
 }
-/* ドラッグ中はクリック判定を広めに（実線は 1px のままでも当たり判定だけ広げる） */
-.psd-guide.dragging[data-axis="h"] { box-shadow: 0 0 0 2px var(--accent); }
-.psd-guide.dragging[data-axis="v"] { box-shadow: 0 0 0 2px var(--accent); }
+
+/* ガイドロック中、縦横 2 本以上のガイドで囲まれた矩形の外側を薄暗くするオーバーレイ。
+   .psd-guides-layer は z-index:2 / pointer-events:none。dim 自身も pointer-events を奪わない。
+   DOM 順で個別ガイド線より先に挿入されるため、ガイド線が常に上に表示される。
+   実装: clipper で canvas 範囲外を切り落とし、内側の dim div の box-shadow (spread) で
+   一気に外周を塗る。4 分割 div では継ぎ目に subpixel 隙間が生じるためこの方式に統一。 */
+.psd-guide-dim-clipper {
+  position: absolute;
+  pointer-events: none;
+  overflow: hidden;
+}
+.psd-guide-dim {
+  position: absolute;
+  pointer-events: none;
+  /* 透明 div の周囲を 9999px の spread で一気に塗る。clipper の overflow:hidden で切り落とされる。 */
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+}
 
 /* 非同期モード時のアクティブペイン強調（キーボード/ホイールの操作対象側） */
 .spreads-pdf-area.active-pane,
@@ -1284,7 +1311,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 .pdf-rotate-btn,
 .psd-rotate-btn,
-.psd-guides-lock-btn {
+.psd-guides-lock-btn,
+.psd-guides-apply-btn {
   position: absolute;
   bottom: 8px;
   z-index: 2;
@@ -1304,10 +1332,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .psd-rotate-btn { right: 8px; }
 /* ロックボタンは回転ボタンの左隣（28px + 4px gap = 32px ぶん左へ） */
 .psd-guides-lock-btn { right: 44px; }
+/* 「ガイドを複数反映」はロックボタンのさらに左隣（44 + 28 + 8 = 80px） */
+.psd-guides-apply-btn { right: 80px; }
 
 .pdf-rotate-btn:hover,
 .psd-rotate-btn:hover,
-.psd-guides-lock-btn:hover {
+.psd-guides-lock-btn:hover,
+.psd-guides-apply-btn:hover {
   background: var(--accent, #3b82f6);
   color: #fff;
 }
@@ -1323,10 +1354,64 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-color: var(--accent, #3b82f6);
 }
 
-/* ガイドロック中：ガイド本体・ルーラー帯ともにドラッグ用 cursor を変更。 */
-.spreads-psd-area.guides-locked .psd-guide { cursor: default; }
+/* ガイドロック中：
+   - ガイド線そのものは非表示（dim マスクで囲んだ枠を確認する用途を優先）。
+   - ルーラー帯のドラッグ用 cursor も変更して新規作成不可を示す。 */
+.spreads-psd-area.guides-locked .psd-guide { display: none; }
 .spreads-psd-area.guides-locked .psd-ruler-top { cursor: default; }
 .spreads-psd-area.guides-locked .psd-ruler-left { cursor: default; }
+
+/* ガイドを複数反映モーダル */
+.guides-apply-card {
+  min-width: 380px;
+  max-width: 520px;
+}
+.guides-apply-controls {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+.guides-apply-list {
+  max-height: 50vh;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 0;
+  background: var(--bg);
+}
+.guides-apply-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  user-select: none;
+  font-size: 13px;
+  color: var(--text);
+}
+.guides-apply-item:hover {
+  background: var(--panel-hover);
+}
+.guides-apply-item input[type="checkbox"] {
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.guides-apply-item-current,
+.guides-apply-item-applied {
+  cursor: default;
+  opacity: 0.5;
+}
+.guides-apply-item-current:hover,
+.guides-apply-item-applied:hover {
+  background: transparent;
+}
+.guides-apply-item-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .pdf-stage {
   flex: 1;

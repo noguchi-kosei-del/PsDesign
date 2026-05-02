@@ -13,6 +13,7 @@ import { rebuildLayerList } from "../text-editor.js";
 import { loadPsdFromPath } from "../psd-loader.js";
 import { setHasSavedThisSession, updateSaveButton } from "../bind/save.js";
 import { baseName, parentDir } from "../utils/path.js";
+import { setGuidesLocked } from "../rulers.js";
 
 export async function pickPsdFiles() {
   const { openFileDialog } = await import("../file-picker.js");
@@ -53,6 +54,9 @@ export async function loadPsdFilesByPaths(files) {
   // 最初に選んだファイルの親ディレクトリを「別名で保存」の既定フォルダ名算出に使う。
   setFolder(parentDir(files[0]) ?? null);
   setHasSavedThisSession(false);
+  // PSD を読み込み直すタイミングでガイドロックは解除。新しい PSD のガイドが
+  // ない / 異なる位置にあっても古いロック状態でユーザーがハマらないようにする。
+  setGuidesLocked(false);
 
   showProgress({
     title: "PSD を読み込み中",

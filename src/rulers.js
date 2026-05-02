@@ -24,12 +24,14 @@ import {
 // ===== State =====
 const RULER_THICK = 18; // CSS px。styles.css の --ruler-thick と同期。
 const VISIBLE_KEY = "psdesign_rulers_visible";
-const LOCKED_KEY = "psdesign_guides_locked";
 
 const guidesByPsd = new Map(); // psdPath -> { h: number[], v: number[] } （PSD pixel）
 let rulersVisible = loadVisible();
 const visibleListeners = new Set();
-let guidesLocked = loadLocked();
+// ロック状態は意図的にセッション内のみ保持（永続化しない）。
+// 再起動時は必ず解除状態で立ち上がる。閉じた瞬間にロックを忘れたまま次セッション
+// で動かせない事故を避けるため、毎回明示的にロックし直す運用とする。
+let guidesLocked = false;
 const lockedListeners = new Set();
 // guides 配列が変化（追加 / 移動 / 削除）したときに発火する listener。
 // ガイドロックボタンの disabled 状態を「ガイドが 1 本以上引かれているか」と連動させる用途。
@@ -56,12 +58,6 @@ function loadVisible() {
 }
 function saveVisible() {
   try { localStorage.setItem(VISIBLE_KEY, rulersVisible ? "1" : "0"); } catch {}
-}
-function loadLocked() {
-  try { return localStorage.getItem(LOCKED_KEY) === "1"; } catch { return false; }
-}
-function saveLocked() {
-  try { localStorage.setItem(LOCKED_KEY, guidesLocked ? "1" : "0"); } catch {}
 }
 
 export function getRulersVisible() { return rulersVisible; }
@@ -91,8 +87,9 @@ export function setGuidesLocked(on) {
   const v = !!on;
   if (guidesLocked === v) return;
   guidesLocked = v;
-  saveLocked();
   applyLockedToDom();
+  // ロック ON/OFF でガイド外側のディムマスク描画が変わるので再描画。
+  requestRulerRedraw();
   for (const fn of lockedListeners) fn(v);
 }
 
@@ -159,6 +156,57 @@ export function removeGuide(psdPath, axis, index) {
   list.splice(index, 1);
   requestRulerRedraw();
   emitGuidesChange(psdPath);
+}
+
+// 指定 PSD パスのガイドが、現在ページのガイドと完全一致しているか。
+// 一致 = h / v 両方の配列が同じ長さで全要素が同値（順不同マッチ）。
+// 反映ボタンのモーダルで「既に反映済みのページ」をグレーアウトするのに使う。
+export function guidesMatchCurrent(psdPath) {
+  const srcPath = getCurrentPsdPath();
+  if (!srcPath || !psdPath || psdPath === srcPath) return false;
+  const src = guidesByPsd.get(srcPath);
+  const dst = guidesByPsd.get(psdPath);
+  if (!src || !dst) return false;
+  return arraysEqualSet(src.h, dst.h) && arraysEqualSet(src.v, dst.v);
+}
+
+// 順不同で配列を比較（ガイドは座標の集合扱い）。要素は数値の前提で 1e-3 PSD px 以内なら同値。
+function arraysEqualSet(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b)) return false;
+  if (a.length !== b.length) return false;
+  if (a.length === 0) return true;
+  const used = new Array(b.length).fill(false);
+  for (const va of a) {
+    let found = -1;
+    for (let i = 0; i < b.length; i++) {
+      if (!used[i] && Math.abs(b[i] - va) <= 1e-3) { found = i; break; }
+    }
+    if (found < 0) return false;
+    used[found] = true;
+  }
+  return true;
+}
+
+// 現在ページのガイド配列（h/v の両方）を、指定 PSD パス群にコピーして上書き反映する。
+// マージではなく完全置き換え。自分自身（現ページ）を targetPaths に含めても無視。
+// 戻り値は実際に書き込んだページ数。
+export function applyGuidesToPaths(targetPaths) {
+  const srcPath = getCurrentPsdPath();
+  if (!srcPath) return 0;
+  const src = guidesByPsd.get(srcPath);
+  if (!src) return 0;
+  let count = 0;
+  for (const path of targetPaths) {
+    if (!path || path === srcPath) continue;
+    guidesByPsd.set(path, {
+      h: [...src.h],
+      v: [...src.v],
+    });
+    emitGuidesChange(path);
+    count++;
+  }
+  if (count > 0) requestRulerRedraw();
+  return count;
 }
 
 // ===== Mount =====
@@ -466,6 +514,13 @@ function renderGuides(geom) {
   const horizLength = geom.page[horizAxisInfo.axis === "x" ? "width" : "height"];
   const vertLength  = geom.page[vertAxisInfo.axis  === "x" ? "width" : "height"];
 
+  // ガイドロック中かつ縦横 2 本以上のガイドが揃ったら、min/max で囲まれる矩形の
+  // 外側 4 領域を薄暗くマスクする。トリミング枠の確認用途。
+  // ガイド線本体より先に追加することで DOM 順 = 描画順で線が dim の上に来る。
+  if (guidesLocked && g.h.length >= 2 && g.v.length >= 2) {
+    renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength);
+  }
+
   // 水平ガイド：上ルーラーから引いた → 画面上で「縦位置」が固定の水平線。
   // ガイド値 v は「上ルーラーで読み取れる値」= map.topAxis 軸の値。
   // ……実装の単純化のため、「水平ガイド」=画面上の水平線=画面 Y が固定 と読み替え、
@@ -518,6 +573,61 @@ function renderGuides(geom) {
     div.addEventListener("mousedown", (e) => beginMoveGuide(e, "v", i));
     guidesLayer.appendChild(div);
   }
+}
+
+// ガイドロック中、縦横 2 本以上のガイドで囲まれた矩形の外側を薄暗くオーバーレイ。
+// 矩形 = 各軸ガイドの画面位置の min..max。canvas 外側にはみ出さないようクリップ。
+//
+// 実装: 単一 div の box-shadow（spread 大）で外周を一気に塗る。
+// 4 分割 div では継ぎ目に 1px 未満の隙間が出る（subpixel rounding が原因）ため、
+// 1 つの shadow で塗って隙間を物理的に作らない方式にする。clipper で canvas 範囲外を切り落とす。
+function renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength) {
+  // 各ガイドの画面 px 位置に変換（renderGuides の個別ループと同じ式）。
+  const yPositions = g.h.map((v) => {
+    const along = vertAxisInfo.sign > 0 ? v : (vertLength - v);
+    return geom.canvasTopInPane + along * geom.pxPerPsdV;
+  });
+  const xPositions = g.v.map((v) => {
+    const along = horizAxisInfo.sign > 0 ? v : (horizLength - v);
+    return geom.canvasLeftInPane + along * geom.pxPerPsdH;
+  });
+
+  const cTop = geom.canvasTopInPane;
+  const cBot = geom.canvasBottomInPane;
+  const cLeft = geom.canvasLeftInPane;
+  const cRight = geom.canvasRightInPane;
+
+  // 矩形を canvas 範囲にクリップ。
+  const minY = Math.max(Math.min(...yPositions), cTop);
+  const maxY = Math.min(Math.max(...yPositions), cBot);
+  const minX = Math.max(Math.min(...xPositions), cLeft);
+  const maxX = Math.min(Math.max(...xPositions), cRight);
+  if (maxY <= minY || maxX <= minX) return;
+
+  // 1) clipper: canvas 範囲ぴったりを覆う。overflow: hidden で内側の box-shadow を切り落とす。
+  //    丸めは外側に倒す（floor for left/top, ceil for right/bottom）ことで端 1px の漏れも防ぐ。
+  const cLeftI  = Math.floor(cLeft);
+  const cTopI   = Math.floor(cTop);
+  const cRightI = Math.ceil(cRight);
+  const cBotI   = Math.ceil(cBot);
+  const clipper = document.createElement("div");
+  clipper.className = "psd-guide-dim-clipper";
+  clipper.style.left = `${cLeftI}px`;
+  clipper.style.top = `${cTopI}px`;
+  clipper.style.width = `${cRightI - cLeftI}px`;
+  clipper.style.height = `${cBotI - cTopI}px`;
+
+  // 2) dim: 「明るく残したい矩形」の位置・サイズに置く透明 div。box-shadow の spread で
+  //    周囲一面を塗る。clipper の overflow:hidden で canvas 範囲外（ルーラー帯等）には漏れない。
+  const dim = document.createElement("div");
+  dim.className = "psd-guide-dim";
+  dim.style.left = `${minX - cLeftI}px`;
+  dim.style.top = `${minY - cTopI}px`;
+  dim.style.width = `${maxX - minX}px`;
+  dim.style.height = `${maxY - minY}px`;
+
+  clipper.appendChild(dim);
+  guidesLayer.appendChild(clipper);
 }
 
 // ===== 入力 =====

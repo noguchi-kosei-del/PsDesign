@@ -232,6 +232,12 @@
             </div>
             <div class="spreads-proofread-area" id="spreads-proofread-area" hidden></div>
             <div class="spreads-psd-area" id="spreads-psd-area">
+              <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" hidden>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                </svg>
+              </button>
               <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" hidden>
                 <svg class="lock-icon-unlocked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
@@ -628,6 +634,21 @@
         <div class="page-jump-actions">
           <button type="button" id="page-jump-cancel" class="page-jump-btn">キャンセル</button>
           <button type="button" id="page-jump-ok" class="page-jump-btn page-jump-btn-primary">ジャンプ</button>
+        </div>
+      </div>
+    </div>
+    <div class="progress-modal" id="guides-apply-modal" hidden>
+      <div class="progress-card guides-apply-card" role="dialog" aria-modal="true" aria-label="ガイドを複数ページに反映">
+        <div class="progress-title">ガイドを複数ページに反映</div>
+        <div class="confirm-modal-message">現在のページのガイドを、選択したページに上書き反映します。</div>
+        <div class="guides-apply-controls">
+          <button type="button" id="guides-apply-select-all" class="page-jump-btn">全選択</button>
+          <button type="button" id="guides-apply-select-none" class="page-jump-btn">全解除</button>
+        </div>
+        <div class="guides-apply-list" id="guides-apply-list"></div>
+        <div class="page-jump-actions">
+          <button type="button" id="guides-apply-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="guides-apply-ok" class="page-jump-btn page-jump-btn-primary">反映</button>
         </div>
       </div>
     </div>

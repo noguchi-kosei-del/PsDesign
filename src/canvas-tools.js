@@ -230,6 +230,44 @@ function applyToolAttrs(ctx) {
     tool === "pan" ? "grab" : "default";
 }
 
+// 既存テキストレイヤーの「実描画 fontSize（pt）」を返す。
+// 写植テキストは Photoshop で「100pt → 0.2× scale」のように transform で縮められて
+// 配置されることがあり、ag-psd の style.fontSize は scale 前の生値を返すため、
+// 単純に layer.fontSize を採用すると frame / 内文が実描画サイズの数倍に膨れる。
+// bounds (layer.left/right/top/bottom) はラスタライズ後の実描画範囲を反映するので、
+// 「厚み軸長 / em-box 列数係数」で em-box pt を逆算する。
+// ユーザーが明示的にサイズを編集している場合は edit.sizePt を優先、それ以外は
+// declared と bounds-derived の小さい方を採用（過大値を抑える）。
+export function getExistingLayerEffectiveSizePt(page, layer, edit) {
+  if (edit && Number.isFinite(edit.sizePt) && edit.sizePt > 0) return edit.sizePt;
+  const declaredSizePt = layer?.fontSize ?? null;
+  const dpi = page?.dpi ?? 72;
+  const rawWidth = Math.max(0, (layer?.right ?? 0) - (layer?.left ?? 0));
+  const rawHeight = Math.max(0, (layer?.bottom ?? 0) - (layer?.top ?? 0));
+  if (rawWidth > 0 && rawHeight > 0) {
+    const direction = edit?.direction ?? layer?.direction ?? "horizontal";
+    const isVertical = direction === "vertical";
+    const text = edit?.contents ?? layer?.text ?? "";
+    const lineCount = Math.max(1, countLines(text));
+    const thickPsdPx = isVertical ? rawWidth : rawHeight;
+    // tight bounds 想定: thick = em × (1 + (n-1) × leading_default)
+    // leading_default は写植系の慣例で 1.25 を仮定（autoLeading 125% と整合）。
+    const tightDenom = 1 + Math.max(0, lineCount - 1) * 1.25;
+    if (tightDenom > 0) {
+      const ptPsdPx = thickPsdPx / tightDenom;
+      const sizeFromBounds = (ptPsdPx * 72) / dpi;
+      if (sizeFromBounds > 0) {
+        // bounds が padded で大きめに出ているケースでは declared を尊重するため、
+        // 必ず小さい方を選ぶ（過大化を防ぐのが目的）。
+        return declaredSizePt > 0
+          ? Math.min(declaredSizePt, sizeFromBounds)
+          : sizeFromBounds;
+      }
+    }
+  }
+  return declaredSizePt ?? 24;
+}
+
 function layerRectForExisting(page, layer, edit) {
   const dpi = page.dpi ?? 72;
   const left0 = layer.left ?? 0;
@@ -239,21 +277,25 @@ function layerRectForExisting(page, layer, edit) {
 
   const direction = edit.direction ?? layer.direction ?? "horizontal";
   const isVertical = direction === "vertical";
-  const sizePt = edit.sizePt ?? layer.fontSize ?? 24;
-  const ptInPsdPx = sizePt * (dpi / 72);
   const previewText = edit.contents ?? layer.text ?? "";
   const chars = Math.max(1, longestLine(previewText));
   const lineCount = Math.max(1, countLines(previewText));
   // 行間 (autoLeadingAmount %) を厚み（行スタック方向）の係数に反映。125% を最低値として
   // 設定しても既存の見た目より細くしないように clamp。
   const leadingFactor = Math.max(1.25, ((edit.leadingPct ?? 125) / 100));
+
+  const sizePt = getExistingLayerEffectiveSizePt(page, layer, edit);
+  const ptInPsdPx = sizePt * (dpi / 72);
   // CJK 縦書きで小書き仮名（ょ・っ・ゃ等）や glyph の line-box overhang、
   // text-stroke の outset 半分（stroke 既定 20 PSD px → ~0.16em）を吸収するため
   // 列方向に 0.4em の安全余白を足す。テキスト本体は CSS で bbox 中央に配置するので
   // bbox が広がっても視覚位置は不変。
+  // LONG 軸（流し方向）にも display 系フォントの ascender/descender が em-box を
+  // 超えてはみ出すぶんの安全余白を 0.4em 加える。
   const THICK_SAFETY = 0.4;
+  const LONG_SAFETY = 0.4;
   const fallbackThick = ptInPsdPx * (leadingFactor * lineCount + THICK_SAFETY);
-  const fallbackLong = ptInPsdPx * 1.05 * chars;
+  const fallbackLong = ptInPsdPx * (1.05 * chars + LONG_SAFETY);
   const minThick = Math.max(ptInPsdPx * (leadingFactor + THICK_SAFETY), 20);
   const minLong = Math.max(ptInPsdPx * 2, 48);
 
@@ -281,11 +323,12 @@ function layerRectForNew(page, nl) {
   const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
   // 行間 (%) を厚み係数に反映。125 が既定。
-  // 小書き仮名 + stroke overhang を吸収する 0.4em の安全余白を加算。テキスト本体は
+  // 小書き仮名 + stroke overhang を吸収する 0.4em の安全余白を THICK 軸に加算。テキスト本体は
   // CSS padding で bbox 中央に配置されるので、bbox が広がっても視覚位置は変わらない。
+  // LONG 軸（流し方向）にも display 系フォントの ascender/descender overshoot 用に 0.4em 加える。
   const leadingFactor = (nl.leadingPct ?? 125) / 100;
   const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + 0.4));
-  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * 1.05 * chars);
+  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (1.05 * chars + 0.4));
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
   const width = isVertical ? thick : long;
@@ -354,7 +397,9 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       box.appendChild(createRotateHandle(ctx, layer.id));
-      box.appendChild(createSizeBadge(edit.sizePt ?? layer.fontSize ?? 24, page, edit.fontPostScriptName ?? layer.font ?? null));
+      // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
+      const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
+      box.appendChild(createSizeBadge(effectivePt, page, edit.fontPostScriptName ?? layer.font ?? null));
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });

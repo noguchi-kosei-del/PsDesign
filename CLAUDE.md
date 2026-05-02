@@ -1826,3 +1826,140 @@ D3. **サイドツールバー / サイドパネル全体**:
 > - 旧: 画像スキャン = 読込済み見本を再利用 → 新: 毎回ファイル選択（旧見本は自動破棄）
 > - 旧: ゴミ箱ボタン = TXT 全削除（誤操作リスク高）→ 新: 選択中段落のみ削除（自動配置済みレイヤーも整合的に削除 + paragraphIndex 補正）
 
+---
+
+## v1.7.0: 自動配置サイズ精度向上 + ガイドロックのディムマスク + ガイド複数反映 + 既存テキストフレーム算出修正
+
+### 概要
+
+このバージョンの 4 つの柱:
+1. **自動配置のテキストサイズを見本に合わせる**（comic-text-detector の `font_size` 活用）
+2. **ガイドロック時の外側ディム表示** + **ガイドを複数ページに一括反映**機能
+3. **既存 PSD のテキストフレーム巨大化バグ修正**（写植で transform スケールがかかったレイヤー）
+4. **テキストフレーム見切れバグ修正**（LONG 軸の安全余白追加）
+
+加えてガイドロックの永続化撤廃、ロック中のガイド線非表示、サイドツールバー区切り線整形などの細かな UI 改善を含む。
+
+### A. 自動配置のテキストサイズ自動推定
+
+A1. **`detectSizePtFromBlock(block, mokuroPage, psdPage)` 新設** ([src/ai-place.js](src/ai-place.js))
+- comic-text-detector が吹き出しごとに推定する `font_size`（OCR 入力画像のピクセル）を、対象 PSD の物理座標系での pt に換算して per-layer に適用
+- 換算式: `pt = (font_size_px × scale) × 72 / dpi × FONT_SIZE_CALIBRATION`
+  - `scale = min(sx, sy)`（縦書き / 横書きどちらでも安全側）
+  - `FONT_SIZE_CALIBRATION = 0.92`（comic-text-detector の `font_size` は em-box 寄りに出るので glyph 相当に揃える経験補正）
+- bbox 上限キャップ: `maxPt = (thick_axis / denom) × 72 / dpi`、`denom = 1 + (lineCount-1) × 1.25`
+  - 1 行吹き出し: `denom = 1`（bbox とほぼ等価でキャップは緩め）
+  - 2 行: `denom = 2.25`（leading 込みで em 1 つ分を逆算）
+  - 多列ほど厳しく頭打ち、装飾フォント等の過大検出を抑える
+- 環境設定の `textSizeStep`（0.1 / 0.5）に丸め、`[6, 999]` にクランプ
+- 検出失敗時は `defaults.sizePt` にフォールバック
+
+A2. **チューニング過程**: 初期実装は `1.0` 固定 → 過大気味 → `0.85 + bbox_cap` に補正 → 1 行が縮みすぎ → 最終的に **0.92 + leading 込みの厳密 bbox cap** に落ち着く。`FONT_SIZE_CALIBRATION` 単独調整 + `ASSUMED_LEADING_FACTOR` で 2 軸チューニング可能。
+
+A3. **`mapBlockToNewLayer` の改修**: `defaults.sizePt` 直書きをやめ、検出値があれば優先採用。下流影響なし（`syncPlacedFromTxt` は `layer.sizePt` を保持して再計算、`jsx_gen.rs` の `nti.size` も per-layer sizePt を反映）。
+
+### B. テキストフレーム見切れバグ修正（LONG 軸の安全余白）
+
+B1. **問題**: v1.5.0 で THICK 軸に 0.4em の安全余白を追加したが、LONG 軸（テキスト流し方向）は `1.05 × chars`（5% per-char）のままだった。display 系フォント（F910コミックW4 など）の ascender/descender overshoot に対する余裕が実質ほぼ無く、特に検出 pt が小数（14.5pt 等）の場合に末尾文字が `overflow: hidden` で切れていた。
+
+B2. **修正** ([src/canvas-tools.js](src/canvas-tools.js) `layerRectForExisting` / `layerRectForNew` + [src/ai-place.js](src/ai-place.js) `estimateLayerSize`):
+```js
+// 旧: ptInPsdPx * 1.05 * chars
+// 新: ptInPsdPx * (1.05 * chars + 0.4)
+```
+THICK 軸と同じ 0.4em の固定 safety margin を LONG 軸にも入れて統一。3 文字で約 +13% の bbox 拡張で descender 切れを解消。
+
+### C. 既存 PSD のテキストフレーム巨大化バグ修正
+
+C1. **問題**: 写植テキストが既に入っている PSD を読み込むと、ラスタライズされたテキストの上に **数倍〜十数倍の巨大なテキストフレーム**が重なって表示される。原因は ag-psd の `style.fontSize` が「変形前の生 fontSize」を返すため。Photoshop で「100pt のテキストを 0.2× scale で配置」した場合 `style.fontSize = 100, transform = [0.2, 0, 0, 0.2, tx, ty]` となり、生値をそのまま使うと frame / 内文プレビュー / バッジ / size input が全て scale 前の pt で表示されていた。
+
+C2. **解決アプローチ**: 当初 `text.transform` 行列の行列式 sqrt から実効 scale を逆算する方式を試したが、ag-psd の出力で transform が期待通り取れないケースがあったため、**PSD bounds（`layer.left/right/top/bottom`）から逆算**する方式に切り替え。bounds はラスタライズ後の実描画範囲を反映するので transform の有無に依存せず確実。
+
+C3. **共通ヘルパー `getExistingLayerEffectiveSizePt(page, layer, edit)` を export** ([src/canvas-tools.js](src/canvas-tools.js)):
+```js
+// edit.sizePt が明示されていれば最優先（ユーザー編集を尊重）。
+// それ以外は declared (layer.fontSize) と bounds-derived の min を採用（過大値を抑制）。
+const thickPsdPx = isVertical ? rawWidth : rawHeight;
+const tightDenom = 1 + Math.max(0, lineCount - 1) * 1.25;  // tight bbox 想定
+const sizeFromBounds = (thickPsdPx / tightDenom) * 72 / dpi;
+return Math.min(declaredSizePt, sizeFromBounds);
+```
+- bounds が tight（写植テキスト）→ bounds-derived（実描画 pt）が採用される
+- bounds が padded（一部ツールが付加した余白）→ declared を尊重（min なので過大化しない）
+- bounds が無効 → declared 素通し
+- ユーザーが size を編集中 → `edit.sizePt` 最優先（`min` の対象外）
+
+C4. **5 箇所で同じ実効 pt を共有** ([src/canvas-tools.js](src/canvas-tools.js) + [src/text-editor.js](src/text-editor.js)):
+1. `layerRectForExisting` の frame 算出（rect.width/height + ptInPsdPx）
+2. 内文プレビュー `inner.style.fontSize`（rect.ptInPsdPx 経由で同期）
+3. `createSizeBadge` の表示 pt
+4. サイドパネルの size input 初期値 / 反映値
+5. レイヤーリストの meta 表示
+
+C5. **副次的試み**: psd-loader.js に `effectiveFontSize(rawFontSize, transform)` を追加し、行列式 sqrt から scale を逆算するフェーズも残してある。transform が取れる PSD ではこちらが先に正しい値に補正、bounds 逆算と二重に min を取って整合する設計。
+
+### D. ガイドロック時の外側ディムマスク
+
+D1. **`renderLockedDimMask(geom, g, ...)` 新設** ([src/rulers.js](src/rulers.js)): ガイドロック中、縦横 2 本以上のガイドが揃ったら **min/max で囲まれた矩形の外側 4 領域**を薄暗くオーバーレイする。トリミング枠の最終確認用途。
+
+D2. **実装方式の試行錯誤**:
+- 当初: 4 分割 div（上 / 下 / 左 / 右）で外周を塗る
+- 問題発覚: subpixel rounding により左端 1px 未満の隙間が発生
+- 改善: **clipper（canvas 範囲を `overflow: hidden`）+ 内側に透明 div を置き `box-shadow: 0 0 0 9999px rgba(0,0,0,0.45)` で外周を一気に spread 描画**
+- 端の丸めは外側に倒す（`floor` for left/top, `ceil` for right/bottom）→ 物理的に隙間が発生しない構造
+
+D3. **DOM 順序**: dim マスクをガイド線より先に追加し、guide line が常に dim の上に来るようにする（`appendChild` 順 = 描画順）。
+
+D4. **再描画**: `setGuidesLocked` 内で `requestRulerRedraw()` を呼びロック切替時に dim 表示が即時反映。`onGuidesChange` 経由でガイド追加・移動・削除にもリアルタイム連動。
+
+### E. ガイドを複数ページに反映機能
+
+E1. **`#psd-guides-apply-btn` 新設** ([index.html](index.html) + [src/styles.css](src/styles.css)): ロックボタンの左隣（`right: 80px`）に lucide `copy` アイコン（重なった矩形）のボタンを配置。
+
+E2. **`applyGuidesToPaths(targetPaths)` 新設** ([src/rulers.js](src/rulers.js)): 現ページのガイド配列（h/v 両方）を指定 PSD パス群にコピーして上書き反映。マージではなく完全置き換え。`emitGuidesChange` を各 path に発火、最後に 1 回 `requestRulerRedraw`。
+
+E3. **モーダル UI** ([index.html](index.html) `#guides-apply-modal` + [src/main.js](src/main.js) `openGuidesApplyModal`):
+- 全 PSD ページのチェックボックスリスト（現ページは灰色 + チェック不可）
+- 「全選択」「全解除」ショートカットボタン
+- Esc キャンセル / Enter 実行
+- 既存モーダルと同じ `showModalAnimated` / `hideModalAnimated` でフェード+スケールアニメ
+
+E4. **ボタンの有効条件**:
+- **ルーラー ON + PSD 2 ページ以上**で表示
+- **現ページにガイドあり + ガイドロック中**で disabled 解除
+- ロック前は「ガイドをロックすると反映できます」、ガイド無しは「現在のページにガイドが引かれていません」とツールチップ
+- `onGuidesLockedChange` を購読してロック切替に追従
+
+E5. **`guidesMatchCurrent(psdPath)` + `arraysEqualSet(a, b)` 新設** ([src/rulers.js](src/rulers.js)): 各 PSD パスのガイドが現ページと完全一致しているか判定（h/v 両方の配列が順不同で全要素同値、誤差 1e-3 PSD px）。モーダル再表示時に **「（反映済み）」ラベル + 灰色 + チェック不可**で表示し、不要な再反映をユーザー側で意識せずに防止。対象ページのガイドを後から動かせば自動的に再選択可能に戻る（自己回復）。
+
+### F. ガイドロック関連の改善
+
+F1. **永続化撤廃** ([src/rulers.js](src/rulers.js)): `localStorage` キー `psdesign_guides_locked` の load / save を完全削除し、`guidesLocked` を常に `false` で初期化。「閉じた瞬間にロックを忘れたまま次セッションで動かせない」事故を防止。**ルーラー表示状態（`psdesign_rulers_visible`）は引き続き永続化**（こちらは設定的な性質）。
+
+F2. **PSD 再読込・ホームに戻るで自動解除** ([src/services/psd-load.js](src/services/psd-load.js) + [src/hamburger-menu.js](src/hamburger-menu.js)): `loadPsdFilesByPaths` 冒頭と `goHome` の中で `setGuidesLocked(false)` を呼ぶ。新しい PSD のガイドがない / 異なる位置にあっても古いロック状態でユーザーがハマらないようにする。
+
+F3. **ロック中はガイド線を非表示** ([src/styles.css](src/styles.css)): `.spreads-psd-area.guides-locked .psd-guide { display: none; }`。dim マスクで囲んだ枠を確認する用途を優先、視覚ノイズを最小化。ロック解除で自動的に再表示。
+
+F4. **ドラッグ中の太さ強調を撤去** ([src/styles.css](src/styles.css)): `.psd-guide.dragging[data-axis="..."] { box-shadow: 0 0 0 2px var(--accent); }` の 2 ルールを削除。色変化（cyan → accent）のみで強調、線幅は 1px のまま。当たり判定は元の 1px 構造で十分機能する。
+
+### G. UI 微調整
+
+G1. **サイドツールバー区切り線が端まで届くように修正** ([src/styles.css](src/styles.css)):
+- 問題: `.side-toolbar` には `padding: 0 6px 10px` があり、その中の `.panel-header` の `border-bottom` が左右 6px ぶん内側で途切れていた
+- 修正: `.side-toolbar > .panel-header` に `margin-left: -6px; margin-right: -6px; width: calc(100% + 12px);` を追加して親パディングを相殺
+- collapsed 時（親 padding=0）は相殺不要なので別ルールで `margin: 0; width: 100%;`
+- サイドパネル側は元々 padding 無しで端まで届いていたため変更不要
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.7.0`** に揃え。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: 自動配置はツール状態のサイズを全レイヤー一律 → 新: comic-text-detector の `font_size` から per-layer に実描画 pt 推定（calibration 0.92 + leading 込み bbox cap）
+> - 旧: LONG 軸は 5% per-char buffer のみ → 新: `1.05 × chars + 0.4em` で固定安全余白を加算、display フォント overshoot に対応
+> - 旧: 既存 PSD のテキストフレームは ag-psd の生 `style.fontSize` を直接使用 → 新: `getExistingLayerEffectiveSizePt` で bounds 逆算 + `min(declared, bounds-derived)` で実描画 pt を共通化、5 箇所で共有
+> - 旧: ガイドロック中もガイド線は表示継続 + 永続化 → 新: ロック中は線非表示・再起動時は必ず解除、PSD 再読込・ホームでも解除
+> - 旧: ガイド枠の確認はガイド線のみ → 新: 縦横 2 本以上揃って且つロック ON で外側を box-shadow 9999px spread + clipper で 1 ピクセルの隙間も無く dim
+> - 旧: ガイドを別ページに移すには 1 本ずつ手で引き直す → 新: 「ガイドを複数反映」モーダルで複数ページへ一括上書き、再反映済みは自動グレーアウト
+> - 旧: side-toolbar の panel-header 区切り線が左右 6px ぶん途切れる → 新: 負マージン相殺で端から端まで（サイドパネル側と統一感）
+

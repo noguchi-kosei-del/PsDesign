@@ -57,6 +57,8 @@ import {
   onGuidesLockedChange,
   hasAnyGuide,
   onGuidesChange,
+  applyGuidesToPaths,
+  guidesMatchCurrent,
 } from "./rulers.js";
 import {
   addPage,
@@ -197,6 +199,115 @@ function updatePsdGuidesLockVisibility() {
   if (!btn) return;
   btn.hidden = !getRulersVisible() || getPages().length === 0;
   btn.disabled = !hasAnyGuide();
+}
+
+// 「ガイドを複数反映」ボタン: ロックボタンと同じく ルーラー ON + PSD 読込済 で可視。
+// ただし反映先が無いと意味が無いので PSD が 2 ページ以上必要。
+// また「現在のガイドが確定している」ことを示すためロック中でないと無効にする
+// （ロック前 = 編集中なので、まだ反映を取らない方が UX として安全）。
+function bindPsdGuidesApply() {
+  const btn = document.getElementById("psd-guides-apply-btn");
+  if (!btn) return;
+  btn.addEventListener("click", openGuidesApplyModal);
+  const sync = () => updatePsdGuidesApplyVisibility();
+  onRulersVisibleChange(sync);
+  onGuidesChange(sync);
+  onPageIndexChange(sync);
+  onGuidesLockedChange(sync);
+  sync();
+}
+function updatePsdGuidesApplyVisibility() {
+  const btn = document.getElementById("psd-guides-apply-btn");
+  if (!btn) return;
+  // 1 ページしか無い場合は反映先が存在しないので非表示。
+  btn.hidden = !getRulersVisible() || getPages().length < 2;
+  // 有効条件: 現ページにガイドあり、かつ ガイドロック中。
+  const noGuides = !hasAnyGuide();
+  const notLocked = !getGuidesLocked();
+  btn.disabled = noGuides || notLocked;
+  btn.title = noGuides
+    ? "現在のページにガイドが引かれていません"
+    : (notLocked
+      ? "ガイドをロックすると反映できます"
+      : "ガイドを複数ページに反映");
+  btn.setAttribute("aria-label", btn.title);
+}
+
+function openGuidesApplyModal() {
+  const modal = document.getElementById("guides-apply-modal");
+  const list = document.getElementById("guides-apply-list");
+  const okBtn = document.getElementById("guides-apply-ok");
+  const cancelBtn = document.getElementById("guides-apply-cancel");
+  const selAllBtn = document.getElementById("guides-apply-select-all");
+  const selNoneBtn = document.getElementById("guides-apply-select-none");
+  if (!modal || !list || !okBtn || !cancelBtn) return;
+
+  const pages = getPages();
+  const currentIdx = getCurrentPageIndex();
+  list.innerHTML = "";
+  for (let i = 0; i < pages.length; i++) {
+    const page = pages[i];
+    const isCurrent = i === currentIdx;
+    // 既に現ページとガイドが完全一致しているページは「反映済み」扱いで選択不可にする。
+    const alreadyApplied = !isCurrent && guidesMatchCurrent(page?.path);
+    const label = document.createElement("label");
+    label.className = "guides-apply-item"
+      + (isCurrent ? " guides-apply-item-current" : "")
+      + (alreadyApplied ? " guides-apply-item-applied" : "");
+    const cb = document.createElement("input");
+    cb.type = "checkbox";
+    cb.dataset.index = String(i);
+    if (isCurrent || alreadyApplied) cb.disabled = true;
+    const span = document.createElement("span");
+    span.className = "guides-apply-item-name";
+    const m = (page?.path ?? "").match(/[\\/]([^\\/]+)$/);
+    const name = m ? m[1] : (page?.path ?? `ページ ${i + 1}`);
+    let suffix = "";
+    if (isCurrent) suffix = "（現在のページ）";
+    else if (alreadyApplied) suffix = "（反映済み）";
+    span.textContent = `${i + 1}: ${name}${suffix}`;
+    label.appendChild(cb);
+    label.appendChild(span);
+    list.appendChild(label);
+  }
+
+  showModalAnimated(modal);
+
+  const cleanup = () => {
+    hideModalAnimated(modal);
+    okBtn.removeEventListener("click", onOk);
+    cancelBtn.removeEventListener("click", onCancel);
+    selAllBtn?.removeEventListener("click", onSelAll);
+    selNoneBtn?.removeEventListener("click", onSelNone);
+    modal.removeEventListener("mousedown", onOverlay);
+    document.removeEventListener("keydown", onKey);
+  };
+  const onOk = () => {
+    const targetPaths = [];
+    list.querySelectorAll("input[type=checkbox]:not(:disabled):checked").forEach((cb) => {
+      const idx = Number(cb.dataset.index);
+      if (Number.isFinite(idx) && pages[idx]?.path) targetPaths.push(pages[idx].path);
+    });
+    cleanup();
+    if (targetPaths.length === 0) return;
+    const count = applyGuidesToPaths(targetPaths);
+    if (count > 0) toast(`${count} ページにガイドを反映しました`, { kind: "success" });
+  };
+  const onCancel = () => cleanup();
+  const onOverlay = (e) => { if (e.target === modal) cleanup(); };
+  const onSelAll = () => list.querySelectorAll("input[type=checkbox]:not(:disabled)").forEach((cb) => { cb.checked = true; });
+  const onSelNone = () => list.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = false; });
+  const onKey = (e) => {
+    if (e.key === "Escape") { e.preventDefault(); cleanup(); }
+    else if (e.key === "Enter") { e.preventDefault(); onOk(); }
+  };
+
+  okBtn.addEventListener("click", onOk);
+  cancelBtn.addEventListener("click", onCancel);
+  selAllBtn?.addEventListener("click", onSelAll);
+  selNoneBtn?.addEventListener("click", onSelNone);
+  modal.addEventListener("mousedown", onOverlay);
+  document.addEventListener("keydown", onKey);
 }
 
 async function loadFontsFromBackend() {
@@ -471,6 +582,7 @@ function schedulePageRender() {
     rebuildLayerList();
     updatePsdRotateVisibility();
     updatePsdGuidesLockVisibility();
+    updatePsdGuidesApplyVisibility();
   });
 }
 
@@ -1447,6 +1559,8 @@ function init() {
   updatePsdRotateVisibility();
   bindPsdGuidesLock();
   updatePsdGuidesLockVisibility();
+  bindPsdGuidesApply();
+  updatePsdGuidesApplyVisibility();
   mountPdfView();
   setupTauriDragDrop();
   bindParallelSync();
@@ -1478,6 +1592,7 @@ function init() {
     updatePageNav();
     updatePsdRotateVisibility();
     updatePsdGuidesLockVisibility();
+    updatePsdGuidesApplyVisibility();
   });
 }
 

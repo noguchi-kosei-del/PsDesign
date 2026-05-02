@@ -104,6 +104,26 @@ function extractStroke(layer) {
   return { strokeColor, strokeWidthPx };
 }
 
+// ag-psd の style.fontSize は PSD エンジンが保持している生の font size で、
+// 実描画サイズはこれに layer.text.transform 行列の scale が掛かったもの。
+// 例：PSD で「100pt のテキストを 0.2 倍に縮小して配置」した場合、
+//   style.fontSize = 100、transform = [0.2, 0, 0, 0.2, tx, ty]
+// なので実効 pt = 100 × 0.2 = 20pt。
+// 行列式 = (a*d - b*c) は scale^2（回転は scale を変えないので det は等価）。
+// その平方根 = 等価 uniform scale。漫画写植では基本 uniform scale なのでこの近似で十分。
+function effectiveFontSize(rawFontSize, transform) {
+  if (!Number.isFinite(rawFontSize) || rawFontSize <= 0) return rawFontSize ?? null;
+  if (!Array.isArray(transform) || transform.length < 4) return rawFontSize;
+  const [a, b, c, d] = transform;
+  const det = Math.abs(a * d - b * c);
+  if (!Number.isFinite(det) || det <= 0) return rawFontSize;
+  const scale = Math.sqrt(det);
+  // scale ≈ 1 ならフォーマット差吸収のため素通し。極端値（>10 / <0.01）も生値を返す
+  // ことで「ag-psd 側で transform に意図しない値が入ったとき」の暴れを防ぐ。
+  if (!(scale > 0.01 && scale < 10)) return rawFontSize;
+  return rawFontSize * scale;
+}
+
 // PSD 上で非表示になっているレイヤー / フォルダ（およびその子孫）は
 // 「読み込みから除外したものとして扱う」ため、collectTextLayers では親フォルダ
 // の可視性を伝播し、テキストレイヤー本体 or 上位グループのいずれかが非表示
@@ -123,7 +143,7 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
         name: layer.name ?? "",
         text: layer.text.text ?? "",
         font: style.font?.name ?? "",
-        fontSize: style.fontSize ?? null,
+        fontSize: effectiveFontSize(style.fontSize, layer.text.transform),
         left: layer.left ?? 0,
         top: layer.top ?? 0,
         right: layer.right ?? 0,

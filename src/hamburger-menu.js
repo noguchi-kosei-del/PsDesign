@@ -20,6 +20,7 @@ import { rebuildLayerList } from "./text-editor.js";
 import { renderTxtSourceViewer } from "./txt-source.js";
 import { confirmDialog } from "./ui-feedback.js";
 import { openSettingsModal } from "./settings-ui.js";
+import { setGuidesLocked } from "./rulers.js";
 
 const THEME_KEY = "psdesign_theme";
 const FLIPPED_KEY = "psdesign_layout_flipped";
@@ -111,6 +112,7 @@ async function goHome() {
   clearTxtSource();
   clearAiOcrDoc();
   setFontPickerStuck(false);
+  setGuidesLocked(false);
   clearPdf();
   setPdfRotation(0);
   setPsdRotation(0);

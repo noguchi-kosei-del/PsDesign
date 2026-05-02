@@ -30,7 +30,7 @@ import {
   toggleLayerSelected,
   updateNewLayer,
 } from "./state.js";
-import { refreshAllOverlays } from "./canvas-tools.js";
+import { refreshAllOverlays, getExistingLayerEffectiveSizePt } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { confirmDialog } from "./ui-feedback.js";
 
@@ -152,10 +152,12 @@ export function rebuildLayerList() {
     const movedMark = edit && (edit.dx || edit.dy) ? "・移動" : "";
     const editedMark = edit ? `• 編集済${movedMark}` : "";
     const direction = edit?.direction ?? layer.direction ?? "horizontal";
+    // bounds 逆算後の実効 pt（transform で縮められた写植テキストでも実描画サイズを表示）
+    const effectivePt = getExistingLayerEffectiveSizePt(page, layer, edit ?? {});
     li.innerHTML = `
       <div class="layer-item-body">
         <div class="layer-text">${escapeHtml(truncate(displayText, 40))}</div>
-        <div class="layer-meta">${escapeHtml(layer.font || "")} ${formatDisplayPt(layer.fontSize, page)} ${editedMark}</div>
+        <div class="layer-meta">${escapeHtml(layer.font || "")} ${formatDisplayPt(effectivePt, page)} ${editedMark}</div>
       </div>
       ${dirToggleHtml(direction)}
     `;
@@ -335,7 +337,8 @@ function populateEditor() {
     if (resolved.kind === "existing") {
       const { page, layer } = resolved;
       const edit = getEdit(page.path, layer.id) ?? {};
-      effectiveSize = edit.sizePt ?? layer.fontSize ?? null;
+      // bounds 逆算後の実効 pt をサイズ入力にも反映（transform で縮められた写植テキスト対応）
+      effectiveSize = getExistingLayerEffectiveSizePt(page, layer, edit);
       effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
       // 既存レイヤーは PSD から行間を読み戻していないため、edit に明示があれば
       // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
