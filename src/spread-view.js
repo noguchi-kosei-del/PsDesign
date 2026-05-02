@@ -8,6 +8,12 @@ import {
 } from "./state.js";
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 import { requestRulerRedraw } from "./rulers.js";
+import {
+  applyOverscrollMargin,
+  captureViewportCenterFraction,
+  centerCanvasInViewport,
+  restoreViewportCenter,
+} from "./overscroll.js";
 
 const container = () => document.getElementById("psd-stage");
 const pageResizeObservers = new Set();
@@ -17,13 +23,29 @@ let rotationSubscribed = false;
 
 const MAX_CANVAS_SIDE = 16384;
 
+// ズーム変更時、ビューポート中心にあったキャンバス上のポイントを再描画後も
+// ビューポート中心に保つため、redraw 前にキャプチャしておく。
+// redraw 内で読み出して新しいスクロール位置を計算 → null へリセット。
+// それ以外（リサイズ・回転）の redraw ではこの値は null のままなので副作用なし。
+let zoomTransitionCenter = null;
+
 export function renderAllSpreads() {
   const root = container();
   if (!root) return;
   if (!zoomSubscribed) {
     zoomSubscribed = true;
     onPsdZoomChange(() => {
-      for (const fn of pageRedraws) fn();
+      // redraw が走る前に「viewport 中心にあったキャンバス上のポイント」をキャプチャ。
+      // redraw 内でこれを読み、新しいキャンバスサイズ + overscroll マージンに合わせて
+      // スクロールを再計算する。これでズーム前後で同じ点が画面中央に保たれる。
+      const stage = container();
+      const pageEl = stage ? stage.querySelector(".page") : null;
+      zoomTransitionCenter = captureViewportCenterFraction(stage, pageEl);
+      try {
+        for (const fn of pageRedraws) fn();
+      } finally {
+        zoomTransitionCenter = null;
+      }
     });
   }
   if (!rotationSubscribed) {
@@ -78,6 +100,13 @@ function buildPage(page, pageIndex, root) {
 
   const overlay = document.createElement("div");
   overlay.className = "page-overlay";
+
+  // 当該 .page 要素にとっての「初回 redraw」フラグ。renderAllSpreads が
+  // root.innerHTML="" でステージを破棄して buildPage を呼び直すたびに
+  // 新しいクロージャで true で始まり、初回 redraw 後に false へ。
+  // 初回 + overscroll margin 適用時は scroll(0,0) が padding 領域に乗ってしまう
+  // ので、明示的にキャンバス中央へスクロールを合わせる。
+  let isFirstRedraw = true;
 
   const redraw = () => {
     const box = root.getBoundingClientRect();
@@ -153,6 +182,41 @@ function buildPage(page, pageIndex, root) {
       ctx.font = `${Math.round(18 * dpr)}px sans-serif`;
       ctx.fillText("（合成プレビューなし）", 16 * dpr, 32 * dpr);
     }
+    // オーバースクロール用のマージンを .page に付与。これで scroll content がキャンバス
+    // サイズ＋viewport の OVERSCROLL_FRACTION 倍分まで広がり、Photoshop のように
+    // キャンバスを画面端まで寄せられる。サイズが viewport より小さいときは 0。
+    // 戻り値 true は「margin が今回新規に付いた」（直前は無し）→ scroll(0,0) では
+    // キャンバスが画面外に押し出される状態なので、後段で再センタリングする。
+    // availW/availH を渡してスクロールバー非依存に overflow 判定させる
+    // （root.clientWidth はズーム中のスクロールバー分削られるので Ctrl+0 直後に誤判定する）。
+    const marginNewlyApplied = applyOverscrollMargin(root, el, visualW, visualH, availW, availH);
+
+    // ズーム変更時のみ、redraw 前にキャプチャした「viewport 中心のキャンバス相対座標」を
+    // 新サイズで再計算してスクロールを復元する。リサイズや回転の redraw では null なので
+    // 何もしない（ブラウザが既存スクロール位置を維持）。
+    // 例外: ズーム後に overflow が解消した場合（Ctrl+0 で 100% に戻すなど）は
+    // frac ベースの再計算が無意味なので、scroll を 0 に戻して flex の安全中央寄せに任せる。
+    //
+    // 比較に root.clientWidth/Height を使うとズームイン時のスクロールバーぶん clientWidth が
+    // 削られて誤判定する可能性がある（pdf-view.js 参照）。代わりに availW/availH（=
+    // box.width/height - 32、スクロールバー非依存）を使う。zoom ≤ 1 では visualW ≤ availW
+    // が保証される。
+    const hasOverflowAfter = visualW > availW || visualH > availH;
+    if (zoomTransitionCenter) {
+      if (hasOverflowAfter) {
+        restoreViewportCenter(root, el, zoomTransitionCenter);
+      } else {
+        root.scrollLeft = 0;
+        root.scrollTop = 0;
+      }
+    } else if (isFirstRedraw || marginNewlyApplied) {
+      // 初回 redraw（PSD ロード直後・ページ切替直後）または margin が新規付与された
+      // ときは、ステージのスクロール位置が (0,0) で padding 上に乗っており、
+      // キャンバスが画面外に押し出されているはず。明示的に中央へ合わせる。
+      centerCanvasInViewport(root, el);
+    }
+    isFirstRedraw = false;
+
     refreshAllOverlays();
     // ページ DOM が再構築/再描画されるたびにルーラーとガイドの座標投影をやり直す。
     requestRulerRedraw();

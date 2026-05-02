@@ -39,24 +39,6 @@
             </svg>
           </button>
         </div>
-        <div class="toolbar-zoom" role="group" aria-label="ズーム">
-          <button id="zoom-in-btn" class="icon-btn zoom-btn" type="button" title="ズームイン (Alt+スクロール)" aria-label="ズームイン">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-              <line x1="11" y1="8" x2="11" y2="14"/>
-              <line x1="8" y1="11" x2="14" y2="11"/>
-            </svg>
-          </button>
-          <button id="zoom-level-btn" class="zoom-level-btn" type="button" title="100% にリセット">100%</button>
-          <button id="zoom-out-btn" class="icon-btn zoom-btn" type="button" title="ズームアウト (Alt+スクロール)" aria-label="ズームアウト">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <circle cx="11" cy="11" r="8"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-              <line x1="8" y1="11" x2="14" y2="11"/>
-            </svg>
-          </button>
-        </div>
         <div class="toolbar-history" role="group" aria-label="履歴">
           <button id="undo-btn" class="icon-btn history-btn" type="button" title="元に戻す (Ctrl+Z)" aria-label="元に戻す" disabled>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -165,6 +147,13 @@
               </button>
             </div>
           </div>
+          <button id="viewer-mode-btn" class="icon-btn file-open-btn" type="button" disabled title="閲覧モード" aria-label="閲覧モード" aria-pressed="false">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="2" y="4" width="20" height="14" rx="2" ry="2"/>
+              <line x1="12" y1="18" x2="12" y2="21"/>
+              <line x1="8" y1="21" x2="16" y2="21"/>
+            </svg>
+          </button>
           <button id="settings-btn" class="icon-btn file-open-btn" type="button" title="環境設定" aria-label="環境設定">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <circle cx="12" cy="12" r="3"/>
@@ -363,6 +352,24 @@
               <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
             </svg>
           </button>
+          <div class="side-page-zoom" role="group" aria-label="ズーム">
+            <button id="zoom-in-btn" class="icon-btn page-zoom-btn" type="button" title="ズームイン (Alt+スクロール)" aria-label="ズームイン">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"/>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                <line x1="11" y1="8" x2="11" y2="14"/>
+                <line x1="8" y1="11" x2="14" y2="11"/>
+              </svg>
+            </button>
+            <button id="zoom-level-btn" class="page-zoom-level-btn" type="button" title="100% にリセット">100%</button>
+            <button id="zoom-out-btn" class="icon-btn page-zoom-btn" type="button" title="ズームアウト (Alt+スクロール)" aria-label="ズームアウト">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="11" cy="11" r="8"/>
+                <line x1="21" y1="21" x2="16.65" y2="16.65"/>
+                <line x1="8" y1="11" x2="14" y2="11"/>
+              </svg>
+            </button>
+          </div>
           <div class="page-nav" role="group" aria-label="ページ移動">
             <button id="page-prev-btn" class="icon-btn page-nav-btn" type="button" title="前のページ (←)" aria-label="前のページ">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -816,27 +823,17 @@
         <div class="ai-place-review-header">
           <span class="ai-place-review-title" id="ai-place-review-title">自動配置プラン確認</span>
         </div>
-        <div class="ai-place-review-intro">
-          <p class="ai-place-review-intro-text">
-            検出した吹き出しと TXT ブロックをページごとに突き合わせます。配置を実行すると、新規テキストレイヤーがプレビューに追加されます。Photoshop への書き出しは、その後 <kbd>Ctrl</kbd>+<kbd>S</kbd> から行ってください。
-          </p>
+        <div class="ai-place-review-warning" id="ai-place-review-warning" hidden>
+          <svg class="ai-place-review-warning-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/>
+            <line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <div class="ai-place-review-warning-body">
+            <div class="ai-place-review-warning-title">ページ数が一致していません</div>
+            <div class="ai-place-review-warning-detail" id="ai-place-review-warning-detail"></div>
+          </div>
         </div>
-        <div class="ai-place-review-tablewrap">
-          <table class="ai-place-review-table">
-            <thead>
-              <tr>
-                <th class="ai-place-col-page">ページ</th>
-                <th class="ai-place-col-psd">PSD</th>
-                <th class="ai-place-col-num">吹き出し</th>
-                <th class="ai-place-col-num">TXT</th>
-                <th class="ai-place-col-num">配置</th>
-                <th class="ai-place-col-status">状態</th>
-              </tr>
-            </thead>
-            <tbody id="ai-place-review-tbody"></tbody>
-          </table>
-        </div>
-        <div class="ai-place-review-summary" id="ai-place-review-summary"></div>
         <div class="ai-place-review-actions">
           <button type="button" id="ai-place-review-cancel" class="page-jump-btn">キャンセル</button>
           <button type="button" id="ai-place-review-ok" class="page-jump-btn page-jump-btn-primary">配置を実行</button>

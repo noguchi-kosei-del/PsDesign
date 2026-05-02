@@ -17,6 +17,12 @@ import {
   getPdfVirtualPageAt,
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
+import {
+  applyOverscrollMargin,
+  captureViewportCenterFraction,
+  centerCanvasInViewport,
+  restoreViewportCenter,
+} from "./overscroll.js";
 
 const MAX_CANVAS_SIDE = 16384;
 
@@ -34,6 +40,11 @@ let pendingRaf = 0;
 // 古いレンダ計算を即停止する（呼ばないと CPU を食い続け、連打中に 30 件以上の
 // レンダタスクが裏で並行進行してラグの原因になる）。
 let currentRenderTask = null;
+// ズーム変更時のみ「viewport 中心にあったキャンバス上の点」を保持して、redraw 後に
+// 新しいキャンバスサイズで同じ点が中央に来るようスクロールを再計算する。
+// schedule() は他のイベント（ページ送り・回転・リサイズ等）でも呼ばれるため、
+// ズーム由来かどうかをフラグで区別する。
+let pdfZoomDirty = false;
 
 function cancelInFlightRender() {
   if (!currentRenderTask) return;
@@ -97,7 +108,13 @@ export function mountPdfView() {
 
   onPdfChange(() => schedule());
   onPdfPageIndexChange(() => schedule());
-  onPdfZoomChange(() => schedule());
+  onPdfZoomChange(() => {
+    // ズーム変更経由の redraw だけ「中心保持」を発動させたいので印を付ける。
+    // 連続でズームするときは最後の値が pdfZoomDirty=true 状態で残り、redraw 内で
+    // フラグを消費しつつ、その時点の (= 直前にレンダ済みの) 表示中心をキャプチャする。
+    pdfZoomDirty = true;
+    schedule();
+  });
   onPdfRotationChange(() => schedule());
   onPdfSplitModeChange(() => schedule());
   onPdfSkipFirstBlankChange(() => schedule());
@@ -291,13 +308,64 @@ async function redraw() {
   // 新しい redraw を始める前に古いタスクを必ずキャンセル。これがないと連打時に
   // pdfjs が複数のレンダを並行実行して CPU が飽和する。
   cancelInFlightRender();
+
+  // 初回読込・OOB → 有効ページ復帰など、pageWrap が hidden だった状態から
+  // 表示に切り替わるタイミングを検知して後段で再センタリングするためのフラグ。
+  // showEmpty / showOutOfRange は pageWrap.hidden = true にする。
+  const wasHidden = pageWrap.hidden;
   showCanvas(pageNum, side);
+
+  // ズーム経由の redraw のときだけ、サイズ変更前の現在レイアウトから
+  // viewport 中心のキャンバス相対座標をキャプチャ。フラグはここで消費。
+  let zoomFracForThisRedraw = null;
+  if (pdfZoomDirty) {
+    pdfZoomDirty = false;
+    zoomFracForThisRedraw = captureViewportCenterFraction(stageEl, pageWrap);
+  }
+
+  // canvas の CSS サイズを先に設定して pageWrap のレイアウトを確定させる
+  // （canvas.width / canvas.height は backing pixel 解像度、両分岐で別値を入れる）。
+  canvas.style.width = `${cssW}px`;
+  canvas.style.height = `${cssH}px`;
+
+  // Photoshop 風オーバースクロール：キャンバスが stage より大きいときだけ pageWrap に
+  // viewport の OVERSCROLL_FRACTION 倍の margin を付け、スクロール可能領域を広げる。
+  // 戻り値 true は「margin が新規に付いた」状態 → scroll(0,0) で見切れるので再センタ。
+  // availW/availH を渡してスクロールバー非依存に overflow 判定させる
+  // （stage.clientWidth はズームイン中のスクロールバー分だけ削られているため
+  //  ズーム=1 直後の遷移で誤判定し、過剰に margin が付与される事故を防ぐ）。
+  const marginNewlyApplied = applyOverscrollMargin(stageEl, pageWrap, cssW, cssH, availW, availH);
+
+  // ズーム前後で同じキャンバス上の点が viewport 中央に来るようスクロールを再計算。
+  // それ以外（ページ送り・回転・リサイズ）の redraw では null なので何もしない。
+  // 例外: ズーム後に overflow が解消した場合（Ctrl+0 で 100% に戻すなど）は frac
+  // ベースの再計算が無意味（スクロール余地が無く flex 中央に貼られる）なので、
+  // 明示的にスクロールを 0 に戻して flex の安全中央寄せに任せる。
+  //
+  // 比較に stage.clientWidth/Height を使うと、ズームイン状態のスクロールバー（横/縦）
+  // が clientWidth/Height からその幅・高さぶん削っているせいで、Ctrl+0 直後でも
+  // 「まだ overflow している」と誤判定し restoreViewportCenter 経路に入って
+  // キャンバスがずれる。代わりに rootEl のコンテンツ寸法（= スクロールバー無視）
+  // を使う：cssW/cssH はそもそも fit-to-availW/H × zoom で算出するので、ズーム≤1 では
+  // 必ず availW/availH 以下になる。
+  const hasOverflowAfter = cssW > availW || cssH > availH;
+  if (zoomFracForThisRedraw) {
+    if (hasOverflowAfter) {
+      restoreViewportCenter(stageEl, pageWrap, zoomFracForThisRedraw);
+    } else {
+      stageEl.scrollLeft = 0;
+      stageEl.scrollTop = 0;
+    }
+  } else if (wasHidden || marginNewlyApplied) {
+    // 初回読込・空表示/OOB から復帰したケース、または margin が新たに付いたケースは
+    // スクロールが (0,0) のまま padding に乗っているので、キャンバス中央を viewport
+    // 中央に合わせる。連続するページ送り（pageWrap が hidden でない）では発動しない。
+    centerCanvasInViewport(stageEl, pageWrap);
+  }
 
   if (side === "full") {
     canvas.width = pxW;
     canvas.height = pxH;
-    canvas.style.width = `${cssW}px`;
-    canvas.style.height = `${cssH}px`;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, pxW, pxH);
     const task = page.render({ canvasContext: ctx, viewport });
@@ -334,8 +402,6 @@ async function redraw() {
     const srcX = side === "right" ? halfPxW : 0;
     canvas.width = halfPxW;
     canvas.height = pxH;
-    canvas.style.width = `${cssW}px`;
-    canvas.style.height = `${cssH}px`;
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, halfPxW, pxH);
     ctx.drawImage(off, -srcX, 0);

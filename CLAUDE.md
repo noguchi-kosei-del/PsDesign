@@ -1963,3 +1963,113 @@ G1. **サイドツールバー区切り線が端まで届くように修正** ([
 > - 旧: ガイドを別ページに移すには 1 本ずつ手で引き直す → 新: 「ガイドを複数反映」モーダルで複数ページへ一括上書き、再反映済みは自動グレーアウト
 > - 旧: side-toolbar の panel-header 区切り線が左右 6px ぶん途切れる → 新: 負マージン相殺で端から端まで（サイドパネル側と統一感）
 
+---
+
+## v1.8.0: 自動配置ダイアログ簡素化 + 閲覧モード + ズーム移動 + Photoshop 風オーバースクロール
+
+### 概要
+
+このバージョンは 4 本柱:
+1. **自動配置確認ダイアログを警告ベースに簡素化** — 件数一致時はダイアログ自体を出さず即配置
+2. **閲覧モード新設** — F1 で PSD をウインドウいっぱいに表示する全画面ビューア（MojiQ ver_2.24 から流用）
+3. **toolbar-zoom をサイドツールバーへ移動** — ヘッダーをスリム化し、ページ移動と隣接して PSD ナビ群として統合
+4. **Photoshop 風オーバースクロール** — PSD/見本の両ステージで、ズームインしたキャンバスを画面端ぎりぎりまで寄せられるよう、scroll content をキャンバス寸法 + viewport の 85% 倍まで拡張
+
+加えて視覚的な区切り線や、複数のスクロール位置補正バグ修正を含む。
+
+### A. 自動配置確認ダイアログの簡素化
+
+A1. **PSD 数 ≠ 画像スキャンページ数 のときだけ警告バナー付きでダイアログ表示** ([src/ai-place.js](src/ai-place.js) / [index.html](index.html) / [src/styles.css](src/styles.css))
+- 旧: 全件ぶんの per-page table（ページ / PSD / 吹き出し / TXT / 配置 / 状態）+ サマリー行 + intro 説明文 + キャンセル/実行 ボタン → 件数一致でも毎回出る
+- 新: 不一致時のみ `confirmDialog`-like モーダル（`#ai-place-review-modal`）を表示 + オレンジ系の警告バナー（`.ai-place-review-warning`、alert-triangle SVG + `border-left: 3px solid #d97706`）+ 「キャンセル / 配置を実行」のみ
+- `runAutoPlace` 内で `(plan.unmappedPsdCount ?? 0) > 0 || (plan.unmappedMokuroCount ?? 0) > 0` を判定し、不一致なら `showPlanReviewModal` を呼び、一致なら直接 `applyPlan` へ進む
+- 警告バナー内テキスト: `PSD: N 枚 / 画像スキャン: M ページ` + 末尾の余り PSD は配置されない・余り OCR ページは使用されない旨
+- 旧 `STATUS_ICON_SVG` / `STATUS_LABEL` / `escapeHtml` ヘルパーと `.ai-place-review-tablewrap` / `.ai-place-review-table` / `.ai-place-col-*` / `.ai-place-status-*` / `.ai-place-review-summary` / `.ai-place-review-intro*` の CSS は撤去（dead code 整理）
+
+A2. **「ページぶん」→「ページ分」** — 警告バナー詳細文の表記を漢字に統一
+
+### B. 閲覧モード（viewer-mode）
+
+B1. **新規モジュール [src/viewer-mode.js](src/viewer-mode.js)** — MojiQ ver_2.24 `js/viewer-mode.js` のロジックを ES module + PsDesign の state API（`getPsdZoom` / `setPsdZoom` / `getPages` / `setActivePane` / `onPageIndexChange`）に移植
+- 状態: `isActive` / `previousZoom`
+- API: `bindViewerMode()` / `toggleViewerMode()` / `isViewerActive()`
+
+B2. **UI 構造**:
+- ヘッダー保存ボタンの右に `#viewer-mode-btn`（lucide ベースのモニター + スタンドアイコン、PSD 未読込時は disabled）。`psdesign:psd-loaded` / `onPageIndexChange` で再評価
+- `<div class="viewer-nav-hint">Esc または × で閲覧モードを終了</div>` を `bindViewerMode` で動的に body へ追加（中央上部、3 秒で fade out）
+- `<button class="viewer-close-btn">` を右上に動的追加（44px 丸ボタン、マウスが右上 150px 圏内に入ると 3 秒間表示、hover で赤系背景）
+
+B3. **CSS** ([src/styles.css](src/styles.css))
+- `body.viewer-mode` クラスでヘッダー（`.toolbar`）/ サイドツールバー（`.side-toolbar`）/ サイドパネル（`.side-panel`）/ PDF・校正・エディタペイン（`.spreads-pdf-area` / `.spreads-proofread-area` / `.spreads-editor-area`）を `opacity: 0; visibility: hidden; width/height: 0; padding: 0; border: none; pointer-events: none` で fade out（0.3s ease）
+- `.spreads-psd-area` を `display: flex !important; flex: 1 1 100%; width/height: 100%; padding/border: 0` で全画面化（editor-mode の `display: none` を上書き）
+- PSD ペイン上のオーバーレイ（`#psd-rotate-btn` / `#psd-guides-lock-btn` / `#psd-guides-apply-btn` / `#psd-rulers` / `#psd-guides-layer`）も非表示
+- `.viewer-nav-hint`（`position: fixed; top: 50px; transform: translateX(-50%); z-index: 10000`、`opacity: 0` 既定 + `.show` で 1）と `.viewer-close-btn`（`position: fixed; top: 20px; right: 20px; z-index: 10001; opacity/visibility: 0/hidden` 既定 + `.show` で表示）
+
+B4. **入退出ロジック**
+- `enter()`: PSD pages > 0 を確認 → `setActivePane("psd")` → `previousZoom = getPsdZoom()` を保存 → `body.classList.add("viewer-mode")` → `setPsdZoom(1)` で fit-to-window → ナビゲーションヒント / 閉じるボタン表示 → `keydown` (Esc) と `mousemove`（右上ホットゾーン）listener を `capture: true` で登録
+- `exit()`: ハイライト解除 → 全タイマークリア → listener 解除 → `setPsdZoom(previousZoom)` で復帰
+
+B5. **ページ送り**: 既存の `bindWheelPageNav`（`.spreads-psd-area` の wheel 既設）と `findShortcutMatch` の `pagePrev` / `pageNext` / `pageFirst` / `pageLast`（global keydown）にそのまま乗るので、wheel スクロール / ←→ / Ctrl+←→ いずれもそのまま動く。viewer-mode 専用ロジックは追加なし。
+
+B6. **F1 ショートカット** ([src/settings.js](src/settings.js) `DEFAULT_SETTINGS.shortcuts.viewerMode = { key: "F1", modifiers: [], description: "閲覧モード" }`) — F1 はブラウザ既定で「ヘルプ」を開くので、`bindViewerMode` 末尾に capture フェーズの keydown listener を登録して `matchShortcut(e, "viewerMode")` 判定 → `preventDefault + stopPropagation + toggle()`。これは既存の `bindRulerToggle`（Ctrl+R = リロード抑止）/ `bindFramesToggle`（Ctrl+H = 履歴抑止）と同じパターン。`runShortcut` の switch にも `case "viewerMode": toggleViewerMode()` を追加し、環境設定での再アサインにも対応。
+
+### C. toolbar-zoom をサイドツールバーへ移動
+
+C1. **ヘッダーから撤去 → サイドツールバー下部の page-nav 上に再配置** ([index.html](index.html))
+- 旧: ヘッダー `.toolbar-actions` 内の `.toolbar-zoom`（zoom-in / 100% / zoom-out 横並び）
+- 新: `<div class="side-page-zoom" role="group">` を `#tool-pan` の直下、`.page-nav` の直前に縦並び（zoom-in → 100% → zoom-out）
+- ID（`#zoom-in-btn` / `#zoom-level-btn` / `#zoom-out-btn`）は据え置き → [src/main.js](src/main.js) の `bindZoomTool` は無改変で動作
+
+C2. **CSS** ([src/styles.css](src/styles.css))
+- 旧 `.toolbar-zoom` / `.zoom-btn` / `.zoom-level-btn` ルールを削除
+- 新 `.side-page-zoom`（縦 flex column、`margin-top: auto` で旧 `.page-nav` のボトムアンカー役を引き継ぐ、`border-top` + `border-bottom` で上下に区切り線）+ `.page-zoom-btn`（30×26）+ `.page-zoom-level-btn`（32×auto / `min-height: 30px` / `font-size: 10px` / `line-height: 1.5`、44px ツールバー幅で `PSD 100%` を 2 行ラップしたとき行間を確保）
+- `.page-nav` から `margin-top: auto` と `border-top` を撤去（ズーム群が新しいアンカー、ページ移動はその直下にぶら下がる）
+
+C3. **`zoom-level-btn` の 2 行表示**: 既存の `bindZoomTool` の `level.textContent = ${paneLabel(pane)} ${zoom}%`（例: `"PSD 100%"`）が 32px 幅のボタン内で自動ラップして「PSD」「100%」の 2 行になる。`line-height: 1.5` で 5px の行間を確保。
+
+### D. toolbar-history に区切り線を復活
+
+D1. **`.toolbar-history` に `border-left: 1px solid var(--border)` を追加** ([src/styles.css:233](src/styles.css#L233))
+- 旧: 左隣 `.toolbar-zoom` の `border-right` を区切り線として流用していた
+- 新: ズーム群がサイドへ移動したので自前の `border-left` を持つ
+- `margin-left: -12px` → `margin-left: -6px` に変更し、view-mode-segment の右端と区切り線の間に 6px breathing room を確保（履歴グループ内側の padding 6px と同じ間隔）
+
+### E. Photoshop 風オーバースクロール（PSD/見本 共通）
+
+E1. **新規モジュール [src/overscroll.js](src/overscroll.js)** — PSD と PDF/見本で共有する 4 つのヘルパー
+- `OVERSCROLL_FRACTION = 0.85`（viewport 寸法に対する余白比率）
+- `captureViewportCenterFraction(stage, pageEl)` — `.page` 要素の `getBoundingClientRect` から viewport 中心点をキャンバス相対の (fracX, fracY) に変換して返す（zoom 前にキャプチャ）
+- `applyOverscrollMargin(stage, pageEl, visualW, visualH, availW, availH)` — visualW/H が availW/H を超えるときだけ `pageEl.style.margin = ${padY}px ${padX}px` を設定（padX = availW × 0.85）。戻り値は「直前は margin 無し → 今回付いた」の遷移を示す bool
+- `restoreViewportCenter(stage, pageEl, frac)` — 新レイアウト後に `getBoundingClientRect` 経由で fracX/Y のキャンバス点を viewport 中央に持ってくるよう scrollLeft/Top を再計算
+- `centerCanvasInViewport(stage, pageEl)` — frac 不要でキャンバス中央を viewport 中央に合わせる（初回読込・ページ切替・空表示復帰用）
+
+E2. **PSD 側** ([src/spread-view.js](src/spread-view.js))
+- モジュール変数 `zoomTransitionCenter` を追加。`onPsdZoomChange` ハンドラを差し替え、`pageRedraws` 実行前に `captureViewportCenterFraction` で `zoomTransitionCenter` をセット → finally で null
+- `buildPage` クロージャに `isFirstRedraw` フラグ追加（`renderAllSpreads` がページごとに `buildPage` を呼び直すと新クロージャで true に）
+- redraw 末尾で `applyOverscrollMargin(root, el, visualW, visualH, availW, availH)` → `marginNewlyApplied` を取得 → 以下の 3 分岐:
+  - `zoomTransitionCenter` あり + overflow 維持: `restoreViewportCenter` で中心保持
+  - `zoomTransitionCenter` あり + overflow 解消（Ctrl+0 で 100% に戻すケース等）: `scrollLeft/Top = 0` で flex の `safe center` に委ねる
+  - `zoomTransitionCenter` なし + (`isFirstRedraw` または `marginNewlyApplied`): `centerCanvasInViewport` でキャンバスをセンタリング（ページ切替直後の見切れ防止）
+
+E3. **PDF/見本側** ([src/pdf-view.js](src/pdf-view.js))
+- モジュール変数 `pdfZoomDirty` を追加。`onPdfZoomChange` ハンドラを差し替え、フラグを立ててから `schedule()`（rAF debounce）。redraw 内でフラグ消費と同時に `captureViewportCenterFraction` をキャプチャ
+- 以前は両分岐（full / 半ページ）でそれぞれ `canvas.style.width/height` を設定していたが、`showCanvas` 直後に 1 度だけ設定するようリフトしてレイアウトを早期確定
+- redraw 末尾で `applyOverscrollMargin(stageEl, pageWrap, cssW, cssH, availW, availH)` + 同じ 3 分岐ロジック
+- `wasHidden = pageWrap.hidden` を `showCanvas` 直前にキャプチャ。空表示や OOB 復帰のときは `isFirstRedraw` 相当として `centerCanvasInViewport` を発動
+
+E4. **applyOverscrollMargin の overflow 判定にスクロールバー非依存の `availW/availH` を使う** — `box.width - 32`（rootEl コンテンツ寸法）として算出した値を渡す。stage.clientWidth/Height はズーム中のスクロールバーぶん（縦/横 16px）削られているため、Ctrl+0 直後のスクロールバー残存タイミングで `cssW > stage.clientWidth` が誤判定で true になり、本来 0 にすべき padX が `round(744 × 0.85) = 632` で計算されて margin が付与され、キャンバス左端が viewport 右側に押し出される事故が起きる。これを修正するため `applyOverscrollMargin` シグネチャに `availW`, `availH` の任意引数を追加し、両呼び出し側から `availW`/`availH` を渡す（省略時は従来どおり stage.clientWidth/Height にフォールバック）。
+
+E5. **`hasOverflowAfter` 判定にも `availW/availH` を使う** — pdf-view.js / spread-view.js の zoom 分岐で `cssW > availW || cssH > availH` を採用。`zoom ≤ 1` では構造的に `cssW <= availW` が保証されるため、Ctrl+0 後は確実に「overflow なし」分岐に入って `scrollLeft/Top = 0` がセットされ、flex の `safe center` でキャンバスがビューポート中央に表示される。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: 自動配置は毎回 per-page 表 + サマリー + 説明文付きの確認モーダル → 新: 不一致時のみ警告バナー入りモーダル、一致時は即配置
+> - 旧: PSD は通常表示のみ → 新: F1 で全画面の閲覧モード（ヘッダー・サイドバー・他ペインを fade out して PSD のみフィット表示、Esc で復帰）
+> - 旧: ズーム群はヘッダーに横並び → 新: サイドツールバー下部の page-nav 上に縦並び、上下に区切り線、PSD/PDF ラベルが 2 行表示
+> - 旧: ズームインすると canvas が viewport にぴったり収まり、画面端まで移動範囲が狭い → 新: viewport の 85% ぶんの透明 margin を `.page` に付与してスクロール領域を拡張、Photoshop と同じ「キャンバス端を画面中央付近まで寄せられる」操作感
+> - 旧: ズーム時は browser 既存スクロールに任せる（中心がずれる） → 新: zoom 前に viewport 中心のキャンバス相対点を frac でキャプチャ → zoom 後に新サイズで scroll を再計算、ズーム前後の中心一致
+> - 旧: 初回読込・ページ切替直後にスクロールが (0,0) で margin により canvas が画面外に押し出される → 新: 初回 redraw / 空表示復帰のタイミングで `centerCanvasInViewport` で明示的にセンタリング
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.8.0`** に揃え。Cargo.lock も自動追従。
+

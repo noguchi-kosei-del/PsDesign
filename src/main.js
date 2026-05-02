@@ -13,6 +13,7 @@ import { deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath
 import { bindAiInstallMenu } from "./ai-install.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
 import { bindAiPlaceButton } from "./ai-place.js";
+import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread, closeProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
@@ -346,6 +347,7 @@ function runShortcut(id) {
     case "sizeDown":   stepTextSize(-1, Math.max(1, Math.round(2 / getSizeStep()))); break;
     case "toggleRulers": toggleRulersVisible(); break;
     case "toggleFrames": toggleFramesVisible(); break;
+    case "viewerMode":   toggleViewerMode(); break;
   }
 }
 
@@ -1584,6 +1586,7 @@ function init() {
   initRulers();
   bindRulerToggle();
   bindFramesToggle();
+  bindViewerMode();
   // services/psd-load.js から読込フェーズの節目で投げられるイベントを購読し、
   // ページバー / 回転ボタン / ガイドロックボタンの可視状態を同期する。
   // psd-load.js 側は main.js を直接 import しないので、循環参照を避けつつ

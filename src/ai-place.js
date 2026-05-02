@@ -282,70 +282,26 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
 }
 
 // ============================================================
-// 確認モーダル UI
+// 確認モーダル UI（PSD と OCR ページ数が不一致のときだけ表示）
 // ============================================================
-// ステータス用 SVG アイコン（lucide ベース）。
-// check（一致）と alert-triangle（警告）の 2 種類。stroke は currentColor で
-// .ai-place-status-ok / .ai-place-status-warn の色を継承する。
-const STATUS_ICON_SVG = {
-  ok:
-    '<svg class="ai-place-status-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<polyline points="20 6 9 17 4 12"/></svg>',
-  warn:
-    '<svg class="ai-place-status-icon" viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
-    '<path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>' +
-    '<line x1="12" y1="9" x2="12" y2="13"/>' +
-    '<line x1="12" y1="17" x2="12.01" y2="17"/></svg>',
-};
-
-const STATUS_LABEL = {
-  "ok":               { text: "一致",          icon: STATUS_ICON_SVG.ok,   cls: "ai-place-status-ok" },
-  "warn-txt-extra":   { text: "TXT 余",        icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
-  "warn-bubble-extra":{ text: "吹き出し余",     icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
-  "warn-empty-txt":   { text: "TXT なし",      icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
-  "warn-empty-bubble":{ text: "吹き出しなし",   icon: STATUS_ICON_SVG.warn, cls: "ai-place-status-warn" },
-};
-
 function renderPlanReviewTable(plan) {
-  const tbody = $("ai-place-review-tbody");
-  if (!tbody) return;
-  tbody.innerHTML = "";
-  for (const row of plan.pages) {
-    const tr = document.createElement("tr");
-    const meta = STATUS_LABEL[row.status] ?? STATUS_LABEL.ok;
-    tr.innerHTML = `
-      <td class="ai-place-col-page">${row.pageIndex}</td>
-      <td class="ai-place-col-psd" title="${escapeHtml(row.psdName)}">${escapeHtml(row.psdName)}</td>
-      <td class="ai-place-col-num">${row.bubbleCount}</td>
-      <td class="ai-place-col-num">${row.txtCount}</td>
-      <td class="ai-place-col-num">${row.placedCount}</td>
-      <td class="ai-place-col-status ${meta.cls}">${meta.icon}<span class="ai-place-status-text">${meta.text}${
-        row.status === "warn-txt-extra" ? ` ${row.leftoverTxt.length}` :
-        row.status === "warn-bubble-extra" ? ` ${row.leftoverBubbles.length}` :
-        ""
-      }</span></td>
-    `;
-    tbody.appendChild(tr);
+  const warning = $("ai-place-review-warning");
+  const warningDetail = $("ai-place-review-warning-detail");
+  if (!warning || !warningDetail) return;
+  const psdExtra = plan.unmappedPsdCount ?? 0;
+  const ocrExtra = plan.unmappedMokuroCount ?? 0;
+  if (psdExtra > 0 || ocrExtra > 0) {
+    const psdTotal = plan.pages.length + psdExtra;
+    const ocrTotal = plan.pages.length + ocrExtra;
+    const parts = [];
+    parts.push(`PSD: ${psdTotal} 枚 / 画像スキャン: ${ocrTotal} ページ`);
+    if (psdExtra > 0) parts.push(`末尾の PSD ${psdExtra} 枚にはテキストが配置されません。`);
+    if (ocrExtra > 0) parts.push(`末尾の OCR ${ocrExtra} ページ分は使用されません。`);
+    warningDetail.textContent = parts.join(" ");
+    warning.hidden = false;
+  } else {
+    warning.hidden = true;
   }
-  const totals = plan.totals;
-  const summary = $("ai-place-review-summary");
-  if (summary) {
-    const extra = [];
-    if (plan.unmappedPsdCount) extra.push(`PSD ${plan.unmappedPsdCount} 枚は OCR 結果なし`);
-    if (plan.unmappedMokuroCount) extra.push(`OCR ${plan.unmappedMokuroCount} ページは PSD なし`);
-    summary.textContent =
-      `配置予定 ${totals.placed} 件 / TXT 余 ${totals.leftoverTxt} 件 / 吹き出し余 ${totals.leftoverBubbles} 件` +
-      (extra.length ? ` / ${extra.join(" / ")}` : "");
-  }
-}
-
-function escapeHtml(s) {
-  return String(s ?? "")
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
 }
 
 function showPlanReviewModal(plan) {
@@ -494,9 +450,13 @@ async function runAutoPlace() {
       if (!proceed) return;
     }
 
-    // 5. 確認モーダル
-    const ok = await showPlanReviewModal(plan);
-    if (!ok) return;
+    // 5. 確認モーダル（PSD と OCR ページ数が不一致のときだけ表示）
+    const hasMismatch =
+      (plan.unmappedPsdCount ?? 0) > 0 || (plan.unmappedMokuroCount ?? 0) > 0;
+    if (hasMismatch) {
+      const ok = await showPlanReviewModal(plan);
+      if (!ok) return;
+    }
 
     // 6. 適用
     const added = applyPlan(plan);
