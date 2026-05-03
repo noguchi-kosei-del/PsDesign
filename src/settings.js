@@ -19,6 +19,7 @@ export const DEFAULT_SETTINGS = {
     leadingPct: 125,        // %（autoLeadingAmount）
     strokeWidthPx: 20,      // px（フチの太さ）
     fontPostScriptName: "", // 空文字 = 指定なし（system default）
+    showBadge: true,        // 選択中レイヤー下部のフォント名 + サイズバッジ（true: 表示 / false: 非表示）
   },
   shortcuts: {
     save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
@@ -84,6 +85,9 @@ function migrate(old) {
     }
     if (typeof d.fontPostScriptName === "string") {
       out.defaults.fontPostScriptName = d.fontPostScriptName;
+    }
+    if (typeof d.showBadge === "boolean") {
+      out.defaults.showBadge = d.showBadge;
     }
   }
   if (old.shortcuts && typeof old.shortcuts === "object") {

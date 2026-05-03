@@ -1604,8 +1604,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-top: 10px;
   background: #000;
   color: #fff;
-  font: 700 11px/1 system-ui, -apple-system, "Segoe UI", sans-serif;
-  padding: 3px 6px;
+  font: 700 11px/1.25 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 4px 6px;
   border-radius: 3px;
   letter-spacing: 0.02em;
   pointer-events: none;
@@ -1613,6 +1613,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   z-index: 3;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+}
+.layer-size-badge-font,
+.layer-size-badge-size {
+  line-height: 1.25;
 }
 
 .layer-rotate-handle {
@@ -4400,7 +4408,9 @@ body.viewer-mode #viewer-mode-btn {
 body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
 
 /* ヘッダー / サイドバー / 他ペインを fade out。
-   width / padding / border も 0 にして spreads-psd-area が flex で全域を吸収できるようにする。 */
+   レイアウトを動かす width / height / padding / border はトランジションさせない（毎フレーム
+   reflow + spreads-psd-area の ResizeObserver による canvas 再描画で重くなるため）。
+   opacity のみを GPU 合成で軽く流し、レイアウトは 0 寸法に瞬時スナップする。 */
 .toolbar,
 .side-toolbar,
 .side-panel,
@@ -4408,14 +4418,8 @@ body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
 .spreads-proofread-area,
 .spreads-editor-area {
   transition:
-    opacity 0.3s ease,
-    visibility 0s linear 0.3s,
-    width 0.3s ease,
-    min-width 0.3s ease,
-    height 0.3s ease,
-    min-height 0.3s ease,
-    padding 0.3s ease,
-    border 0.3s ease;
+    opacity 0.18s ease,
+    visibility 0s linear 0.18s;
 }
 body.viewer-mode .toolbar {
   opacity: 0 !important;
@@ -4452,8 +4456,7 @@ body.viewer-mode .spreads-editor-area {
   border: none !important;
   overflow: hidden !important;
 }
-
-/* fade in 時は visibility を即座に戻す（MojiQ パターン） */
+/* fade in 時は visibility を即座に元に戻す（待ってから可視化すると遅延が見えるため）。 */
 body:not(.viewer-mode) .toolbar,
 body:not(.viewer-mode) .side-toolbar,
 body:not(.viewer-mode) .side-panel,
@@ -4461,14 +4464,8 @@ body:not(.viewer-mode) .spreads-pdf-area,
 body:not(.viewer-mode) .spreads-proofread-area,
 body:not(.viewer-mode) .spreads-editor-area {
   transition:
-    opacity 0.3s ease,
-    visibility 0s linear 0s,
-    width 0.3s ease,
-    min-width 0.3s ease,
-    height 0.3s ease,
-    min-height 0.3s ease,
-    padding 0.3s ease,
-    border 0.3s ease;
+    opacity 0.18s ease,
+    visibility 0s linear 0s;
 }
 
 /* PSD ペイン上のオーバーレイ（回転ボタン / ガイドロック / ガイド反映 / ルーラー / ガイド） */
@@ -4483,8 +4480,10 @@ body.viewer-mode #psd-guides-layer {
 }
 
 /* PSD エリアを全画面に拡張。padding/border を消して content 領域を最大化。
-   editor-mode の display: none より優先させるため display: flex を強制。 */
-body.viewer-mode .spreads-psd-area {
+   editor-mode の `.workspace.editor-mode .spreads-psd-area { display: none }` は
+   特異度 (0,3,0)。viewer-mode 側も `.workspace` を介して特異度 (0,3,1) に揃え、
+   display: flex が確実に優先されるようにする。 */
+body.viewer-mode .workspace .spreads-psd-area {
   display: flex !important;
   flex: 1 1 100% !important;
   width: 100% !important;
@@ -4492,7 +4491,7 @@ body.viewer-mode .spreads-psd-area {
   padding: 0 !important;
   border: none !important;
 }
-body.viewer-mode .psd-stage {
+body.viewer-mode .workspace .psd-stage {
   width: 100% !important;
   height: 100% !important;
 }

@@ -35,9 +35,9 @@ import {
   updateNewLayer,
 } from "./state.js";
 import { ensureFontLoaded } from "./font-loader.js";
-import { getDefault } from "./settings.js";
+import { getDefault, onSettingsChange } from "./settings.js";
 import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
-import { advanceTxtSelection, getActiveTxtSelection } from "./txt-source.js";
+import { advanceTxtSelection, cascadeRemoveTxtForLayers, getActiveTxtSelection } from "./txt-source.js";
 
 const mounts = new Map();
 const resizeObservers = new Set();
@@ -90,6 +90,16 @@ export function refreshAllOverlays() {
   for (const m of mounts.values()) renderOverlay(m);
 }
 
+// 環境設定（フォント名表示 / サイズ表示の切替など）が変わったらオーバーレイを再描画して
+// 選択中のバッジに即時反映する。
+let settingsListenerBound = false;
+function bindSettingsListener() {
+  if (settingsListenerBound) return;
+  settingsListenerBound = true;
+  onSettingsChange(() => refreshAllOverlays());
+}
+bindSettingsListener();
+
 export function nudgeSelectedLayers(dx, dy) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
@@ -130,8 +140,27 @@ export function deleteSelectedLayers() {
     .filter((s) => typeof s.layerId === "string")
     .map((s) => s.layerId);
   if (tempIds.length === 0) return false;
+
+  // 削除前のレイヤースナップショットを取り、sourceTxtRef を持つものは TXT 側からも消す
+  // ための情報として保持する（自動配置レイヤー → 原稿テキスト の cascade）。
+  const tempIdSet = new Set(tempIds);
+  const newLayersAll = (typeof window !== "undefined" ? null : null) || [];
+  // モジュールスコープに getNewLayers が無いので getNewLayersForPsd 経由で取得する代わりに、
+  // selection の page から layer を解決する。
+  const deletedLayerSnapshots = [];
+  for (const sel of selections) {
+    if (typeof sel.layerId !== "string") continue;
+    const page = getPages()[sel.pageIndex];
+    if (!page) continue;
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+    if (nl) deletedLayerSnapshots.push(nl);
+  }
+
   withHistoryTransient(() => {
     for (const id of tempIds) removeNewLayer(id);
+    // 削除されたレイヤーが原稿テキストの段落に紐付いていれば、その段落も TXT 側から取り除く。
+    // editor-textarea / txt-source-viewer は state.txtSource の listener 経由で自動更新される。
+    cascadeRemoveTxtForLayers(deletedLayerSnapshots, tempIdSet);
   });
   // 既存 PSD レイヤーの選択は維持し、新規分のみ選択から外す。
   setSelectedLayers(selections.filter((s) => typeof s.layerId !== "string"));
@@ -398,8 +427,10 @@ function renderOverlay(ctx) {
       box.classList.add("selected");
       box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
+      // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
       const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
-      box.appendChild(createSizeBadge(effectivePt, page, edit.fontPostScriptName ?? layer.font ?? null));
+      const badge = createSizeBadge(effectivePt, page, edit.fontPostScriptName ?? layer.font ?? null);
+      if (badge) box.appendChild(badge);
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });
@@ -434,7 +465,8 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
       box.appendChild(createRotateHandle(ctx, nl.tempId));
-      box.appendChild(createSizeBadge(nl.sizePt ?? 24, page, nl.fontPostScriptName ?? null));
+      const newBadge = createSizeBadge(nl.sizePt ?? 24, page, nl.fontPostScriptName ?? null);
+      if (newBadge) box.appendChild(newBadge);
     }
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, nl.tempId), { passive: false });
@@ -502,13 +534,27 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings) {
 }
 
 function createSizeBadge(sizePt, page, fontPostScriptName) {
+  // 環境設定（デフォルトタブ）でフォント名・文字サイズの表示/非表示を一括切替。
+  // OFF の場合はバッジ自体を生成せず null を返し、呼び出し側で append をスキップする。
+  if (getDefault("showBadge") === false) return null;
+
   const el = document.createElement("div");
   el.className = "layer-size-badge";
   // 基準PSD 比で換算した pt を表示。基準が 1 ページ目（または未読込）の場合は素のまま。
   const display = toDisplaySizePt(sizePt ?? 0, page);
   const rounded = Math.round((display ?? 0) * 10) / 10;
   const fontName = fontPostScriptName ? (getFontDisplayName(fontPostScriptName) ?? fontPostScriptName) : "";
-  el.textContent = fontName ? `${fontName} · ${rounded}pt` : `${rounded}pt`;
+  // フォント名と文字サイズを 2 行に分けて表示（フォント上 / サイズ下）。
+  if (fontName) {
+    const fontEl = document.createElement("div");
+    fontEl.className = "layer-size-badge-font";
+    fontEl.textContent = fontName;
+    el.appendChild(fontEl);
+  }
+  const sizeEl = document.createElement("div");
+  sizeEl.className = "layer-size-badge-size";
+  sizeEl.textContent = `${rounded}pt`;
+  el.appendChild(sizeEl);
   return el;
 }
 
@@ -763,6 +809,37 @@ function maybeApplyStickyFont() {
   return commitFontToSelections(ps);
 }
 
+// 直近 mousedown のタイムスタンプとレイヤーキーで「同じレイヤーへの 2 連クリック」を検出する。
+// 1 回目の mousedown で renderOverlay が走り box DOM が差し替わるため、ブラウザ既定の dblclick
+// は発火しない（mousedown と mouseup のターゲットが食い違って click 自体が出ない）。タイミング
+// での自前検出に切替える。
+const DBLCLICK_THRESHOLD_MS = 350;
+let lastLayerClickAt = 0;
+let lastLayerClickKey = null;
+
+function isLayerDoubleClick(pageIndex, layerKey) {
+  const now = performance.now();
+  const composite = `${pageIndex}::${layerKey}`;
+  const isDouble = (now - lastLayerClickAt) < DBLCLICK_THRESHOLD_MS && lastLayerClickKey === composite;
+  lastLayerClickAt = now;
+  lastLayerClickKey = composite;
+  return isDouble;
+}
+
+// V（選択）ツール選択中にテキストフレームをダブルクリックすると、レイヤーの組方向に応じて
+// T/Y ツールへ切替えて in-place 編集を開始する（原稿テキストパネルの dblclick 経路と同じ挙動）。
+function enterInPlaceEditFromMove(ctx, target) {
+  const direction = target.kind === "existing"
+    ? (getEdit(ctx.page.path, target.layer.id)?.direction ?? target.layer.direction ?? "horizontal")
+    : (target.nl.direction ?? "vertical");
+  setTool(direction === "vertical" ? "text-v" : "text-h");
+  const layerKey = target.kind === "existing" ? target.layer.id : target.nl.tempId;
+  setSelectedLayer(ctx.pageIndex, layerKey);
+  renderOverlay(ctx);
+  rebuildLayerList();
+  startInPlaceEdit(ctx, target);
+}
+
 function onExistingLayerMouseDown(e, ctx, layer) {
   const tool = getTool();
   if (isTextTool(tool)) {
@@ -777,6 +854,10 @@ function onExistingLayerMouseDown(e, ctx, layer) {
   if (tool !== "move") return;
   e.stopPropagation();
   e.preventDefault();
+  if (isLayerDoubleClick(ctx.pageIndex, layer.id)) {
+    enterInPlaceEditFromMove(ctx, { kind: "existing", layer });
+    return;
+  }
   if (e.shiftKey) {
     toggleLayerSelected(ctx.pageIndex, layer.id);
     renderOverlay(ctx);
@@ -805,6 +886,10 @@ function onNewLayerMouseDown(e, ctx, nl) {
   if (tool !== "move") return;
   e.stopPropagation();
   e.preventDefault();
+  if (isLayerDoubleClick(ctx.pageIndex, nl.tempId)) {
+    enterInPlaceEditFromMove(ctx, { kind: "new", nl });
+    return;
+  }
   if (e.shiftKey) {
     toggleLayerSelected(ctx.pageIndex, nl.tempId);
     renderOverlay(ctx);
@@ -1110,9 +1195,13 @@ function collectLayerHits(ctx, selRect) {
 // commit 時のアクションだけ `onCommit(value)` で呼び出し元に委ねる。
 function createTextFloater(ctx, {
   x, y, direction,
+  width = null,
+  height = null,
+  fontSizePsd = null,
   initialText = "",
   selectAll = false,
   guardBlurUntilFocused = false,
+  anchor = "top-left",
   onCommit,
   onClose,
   onCursorChange,
@@ -1127,6 +1216,32 @@ function createTextFloater(ctx, {
     : "テキスト（横書き）：Ctrl+Enterで確定 / Escで破棄";
   input.style.left = `${(x / page.width) * 100}%`;
   input.style.top = `${(y / page.height) * 100}%`;
+  // 既存テキストフレームの打ち換え（startInPlaceEdit）では rect の中央から
+  // 展開するよう transform で自身を中心合わせ。新規テキスト配置（startTextInput）は
+  // クリック点を左上に固定したいので既定の "top-left" のまま。
+  if (anchor === "center") {
+    input.style.transform = "translate(-50%, -50%)";
+  }
+  // 打ち換え時は frame サイズに合わせて textarea を縮める（CSS の min-height: 160px を上書き）。
+  // PSD 座標を page 寸法比の % に変換して反映、CSS の min-* を 0 に倒して content にぴったり寄せる。
+  if (width != null && height != null) {
+    input.style.width = `${(width / page.width) * 100}%`;
+    input.style.height = `${(height / page.height) * 100}%`;
+    input.style.minWidth = "0";
+    input.style.minHeight = "0";
+    input.style.boxSizing = "border-box";
+  }
+  // textarea 内の文字を frame と同じ pt サイズで表示する。CSS 既定の 16px のままだと
+  // frame に対して文字が小さすぎ「textarea が小さく見える」原因になる。
+  // PSD px → screen px の換算は canvas.clientWidth / page.width で取得。
+  if (fontSizePsd != null && fontSizePsd > 0) {
+    const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
+    if (pxPerPsd > 0) {
+      input.style.fontSize = `${fontSizePsd * pxPerPsd}px`;
+      input.style.lineHeight = "1.25";
+      input.style.padding = "0";
+    }
+  }
   if (initialText) input.value = initialText;
   else input.rows = 1;
   ctx.overlay.appendChild(input);
@@ -1186,20 +1301,35 @@ function startInPlaceEdit(ctx, target, options = {}) {
   let x = 0;
   let y = 0;
   let direction = "vertical";
+  let width = 0;
+  let height = 0;
+  let fontSizePsd = 0;
 
+  // 打ち換え時は textarea を rect の中央から展開し、サイズも frame に合わせる。
+  // layerRectFor* で frame の中心と寸法、内部 pt サイズを算出し createTextFloater に渡す。
+  // 入力欄と文字を視認しやすくするため、frame の 2 倍に拡大して表示する（中心固定）。
+  const EDIT_SCALE = 2;
   if (target.kind === "existing") {
     const layer = target.layer;
     const edit = getEdit(page.path, layer.id) ?? {};
     initialText = edit.contents ?? layer.text ?? "";
-    x = (layer.left ?? 0) + (edit.dx ?? 0);
-    y = (layer.top ?? 0) + (edit.dy ?? 0);
     direction = edit.direction ?? layer.direction ?? "horizontal";
+    const rect = layerRectForExisting(page, layer, edit);
+    x = rect.left + rect.width / 2;
+    y = rect.top + rect.height / 2;
+    width = rect.width * EDIT_SCALE;
+    height = rect.height * EDIT_SCALE;
+    fontSizePsd = rect.ptInPsdPx * EDIT_SCALE;
   } else {
     const nl = target.nl;
     initialText = nl.contents ?? "";
-    x = nl.x;
-    y = nl.y;
     direction = nl.direction ?? "vertical";
+    const rect = layerRectForNew(page, nl);
+    x = rect.left + rect.width / 2;
+    y = rect.top + rect.height / 2;
+    width = rect.width * EDIT_SCALE;
+    height = rect.height * EDIT_SCALE;
+    fontSizePsd = rect.ptInPsdPx * EDIT_SCALE;
   }
 
   const existing = ctx.overlay.querySelector(".text-input-floater");
@@ -1216,8 +1346,11 @@ function startInPlaceEdit(ctx, target, options = {}) {
 
   createTextFloater(ctx, {
     x, y, direction,
+    width, height,
+    fontSizePsd,
     initialText,
     selectAll: true,
+    anchor: "center",
     onCursorChange: ({ lineIndex, totalLines, contents }) => {
       setEditingContext({ ...editTargetMeta, currentLineIndex: lineIndex, totalLines, contents });
     },

@@ -492,8 +492,8 @@
             </label>
             <div class="editor-tabs-section">
               <div class="editor-tabs" role="tablist">
-                <button id="editor-tab-size" class="editor-tab active" data-tab="size" data-editor-scope="single" type="button" role="tab" aria-selected="true">サイズ</button>
-                <button id="editor-tab-leading" class="editor-tab" data-tab="leading" data-editor-scope="single" type="button" role="tab" aria-selected="false">行間</button>
+                <button id="editor-tab-size" class="editor-tab active" data-tab="size" type="button" role="tab" aria-selected="true">サイズ</button>
+                <button id="editor-tab-leading" class="editor-tab" data-tab="leading" type="button" role="tab" aria-selected="false">行間</button>
                 <button id="editor-tab-stroke" class="editor-tab" data-tab="stroke" type="button" role="tab" aria-selected="false">フチ</button>
               </div>
               <div class="editor-tab-panel" data-tab-panel="size" role="tabpanel">
@@ -668,7 +668,7 @@
         <div class="settings-tabs" role="tablist">
           <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
           <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">ページ送り</button>
-          <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">デフォルト</button>
+          <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">サイドバー</button>
         </div>
         <div class="settings-tab-panel active" id="settings-tab-shortcuts" role="tabpanel">
           <div class="settings-section-header">
@@ -729,6 +729,13 @@
               <label class="settings-default-label" for="default-font">フォント</label>
               <input type="text" id="default-font" class="settings-default-input" list="default-font-list" placeholder="（指定なし）" />
               <datalist id="default-font-list"></datalist>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-show-badge">選択時のフォント名・文字サイズ</label>
+              <select id="default-show-badge" class="settings-default-input">
+                <option value="show">表示</option>
+                <option value="hide">非表示</option>
+              </select>
             </div>
           </div>
         </div>

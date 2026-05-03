@@ -5,7 +5,9 @@ import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
 import {
   bindEditorEvents,
+  commitLeadingToSelections,
   commitSelectedLayerField,
+  commitSizeToSelections,
   hasSelection,
   rebuildLayerList,
 } from "./text-editor.js";
@@ -1074,9 +1076,8 @@ function bindParallelViewMode() {
 
 function applyTextSize(n) {
   setTextSize(n);
-  if (hasSelection()) {
-    commitSelectedLayerField("sizePt", getTextSize());
-  }
+  // 選択中の全レイヤーに同じサイズを適用（複数選択でも一括反映）。
+  commitSizeToSelections(getTextSize());
 }
 
 function getSizeStep() {
@@ -1136,7 +1137,8 @@ function applyLeading(n) {
     return;
   }
   setLeadingPct(v);
-  if (hasSelection()) commitSelectedLayerField("leadingPct", getLeadingPct());
+  // 選択中の全レイヤーに同じ行間を適用（複数選択でも一括反映）。
+  commitLeadingToSelections(getLeadingPct());
 }
 function clampLeading(n) {
   const v = Number(n);

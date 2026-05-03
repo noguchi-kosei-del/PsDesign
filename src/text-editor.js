@@ -315,17 +315,11 @@ function populateEditor() {
   }
   editor.hidden = false;
 
-  // フォント/サイズ/組方向は単独選択時のみ表示（複数だと値が曖昧）。
-  // フチは複数選択でも一括適用できるため常に表示。
+  // フォントは単独選択時のみ表示（複数だと値が曖昧）。サイズ/行間/フチタブは複数選択でも
+  // 一括適用できるため常に表示する。タブパネル内の入力値は単独選択時のみレイヤー値に追従し、
+  // 複数選択時はツール状態（state.textSize / state.leadingPct）の値を表示する。
   const singleOnly = editor.querySelectorAll("[data-editor-scope='single']");
   for (const el of singleOnly) el.hidden = selections.length !== 1;
-  // タブ active が single-only でかつ複数選択になったらフチに自動切替。
-  if (selections.length !== 1) {
-    const activeTab = editor.querySelector(".editor-tab.active");
-    if (activeTab && activeTab.dataset.editorScope === "single") {
-      setEditorTab("stroke");
-    }
-  }
 
   if (selections.length === 1) {
     const resolved = resolveSelection();
@@ -522,6 +516,10 @@ function resolveFontFromInput(typed) {
 function rebuildFontOptions(currentValue) {
   const input = fontEl();
   if (!input) return;
+  // ユーザーがフォント名を入力中（input が active）なら、入力中の文字列を
+  // populateEditor / rebuildLayerList などの再描画で上書きしないようにする。
+  // dataset.ps だけは更新して、確定時の resolveFontFromInput が壊れないようにする。
+  const isTypingHere = document.activeElement === input;
   const fonts = getFonts();
   let displayText = "";
   let ps = "";
@@ -537,7 +535,7 @@ function rebuildFontOptions(currentValue) {
       ps = currentValue;
     }
   }
-  input.value = displayText;
+  if (!isTypingHere) input.value = displayText;
   input.dataset.ps = ps;
 }
 
@@ -799,6 +797,52 @@ export function commitFontToSelections(ps) {
     refreshAllOverlays();
   }
   return !!mutated;
+}
+
+// 単一フィールド（sizePt / leadingPct など）を選択中の全レイヤーに書き込む。
+// 値が変わらないレイヤーはスキップして余計な history snapshot を作らない。
+function commitSingleFieldToSelections(field, value) {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  const mutated = withHistoryTransient(() => {
+    let any = false;
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      let cur;
+      if (ref.kind === "existing") {
+        const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+        cur = edit[field];
+      } else {
+        cur = ref.newLayer[field];
+      }
+      if (cur === value) continue;
+      if (ref.kind === "existing") {
+        setEdit(ref.page.path, ref.layer.id, { [field]: value });
+      } else {
+        updateNewLayer(ref.newLayer.tempId, { [field]: value });
+      }
+      any = true;
+    }
+    return any || false;
+  });
+  if (mutated) {
+    rebuildLayerList();
+    refreshAllOverlays();
+  }
+  return !!mutated;
+}
+
+// サイズ（sizePt）を選択中の全レイヤーに書き込む。
+export function commitSizeToSelections(sizePt) {
+  if (!Number.isFinite(sizePt)) return false;
+  return commitSingleFieldToSelections("sizePt", sizePt);
+}
+
+// 行間（leadingPct）を選択中の全レイヤーに書き込む。
+export function commitLeadingToSelections(leadingPct) {
+  if (!Number.isFinite(leadingPct)) return false;
+  return commitSingleFieldToSelections("leadingPct", leadingPct);
 }
 
 // 文字色を選択中の全レイヤーに書き込む。

@@ -107,11 +107,13 @@ function syncDefaultsUi() {
   const lp = $("default-leading-pct");
   const sw = $("default-stroke-width");
   const ft = $("default-font");
+  const sb = $("default-show-badge");
   if (ts) ts.value = String(d.textSize ?? "");
   if (tss) tss.value = String(d.textSizeStep ?? 0.1);
   if (lp) lp.value = String(d.leadingPct ?? "");
   if (sw) sw.value = String(d.strokeWidthPx ?? "");
   if (ft) ft.value = String(d.fontPostScriptName ?? "");
+  if (sb) sb.value = d.showBadge === false ? "hide" : "show";
   populateFontDatalist();
 }
 
@@ -357,6 +359,13 @@ function bindDefaultsInputs() {
     ft.addEventListener("change", () => {
       setDefault("fontPostScriptName", String(ft.value || "").trim());
       applyToolDefaults();
+    });
+  }
+
+  const sb = $("default-show-badge");
+  if (sb) {
+    sb.addEventListener("change", () => {
+      setDefault("showBadge", sb.value !== "hide");
     });
   }
 

@@ -361,6 +361,68 @@ export function deleteSelectedTxtBlock() {
   return true;
 }
 
+// レイヤー削除（V ツールでの Delete/Backspace）から呼ばれる、layer → TXT 方向の cascade。
+// 削除された layer の `sourceTxtRef` で参照されていた段落を原稿テキストから取り除き、
+// 残ったレイヤーの paragraphIndex を補正する。
+//
+// 引数 `deletedLayers`: 削除直前のレイヤースナップショット（tempId と sourceTxtRef を持つ）
+// 引数 `excludeTempIds`: 補正対象から除外する tempId Set（呼び出し側で既に removeNewLayer 済の id）
+//
+// 既に呼び出し側で withHistoryTransient のスコープ内にある前提（自前では作らない）。
+// 戻り値: 何か変更があれば true。
+export function cascadeRemoveTxtForLayers(deletedLayers, excludeTempIds = new Set()) {
+  const refs = (deletedLayers ?? [])
+    .map((l) => l?.sourceTxtRef)
+    .filter((r) => r && Number.isInteger(r.paragraphIndex));
+  if (refs.length === 0) return false;
+  const source = getTxtSource();
+  if (!source) return false;
+
+  // ページごとに分けて、paragraphIndex の降順で処理する。
+  // 降順にすると「先に下を消す → 上の index は不変」で重複補正が不要になる。
+  const byPage = new Map();
+  for (const r of refs) {
+    const key = r.pageNumber == null ? "__null__" : String(r.pageNumber);
+    if (!byPage.has(key)) byPage.set(key, []);
+    byPage.get(key).push(r);
+  }
+
+  let content = source.content;
+  let changed = false;
+  for (const [key, list] of byPage) {
+    const pageNumber = key === "__null__" ? null : Number(key);
+    const sortedDesc = list.slice().sort((a, b) => b.paragraphIndex - a.paragraphIndex);
+    // 同一段落を複数レイヤーが指していた場合は重複削除を避けるため Set で 1 回ずつ。
+    const seen = new Set();
+    for (const r of sortedDesc) {
+      if (seen.has(r.paragraphIndex)) continue;
+      seen.add(r.paragraphIndex);
+      const next = deleteBlockFromContent(content, pageNumber, r.paragraphIndex);
+      if (next == null || next === content) continue;
+      content = next;
+      changed = true;
+      // 残レイヤーの paragraphIndex 補正（同ページかつ削除位置より後ろ）
+      for (const layer of getNewLayers().slice()) {
+        if (excludeTempIds.has(layer.tempId)) continue;
+        const ref = layer?.sourceTxtRef;
+        if (!ref) continue;
+        const refPage = ref.pageNumber == null ? null : Number(ref.pageNumber);
+        if (refPage !== pageNumber) continue;
+        if (ref.paragraphIndex > r.paragraphIndex) {
+          updateNewLayer(layer.tempId, {
+            sourceTxtRef: { ...ref, paragraphIndex: ref.paragraphIndex - 1 },
+          });
+        }
+      }
+    }
+  }
+
+  if (changed) {
+    setTxtSource({ name: source.name, content });
+  }
+  return changed;
+}
+
 // content をページマーカーで区切り、pageNumber に対応するセクション内で
 // oldText の最初の出現を newText に置換した結果を返す。一致しなければ null。
 // pageNumber == null（マーカー無し原稿）のときは content 全体を対象にする。

@@ -2073,3 +2073,85 @@ E5. **`hasOverflowAfter` 判定にも `availW/availH` を使う** — pdf-view.j
 
 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.8.0`** に揃え。Cargo.lock も自動追従。
 
+---
+
+## v1.9.0: 打ち換え入力欄の中央展開・V ツールでのダブルクリック編集・編集パネル UX 改善
+
+### A. 既存テキストフレーム打ち換え時の入力欄改善
+
+A1. **入力欄を frame の中央から展開** ([src/canvas-tools.js](src/canvas-tools.js)): `startInPlaceEdit` で frame の rect を `layerRectForExisting` / `layerRectForNew` で算出し、中心 `(left + width/2, top + height/2)` を `createTextFloater` に渡す。`createTextFloater` 側で新オプション `anchor: "center"` のとき `transform: translate(-50%, -50%)` を当て、入力欄が中央起点で広がるように。`startTextInput`（空キャンバスクリックの新規入力）はクリック点 = 左上の従来挙動を維持。
+
+A2. **入力欄サイズを frame に合わせて自動フィット**: `createTextFloater` に `width` / `height` オプションを追加。PSD 座標を page 寸法比 % に変換、`box-sizing: border-box`、`min-width/min-height: 0` で CSS の `min-height: 160px` を上書きし、frame サイズにぴったり寄せる（テキスト量に応じた適正サイズ）。
+
+A3. **textarea 内の文字も frame と同じ pt サイズに**: `fontSizePsd` オプション（PSD 座標の pt サイズ）を渡し、`canvas.clientWidth / page.width` で screen px 換算して `font-size` を直接指定。CSS 既定 16px のままだと「frame に対して文字が小さすぎ textarea が空に見える」原因になっていた。
+
+A4. **frame の 2 倍に拡大（視認性確保）**: `startInPlaceEdit` 内で `EDIT_SCALE = 2` を定義、`width` / `height` / `fontSizePsd` を 2 倍にして渡す。中心固定なので入力欄は frame 中心から左右上下に均等に広がる。倍率調整は定数 1 箇所で完結。
+
+### B. V ツール選択中のダブルクリックで打ち換えモードに
+
+B1. **タイミング検出による double-click 判定** ([src/canvas-tools.js](src/canvas-tools.js)): 1 回目の mousedown で `renderOverlay` が走り `.layer-box` DOM が差し替わるため、ブラウザ既定の `dblclick` イベントは発火しない（mousedown と mouseup のターゲット食い違い）。`isLayerDoubleClick(pageIndex, layerKey)` で **`performance.now() - lastLayerClickAt < 350ms` かつ同じレイヤーキー**を判定する自前検出に切替え。
+
+B2. **`enterInPlaceEditFromMove(ctx, target)` 新設**: レイヤーの組方向（`edit.direction ?? layer.direction` / `nl.direction`）に応じて `setTool("text-v" / "text-h")` で T/Y ツールへ切替えてから `startInPlaceEdit` を起動。原稿テキストパネルの dblclick 経路（`enterInPlaceEditForLayer`）と同じ動作で、確定後はそのツールに留まる（既存挙動と一致）。
+
+B3. **両 mousedown ハンドラに統合**: `onExistingLayerMouseDown` / `onNewLayerMouseDown` の `tool === "move"` 分岐冒頭で `isLayerDoubleClick` を判定し、true なら `enterInPlaceEditFromMove` を呼んで return。Shift+click や drag 開始ロジックには影響しない。
+
+### C. V ツールでの削除を原稿テキスト・エディタモードへ cascade
+
+C1. **`cascadeRemoveTxtForLayers(deletedLayers, excludeTempIds)` 新設** ([src/txt-source.js](src/txt-source.js)): 削除されたレイヤーの `sourceTxtRef = { pageNumber, paragraphIndex }` を辿り、対応する原稿テキスト段落を `deleteBlockFromContent` で削除。`setTxtSource` 経由で `editor-textarea`（テキストエディタモード）と `txt-source-viewer`（原稿テキストパネル）の両方が listener で自動更新される。
+
+C2. **paragraphIndex 補正**: ページごとに paragraphIndex 降順で処理（先に下を消す → 上の index は不変、補正不要）。同一ページで削除位置より後ろを参照していた残レイヤーは `updateNewLayer` で paragraphIndex を 1 デクリメントする。`deleteSelectedTxtBlock`（TXT → layer 方向の cascade）と同じ pattern を逆方向に適用。
+
+C3. **同 history transient で 1 snapshot に集約** ([src/canvas-tools.js](src/canvas-tools.js)): `deleteSelectedLayers` の冒頭で削除前のレイヤースナップショット (`{tempId, sourceTxtRef}`) を取得 → `withHistoryTransient` 内で `removeNewLayer` + `cascadeRemoveTxtForLayers` を実行。Ctrl+Z 一発でレイヤー＋原稿の両方が同時に巻き戻る。
+
+### D. 編集パネルの複数選択対応
+
+D1. **「サイズ」「行間」タブを複数選択でも常時表示** ([index.html](index.html) + [src/text-editor.js](src/text-editor.js)): `data-editor-scope="single"` をサイズ・行間タブから撤去（フォントだけは値が曖昧になるので維持）。`populateEditor` から「複数選択 → フチタブへ自動切替」のロジックも撤去。
+
+D2. **多レイヤー一括 commit ヘルパー** ([src/text-editor.js](src/text-editor.js)): `commitSingleFieldToSelections(field, value)` を新設し、`commitSizeToSelections(sizePt)` / `commitLeadingToSelections(leadingPct)` を export。既存の `commitFontToSelections` / `commitStrokeFields` と同じパターン（`withHistoryTransient` で 1 snapshot 化、値が変わらないレイヤーは skip）。
+
+D3. **`applyTextSize` / `applyLeading` の経路を多選択対応に切替** ([src/main.js](src/main.js)): 旧 `if (hasSelection()) commitSelectedLayerField(...)`（最初のレイヤーだけ更新）を `commitSizeToSelections` / `commitLeadingToSelections` に置換。+/- ボタン・size-input・leading-input・[ / ] ショートカット・wheel すべてが多選択で一括反映に。
+
+### E. テキストフレーム下のサイズバッジ刷新
+
+E1. **フォント上 / サイズ下の縦積み** ([src/canvas-tools.js](src/canvas-tools.js) + [src/styles.css](src/styles.css)): 旧 `${フォント名} · ${N}pt` の 1 行表示を、`<div class="layer-size-badge-font">` + `<div class="layer-size-badge-size">` の 2 つの child div に分離。`.layer-size-badge` を `display: flex; flex-direction: column; align-items: center; gap: 2px` に。フォント未設定のレイヤーはサイズのみ 1 行表示（フォント div 自体を生成しない）。
+
+E2. **環境設定で表示/非表示を切替**: `DEFAULT_SETTINGS.defaults.showBadge: true` を新設 ([src/settings.js](src/settings.js))、`migrate()` でホワイトリスト穴埋め。`createSizeBadge` 冒頭で `getDefault("showBadge") === false` をチェックして `null` を返し、呼び出し側 2 箇所で `if (badge) box.appendChild(badge)` でガード。`onSettingsChange(refreshAllOverlays)` を購読し、設定モーダルでの切替が即時反映される。
+
+E3. **環境設定 UI**: 設定モーダル「サイドバー」タブ（旧「デフォルト」）に「選択時のフォント名・文字サイズ」行を追加。**ドロップダウン形式**（`<select>` で「表示」/「非表示」）。`syncDefaultsUi` で `sb.value = d.showBadge === false ? "hide" : "show"` を反映、change で `setDefault("showBadge", sb.value !== "hide")` を保存。
+
+### F. 設定タブ名を「デフォルト」→「サイドバー」に変更
+
+F1. [index.html](index.html): 環境設定モーダルの 3 つのタブ「ショートカット」「ページ送り」「デフォルト」のうち、3 つ目を **「サイドバー」** に文言変更。タブの内部 ID（`data-tab="defaults"` / `id="settings-tab-defaults"`）と setting key (`defaults.*`) は据え置き。「デフォルトに戻す」ボタンの文言もそのまま。
+
+### G. edit-font 入力欄の typing 中保護
+
+G1. **問題**: `populateEditor` / `rebuildLayerList` 経路で `rebuildFontOptions` が走ると `input.value = displayText` が走り、ユーザーがフォント名を入力中の文字列を上書きしてしまう不具合（多レイヤー一括 commit や onSettingsChange による refresh で再現）。
+
+G2. **修正** ([src/text-editor.js](src/text-editor.js) `rebuildFontOptions`): `document.activeElement === input` のときは `input.value` の上書きをスキップ。`dataset.ps` だけは更新して、Enter キーで確定する `resolveFontFromInput` の参照が壊れないようにする。
+
+### H. 閲覧モードのアニメーション軽量化
+
+H1. **問題**: 閲覧モード切替時に `width / height / padding / border` の transition がトリガーされ、毎フレーム reflow + `spreads-psd-area` の `ResizeObserver` による canvas 再描画が発生して重かった。
+
+H2. **修正** ([src/styles.css](src/styles.css)): layout 系プロパティの transition を撤去し、`opacity 0.18s ease` + `visibility 0s linear 0.18s` のみ残す。レイアウトは body class 付与時に瞬時にスナップ（1 回の reflow + canvas 再描画）、視覚的には opacity フェードのみ GPU 合成で軽く流れる。0.3s → 0.18s 短縮で切れ味も改善。
+
+### I. テキストエディタモードから閲覧モードへ切替時の表示バグ修正
+
+I1. **問題**: `.workspace.editor-mode .spreads-psd-area { display: none }`（特異度 0,3,0）が `body.viewer-mode .spreads-psd-area { display: flex }`（特異度 0,2,1）を上書きしてしまい、エディタモード中に閲覧モードへ切替えても PSD が表示されなかった。
+
+I2. **修正** ([src/styles.css](src/styles.css)): viewer-mode 側のセレクタを `body.viewer-mode .workspace .spreads-psd-area` / `body.viewer-mode .workspace .psd-stage` に変更。特異度 (0,3,1) になり、editor-mode の (0,3,0) を確実に上書きする。
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.9.0`** に揃え。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: 打ち換え入力欄は左上から展開、CSS 既定の min-height 160px・font-size 16px で frame に対して空白だらけ → 新: rect 中央起点、frame 寸法フィット、内部文字も実 pt × 2 倍で視認性確保
+> - 旧: V ツールでテキストフレームを編集するには T/Y ツールに切替えてからクリック → 新: V ツール選択中の double-click で組方向に応じて T/Y へ自動切替 + 打ち換え起動
+> - 旧: 自動配置レイヤーを V ツールで削除しても原稿テキストには残留（次の自動配置で重複） → 新: sourceTxtRef を辿って TXT 段落も削除 + paragraphIndex 補正、Ctrl+Z 一発で巻き戻る
+> - 旧: 複数選択すると編集パネルが「フチ」だけになり、サイズ・行間が変更不可 → 新: 3 タブすべて常時表示、サイズ・行間も全選択レイヤーへ一括適用（commitSizeToSelections / commitLeadingToSelections）
+> - 旧: フレーム下のバッジは `${font} · ${N}pt` の 1 行 → 新: フォント上 / サイズ下の 2 行縦積み、環境設定の「サイドバー」タブで表示/非表示をドロップダウン切替
+> - 旧: edit-font 入力中に rebuildLayerList が走ると入力文字が消える → 新: input が active なら input.value を保護
+> - 旧: 閲覧モード切替で width / height / padding 等のレイアウトプロパティが transition → 重い → 新: opacity のみ 0.18s でフェード、レイアウトは瞬時スナップ
+> - 旧: editor-mode → viewer-mode の遷移で PSD が表示されない（特異度負け） → 新: `.workspace` を介在させて (0,3,1) で確実に上書き
+
