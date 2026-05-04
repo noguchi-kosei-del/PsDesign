@@ -95,10 +95,11 @@ function makeImagePage(bitmap) {
 }
 
 // 複数ファイル（PDF / 画像）を 1 つの「合成 doc」にまとめる。
-//   sources: Array<{ type: "image", bitmap: ImageBitmap }
-//                  | { type: "pdf",   doc: pdfjsDoc, pageNum: number }>
+//   sources: Array<{ type: "image", bitmap: ImageBitmap, path: string }
+//                  | { type: "pdf",   doc: pdfjsDoc, pageNum: number, path: string }>
 // pdf-view.js / pdf-pages.js は doc.numPages と doc.getPage(n) しか触らないので、
 // 各ソースを 1 ページずつ並べたフラットな配列にすれば従来コードに変更不要で動く。
+// getSourcePath(n) で n ページ目の元ファイルパスを返す（バーのファイル名表示用）。
 function makeCompositeDoc(sources) {
   return {
     numPages: sources.length,
@@ -108,6 +109,10 @@ function makeCompositeDoc(sources) {
       if (src.type === "image") return Promise.resolve(makeImagePage(src.bitmap));
       // pdf — pdfjs Page をそのまま返す
       return src.doc.getPage(src.pageNum);
+    },
+    getSourcePath(n) {
+      const src = sources[n - 1];
+      return src?.path ?? null;
     },
     destroy() {
       const seenDocs = new Set();
@@ -197,11 +202,11 @@ export async function loadReferenceFiles(paths) {
       try {
         if (IMAGE_EXT_REGEX.test(p)) {
           const bitmap = await readImageBitmap(p);
-          sources.push({ type: "image", bitmap });
+          sources.push({ type: "image", bitmap, path: p });
         } else {
           const doc = await readPdfDocument(p);
           for (let pn = 1; pn <= doc.numPages; pn++) {
-            sources.push({ type: "pdf", doc, pageNum: pn });
+            sources.push({ type: "pdf", doc, pageNum: pn, path: p });
           }
         }
       } catch (e) {

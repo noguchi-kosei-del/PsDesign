@@ -78,9 +78,9 @@ export function mountPdfView() {
   pageWrap = document.createElement("div");
   pageWrap.className = "page pdf-page";
 
-  labelEl = document.createElement("div");
-  labelEl.className = "page-label";
-  pageWrap.appendChild(labelEl);
+  // ラベルはペイン上部の `.stage-label-bar` 内 `#pdf-stage-label` に表示。
+  // ステージ内のページに浮かべる旧方式は廃止。
+  labelEl = document.getElementById("pdf-stage-label");
 
   canvas = document.createElement("canvas");
   canvas.className = "pdf-canvas";
@@ -193,10 +193,26 @@ function schedule() {
   });
 }
 
+/* ステージ上部バーのラベル文字数上限。30 文字を超えたら末尾を `…` に置換する。
+   `…` 自体を 1 文字として数える方針：max 30 のとき先頭 29 文字 + `…` = 30 文字。 */
+const LABEL_MAX_CHARS = 30;
+function truncateLabel(text) {
+  if (typeof text !== "string") return "";
+  const chars = Array.from(text);
+  if (chars.length <= LABEL_MAX_CHARS) return text;
+  return chars.slice(0, LABEL_MAX_CHARS - 1).join("") + "…";
+}
+
+/* ページ番号は最低 2 桁ゼロ埋め（P01 / P10 / P100）。 */
+function pageNumLabel(n) {
+  return String(n).padStart(2, "0");
+}
+
 function showEmpty() {
   pageWrap.hidden = true;
   outOfRangeEl.hidden = true;
   emptyEl.hidden = false;
+  if (labelEl) labelEl.textContent = "";
 }
 
 function showOutOfRange(requested, total) {
@@ -212,6 +228,7 @@ function showOutOfRange(requested, total) {
     <p class="pdf-empty-text">見本にこのページはありません (${requested} / ${total})</p>
   `;
   outOfRangeEl.hidden = false;
+  if (labelEl) labelEl.textContent = truncateLabel(`P${pageNumLabel(requested)} (見本範囲外 / ${total})`);
 }
 
 function showCanvas(pageNum, side) {
@@ -220,9 +237,18 @@ function showCanvas(pageNum, side) {
   pageWrap.hidden = false;
   if (labelEl) {
     const sideLabel = side === "right" ? "右" : side === "left" ? "左" : "";
-    labelEl.textContent = sideLabel
-      ? `#${pageNum}${sideLabel}  ${basename(getPdfPath())}`
-      : `#${pageNum}  ${basename(getPdfPath())}`;
+    const pn = pageNumLabel(pageNum);
+    // 合成 doc（loadReferenceFiles）は getSourcePath(pageNum) で per-page の元
+    // ファイルパスを返す。フォールバックで getPdfPath()（先頭ファイル）を使う。
+    const doc = getPdfDoc();
+    const srcPath = (doc && typeof doc.getSourcePath === "function")
+      ? doc.getSourcePath(pageNum)
+      : null;
+    const filename = basename(srcPath ?? getPdfPath());
+    const raw = sideLabel
+      ? `P${pn}${sideLabel}  ${filename}`
+      : `P${pn}  ${filename}`;
+    labelEl.textContent = truncateLabel(raw);
   }
 }
 

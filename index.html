@@ -184,12 +184,17 @@
         <section class="spreads-container" id="spreads-container">
           <div id="spreads-stage" class="spreads-stage">
             <div class="spreads-pdf-area" id="spreads-pdf-area">
-              <button id="pdf-rotate-btn" class="pdf-rotate-btn icon-btn" type="button" title="PDF を 90° 回転（クリックごと）" aria-label="PDF を回転" hidden>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="21 2 21 8 15 8"/>
-                  <path d="M21 8A9 9 0 1 0 18.4 16.9"/>
-                </svg>
-              </button>
+              <div class="stage-label-bar" id="pdf-stage-label-bar">
+                <span class="stage-label-text" id="pdf-stage-label"></span>
+                <div class="stage-label-actions">
+                  <button id="pdf-rotate-btn" class="pdf-rotate-btn icon-btn" type="button" title="PDF を 90° 回転（クリックごと）" aria-label="PDF を回転" hidden>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="21 2 21 8 15 8"/>
+                      <path d="M21 8A9 9 0 1 0 18.4 16.9"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
               <div id="pdf-stage" class="pdf-stage"></div>
             </div>
             <div class="spreads-proofread-area" id="spreads-proofread-area">
@@ -222,28 +227,33 @@
               </div>
             </div>
             <div class="spreads-psd-area" id="spreads-psd-area">
-              <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" hidden>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                  <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                </svg>
-              </button>
-              <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" hidden>
-                <svg class="lock-icon-unlocked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                  <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
-                </svg>
-                <svg class="lock-icon-locked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                  <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                </svg>
-              </button>
-              <button id="psd-rotate-btn" class="psd-rotate-btn icon-btn" type="button" title="PSD を 90° 回転（クリックごと）" aria-label="PSD を回転" hidden>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="21 2 21 8 15 8"/>
-                  <path d="M21 8A9 9 0 1 0 18.4 16.9"/>
-                </svg>
-              </button>
+              <div class="stage-label-bar" id="psd-stage-label-bar">
+                <span class="stage-label-text" id="psd-stage-label"></span>
+                <div class="stage-label-actions">
+                  <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" hidden>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
+                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
+                    </svg>
+                  </button>
+                  <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" hidden>
+                    <svg class="lock-icon-unlocked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                      <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
+                    </svg>
+                    <svg class="lock-icon-locked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
+                      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+                    </svg>
+                  </button>
+                  <button id="psd-rotate-btn" class="psd-rotate-btn icon-btn" type="button" title="PSD を 90° 回転（クリックごと）" aria-label="PSD を回転" hidden>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="21 2 21 8 15 8"/>
+                      <path d="M21 8A9 9 0 1 0 18.4 16.9"/>
+                    </svg>
+                  </button>
+                </div>
+              </div>
               <div id="psd-stage" class="psd-stage"></div>
               <div class="psd-rulers" id="psd-rulers" hidden>
                 <canvas class="psd-ruler psd-ruler-top" id="psd-ruler-top"></canvas>

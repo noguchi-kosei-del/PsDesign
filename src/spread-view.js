@@ -60,7 +60,10 @@ export function renderAllSpreads() {
   root.innerHTML = "";
   unmountAll();
   const pages = getPages();
+  // ステージ上部ラベル（ペイン上部の固定バー）の更新。空状態ではテキストもクリア。
+  const psdLabelEl = document.getElementById("psd-stage-label");
   if (pages.length === 0) {
+    if (psdLabelEl) psdLabelEl.textContent = "";
     const empty = document.createElement("div");
     empty.className = "spreads-empty";
     empty.innerHTML = `
@@ -76,7 +79,24 @@ export function renderAllSpreads() {
 
   const idx = Math.max(0, Math.min(pages.length - 1, getCurrentPageIndex()));
   const page = pages[idx];
+  if (psdLabelEl) psdLabelEl.textContent = truncateLabel(`P${pageNumLabel(idx + 1)}  ${fileName(page.path)}`);
   root.appendChild(buildPage(page, idx, root));
+}
+
+/* ページ番号は最低 2 桁ゼロ埋め（P01 / P10 / P100）。 */
+function pageNumLabel(n) {
+  return String(n).padStart(2, "0");
+}
+
+/* ステージ上部バーのラベル文字数上限。30 文字を超えたら末尾を `…` に置換する。
+   `…` 自体を 1 文字として数える方針：max 30 のとき先頭 29 文字 + `…` = 30 文字。 */
+const LABEL_MAX_CHARS = 30;
+function truncateLabel(text) {
+  if (typeof text !== "string") return "";
+  // Array.from で surrogate pair（絵文字等）を 1 文字単位で扱う。
+  const chars = Array.from(text);
+  if (chars.length <= LABEL_MAX_CHARS) return text;
+  return chars.slice(0, LABEL_MAX_CHARS - 1).join("") + "…";
 }
 
 export function refreshOverlays() {
@@ -87,10 +107,9 @@ function buildPage(page, pageIndex, root) {
   const el = document.createElement("div");
   el.className = "page";
 
-  const label = document.createElement("div");
-  label.className = "page-label";
-  label.textContent = `#${pageIndex + 1}  ${fileName(page.path)}`;
-  el.appendChild(label);
+  // ラベルはペイン上部の `.stage-label-bar > #psd-stage-label` に表示。
+  // ステージ内の `.page` 直下に浮かべる旧方式は廃止し、renderAllSpreads 側で
+  // 現在ページ index に対応する文字列をバーへ書き込む。
 
   const wrap = document.createElement("div");
   wrap.className = "canvas-wrap";

@@ -113,43 +113,86 @@ export function updateProgress({ detail, current, total, showCount = true } = {}
 // バーの Y 座標を計測して --bar-top に注入 → 上下 2 つの bg 帯の境界をバー位置に揃え、
 // .closing クラス付与で bg-top は translateY(-100%)、bg-bottom は translateY(100%) で
 // 物理的に画面外へスライドアウトさせる。card は少し遅れてフェードアウト。
+//
+// 戻り値: 閉じアニメ完了時に resolve する Promise。await すれば「次に開くモーダルが
+// progress-modal の上に重なってアニメが見えなくなる」事故を防げる（既存の fire-and-forget
+// 呼び出しは await しないだけで、Promise 自体は GC で回収されるため互換）。
+//
+// success: true を渡すと、close アニメに入る前にアイコン領域へ緑のチェックマーク
+// アニメーション（リング描画 + チェック描画 + バースト）を再生してから閉じる。
 const PROGRESS_CLOSE_ANIM_MS = 500;
-export function hideProgress() {
-  const modal = $("progress-modal");
-  if (!modal) return;
-  // バーの中心 Y をビューポート % で算出し --bar-top に設定（bg-top の高さ = バー位置まで）。
-  const trackEl = modal.querySelector(".progress-track");
-  if (trackEl) {
-    const r = trackEl.getBoundingClientRect();
-    const barCenterY = r.top + r.height / 2;
-    const winH = window.innerHeight || document.documentElement.clientHeight || 1;
-    const topPct = Math.max(0, Math.min(100, (barCenterY / winH) * 100));
-    modal.style.setProperty("--bar-top", `${topPct}%`);
-  }
-  // 直前の hideProgress があれば置き換え（重複タイマー防止）。
-  if (pendingHideTimer != null) clearTimeout(pendingHideTimer);
-  // .visible は外さず .closing を付ける（opacity 1 維持 + bg 帯のスライドアウト）。
-  modal.classList.add("closing");
-  pendingHideTimer = setTimeout(() => {
-    pendingHideTimer = null;
-    // 万一 .closing が外れていたら（次の showProgress が割り込んだ）何もしない。
-    if (!modal.classList.contains("closing")) return;
-    // アニメ完了 → 状態リセット + hidden 化。次回 open に備えて変数も消す。
-    modal.classList.remove("closing");
-    modal.classList.remove("visible");
-    modal.hidden = true;
-    modal.style.removeProperty("--bar-top");
-    // 次回 open 時に 0% から再開するため fill 幅と indeterminate クラスを明示リセット。
-    const fill = $("progress-fill");
-    if (fill) {
-      fill.classList.remove("indeterminate");
-      fill.style.width = "0%";
+const SUCCESS_HOLD_MS = 700;
+const SUCCESS_CHECK_HTML = `
+  <div class="success-check-anim">
+    <div class="success-check-burst"></div>
+    <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
+      <circle class="success-check-ring" cx="24" cy="24" r="22"/>
+      <path class="success-check-path" d="M14 24l7 7 13-13"/>
+    </svg>
+  </div>
+`;
+export function hideProgress({ success = false } = {}) {
+  return new Promise((resolve) => {
+    const modal = $("progress-modal");
+    if (!modal) { resolve(); return; }
+    // 既に hidden で closing でもなければ、何も走らせず即解決。
+    // （未表示状態で呼ばれた場合に 500ms 待つのは無駄）
+    if (modal.hidden && !modal.classList.contains("closing")) {
+      resolve();
+      return;
     }
-    $("progress-detail").textContent = "";
-    const loadingText = $("progress-loading-text");
-    if (loadingText) loadingText.textContent = "LOADING...";
-    setProgressIcon(null);
-  }, PROGRESS_CLOSE_ANIM_MS);
+
+    const startCloseAnim = () => {
+      // バーの中心 Y をビューポート % で算出し --bar-top に設定（bg-top の高さ = バー位置まで）。
+      const trackEl = modal.querySelector(".progress-track");
+      if (trackEl) {
+        const r = trackEl.getBoundingClientRect();
+        const barCenterY = r.top + r.height / 2;
+        const winH = window.innerHeight || document.documentElement.clientHeight || 1;
+        const topPct = Math.max(0, Math.min(100, (barCenterY / winH) * 100));
+        modal.style.setProperty("--bar-top", `${topPct}%`);
+      }
+      // 直前の hideProgress があれば置き換え（重複タイマー防止）。
+      if (pendingHideTimer != null) clearTimeout(pendingHideTimer);
+      // .visible は外さず .closing を付ける（opacity 1 維持 + bg 帯のスライドアウト）。
+      modal.classList.add("closing");
+      pendingHideTimer = setTimeout(() => {
+        pendingHideTimer = null;
+        // 万一 .closing が外れていたら（次の showProgress が割り込んだ）何もしない。
+        if (!modal.classList.contains("closing")) {
+          resolve();
+          return;
+        }
+        // アニメ完了 → 状態リセット + hidden 化。次回 open に備えて変数も消す。
+        modal.classList.remove("closing");
+        modal.classList.remove("visible");
+        modal.hidden = true;
+        modal.style.removeProperty("--bar-top");
+        // 次回 open 時に 0% から再開するため fill 幅と indeterminate クラスを明示リセット。
+        const fill = $("progress-fill");
+        if (fill) {
+          fill.classList.remove("indeterminate");
+          fill.style.width = "0%";
+        }
+        $("progress-detail").textContent = "";
+        const loadingText = $("progress-loading-text");
+        if (loadingText) loadingText.textContent = "LOADING...";
+        setProgressIcon(null);
+        resolve();
+      }, PROGRESS_CLOSE_ANIM_MS);
+    };
+
+    if (success) {
+      // close アニメに入る前にアイコンを成功チェックマークに差し替えて約 700ms 再生。
+      // ローディングテキストもクリアして「完了」感を視覚的に揃える。
+      setProgressIcon(SUCCESS_CHECK_HTML);
+      const loadingText = $("progress-loading-text");
+      if (loadingText) loadingText.textContent = "";
+      setTimeout(startCloseAnim, SUCCESS_HOLD_MS);
+    } else {
+      startCloseAnim();
+    }
+  });
 }
 
 // タイトル要素にテキストとアイコンを書き戻す共通ヘルパー。

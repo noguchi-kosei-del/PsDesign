@@ -638,6 +638,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* side-toolbar / side-panel の列は要素の実 width で決まるよう auto。
      折り畳み時は要素 width を 24px に縮めて、自動的に列幅も追従させる。 */
   grid-template-columns: 1fr auto auto;
+  /* 暗黙行 (auto) のままだと side-panel の content 高さに引きずられて行が縦に
+     膨張し、ワークスペースの可視高を超えても layer-list 等の overflow が発火
+     しない。明示的に 1fr で行高を確定させ、各列の子要素を可視範囲内に収める。 */
+  grid-template-rows: 1fr;
+  /* grid item としての min-height: auto を解除しないと、子の content min-size
+     に引きずられて #app 内で膨張する。 */
+  min-height: 0;
   overflow: hidden;
 }
 
@@ -1228,13 +1235,27 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    ステージのコンテンツが目盛りで隠れないようにする。 */
 :root { --ruler-thick: 18px; }
 
-/* ルーラー有効時はペイン側の padding を ruler 厚ぶんだけ確保してステージを押し出す。
-   absolute 配置の rotate ボタンは padding-box（border 内側）基準なので影響なし。
-   Photoshop と同じくルーラーがキャンバスに密着する見た目になる（ペイン端 0px から
-   ruler-thick まで ruler 帯、その後ろから content）。 */
+/* ルーラー有効時の配置：
+   - 上端 24px: ステージラベルバー（`.stage-label-bar`）
+   - その下 18px (`--ruler-thick`): ルーラー帯（top）
+   - 左 18px: ルーラー帯（left）
+   - 残り: ステージ
+   .psd-rulers コンテナ自体を bar 高さぶん下げて、その内側の ruler-top / ruler-left /
+   ruler-corner が自動的に bar 下から始まるようにする。
+   bar の margin-bottom を ruler-thick に増やしてステージも ruler 帯ぶん下へ押し出す。 */
 .spreads-psd-area.rulers-on {
-  padding-top: var(--ruler-thick);
   padding-left: var(--ruler-thick);
+}
+.spreads-psd-area.rulers-on .stage-label-bar {
+  /* デフォルトの 8px から ruler-thick (18px) に拡大 → bar 下に ruler-top 用の隙間ができる */
+  margin-bottom: var(--ruler-thick);
+}
+.spreads-psd-area.rulers-on .psd-rulers {
+  /* bar 視覚高さ (24px) ぶん下げてコンテナを bar の真下から始めるく。
+     内側の ruler-top (top:0) / ruler-corner (top:0) / ruler-left (top:18px) は
+     このコンテナを基準に配置されるので追加調整は不要。 */
+  top: 24px;
+  height: calc(100% - 24px);
 }
 
 .psd-rulers {
@@ -1335,45 +1356,41 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   transition: box-shadow 0.15s ease;
 }
 
+/* これらのボタンは旧仕様ではペイン右下に absolute 配置していたが、
+   `.stage-label-bar > .stage-label-actions` の flex 子としてバー右端に並ぶ
+   方式に変更。バー高さ 24px に収めるため 20px 角・SVG 12px に縮小。 */
 .pdf-rotate-btn,
 .psd-rotate-btn,
 .psd-guides-lock-btn,
 .psd-guides-apply-btn {
-  position: absolute;
-  bottom: 8px;
-  z-index: 2;
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
   padding: 0;
-  background: var(--panel, rgba(40, 40, 40, 0.8));
-  border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
-  border-radius: 6px;
-  color: var(--text, currentColor);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  color: var(--text-muted);
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
+  flex-shrink: 0;
 }
 .pdf-rotate-btn svg,
 .psd-rotate-btn svg,
 .psd-guides-lock-btn svg,
 .psd-guides-apply-btn svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
 }
-.pdf-rotate-btn,
-.psd-rotate-btn { right: 8px; }
-/* ロックボタンは回転ボタンの左隣（8 + 24 + 8 = 40px ぶん右からのオフセット） */
-.psd-guides-lock-btn { right: 40px; }
-/* 「ガイドを複数反映」はロックボタンのさらに左隣（40 + 24 + 8 = 72px） */
-.psd-guides-apply-btn { right: 72px; }
 
-.pdf-rotate-btn:hover,
-.psd-rotate-btn:hover,
-.psd-guides-lock-btn:hover,
-.psd-guides-apply-btn:hover {
-  background: var(--accent, #3b82f6);
-  color: #fff;
+.pdf-rotate-btn:hover:not(:disabled),
+.psd-rotate-btn:hover:not(:disabled),
+.psd-guides-lock-btn:hover:not(:disabled),
+.psd-guides-apply-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+  border-color: var(--border);
+  color: var(--text);
 }
 
 /* ロックボタンの状態に応じたアイコン切替（押下＝ロック中） */
@@ -1570,15 +1587,43 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-shadow: 0 0 0 2px #e89a3c;
 }
 
-/* V ツールでドラッグ中、ドロップ位置の swap 候補にアクセント色のリングを当てる。
-   .selected と box-shadow は強さで区別（candidates のほうが太い）。 */
-.layer-box.swap-target {
-  box-shadow: 0 0 0 3px var(--accent), 0 0 0 5px rgba(255, 255, 255, 0.6);
-  background: rgba(0, 120, 212, 0.28);
-}
+/* V ツール swap 中、入れ替え対象 B（A の元位置に移動するフレーム）を緑で強調。
+   A 側はそのまま通常の選択枠を維持し、B と点線 ghost のみ緑で操作意図を示す。 */
+.layer-box.swap-target,
 .layer-box-new.swap-target {
-  box-shadow: 0 0 0 3px #e89a3c, 0 0 0 5px rgba(255, 255, 255, 0.6);
-  background: rgba(255, 200, 120, 0.28);
+  border-color: #10b981;
+  box-shadow: 0 0 0 3px #10b981, 0 0 0 5px rgba(255, 255, 255, 0.6);
+  background: rgba(16, 185, 129, 0.28);
+}
+
+/* B が入れ替え後に着地する位置（A の元中心 + B のサイズ）の点線プレビュー。
+   4 本の linear-gradient で四辺の dash を構成し、各辺の background-position を
+   右回りに animate して marching ants 風に流す。 */
+.swap-ghost {
+  position: absolute;
+  pointer-events: none;
+  box-sizing: border-box;
+  z-index: 5;
+  background-color: transparent;
+  background-image:
+    linear-gradient(90deg, #10b981 50%, transparent 50%), /* 上辺 */
+    linear-gradient(90deg, #10b981 50%, transparent 50%), /* 下辺 */
+    linear-gradient(0deg, #10b981 50%, transparent 50%),  /* 左辺 */
+    linear-gradient(0deg, #10b981 50%, transparent 50%);  /* 右辺 */
+  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
+  background-position: 0 0, 0 100%, 0 0, 100% 0;
+  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
+  animation: swap-ghost-march 0.6s linear infinite;
+}
+
+@keyframes swap-ghost-march {
+  to {
+    background-position:
+      8px 0,      /* 上辺：右へ */
+      -8px 100%,  /* 下辺：左へ */
+      0 -8px,     /* 左辺：上へ */
+      100% 8px;   /* 右辺：下へ */
+  }
 }
 
 .new-layer-text,
@@ -1694,16 +1739,12 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   box-shadow: none !important;
 }
 
-/* frames-hidden 中も swap ターゲットの強調は残す（操作意図フィードバックを優先）。 */
-body.frames-hidden .layer-box.swap-target {
-  border-color: var(--accent) !important;
-  background: rgba(0, 120, 212, 0.28) !important;
-  box-shadow: 0 0 0 3px var(--accent), 0 0 0 5px rgba(255, 255, 255, 0.6) !important;
-}
+/* frames-hidden 中も swap 対象 B の緑強調は残す（操作意図フィードバックを優先）。 */
+body.frames-hidden .layer-box.swap-target,
 body.frames-hidden .layer-box-new.swap-target {
-  border-color: #e89a3c !important;
-  background: rgba(255, 200, 120, 0.28) !important;
-  box-shadow: 0 0 0 3px #e89a3c, 0 0 0 5px rgba(255, 255, 255, 0.6) !important;
+  border-color: #10b981 !important;
+  background: rgba(16, 185, 129, 0.28) !important;
+  box-shadow: 0 0 0 3px #10b981, 0 0 0 5px rgba(255, 255, 255, 0.6) !important;
 }
 
 .page-overlay[data-tool="text-v"] .layer-box {
@@ -1747,14 +1788,52 @@ body.frames-hidden .layer-box-new.swap-target {
   text-orientation: mixed;
 }
 
-.page-label {
-  position: absolute;
-  top: -18px;
-  left: 0;
+/* 旧 .page-label（.page 要素直下に absolute 配置していたフロートラベル）は廃止。
+   見本画像 / PSD ともにペイン上部の `.stage-label-bar` に表示先を移行。 */
+.page-label { display: none; }
+
+/* ステージ上部のラベルバー：見本画像 / PSD ペインそれぞれの最上部に貼り付き、
+   ペインの padding (16px) を負マージンで打ち消して左右端まで広げる。
+   左にファイル名ラベル、右に回転 / ガイド系ボタンを配置する flex 構成。
+   stage 側が flex:1 で残余高を吸収するため、バーは常に上端に位置する。
+   高さは サイドパネル / サイドツールバーの `.panel-header` (24px) と揃える。 */
+.stage-label-bar {
+  position: relative;
+  z-index: 4;
+  flex: 0 0 auto;
+  align-self: stretch;
+  /* ペイン padding (16px) を相殺してペイン端〜端まで広げ、上端は pane top に貼り付け */
+  margin: -16px -16px 8px;
+  padding: 0 6px 0 10px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 10px;
+  font-size: 11px;
   font-family: ui-monospace, Consolas, monospace;
+  box-sizing: border-box;
+  height: 24px;
+}
+.stage-label-text {
+  flex: 1 1 auto;
+  min-width: 0;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.stage-label-actions {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+/* テキスト未設定（見本未読込・PSD 未読込）のときは visual noise を避けるため
+   バー自体を非表示。:has() で動的に切り替える（HMR 即反映）。 */
+.stage-label-bar:has(.stage-label-text:empty) {
+  display: none;
 }
 
 .side-panel {
@@ -1766,6 +1845,11 @@ body.frames-hidden .layer-box-new.swap-target {
   overflow: hidden;
   box-sizing: border-box;
   transition: width 0.25s ease;
+  /* grid item としての min-height: auto を解除しないと、子の content min-size
+     （= 全レイヤー分）に引きずられて workspace の grid セルを超えて膨張し、
+     その結果 layer-list が overflow:scroll を発火しなくなる。 */
+  min-height: 0;
+  height: 100%;
 }
 
 .side-panel.collapsed {
@@ -2597,9 +2681,39 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   list-style: none;
   margin: 0;
   padding: 0;
-  flex: 1;
-  overflow-y: auto;
-  min-height: 80px;
+  flex: 1 1 0;
+  /* スクロールが要らないときも track 領域を確保して、項目数が増減してもサイドバーの
+     幅が揺れないようにする（`auto` だと最後の 1 行が描画タイミングによっては
+     overflow を 1px 下回り track が消える瞬間がある）。!important は他ルールに
+     上書きされないよう保険。 */
+  overflow-y: scroll !important;
+  overflow-x: hidden;
+  /* min-height: 0 で flex 子の既定 min-content size を無効化し、コンテンツ量に
+     かかわらず親の残余高に収まるようにする。これがないと項目数が増えたとき
+     `<ul>` 自身が intrinsic 高さに膨らんで overflow が発火しない。 */
+  min-height: 0;
+  /* グローバル scrollbar の track (`--scrollbar-track` = `--bg` と同値) は
+     li 背景 (`--bg`) と同色で消えてしまうため、track だけ親セクションの
+     `--panel-body` に上書き。thumb / thumb-hover は既存の theme-aware 変数を
+     そのまま使い、ダーク / ライト両モードで自然な配色を維持する。
+     dark: thumb #3e3e42 / hover #5a5a5e、light: thumb #c0c0c0 / hover #a0a0a0。 */
+  scrollbar-color: var(--scrollbar-thumb) var(--panel-body);
+  scrollbar-gutter: stable;
+}
+.layer-list::-webkit-scrollbar {
+  width: 12px;
+}
+.layer-list::-webkit-scrollbar-track {
+  background: var(--panel-body);
+}
+.layer-list::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border: 3px solid var(--panel-body);
+  border-radius: 8px;
+  min-height: 32px;
+}
+.layer-list::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
 }
 
 .layer-list li {
@@ -2690,7 +2804,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 0;
+  /* flex 子としては content 高さで固定し、layer-list と残余高を取り合わない */
+  flex-shrink: 0;
 }
+/* `.editor { display: flex }` が UA 既定の `[hidden] { display: none }` を
+   上書きしてしまう。選択 0 件のときに padding/border ぶんの空き高が残って
+   layer-list の表示範囲を圧迫するのを防ぐため、明示的に non-display 化する。 */
+.editor[hidden] { display: none; }
 
 /* editor 内の各項目（フォント / サイズ・組方向 / フチ）を区切り線で分ける。
    :not([hidden]) ペアのみに適用することで、単独選択で一部項目が hidden の場合でも
@@ -2893,16 +3013,34 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   pointer-events: auto;
 }
 
-/* dim / blur を 2 つの帯に分割。境界をバー中心 (--bar-top) に揃える。
+/* blur は単一の ::before レイヤーに統合（背景 backdrop-filter を 2 帯に分けると
+   各 blur kernel が境界で独立計算され視覚的な seam が発生するため）。
+   bg-top / bg-bottom は dim カラーのスライド演出専用にする。 */
+.progress-modal::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.22s ease;
+}
+.progress-modal.visible::before { opacity: 1; }
+/* close 時はカードのフェードに合わせて少し遅らせて消し、bg 帯が外へ抜けたあとに
+   blur が解けるシークエンス感を出す。 */
+.progress-modal.closing::before {
+  opacity: 0;
+  transition: opacity 0.3s ease 0.15s;
+}
+
+/* dim を 2 つの帯に分割。境界をバー中心 (--bar-top) に揃える。
    開く時 / 閉じる時とも transform: translateY を common transition で animate するため、
-   .progress-bg 自体に transition を常時設定する。 */
+   .progress-bg 自体に transition を常時設定する。
+   blur は ::before に集約したので、ここでは backdrop-filter を持たない。 */
 .progress-modal .progress-bg {
   position: absolute;
   left: 0;
   right: 0;
   background: rgba(0, 0, 0, 0.55);
-  backdrop-filter: blur(2px);
-  -webkit-backdrop-filter: blur(2px);
   pointer-events: none;
   will-change: transform;
   transition: transform 0.45s cubic-bezier(0.55, 0.05, 0.4, 1);
@@ -3091,12 +3229,14 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 /* #progress-modal だけは「背景全体をぼかし、進捗バーを画面端から端まで展開」する
    表示形式。共有 .progress-card を直接いじると confirm/resync/page-jump など他モーダル
    まで巻き込むため ID スコープで限定。
-   完了時に上下スライドアウトする bg 帯 (.progress-bg) に dim と blur を移譲し、
-   .progress-modal 自体は透明な位置決めコンテナとする。 */
-#progress-modal .progress-bg {
-  background: rgba(0, 0, 0, 0.18);
+   blur は #progress-modal::before の単一レイヤーに集約。bg 帯は dim 色のみで
+   スライド演出専用。dim 色は薄め（rgba 0.18）で全画面均一なので帯境界に seam が出ない。 */
+#progress-modal::before {
   backdrop-filter: blur(14px);
   -webkit-backdrop-filter: blur(14px);
+}
+#progress-modal .progress-bg {
+  background: rgba(0, 0, 0, 0.18);
 }
 
 #progress-modal .progress-card {
@@ -3154,6 +3294,97 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   width: 64px;
   height: 64px;
   stroke-width: 2;
+}
+
+/* ===== 完了時の成功チェックマークアニメーション =====
+   hideProgress({ success: true }) のとき、close アニメに入る前に
+   このアイコンに差し替えて再生する（Tachimi 流：放射バースト + リング描画 + チェック描画）。
+   配色は緑 (Tailwind green-500 系) で統一。 */
+.success-check-anim {
+  position: relative;
+  width: 80px;
+  height: 80px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: psd-success-icon-in 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.success-check-anim svg {
+  width: 100% !important;
+  height: 100% !important;
+  filter: drop-shadow(0 0 20px rgba(34, 197, 94, 0.45));
+  position: relative;
+  z-index: 2;
+}
+@keyframes psd-success-icon-in {
+  0%   { transform: scale(0.7); opacity: 0; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+
+/* 放射状の光バースト（リングの外周から広がる緑のグロー） */
+.success-check-burst {
+  position: absolute;
+  inset: 0;
+  border-radius: 50%;
+  background: radial-gradient(
+    circle,
+    rgba(74, 222, 128, 0.55) 0%,
+    rgba(34, 197, 94, 0.18) 40%,
+    transparent 70%
+  );
+  opacity: 0;
+  transform: scale(0.5);
+  animation: psd-success-burst 0.4s ease-out 0.25s forwards;
+}
+@keyframes psd-success-burst {
+  0%   { opacity: 0; transform: scale(0.5); }
+  30%  { opacity: 1; }
+  100% { opacity: 0; transform: scale(2.5); }
+}
+
+/* リング：周囲を時計回りに描く緑の円。stroke-dasharray=138 (≒ 2πr, r=22)。 */
+.success-check-ring {
+  fill: none;
+  stroke: #22c55e;
+  stroke-width: 2;
+  stroke-dasharray: 138;
+  stroke-dashoffset: 138;
+  transform-origin: center;
+  filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.6));
+  animation:
+    psd-success-ring-draw 0.3s cubic-bezier(0.4, 0, 0.2, 1) forwards,
+    psd-success-ring-glow 0.25s ease-out 0.25s forwards;
+}
+@keyframes psd-success-ring-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes psd-success-ring-glow {
+  0%   { stroke: #22c55e; filter: drop-shadow(0 0 8px rgba(34, 197, 94, 0.6)); }
+  50%  { stroke: #4ade80; filter: drop-shadow(0 0 20px rgba(74, 222, 128, 0.95)); }
+  100% { stroke: rgba(34, 197, 94, 0.55); filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.3)); }
+}
+
+/* チェックマーク：リング描画から少し遅れて鉤型を描き、ピーク時に輝く緑。 */
+.success-check-path {
+  stroke: #22c55e;
+  stroke-width: 3;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 40;
+  stroke-dashoffset: 40;
+  fill: none;
+  filter: drop-shadow(0 0 12px rgba(34, 197, 94, 0.85));
+  animation:
+    psd-success-check-draw 0.25s cubic-bezier(0.4, 0, 0.2, 1) 0.2s forwards,
+    psd-success-check-glow 0.2s ease-out 0.4s forwards;
+}
+@keyframes psd-success-check-draw {
+  to { stroke-dashoffset: 0; }
+}
+@keyframes psd-success-check-glow {
+  0%   { filter: drop-shadow(0 0 12px rgba(34, 197, 94, 0.85)); }
+  50%  { stroke: #bbf7d0; filter: drop-shadow(0 0 24px rgba(74, 222, 128, 1)); }
+  100% { stroke: #22c55e; filter: drop-shadow(0 0 14px rgba(34, 197, 94, 0.7)); }
 }
 
 /* 画像スキャンアイコン: 「手前から奥にフェードアウト」を無限ループ。
@@ -4706,10 +4937,10 @@ body:not(.viewer-mode) .spreads-editor-area {
     transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* PSD ペイン上のオーバーレイ（回転ボタン / ガイドロック / ガイド反映 / ルーラー / ガイド） */
-body.viewer-mode #psd-rotate-btn,
-body.viewer-mode #psd-guides-lock-btn,
-body.viewer-mode #psd-guides-apply-btn,
+/* PSD ペイン上のオーバーレイ（回転ボタン / ガイドロック / ガイド反映 / ルーラー / ガイド）。
+   ボタン群は `.stage-label-bar` 内に移行したため、バー自体も viewer-mode で隠す。 */
+body.viewer-mode #pdf-stage-label-bar,
+body.viewer-mode #psd-stage-label-bar,
 body.viewer-mode #psd-rulers,
 body.viewer-mode #psd-guides-layer {
   opacity: 0 !important;

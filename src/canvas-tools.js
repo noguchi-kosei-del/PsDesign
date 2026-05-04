@@ -1109,9 +1109,38 @@ function beginMultiLayerDrag(e, ctx) {
       : { kind: "new", id: dragged.nl.tempId })
     : null;
   let lastSwapTarget = null;
+  let swapGhostEl = null;
   const swapTargetKey = (t) => (
     t ? `${t.kind}:${t.kind === "existing" ? t.layer.id : t.nl.tempId}` : null
   );
+
+  // 入れ替え対象 B が存在するときの視覚フィードバックを適用/解除。
+  //   - 既存の `.swap-target` リング（緑）を B 側に付ける
+  //   - A の元位置中心 + B のサイズで点線 ghost を表示（B の入れ替え後 着地位置）
+  const applySwapVisuals = (target) => {
+    setSwapTargetHighlight(ctx, target);
+    if (target) {
+      const bRect = target.kind === "existing"
+        ? layerRectForExisting(ctx.page, target.layer, getEdit(ctx.page.path, target.layer.id) ?? {})
+        : layerRectForNew(ctx.page, target.nl);
+      const aCenterX = aStartRect.left + aStartRect.width / 2;
+      const aCenterY = aStartRect.top + aStartRect.height / 2;
+      const ghostLeft = aCenterX - bRect.width / 2;
+      const ghostTop = aCenterY - bRect.height / 2;
+      if (!swapGhostEl) {
+        swapGhostEl = document.createElement("div");
+        swapGhostEl.className = "swap-ghost";
+        ctx.overlay.appendChild(swapGhostEl);
+      }
+      swapGhostEl.style.left = `${(ghostLeft / ctx.page.width) * 100}%`;
+      swapGhostEl.style.top = `${(ghostTop / ctx.page.height) * 100}%`;
+      swapGhostEl.style.width = `${(bRect.width / ctx.page.width) * 100}%`;
+      swapGhostEl.style.height = `${(bRect.height / ctx.page.height) * 100}%`;
+    } else if (swapGhostEl) {
+      swapGhostEl.remove();
+      swapGhostEl = null;
+    }
+  };
 
   const computePsdDelta = (ev) => {
     const { dx, dy } = inverseRotateDelta(
@@ -1150,7 +1179,7 @@ function beginMultiLayerDrag(e, ctx) {
     const cy = aStartRect.top + aStartRect.height / 2 + ddy;
     const next = findSwapTarget(ctx, draggedKey, cx, cy);
     if (swapTargetKey(next) !== swapTargetKey(lastSwapTarget)) {
-      setSwapTargetHighlight(ctx, next);
+      applySwapVisuals(next);
       document.body.style.cursor = next ? "alias" : prevCursor;
       lastSwapTarget = next;
     }
@@ -1164,7 +1193,7 @@ function beginMultiLayerDrag(e, ctx) {
     if (isDuplicate || lastSwapTarget) document.body.style.cursor = prevCursor;
     // swap モード中の hover ハイライト残骸を必ず掃除（refreshAllOverlays でも再構築されるが
     // 通常移動分岐では DOM が再生成されないため明示的に外す）。
-    setSwapTargetHighlight(ctx, null);
+    applySwapVisuals(null);
     const { ddx, ddy } = computePsdDelta(ev);
     if (isDuplicate) {
       // 複製は開始時点で beginHistoryTransient 済み。移動量があれば位置も確定し、

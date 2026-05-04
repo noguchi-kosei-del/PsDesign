@@ -208,7 +208,10 @@ async function runAiOcr(files, {
     try { unsubStart(); } catch (_) {}
     try { unsubProgress(); } catch (_) {}
     try { unsubLog(); } catch (_) {}
-    hideProgress();
+    // OCR 成功時のみ緑チェックマークを再生してから閉じる。失敗 (err あり / doc なし)
+    // のときは即座に閉じて、失敗ダイアログをすぐ出す。
+    const ok = !err && !!doc;
+    await hideProgress({ success: ok });
     runningOcr = false;
     if (btn) btn.disabled = false;
   }

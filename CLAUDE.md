@@ -2359,3 +2359,111 @@ C2. **影響範囲**: 見本（PDF / 画像）の回転ボタン、PSD の回転
 > - 旧: PSD ペイン右下の 4 ボタンが 28×28 → 新: 24×24 で控えめなサイズ感
 > - 旧: jsx_gen.rs `applyLineLeadings` 等が `setDesc.putObject(sID("to"), sID("textKey"), ...)` で動作 → 新規 tracking では `sID("textLayer")` に変更（`textKey` だと per-character の新規スタイル変更が破棄されるケース対応）
 
+---
+
+## v1.12.0: ステージ上部ラベルバー + プログレスバー成功演出 + 各種 UX 修正
+
+### A. V ツール フレーム入れ替えの視覚フィードバック改善
+
+A1. **入れ替え対象 B のリングを緑統一 + 入れ替え後 配置位置の点線プレビュー** ([src/canvas-tools.js](src/canvas-tools.js) + [src/styles.css](src/styles.css)): 旧 `.swap-target` の青/オレンジリングを **緑 (`#10b981`) に統一**。さらに `applySwapVisuals(target)` で **A の元位置中心 + B のサイズで点線 ghost (`.swap-ghost`)** を `ctx.overlay` に挿入し、「B が入れ替え後に着地する位置」を可視化。frames-hidden モードでも `!important` で残す。
+
+A2. **点線 ghost の右回り marching ants アニメ**: `.swap-ghost` を `border: dashed` ではなく **4 本の `linear-gradient` で四辺の dash を構成** し、`@keyframes swap-ghost-march` で各辺の `background-position` を右回り（上→右、右→下、下→左、左→上）に 0.6s ループでアニメート。dash 8px / gap 8px、stroke 2px。
+
+A3. **A 側はそのまま**: ドラッグ中フレーム A の表示は通常の選択枠（青）を維持。緑強調は B と ghost のみで、入れ替え方向（A は移動、B が着地）が直感的に伝わる。
+
+### B. テキスト編集 layer-list のスクロール対応（複数原因の連鎖修正）
+
+B1. **layer-list 内部 overflow** ([src/styles.css](src/styles.css) `.layer-list`): 旧 `flex: 1; overflow-y: auto; min-height: 80px` → 新 `flex: 1 1 0; overflow-y: scroll; min-height: 0`。`min-height: 0` で flex 子の既定 `min-content` size を解除し、項目数に関わらず親残余高に収まる。`auto` ではなく `scroll` で track 領域を常時確保し描画タイミングで track が消える瞬間も防ぐ。
+
+B2. **`.editor` の `[hidden]` が効かない問題**: `.editor { display: flex }` が UA 既定の `[hidden] { display: none }` を上書きしていたため、選択 0 件時にも padding 12px + border 1px の空き高が残っていた。`.editor[hidden] { display: none }` を明示追加。
+
+B3. **`.editor` の flex-shrink: 0**: フォント + タブ群が layer-list と残余高を取り合わないよう固定。
+
+B4. **workspace の暗黙行が auto** ([src/styles.css](src/styles.css) `.workspace`): `grid-template-rows` 未指定で暗黙行が content 高で計算されており、レイヤー数が膨らむと side-panel ごと縦に膨張して可視範囲を超え overflow が発火しなかった。`grid-template-rows: 1fr` + `min-height: 0` で行高を確定。
+
+B5. **side-panel の min-height: auto**: grid item の既定 `min-height: auto` が子の content min-size に引きずられて膨張するため、`min-height: 0; height: 100%` で親セルに収める。
+
+B6. **ダーク対応の専用 scrollbar 配色**: グローバル `--scrollbar-track: #1e1e1e` がリスト li 背景 (`--bg: #1e1e1e`) と同色で消えていたため、layer-list 専用に `track: var(--panel-body)` / `thumb: var(--scrollbar-thumb)` (theme-aware) でコントラストを確保。`scrollbar-gutter: stable` も追加。
+
+> **修正の連鎖まとめ**: layer-list が「スクロールできない」問題は単一原因ではなく、(1) `.layer-list` 自身の min-height、(2) `.editor` の hidden、(3) flex-shrink、(4) workspace 行高、(5) side-panel min-height、(6) scrollbar 配色 の 6 段階の修正でようやく解決。grid/flex の `min-height: 0` 連鎖が壊れていると overflow:scroll は機能しない（CSS 仕様）ことを再確認。
+
+### C. ステージ上部のファイル名ラベルバー新設
+
+C1. **`.stage-label-bar` を `.spreads-pdf-area` / `.spreads-psd-area` の上端に固定** ([index.html](index.html) + [src/styles.css](src/styles.css)):
+- ペイン padding (16px) を負マージン (`margin: -16px -16px 0`) で相殺してペイン端〜端まで広げ、上端に貼り付け
+- `height: 24px` でサイドパネル `.panel-header` と完全一致（border-bottom 1px + box-sizing border-box）
+- `display: flex; justify-content: space-between` で左にファイル名、右に `.stage-label-actions`（ボタン群）を配置
+- `z-index: 4` で psd-rulers (z-index 3) より前面
+
+C2. **回転 / ロック / ガイド反映ボタンをバー右側へ移動** (PDF: 1 個、PSD: 3 個): 旧 `position: absolute; bottom: 8px; right: 8/40/72px` の絶対配置を撤去し、`.stage-label-actions` の flex 子として整列。サイズも 24×24 → 20×20、SVG 14 → 12 でバー高さ (24px) に収める。
+
+C3. **JS のラベル更新先を per-pane 固定 span に変更** ([src/spread-view.js](src/spread-view.js) + [src/pdf-view.js](src/pdf-view.js)): per-page で `.page-label` を生成して `.page` に append していた旧仕様を廃止し、`#pdf-stage-label` / `#psd-stage-label` (静的 `<span>`) の `textContent` を更新する方式へ。旧 `.page-label` は `display: none` で無効化。
+
+C4. **ファイル名 30 文字制限 + `…` 切り詰め**: 共通ヘルパー `truncateLabel(text)` を spread-view / pdf-view 各々に追加。`Array.from(text)` でサロゲートペア（CJK 拡張・絵文字）を 1 文字単位で扱い、30 文字超は先頭 29 + `…` で計 30 文字に統一。
+
+C5. **`#●` → `P●●` 形式へ変更**: 共通 `pageNumLabel(n) = String(n).padStart(2, "0")` で 2 桁ゼロ埋め。`#1 file.psd` → `P01 file.psd`、`#10` → `P10`、3 桁以上はそのまま。PDF の左右見開き表記も `P01左` / `P01右` 形式に。
+
+C6. **複数ファイル合成 doc の per-page ファイル名表示** ([src/pdf-loader.js](src/pdf-loader.js)): `loadReferenceFiles` で複数の見本ファイルを 1 つの合成 doc にまとめる際、各 source エントリに `path` を保持していなかったため、`getPdfPath()` (先頭ファイルパス) しか参照できずページ移動でラベルが固定されていた問題を修正。`makeCompositeDoc` に `getSourcePath(n)` API を追加し、pdf-view.js の `showCanvas` がページ毎の元ファイル名を表示。
+
+C7. **viewer-mode で バー全体を非表示**: 旧 `body.viewer-mode #psd-rotate-btn / #psd-guides-lock-btn / #psd-guides-apply-btn` の個別ボタン非表示を `#pdf-stage-label-bar` / `#psd-stage-label-bar` のバー単位に変更（バー単位で隠せばボタンも自動的に消える）。
+
+C8. **`:has(.stage-label-text:empty) { display: none }`**: ファイル未読込時はバーを完全非表示にして visual noise を排除。
+
+### D. プログレスバー解除アニメーションの修正
+
+D1. **`hideProgress` を `Promise<void>` を返す形に変更** ([src/ui-feedback.js](src/ui-feedback.js)): 旧 fire-and-forget 方式は close アニメ (500ms) 中に呼び出し側が即時続行できたため、`notifyDialog` が `#confirm-modal` (z-index: 300) を即開いて `#progress-modal` (z-index: 100) のアニメが上に重なって見えなくなる事故が発生していた。Promise 化で `await` 可能になり、close アニメ完了 → 次のモーダル open の順序を保証。
+
+D2. **`{ success: true }` オプション追加**: 後述の緑チェックマーク演出を表示するためのフラグ。modal が hidden で closing 中でもなければ即 resolve（無駄な 500ms 待機を回避）。
+
+D3. **ai-place 完了通知の前に `await hideProgress()`** ([src/ai-place.js](src/ai-place.js)): success notifyDialog および error notifyDialog の直前に await を挿入し、close アニメ完了を待ってから success モーダルを開く。
+
+### E. プログレスバー背景の seam 修正
+
+E1. **blur を `::before` の単一レイヤーに統合** ([src/styles.css](src/styles.css)): 旧仕様は `.progress-bg-top` と `.progress-bg-bottom` 双方に `backdrop-filter: blur(14px)` を当てていたため、各 blur kernel が境界 (`--bar-top`) で独立計算されて視覚的な seam（横線）が出ていた。`#progress-modal::before` を全画面 (`inset: 0`) の単一 blur レイヤーとし、`.visible` で opacity 0 → 1、`.closing` で 0.15s ディレイ後 1 → 0 で解ける。bg 帯は dim 色 (`rgba(0,0,0,0.18)`) のみのスライド演出専用に。dim はベタ塗りなので 2 帯が並んでも色境界は不可視。
+
+### F. プログレスバー成功完了時の緑チェックマークアニメ
+
+F1. **Tachimi 流の checkmark アニメを緑配色で移植** ([src/styles.css](src/styles.css)): `Tachimi-_Standalone` の `.apply-success-icon` パターン（リング描画 + チェック描画 + 放射バースト + 入場 scale）をベースに、配色を緑 (Tailwind green-500 系: `#22c55e` / `#4ade80` / `#bbf7d0`) で再構成。
+- `.success-check-anim`: 80×80 コンテナ、開始時 scale 0.7→1 (0.25s, バウンシー)
+- `.success-check-burst`: radial-gradient + scale 0.5→2.5 で外周フェードアウト (0.4s)
+- `.success-check-ring`: 緑円を `stroke-dashoffset: 138 → 0` で時計回り描画 (0.3s) + ピーク時 glow フラッシュ
+- `.success-check-path`: チェック鉤型を 0.2s 遅延 `stroke-dashoffset: 40 → 0` で描画 + 最大時 pale green で輝く
+
+F2. **`hideProgress({ success: true })` でアイコン領域を成功演出に差し替え** ([src/ui-feedback.js](src/ui-feedback.js)): close アニメに入る前に `setProgressIcon(SUCCESS_CHECK_HTML)` でリング+チェック+バーストの SVG に差し替え、約 700ms 再生してから通常の close アニメへ。ローディングテキストもクリアして「完了」感を視覚的に揃える。
+
+F3. **成功完了経路で success: true を渡す**:
+- [src/ai-place.js](src/ai-place.js): 自動配置の applyPlan 成功後
+- [src/ai-ocr.js](src/ai-ocr.js): OCR 成功時 (`!err && doc` のとき) のみ
+- [src/services/psd-load.js](src/services/psd-load.js): PSD 読込で 1 件以上成功時 (`!allFailed`)
+- [src/bind/save.js](src/bind/save.js): Photoshop 保存で警告なしの完全成功時 (`!hasWarn`)
+
+エラー時は緑チェックを出さず即閉じる挙動なので、誤った成功フィードバックは出ない。
+
+### G. 自動配置完了メッセージの変更
+
+G1. **「N 件のテキストレイヤーを追加しました。」→「テキストの自動配置が完了しました。」** ([src/ai-place.js](src/ai-place.js)): 件数表示を撤去し、簡潔な完了メッセージに統一。`applyPlan(plan)` の戻り値も使わなくなったため `const added = ...` 代入を削除。
+
+### H. ルーラー有効時のラベルバーとの重なり修正
+
+H1. **`.psd-rulers` を bar 高さぶん下げる** ([src/styles.css](src/styles.css)): 旧 `.spreads-psd-area.rulers-on { padding-top: var(--ruler-thick) }` は bar が上端にある現仕様を考慮しておらず、ruler-top がバー (z-index 4 > rulers z-index 3) の下に隠れていた。
+- `padding-top` 撤去（bar が上端のままでよい）
+- `.stage-label-bar { margin-bottom: var(--ruler-thick) }` (8px → 18px) で bar 下に ruler-top 用の隙間
+- `.psd-rulers { top: 24px; height: calc(100% - 24px) }` でルーラーコンテナ自体を bar 高さぶん下げる（内側の ruler-top / ruler-left / ruler-corner はコンテナ基準のまま自動的に正しい位置へ）
+
+レイアウト結果: y=0..24 ラベルバー、y=24..42 ruler-top + ruler-corner、y=42.. ruler-left + ステージ。
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.12.0`** に揃え。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: page-label = 各 `.page` 直下に absolute 浮かせ表示 → 新: ペイン上端の固定バー (`.stage-label-bar`) に集約。回転/ガイド系ボタンも全て同バー右側に移動
+> - 旧: ラベル `#1 filename` 形式・無制限長 → 新: `P01 filename` 形式・30 文字超は `…` で切り詰め
+> - 旧: 複数ファイル合成 doc は先頭ファイル名のみ表示（ページ移動で固定） → 新: source 毎に path を保持、`getSourcePath(n)` で per-page の元ファイル名表示
+> - 旧: V ツール swap = B に青/オレンジリング、A は無装飾、ghost なし → 新: B が緑リング、A 元位置に右回り marching ants の緑点線 ghost
+> - 旧: `hideProgress` は同期 fire-and-forget → 新: Promise を返し await 可能。`{ success: true }` でアイコン領域に緑チェックマークアニメ
+> - 旧: progress-modal 背景 = 上下 bg 帯それぞれに backdrop-filter で seam 発生 → 新: blur を `::before` 単一レイヤー、bg 帯は dim 色のみ
+> - 旧: 自動配置完了 = 「N 件のテキストレイヤーを追加しました」 → 新: 「テキストの自動配置が完了しました。」
+> - 旧: ルーラー有効時 ruler-top がバーの下に隠れる → 新: `.psd-rulers` 自体を bar 高さぶん下げてバー直下から目盛り開始
+> - 旧: layer-list は overflow:auto 設定だが grid/flex の min-height: 0 連鎖が壊れてスクロールできない → 新: `.workspace { grid-template-rows: 1fr; min-height: 0 }` + `.side-panel { min-height: 0; height: 100% }` + `.editor[hidden] { display: none }` + `.layer-list { flex: 1 1 0; min-height: 0; overflow-y: scroll }` の 4 連鎖修正で確実にスクロール
+

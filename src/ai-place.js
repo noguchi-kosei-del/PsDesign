@@ -27,7 +27,7 @@ import {
   abortHistoryTransient,
 } from "./state.js";
 import { parsePages } from "./txt-source.js";
-import { notifyDialog, confirmDialog } from "./ui-feedback.js";
+import { notifyDialog, confirmDialog, hideProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runAiOcrForFiles, PLACE_ICON_SVG } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
@@ -461,15 +461,23 @@ async function runAutoPlace() {
     }
 
     // 6. 適用
-    const added = applyPlan(plan);
+    applyPlan(plan);
     lastPlacedFingerprint = fingerprint;
+    // 直前の OCR / PSD 読込で出した進捗モーダルが close アニメ中のことがある
+    // （hideProgress は 500ms かけて bg 帯をスライドアウト）。await せずに
+    // notifyDialog を開くと #confirm-modal (z-index 300) が #progress-modal
+    // (z-index 100) を覆ってアニメが視覚的にスキップされて見える事故が起きるため、
+    // 完了を必ず待ってから success モーダルを出す。
+    // success: true でアイコン領域に緑のチェックマークアニメを再生してから閉じる。
+    await hideProgress({ success: true });
     await notifyDialog({
       title: "自動配置完了",
-      message: `${added} 件のテキストレイヤーを追加しました。`,
+      message: "テキストの自動配置が完了しました。",
       kind: "success",
     });
   } catch (e) {
     console.error(e);
+    await hideProgress();
     await notifyDialog({
       title: "自動配置エラー",
       message: String(e?.message ?? e ?? "不明なエラー"),

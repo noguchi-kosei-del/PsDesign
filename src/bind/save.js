@@ -73,10 +73,12 @@ async function runSaveWithMode({ saveMode, targetDir }) {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const result = await invoke("apply_edits_via_photoshop", { payload });
-    hideProgress();
     const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
     const hasWarn = typeof result === "string" && result.includes("警告:");
     hasSavedThisSession = true;
+    // 警告ありなら success アニメをスキップして即閉じ（ユーザーには警告通知を優先表示）。
+    // 純粋な成功時のみ緑チェックマークを再生してから閉じる。
+    await hideProgress({ success: !hasWarn });
     // 保存完了は中央モーダルで通知。警告有無で kind を切替（warning=オレンジ + 警告 SVG / success=緑 + チェック SVG）。
     await notifyDialog({
       title: hasWarn ? "保存完了（警告あり）" : "保存完了",
@@ -85,7 +87,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     });
   } catch (e) {
     console.error(e);
-    hideProgress();
+    await hideProgress();
     toast(`保存失敗: ${e.message ?? e}`, { kind: "error", duration: 5000 });
   } finally {
     saveInflight = false;
