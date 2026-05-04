@@ -33,7 +33,12 @@ export async function listPsdFilesInFolder(folder) {
   return invoke("list_psd_files", { folder });
 }
 
-export async function loadPsdFilesByPaths(files) {
+// options.icon: 進捗ダイアログに出すアイコン SVG 文字列（省略可）。
+//   通常の「PSD を開く」フローは未指定 → アイコン無し。
+//   自動配置から呼ばれるときは ai-place.js が PLACE_ICON_SVG を渡す。
+// options.label: アイコン直下のラベル文言（省略時は "PSD を読み込み中"）。
+//   自動配置経由は "自動配置中…" を渡してプロセス全体の文脈を維持する。
+export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み込み中" } = {}) {
   if (!files || files.length === 0) return;
   // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
   // のいずれもページ番号順 (page1 → page2 → page10) で先頭から並ぶようにする。
@@ -59,10 +64,11 @@ export async function loadPsdFilesByPaths(files) {
   setGuidesLocked(false);
 
   showProgress({
-    title: "PSD を読み込み中",
+    title: label,
     detail: baseName(files[0]),
     current: 0,
     total: files.length,
+    icon,
   });
 
   clearPages();

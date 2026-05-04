@@ -555,12 +555,15 @@
       </main>
     </div>
     <div class="progress-modal" id="progress-modal" data-tauri-drag-region hidden>
+      <div class="progress-bg progress-bg-top" data-tauri-drag-region></div>
+      <div class="progress-bg progress-bg-bottom" data-tauri-drag-region></div>
       <div class="progress-card" role="dialog" aria-live="polite" aria-busy="true" data-tauri-drag-region>
-        <div class="progress-title" id="progress-title" data-tauri-drag-region>読込中</div>
         <div class="progress-detail" id="progress-detail" data-tauri-drag-region></div>
+        <div class="progress-icon" id="progress-icon" data-tauri-drag-region></div>
+        <div class="progress-title" id="progress-title" data-tauri-drag-region>読込中</div>
+        <div class="progress-loading-text" id="progress-loading-text" data-tauri-drag-region>LOADING...</div>
         <div class="progress-track" data-tauri-drag-region>
           <div class="progress-fill" id="progress-fill"></div>
-          <span class="progress-loading-text" aria-hidden="true">LOADING...</span>
         </div>
         <div class="progress-count" id="progress-count" data-tauri-drag-region></div>
       </div>

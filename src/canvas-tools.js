@@ -1007,6 +1007,26 @@ function beginMultiLayerDrag(e, ctx) {
   document.body.style.userSelect = "none";
   if (isDuplicate) document.body.style.cursor = "copy";
 
+  // swap モード判定用：単一選択 + Alt 複製でないときのみ swap 可能。
+  const isSingleMoveDrag = !isDuplicate && items.length === 1;
+  const dragged = isSingleMoveDrag ? items[0] : null;
+  // ドラッグ開始時点の被ドラッグレイヤーの絶対 PSD rect（aStart）。
+  // 既存レイヤーの edit.dx/dy は開始時の値で固定される（layerRectForExisting が反映済み）。
+  const aStartRect = dragged
+    ? (dragged.kind === "existing"
+      ? layerRectForExisting(ctx.page, dragged.layer, getEdit(ctx.page.path, dragged.layer.id) ?? {})
+      : layerRectForNew(ctx.page, dragged.nl))
+    : null;
+  const draggedKey = dragged
+    ? (dragged.kind === "existing"
+      ? { kind: "existing", id: dragged.layer.id }
+      : { kind: "new", id: dragged.nl.tempId })
+    : null;
+  let lastSwapTarget = null;
+  const swapTargetKey = (t) => (
+    t ? `${t.kind}:${t.kind === "existing" ? t.layer.id : t.nl.tempId}` : null
+  );
+
   const computePsdDelta = (ev) => {
     const { dx, dy } = inverseRotateDelta(
       ev.clientX - startClientX,
@@ -1039,6 +1059,15 @@ function beginMultiLayerDrag(e, ctx) {
     ev.preventDefault();
     const { ddx, ddy } = computePsdDelta(ev);
     applyPreview(ddx, ddy);
+    if (!isSingleMoveDrag) return;
+    const cx = aStartRect.left + aStartRect.width / 2 + ddx;
+    const cy = aStartRect.top + aStartRect.height / 2 + ddy;
+    const next = findSwapTarget(ctx, draggedKey, cx, cy);
+    if (swapTargetKey(next) !== swapTargetKey(lastSwapTarget)) {
+      setSwapTargetHighlight(ctx, next);
+      document.body.style.cursor = next ? "alias" : prevCursor;
+      lastSwapTarget = next;
+    }
   };
   const onUp = (ev) => {
     window.removeEventListener("mousemove", onMove);
@@ -1046,7 +1075,10 @@ function beginMultiLayerDrag(e, ctx) {
     window.removeEventListener("dragstart", suppressDefault, true);
     window.removeEventListener("selectstart", suppressDefault, true);
     document.body.style.userSelect = prevUserSelect;
-    if (isDuplicate) document.body.style.cursor = prevCursor;
+    if (isDuplicate || lastSwapTarget) document.body.style.cursor = prevCursor;
+    // swap モード中の hover ハイライト残骸を必ず掃除（refreshAllOverlays でも再構築されるが
+    // 通常移動分岐では DOM が再生成されないため明示的に外す）。
+    setSwapTargetHighlight(ctx, null);
     const { ddx, ddy } = computePsdDelta(ev);
     if (isDuplicate) {
       // 複製は開始時点で beginHistoryTransient 済み。移動量があれば位置も確定し、
@@ -1058,6 +1090,22 @@ function beginMultiLayerDrag(e, ctx) {
         }
       }
       commitHistoryTransient();
+    } else if (isSingleMoveDrag && (ddx !== 0 || ddy !== 0)) {
+      // mouseup 時点で再判定（mousemove 最終フレームと mouseup の差を吸収）。
+      const cx = aStartRect.left + aStartRect.width / 2 + ddx;
+      const cy = aStartRect.top + aStartRect.height / 2 + ddy;
+      const target = findSwapTarget(ctx, draggedKey, cx, cy);
+      if (target) {
+        performSwap(ctx, dragged, aStartRect, target);
+      } else {
+        beginHistoryTransient();
+        if (dragged.kind === "existing") {
+          addEditOffset(ctx.page.path, dragged.layer.id, ddx, ddy);
+        } else {
+          updateNewLayer(dragged.nl.tempId, { x: dragged.startX + ddx, y: dragged.startY + ddy });
+        }
+        commitHistoryTransient();
+      }
     } else if (ddx !== 0 || ddy !== 0) {
       beginHistoryTransient();
       for (const item of items) {
@@ -1188,6 +1236,93 @@ function collectLayerHits(ctx, selRect) {
     if (rectsIntersect(selRect, lrect)) hits.push({ pageIndex, layerId: nl.tempId });
   }
   return hits;
+}
+
+// V ツールでテキストフレームを別フレームの上にドロップしたとき、両者の位置を
+// 入れ替える（swap）ためのヘルパ群。単一選択ドラッグ（Alt 複製ではない）の
+// ときだけ有効化される。
+
+// ドラッグ中レイヤーの中心点 (centerXPsd, centerYPsd) を含むレイヤーを探す。
+// draggedKey と一致するレイヤーは自己除外。最初のヒット 1 件を返す（既存→新規の順）。
+function findSwapTarget(ctx, draggedKey, centerXPsd, centerYPsd) {
+  const tinyRect = {
+    left: centerXPsd - 0.5,
+    top: centerYPsd - 0.5,
+    right: centerXPsd + 0.5,
+    bottom: centerYPsd + 0.5,
+  };
+  for (const layer of ctx.page.textLayers) {
+    if (draggedKey.kind === "existing" && layer.id === draggedKey.id) continue;
+    const edit = getEdit(ctx.page.path, layer.id) ?? {};
+    const lrect = layerRectForExisting(ctx.page, layer, edit);
+    if (rectsIntersect(tinyRect, lrect)) return { kind: "existing", layer };
+  }
+  for (const nl of getNewLayersForPsd(ctx.page.path)) {
+    if (draggedKey.kind === "new" && nl.tempId === draggedKey.id) continue;
+    const lrect = layerRectForNew(ctx.page, nl);
+    if (rectsIntersect(tinyRect, lrect)) return { kind: "new", nl };
+  }
+  return null;
+}
+
+// hover 中の swap ターゲットに `.swap-target` クラスを付ける/外す。
+// refreshAllOverlays は呼ばず、対象 box の DOM だけを直接触る。
+function setSwapTargetHighlight(ctx, target) {
+  const prev = ctx.overlay.querySelector(".layer-box.swap-target");
+  if (prev) prev.classList.remove("swap-target");
+  if (!target) return;
+  let el = null;
+  if (target.kind === "existing") {
+    el = ctx.overlay.querySelector(`.layer-box-existing[data-layer-id="${target.layer.id}"]`);
+  } else {
+    el = ctx.overlay.querySelector(`.layer-box-new[data-temp-id="${target.nl.tempId}"]`);
+  }
+  if (el) el.classList.add("swap-target");
+}
+
+// 被ドラッグレイヤー A とターゲット B の位置を交換する。
+// aStartRect は A のドラッグ開始時点の絶対 PSD rect、target は最新の B 情報。
+// A と B でサイズ（幅・高さ）が異なる場合、左上 (left/top) ではなく
+// **中心 (center)** を入れ替える。これによりサイズ差があっても各フレームが
+// 元々あった位置の中央に収まる（吹き出し中央同士のスワップとして自然）。
+// 既存レイヤーは差分加算 (addEditOffset)、新規レイヤーは絶対値上書き (updateNewLayer)
+// を用い、begin/commitHistoryTransient で 1 history snapshot に集約する。
+function performSwap(ctx, dragged, aStartRect, target) {
+  const path = ctx.page.path;
+  // ターゲット B の現在 rect（最新の絶対座標 + 幅高さ）を取得。
+  let bRect;
+  if (target.kind === "existing") {
+    const bEdit = getEdit(path, target.layer.id) ?? {};
+    bRect = layerRectForExisting(ctx.page, target.layer, bEdit);
+  } else {
+    bRect = layerRectForNew(ctx.page, target.nl);
+  }
+  // 中心点（A は開始時、B は現在）。
+  const aCenterX = aStartRect.left + aStartRect.width / 2;
+  const aCenterY = aStartRect.top + aStartRect.height / 2;
+  const bCenterX = bRect.left + bRect.width / 2;
+  const bCenterY = bRect.top + bRect.height / 2;
+  // A の新 left/top（中心を B の中心に揃える → A 自身の半サイズを引く）。
+  const aNewLeft = bCenterX - aStartRect.width / 2;
+  const aNewTop = bCenterY - aStartRect.height / 2;
+  // B の新 left/top（中心を A の元中心に揃える → B 自身の半サイズを引く）。
+  const bNewLeft = aCenterX - bRect.width / 2;
+  const bNewTop = aCenterY - bRect.height / 2;
+
+  beginHistoryTransient();
+  // A → B の中心へ
+  if (dragged.kind === "existing") {
+    addEditOffset(path, dragged.layer.id, aNewLeft - aStartRect.left, aNewTop - aStartRect.top);
+  } else {
+    updateNewLayer(dragged.nl.tempId, { x: aNewLeft, y: aNewTop });
+  }
+  // B → A の元中心へ
+  if (target.kind === "existing") {
+    addEditOffset(path, target.layer.id, bNewLeft - bRect.left, bNewTop - bRect.top);
+  } else {
+    updateNewLayer(target.nl.tempId, { x: bNewLeft, y: bNewTop });
+  }
+  commitHistoryTransient();
 }
 
 // テキスト入力 textarea の共通生成ヘルパ。

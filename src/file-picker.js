@@ -501,6 +501,14 @@ function onKeyDown(e) {
       e.preventDefault();
       void goBack();
     }
+  } else if ((e.ctrlKey || e.metaKey) && (e.key === "a" || e.key === "A")) {
+    // ファイル名入力欄など text input 内では Ctrl+A をテキスト全選択として通す。
+    // それ以外（リスト / ナビ等）はブラウザ既定の "ページ全体テキスト全選択" を抑止する
+    // — そうしないとダイアログ全体が青く反転してリスト操作が事実上ロックされる。
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    e.preventDefault();
+    e.stopPropagation();
   }
 }
 

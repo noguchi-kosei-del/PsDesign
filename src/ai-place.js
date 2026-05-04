@@ -29,7 +29,7 @@ import {
 import { parsePages } from "./txt-source.js";
 import { notifyDialog, confirmDialog } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
-import { runAiOcrForFiles } from "./ai-ocr.js";
+import { runAiOcrForFiles, PLACE_ICON_SVG } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
@@ -372,7 +372,9 @@ async function runAutoPlace() {
     if (!psdPages || psdPages.length === 0) {
       const files = await pickPsdFiles();
       if (!files || files.length === 0) return;
-      await loadPsdFilesByPaths(files);
+      // 自動配置から呼ばれる PSD 読込なので進捗バーには wand-sparkles アイコンと
+      // 「自動配置中…」ラベルを出し、ユーザーの操作文脈を維持する。
+      await loadPsdFilesByPaths(files, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
       psdPages = getPages();
       if (!psdPages || psdPages.length === 0) {
         // 読み込みが全件失敗 (loadPsdFilesByPaths が内部で notifyDialog を出す) 等

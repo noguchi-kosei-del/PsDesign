@@ -1551,6 +1551,17 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-shadow: 0 0 0 2px #e89a3c;
 }
 
+/* V ツールでドラッグ中、ドロップ位置の swap 候補にアクセント色のリングを当てる。
+   .selected と box-shadow は強さで区別（candidates のほうが太い）。 */
+.layer-box.swap-target {
+  box-shadow: 0 0 0 3px var(--accent), 0 0 0 5px rgba(255, 255, 255, 0.6);
+  background: rgba(0, 120, 212, 0.28);
+}
+.layer-box-new.swap-target {
+  box-shadow: 0 0 0 3px #e89a3c, 0 0 0 5px rgba(255, 255, 255, 0.6);
+  background: rgba(255, 200, 120, 0.28);
+}
+
 .new-layer-text,
 .existing-layer-text {
   color: #000;
@@ -1662,6 +1673,18 @@ body.frames-hidden .layer-box-existing:not(.selected) {
   border-color: transparent !important;
   background: transparent !important;
   box-shadow: none !important;
+}
+
+/* frames-hidden 中も swap ターゲットの強調は残す（操作意図フィードバックを優先）。 */
+body.frames-hidden .layer-box.swap-target {
+  border-color: var(--accent) !important;
+  background: rgba(0, 120, 212, 0.28) !important;
+  box-shadow: 0 0 0 3px var(--accent), 0 0 0 5px rgba(255, 255, 255, 0.6) !important;
+}
+body.frames-hidden .layer-box-new.swap-target {
+  border-color: #e89a3c !important;
+  background: rgba(255, 200, 120, 0.28) !important;
+  box-shadow: 0 0 0 3px #e89a3c, 0 0 0 5px rgba(255, 255, 255, 0.6) !important;
 }
 
 .page-overlay[data-tool="text-v"] .layer-box {
@@ -2817,21 +2840,78 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .progress-modal {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.55);
+  /* 背景の dim / blur は子要素 .progress-bg-top / .progress-bg-bottom に分割して持たせる。
+     こうすることで完了時にそれぞれを transform: translateY で外側へスライドさせ、
+     「バーを中心線として上下に開く」物理的な動きを表現できる。 */
+  background: transparent;
   display: flex;
   align-items: center;
   justify-content: center;
   z-index: 100;
-  backdrop-filter: blur(2px);
   opacity: 0;
   transition: opacity 0.22s ease;
   pointer-events: none;
+  /* バーの中心 Y 座標 (vh%)。hideProgress が JS で進捗バーから実値を計算し設定。
+     初期値 50% は画面縦中央（fallback）。 */
+  --bar-top: 50%;
 }
 
 .progress-modal[hidden] { display: none; }
 .progress-modal.visible {
   opacity: 1;
   pointer-events: auto;
+}
+
+/* dim / blur を 2 つの帯に分割。境界をバー中心 (--bar-top) に揃える。
+   開く時 / 閉じる時とも transform: translateY を common transition で animate するため、
+   .progress-bg 自体に transition を常時設定する。 */
+.progress-modal .progress-bg {
+  position: absolute;
+  left: 0;
+  right: 0;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  pointer-events: none;
+  will-change: transform;
+  transition: transform 0.45s cubic-bezier(0.55, 0.05, 0.4, 1);
+}
+/* 初期状態 (visible なし) は画面外。開く時に translateY(0) へ animate して
+   「上下からカーテンが中央に閉じる」入場アニメになる。 */
+.progress-modal .progress-bg-top {
+  top: 0;
+  height: var(--bar-top);
+  transform: translateY(-100%);
+}
+.progress-modal .progress-bg-bottom {
+  top: var(--bar-top);
+  bottom: 0;
+  transform: translateY(100%);
+}
+/* 表示中: bg は定位置に揃い、画面全体がぼかし dim される。 */
+.progress-modal.visible .progress-bg-top,
+.progress-modal.visible .progress-bg-bottom {
+  transform: translateY(0);
+}
+
+/* 完了時の閉じアニメ:
+   - 上帯: transform translateY(-100%) で画面上端から外へ
+   - 下帯: transform translateY(100%) で画面下端から外へ
+   - card 全体は少し遅れてフェードアウト（バーが中心線として最後に残るような印象）
+   .visible は外さず opacity 1 を維持して、bg のスライドだけが見える。 */
+.progress-modal.closing {
+  opacity: 1 !important;
+  pointer-events: none;
+}
+.progress-modal.closing .progress-bg-top {
+  transform: translateY(-100%);
+}
+.progress-modal.closing .progress-bg-bottom {
+  transform: translateY(100%);
+}
+.progress-modal.closing .progress-card {
+  transition: opacity 0.3s ease 0.1s;
+  opacity: 0;
 }
 
 /* 確認ダイアログはハンバーガーメニュー (z-index 151) から呼ばれることがあるので、
@@ -2977,13 +3057,163 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   min-height: 14px;
 }
 
-/* #progress-modal だけサイズを少し大きく。共有 .progress-card を直接膨らませると
-   confirm/resync/page-jump など他モーダルまで巻き込むため ID スコープで限定。 */
+/* #progress-modal だけは「背景全体をぼかし、進捗バーを画面端から端まで展開」する
+   表示形式。共有 .progress-card を直接いじると confirm/resync/page-jump など他モーダル
+   まで巻き込むため ID スコープで限定。
+   完了時に上下スライドアウトする bg 帯 (.progress-bg) に dim と blur を移譲し、
+   .progress-modal 自体は透明な位置決めコンテナとする。 */
+#progress-modal .progress-bg {
+  background: rgba(0, 0, 0, 0.18);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
 #progress-modal .progress-card {
-  min-width: 440px;
-  max-width: 600px;
-  padding: 24px 28px;
+  /* card 自体は透明・枠なし・余白なし。アイコンと進捗バーだけが画面に浮く構造。
+     画面横幅 100vw の透明コンテナとして機能し、子要素 (.progress-icon /
+     .progress-track) を縦に積む。 */
+  width: 100vw;
+  max-width: none;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
   gap: 14px;
+  align-items: stretch;
+}
+
+/* 詳細・カウントは「メッセージウインドウ」撤去で非表示。タイトルだけはアイコン直下の
+   ラベル（"画像スキャン中…" / "自動配置中…" など）として残す。要素は残して JS の
+   textContent 操作の互換性は保ったまま。 */
+#progress-modal .progress-detail,
+#progress-modal .progress-count {
+  display: none;
+}
+
+/* progress-title はアイコン直下のラベル位置で表示。白文字、中央寄せ、影で読みやすく。 */
+#progress-modal .progress-title {
+  display: block;
+  text-align: center;
+  font-size: 16px;
+  font-weight: 700;
+  color: #ffffff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+  padding: 0 28px;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+/* 進捗バーの上に表示するアイコン（画像スキャン / 自動配置 等）。
+   親が透明背景なので、アイコンを目立たせるため drop-shadow で輪郭を立たせる。
+   未指定時 (空) は領域取らない。 */
+#progress-modal .progress-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #ffffff;
+  filter: drop-shadow(0 2px 6px rgba(0, 0, 0, 0.45));
+  pointer-events: none;
+}
+#progress-modal .progress-icon:empty {
+  display: none;
+}
+#progress-modal .progress-icon svg {
+  width: 64px;
+  height: 64px;
+  stroke-width: 2;
+}
+
+/* 画像スキャンアイコン: 「手前から奥にフェードアウト」を無限ループ。
+   scale 1 → 0.4 + opacity 1 → 0 で奥へ消えた後、瞬時に元に戻り再フェードアウト。 */
+#progress-modal .progress-icon .scan-icon {
+  transform-origin: 50% 50%;
+  animation: scan-fade-back 1.8s ease-in-out infinite;
+}
+@keyframes scan-fade-back {
+  0%   { transform: scale(1);   opacity: 1; }
+  60%  { transform: scale(0.4); opacity: 0; }
+  /* 一瞬不可視のまま元のサイズへ戻し、次サイクルで再びフェードアウトさせる */
+  61%  { transform: scale(1);   opacity: 0; }
+  100% { transform: scale(1);   opacity: 1; }
+}
+
+/* デフォルト spinner (showProgress({ icon: undefined }) 時のフォールバック)。
+   12 個の dot を中心から半径 22px の円周上に等角配置し、fade-out animation の
+   delay を 0s, -0.1s, ..., -1.1s で振って「濃淡が回転する」古典 spinner。 */
+#progress-modal .progress-icon .progress-spinner {
+  position: relative;
+  width: 64px;
+  height: 64px;
+  color: #ffffff;
+}
+#progress-modal .progress-icon .spinner-dot {
+  position: absolute;
+  top: calc(50% - 6px);
+  left: calc(50% - 6px);
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: spinner-fade 1.2s linear infinite;
+}
+#progress-modal .progress-icon .spinner-dot:nth-child(1)  { transform: rotate(0deg)   translateY(-22px); animation-delay: 0s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(2)  { transform: rotate(30deg)  translateY(-22px); animation-delay: -0.1s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(3)  { transform: rotate(60deg)  translateY(-22px); animation-delay: -0.2s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(4)  { transform: rotate(90deg)  translateY(-22px); animation-delay: -0.3s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(5)  { transform: rotate(120deg) translateY(-22px); animation-delay: -0.4s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(6)  { transform: rotate(150deg) translateY(-22px); animation-delay: -0.5s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(7)  { transform: rotate(180deg) translateY(-22px); animation-delay: -0.6s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(8)  { transform: rotate(210deg) translateY(-22px); animation-delay: -0.7s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(9)  { transform: rotate(240deg) translateY(-22px); animation-delay: -0.8s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(10) { transform: rotate(270deg) translateY(-22px); animation-delay: -0.9s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(11) { transform: rotate(300deg) translateY(-22px); animation-delay: -1.0s; }
+#progress-modal .progress-icon .spinner-dot:nth-child(12) { transform: rotate(330deg) translateY(-22px); animation-delay: -1.1s; }
+@keyframes spinner-fade {
+  0%   { opacity: 1; }
+  100% { opacity: 0.15; }
+}
+
+/* 自動配置アイコン: ステッキ本体は静止、周りの sparkle 6 本だけが順番に点滅。
+   nth-of-type で各 sparkle に少しずつ遅延を付け、キラキラ感を出す。 */
+#progress-modal .progress-icon .place-icon .sparkle {
+  animation: sparkle-blink 1.6s ease-in-out infinite;
+  transform-origin: 50% 50%;
+}
+#progress-modal .progress-icon .place-icon .sparkle:nth-of-type(1) { animation-delay: 0s; }
+#progress-modal .progress-icon .place-icon .sparkle:nth-of-type(2) { animation-delay: 0.12s; }
+#progress-modal .progress-icon .place-icon .sparkle:nth-of-type(3) { animation-delay: 0.24s; }
+#progress-modal .progress-icon .place-icon .sparkle:nth-of-type(4) { animation-delay: 0.36s; }
+#progress-modal .progress-icon .place-icon .sparkle:nth-of-type(5) { animation-delay: 0.48s; }
+#progress-modal .progress-icon .place-icon .sparkle:nth-of-type(6) { animation-delay: 0.60s; }
+@keyframes sparkle-blink {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 1; }
+}
+
+/* 進捗テキスト（残り N ページ ・ P %）はバーの上に単独表示。
+   バー内の reveal 効果は廃止し、白文字で読みやすく中央寄せ。 */
+#progress-modal .progress-loading-text {
+  position: static;  /* バー外なので絶対配置を解除 */
+  display: block;
+  text-align: center;
+  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.12em;
+  color: #ffffff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.55);
+  padding: 0 28px;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* progress-track は card 全幅 = 画面全幅。border-radius 撤去で端まで連続感、
+   高さは旧 44px から半分の 22px に。 */
+#progress-modal .progress-track {
+  height: 22px;
+  border-radius: 0;
 }
 
 .progress-track {
@@ -3001,35 +3231,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   left: 0;
   bottom: 0;
   width: 0%;
-  background: linear-gradient(90deg, #2e6cd6 0%, #5fa1ff 100%);
-  overflow: hidden;  /* フラッシュ ::after をバーの可視領域内にクリップ */
+  /* 左 → 右 で薄い青から濃い青に変化。進捗が進むほど右端の濃い色が露わになる。 */
+  background: linear-gradient(90deg, #6fb1ff 0%, #1d4f9e 100%);
   transition: width 0.3s ease-out;
-}
-
-/* バー上を左から右に流れるフラッシュ（光沢）。
-   ::after を fill の中で translateX し、fill の overflow:hidden で輪郭にクリップされる。
-   無限ループだが、後半 40% は画面外で待機するので脈動感が出る。 */
-.progress-fill::after {
-  content: "";
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  left: 0;
-  width: 35%;
-  background: linear-gradient(
-    105deg,
-    transparent 25%,
-    rgba(255, 255, 255, 0.55) 50%,
-    transparent 75%
-  );
-  transform: translateX(-120%);
-  pointer-events: none;
-}
-
-@keyframes progress-flash {
-  0%   { transform: translateX(-120%); }
-  60%  { transform: translateX(320%); }
-  100% { transform: translateX(320%); }
 }
 
 /* track 背景と同色で初期は透明。青いバーが下を通過した部分だけ
@@ -3050,19 +3254,10 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 
 /* バー幅は JS の updateProgress 経由で fill.style.width に反映される。
-   現在/総数が無いケース（Photoshop 反映中など）は .indeterminate を付けて
-   バーを満タン表示し、左→右に流れるフラッシュ ::after で「動いている」感を伝える。 */
+   現在/総数が無いケース（Photoshop 反映中など）は .indeterminate を付けてバー満タン表示。
+   進捗テキスト「●●中…」と loading-text の文言更新で動作中であることを伝える。 */
 .progress-fill.indeterminate {
   width: 100%;
-}
-
-/* フラッシュは .visible 中だけループ。閉じる際は .visible が外れて animation:none に戻り、
-   次回開いたときに再付与されて先頭から流れる。 */
-.progress-modal .progress-fill::after {
-  animation: none;
-}
-.progress-modal.visible .progress-fill::after {
-  animation: progress-flash 2.2s linear infinite;
 }
 
 .progress-count {
@@ -4139,6 +4334,15 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow: hidden;
   transform: scale(0.92);
   transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1.0);
+  /* 既定ではテキスト選択を不許可（Ctrl+A・ドラッグ・右クリックすべて選択 等で
+     ダイアログ全体が青く反転して操作が事実上ロックされるのを防ぐ）。
+     ファイル名入力欄だけ user-select: text で例外。 */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.file-picker-card .file-picker-name-input {
+  user-select: text;
+  -webkit-user-select: text;
 }
 .file-picker-modal.visible .file-picker-card {
   transform: scale(1);

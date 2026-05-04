@@ -78,7 +78,21 @@ function mokuroDocToText(doc, normalizeSettings) {
   return out.join("\n").replace(/\n{3,}/g, "\n\n");
 }
 
-async function runAiOcr(files, { notifyOnComplete = false } = {}) {
+// プログレスバー上のアイコン（lucide ベース）。画像スキャンボタン直接 = scan-line、
+// 自動配置から自動 OCR をトリガーする経路 = wand-sparkles。index.html のボタンと同形。
+// アニメーションは styles.css 側で .scan-icon / .place-icon の class scope で定義。
+// PLACE_ICON_SVG の sparkle 6 本（ステッキ周りの光）には個別に .sparkle class を当てて
+// CSS から nth-of-type で順次点滅させる。最初の 2 本（ステッキ軸 + ヘッド）は静止。
+const SCAN_ICON_SVG = `<svg class="scan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>`;
+export const PLACE_ICON_SVG = `<svg class="place-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path class="sparkle" d="M5 6v4"/><path class="sparkle" d="M19 14v4"/><path class="sparkle" d="M10 2v2"/><path class="sparkle" d="M7 8H3"/><path class="sparkle" d="M21 16h-4"/><path class="sparkle" d="M11 3H9"/></svg>`;
+
+async function runAiOcr(files, {
+  notifyOnComplete = false,
+  icon = SCAN_ICON_SVG,
+  // 進捗ダイアログのアイコン直下ラベル。直接呼ばれる「画像スキャン」と
+  // 自動配置から呼ばれる経路で文言を切替えるため引数化。
+  label = "画像スキャン中…",
+} = {}) {
   if (runningOcr) return;
   if (!files || files.length === 0) return; // 何も選択されていない場合は静かに戻る
 
@@ -105,11 +119,12 @@ async function runAiOcr(files, { notifyOnComplete = false } = {}) {
   const approxLabel = formatApproxDuration(estimateRemainingSeconds(files.length));
 
   showProgress({
-    title: "画像スキャン実行中",
+    title: label,
     detail: `${baseName(files[0])} ほか ${files.length} 件 (完了まで${approxLabel})`,
     current: 0,
     total: 1,
     showCount: false,
+    icon,
   });
 
   const { invoke } = await import("@tauri-apps/api/core");
@@ -301,8 +316,9 @@ function formatEta(eta) {
 
 // 公開: ファイル群に対して画像スキャンを実行し、MokuroDocument を返す。
 // (ai-place.js から「OCR キャッシュなし時に自動実行」用に呼ぶ)
+// 自動配置経由なのでアイコンは wand-sparkles、ラベルも「自動配置中…」に揃える。
 export async function runAiOcrForFiles(files) {
-  await runAiOcr(files);
+  await runAiOcr(files, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
 }
 
 export function bindAiOcrButton() {
