@@ -108,12 +108,16 @@ function syncDefaultsUi() {
   const sw = $("default-stroke-width");
   const ft = $("default-font");
   const sb = $("default-show-badge");
+  const dt = $("default-dash-tracking");
+  const tt = $("default-tilde-tracking");
   if (ts) ts.value = String(d.textSize ?? "");
   if (tss) tss.value = String(d.textSizeStep ?? 0.1);
   if (lp) lp.value = String(d.leadingPct ?? "");
   if (sw) sw.value = String(d.strokeWidthPx ?? "");
   if (ft) ft.value = String(d.fontPostScriptName ?? "");
   if (sb) sb.value = d.showBadge === false ? "hide" : "show";
+  if (dt) dt.value = String(d.dashTrackingMille ?? 0);
+  if (tt) tt.value = String(d.tildeTrackingMille ?? 0);
   populateFontDatalist();
 }
 
@@ -340,6 +344,8 @@ function bindDefaultsInputs() {
   wireNumber("default-text-size",   "textSize");
   wireNumber("default-leading-pct", "leadingPct");
   wireNumber("default-stroke-width", "strokeWidthPx");
+  wireNumber("default-dash-tracking", "dashTrackingMille");
+  wireNumber("default-tilde-tracking", "tildeTrackingMille");
 
   const tss = $("default-text-size-step");
   if (tss) {

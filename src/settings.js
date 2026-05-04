@@ -20,6 +20,10 @@ export const DEFAULT_SETTINGS = {
     strokeWidthPx: 20,      // px（フチの太さ）
     fontPostScriptName: "", // 空文字 = 指定なし（system default）
     showBadge: true,        // 選択中レイヤー下部のフォント名 + サイズバッジ（true: 表示 / false: 非表示）
+    // ‰（千分率）。連続記号のツメ量を group 別に保持。0 = OFF、負値（または絶対値）で詰まる。
+    // 連続ランの最後の 1 文字は常に 0 のまま（後続文字との字間が詰まりすぎないように）。
+    dashTrackingMille: -100,   // ダッシュ系（— ― – ‒ ‐ ‑ ー －）の連続詰め
+    tildeTrackingMille: -300,  // チルダ系（〜 ～）の連続詰め
   },
   shortcuts: {
     save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
@@ -88,6 +92,15 @@ function migrate(old) {
     }
     if (typeof d.showBadge === "boolean") {
       out.defaults.showBadge = d.showBadge;
+    }
+    if (typeof d.dashTrackingMille === "number" && Number.isFinite(d.dashTrackingMille)) {
+      out.defaults.dashTrackingMille = d.dashTrackingMille;
+    } else if (typeof d.repeatedDashTrackingMille === "number" && Number.isFinite(d.repeatedDashTrackingMille)) {
+      // 旧キー（v1.10.0 開発時に存在）からの自動移行。チルダは新規 default に従う。
+      out.defaults.dashTrackingMille = d.repeatedDashTrackingMille;
+    }
+    if (typeof d.tildeTrackingMille === "number" && Number.isFinite(d.tildeTrackingMille)) {
+      out.defaults.tildeTrackingMille = d.tildeTrackingMille;
     }
   }
   if (old.shortcuts && typeof old.shortcuts === "object") {

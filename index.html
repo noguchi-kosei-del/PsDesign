@@ -191,6 +191,8 @@
                 </svg>
               </button>
               <div id="pdf-stage" class="pdf-stage"></div>
+            </div>
+            <div class="spreads-proofread-area" id="spreads-proofread-area">
               <div id="proofread-panel" class="proofread-panel" hidden>
                 <div class="proofread-panel-header">
                   <div class="proofread-tabs" id="proofread-tabs" role="tablist">
@@ -219,7 +221,6 @@
                 <div id="proofread-body" class="proofread-body"></div>
               </div>
             </div>
-            <div class="spreads-proofread-area" id="spreads-proofread-area" hidden></div>
             <div class="spreads-psd-area" id="spreads-psd-area">
               <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" hidden>
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -251,7 +252,7 @@
               </div>
               <div class="psd-guides-layer" id="psd-guides-layer" hidden></div>
             </div>
-            <div class="spreads-editor-area" id="spreads-editor-area" hidden>
+            <div class="spreads-editor-area" id="spreads-editor-area">
               <div class="editor-filename-row">
                 <svg class="editor-filename-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
@@ -739,6 +740,14 @@
                 <option value="show">表示</option>
                 <option value="hide">非表示</option>
               </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-dash-tracking">「―」連続のツメ (‰)</label>
+              <input type="number" id="default-dash-tracking" class="settings-default-input" min="-1000" max="1000" step="10" placeholder="0 で OFF" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-tilde-tracking">「～」連続のツメ (‰)</label>
+              <input type="number" id="default-tilde-tracking" class="settings-default-input" min="-1000" max="1000" step="10" placeholder="0 で OFF" />
             </div>
           </div>
         </div>

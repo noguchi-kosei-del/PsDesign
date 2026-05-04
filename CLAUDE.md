@@ -2254,3 +2254,108 @@ E1. **1.9.0 → 1.10.0** ([package.json](package.json) / [src-tauri/Cargo.toml](
 > - 旧: V ツール ドラッグはレイヤー移動のみ → 新: 単一選択ドラッグで他フレーム上にドロップ → 中心同士で位置入替（hover 中アクセント色リング、Ctrl+Z 1 回で戻る）
 > - 旧: ファイル選択ダイアログで Ctrl+A → ダイアログ全体が青く反転して操作不能 → 新: カード全体 `user-select: none` + Ctrl+A をリスト上で抑止、ファイル名入力欄だけ例外
 
+---
+
+## v1.11.0: 連続記号の自動字詰め + view-mode スライドアニメーション + 細部 UI 調整
+
+### A. 連続記号「— ― 〜 ～」のグループ別自動字詰め
+
+A1. **概要**: 縦書き漫画の写植で常用される「ダッシュ系記号 / チルダ系記号が連続したら詰める」というルールを自動化。連続ランの **最後の 1 文字だけは詰めない**（後続の通常文字との字間が詰まりすぎないように）。詰め量は環境設定の「サイドバー」タブから dash 系 / tilde 系 別々に変更可能。
+
+A2. **対象 10 文字を 2 グループに分類**:
+- **dash 系**（既定 -100‰）: U+2014 EM DASH `—` / U+2015 HORIZONTAL BAR `―` / U+2013 EN DASH `–` / U+2012 FIGURE DASH `‒` / U+2010 HYPHEN `‐` / U+2011 NON-BREAKING HYPHEN `‑` / U+30FC KATAKANA-HIRAGANA PROLONGED SOUND MARK `ー`（長音記号）/ U+FF0D FULLWIDTH HYPHEN-MINUS `－`
+- **tilde 系**（既定 -300‰）: U+301C WAVE DASH `〜` / U+FF5E FULLWIDTH TILDE `～`
+
+A3. **連続判定**: 2 つのグループに属する任意の文字が **2 個以上連続** したら 1 つのラン。混在連続（`―〜―` 等）も同じラン扱い。各文字に **その文字自身のグループ** の tracking 値を per-char で当てる。例:`あ―〜～い` → ― は -100‰、〜 は -300‰、最後の ～ は 0（保護）、あ・い は 0。
+
+A4. **適用範囲**: PsDesign で新規配置したテキスト（`state.newLayers`）のみ。既存 PSD 由来のテキストレイヤーは触らない（Photoshop 側で意図的に詰めていた箇所の二重詰め事故を回避）。プレビュー / Photoshop 保存 ともに同じルールで描画。
+
+A5. **設定永続化** ([src/settings.js](src/settings.js) `DEFAULT_SETTINGS.defaults`):
+```js
+dashTrackingMille: -100,   // ダッシュ系の連続詰め (‰)
+tildeTrackingMille: -300,  // チルダ系の連続詰め (‰)
+```
+正負どちらの符号でも「絶対値ぶん詰める」セマンティクスに統一（Photoshop 慣例で負値を入れるユーザーも、正値を入れるユーザーも同じ結果）。`migrate()` でホワイトリスト穴埋め、旧 v1.10.0 の `repeatedDashTrackingMille` キーがあれば `dashTrackingMille` に自動引き継ぎ。
+
+A6. **環境設定 UI** ([index.html](index.html) + [src/settings-ui.js](src/settings-ui.js)): 設定モーダル → 「サイドバー」タブに 2 行追加:
+- 「`「―」連続のツメ (‰)`」
+- 「`「～」連続のツメ (‰)`」
+
+`min="-1000" max="1000" step="10" placeholder="0 で OFF"` の number input。`syncDefaultsUi` / `bindDefaultsInputs` の既存 `wireNumber` ヘルパーで配線。
+
+A7. **プレビュー側実装** ([src/canvas-tools.js](src/canvas-tools.js)):
+- `DASH_CHARS` / `TILDE_CHARS` を `Set` で定義、`repeatedTargetGroup(ch)` で per-char グループ判定
+- `findRepeatedTargetRuns(line)` で行を `[{text, isTargetRun}]` セグメント列に分解
+- `appendLineWithTracking(parentEl, line, dashMag, tildeMag)`: 連続ランの最初の N-1 文字を **per-char の `<span style="letter-spacing: -X em">`** でラップ、最後の 1 文字は素のテキストノードで append。X はその文字のグループ別 magnitude (-X / 1000) em
+- `renderInnerText` のシグネチャを `(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille)` に拡張
+- 既存レイヤー描画は `renderInnerText(inner, ..., 0, 0)` で詰め無効、新規レイヤーだけ `getDefault("dashTrackingMille")` / `getDefault("tildeTrackingMille")` を渡す
+- `onSettingsChange(refreshAllOverlays)` の既存購読により設定変更で即時プレビュー更新
+
+A8. **Photoshop 書き戻し** ([src/state.js](src/state.js) `exportEdits` payload に `dashTrackingMille` + `tildeTrackingMille` 追加 → [src-tauri/src/lib.rs](src-tauri/src/lib.rs) `EditPayload` に `dash_tracking_mille: f64` + `tilde_tracking_mille: f64` フィールド追加 → [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)):
+- `applyRepeatedDashTracking(layer, contents, dashMille, tildeMille)` を新設（HEADER に追加）
+- `charGroup(s)` ヘルパーで per-char に dash / tilde / null を判定（regex リテラルは ExtendScript のファイルエンコーディング Shift_JIS 影響を受けるため、`charCodeAt(0)` 直接判定で安全に）
+- 連続ラン検出 → 最初の N-1 文字の `trackingPerChar[k]` にグループ別の負値を格納（最後の 1 文字は 0）
+- 既存 `textStyleRange` を読み、各 char index がどの old range に属するかを `srcRangeIndex[]` で記録 → `(srcRangeIndex, trackingValue)` が連続している区間に圧縮 → 各区間で `cloneActionDescriptor(srcStyle)` + `putInteger(sID("tracking"), v)` で新 textStyleRange を構築
+- **重要なバグ修正**: `executeAction(sID("set"), ...)` で `setDesc.putObject(sID("to"), sID("textKey"), newTextKey)` だと Photoshop が渡された textStyleRange を破棄して既存値を保持するケースがある → **class を `sID("textLayer")`（charID `TxtL`）に変更** することで tracking が確実に反映される。applyLineLeadings は `textKey` で動いているが、tracking のような per-character の新規スタイル変更は `textLayer` class でないと有効化されないことが Action Manager 経路の verify 診断で判明
+- `applyToPsd` シグネチャを 6 引数化 (`psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille`)、newLayers ループで `nl.lineLeadings` 適用後に `applyRepeatedDashTracking` を呼ぶ
+- `generate_apply_script` で payload の値を JSX の各 `applyToPsd` 呼び出しに埋め込み
+
+> **注**: `applyLineLeadings` と併用する場合、`applyRepeatedDashTracking` が後から実行されて textStyleRange を再構築するため、各 source range の style を clone して tracking を上乗せする方針で line leading 情報も保持。複数選択編集や per-line leading との衝突は最小限。
+
+### B. view-mode 切替の左スライドアニメーション
+
+B1. **概要**: view-mode-segment（parallel / proofread / editor）切替を「ハンバーガーメニュー風」の左スライドに変更。これまで `hidden` 属性 + `display:none !important` で瞬間スナップしていた挙動を、`transform: translateX` + `opacity` の transition に置き換え。
+
+B2. **DOM 再構成** ([index.html](index.html)):
+- `#proofread-panel` の初期 DOM 位置を `.spreads-pdf-area` 内 → `.spreads-proofread-area` 内 に移動
+- `.spreads-proofread-area` と `.spreads-editor-area` の初期 `hidden` 属性を撤去（CSS の class 制御に一本化）
+
+B3. **ドロワー化 CSS** ([src/styles.css](src/styles.css)):
+- `.spreads-stage { position: relative }` で absolute 配置の anchor を提供
+- `.spreads-proofread-area`: `position: absolute; left:0; width:50%; height:100%; z-index:11`、隠し時 `transform: translateX(-100%); opacity: 0; pointer-events: none`
+- `.spreads-editor-area`: `position: absolute; left:50%; width:50%; height:100%; z-index:10`、隠し時 `transform: translateX(-200%); opacity: 0; pointer-events: none`（stage 全体ぶん左 = 完全に画面外）
+- `.spreads-stage.proofread-visible` / `.editor-visible` クラスで `transform: translateX(0); opacity: 1; pointer-events: auto` に
+- `.proofread-panel` を `.proofread-overlay` / `.proofread-pane` の class 切替なしのシンプルな pane スタイルに統合（`position: relative; flex: 1; min-width:0; min-height:0`）
+- `.workspace.editor-mode` の `display: none !important` 対象から PDF/PSD area を外し、**サイドバー類のみ** 残す（PDF/PSD は背景に残してドロワーで覆う）
+- viewer-mode 用の共有 transition rule に `transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)` を追加（既存 opacity / visibility と並列）。これがないと既存ルール（specificity (0,2,1)）が新規 transform を上書きしてアニメが効かない
+
+B4. **JS 制御の簡素化** ([src/main.js](src/main.js) `bindParallelViewMode`):
+- `pdfArea / psdArea / editorArea / proofreadArea.toggleAttribute("hidden", ...)` を全撤去
+- 代わりに `stage.classList.toggle("proofread-visible", showProofread || showEditor)` と `stage.classList.toggle("editor-visible", showEditor)` を設定
+- `proofread-panel` の `appendChild` 移動と `.proofread-overlay`/`.proofread-pane` class 切替を撤去
+- `closeProofread()` 呼出を撤去（スライドアウト中も内容を保持し、parent の opacity で制御。closeProofread を呼ぶと panel.hidden が即時 true → display:none で内容が瞬時に消えてからドロワーがスライドする「空のドロワーが滑る」不格好な見た目になる）。`closeProofread` の import も削除
+- `.workspace.editor-mode` 付与は維持（サイドバー display:none 制御に使用）
+
+B5. **アニメーション仕様**:
+- `transform 0.28s cubic-bezier(0.4, 0, 0.2, 1)` で left → right にスライド
+- `opacity 0.18s ease` で同時にフェード
+- `pointer-events: none ↔ auto` で誤クリック防止
+- proofread の z-index (11) > editor (10) でスライド中の重複は proofread が前面でカバー
+
+B6. **モード遷移マトリクス**:
+
+| from → to | 動作 |
+|---|---|
+| parallel → proofread | 校正パネルが PDF area 上に左からスライドイン（PSD は不動） |
+| proofread → parallel | 校正パネルが左へスライドアウト → PDF area が完全露出 |
+| parallel → editor | 校正 + エディタが同時に左からスライドイン、PDF/PSD を覆う |
+| editor → parallel | 両方が左へスライドアウト → PDF/PSD が露出 |
+| proofread → editor | エディタだけが追加スライドイン、校正は左半分に残る |
+| editor → proofread | エディタだけがスライドアウト、校正はそのまま |
+
+### C. PSD ペイン上のオーバーレイボタンを少し縮小
+
+C1. **対象**: 4 つのオーバーレイボタンを統一規格でやや小型化 ([src/styles.css](src/styles.css) `.pdf-rotate-btn / .psd-rotate-btn / .psd-guides-lock-btn / .psd-guides-apply-btn`):
+- ボタン外径: 28×28 → **24×24** px
+- 内部 SVG: 16×16 → **14×14** px（`.icon-btn` グローバル 18px ルールを上書き）
+- `right` オフセット再計算: rotate 8px / lock 44 → **40** px / apply 80 → **72** px（24 + 8 ギャップで等間隔維持）
+
+C2. **影響範囲**: 見本（PDF / 画像）の回転ボタン、PSD の回転ボタン、ガイドロックボタン、ガイドを複数ページに反映ボタン。ペイン右下の縦並びがコンパクトになり、PSD コンテンツへの視覚的干渉が軽減。
+
+> **構造変更まとめ**:
+> - 旧: 連続記号のツメ機能なし → 新: dash 系（既定 -100‰）/ tilde 系（既定 -300‰）グループ別、最後の 1 文字保護、混在連続対応、Photoshop 互換。設定モーダルの「サイドバー」タブから可変
+> - 旧: view-mode 切替は `hidden` 属性で瞬間スナップ → 新: ハンバーガーメニュー風の左スライド（transform 0.28s + opacity 0.18s）。`.spreads-stage.proofread-visible` / `.editor-visible` で 2 段階制御
+> - 旧: editor モードで PDF/PSD area が `display: none` → 新: 背景に残し、ドロワーで覆う（スライドアウト時に PDF/PSD が露出する自然な動き）
+> - 旧: PSD ペイン右下の 4 ボタンが 28×28 → 新: 24×24 で控えめなサイズ感
+> - 旧: jsx_gen.rs `applyLineLeadings` 等が `setDesc.putObject(sID("to"), sID("textKey"), ...)` で動作 → 新規 tracking では `sID("textLayer")` に変更（`textKey` だと per-character の新規スタイル変更が破棄されるケース対応）
+

@@ -408,8 +408,9 @@ function renderOverlay(ctx) {
       inner.style.fontSize = `${rect.ptInPsdPx * pxPerPsd}px`;
     }
     // 行間：edit.leadingPct があれば反映、なければ既定 1.05（既存表示と整合）。
+    // tracking は既存レイヤーには適用しない（PS 側に書き戻さない方針と整合させ、保存後の見た目とプレビューを一致させる）。
     const defaultLeadPct = Number.isFinite(edit.leadingPct) ? edit.leadingPct : 105;
-    renderInnerText(inner, rect.previewText, defaultLeadPct, edit.lineLeadings);
+    renderInnerText(inner, rect.previewText, defaultLeadPct, edit.lineLeadings, 0, 0);
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
     if (existingFontCss) inner.style.fontFamily = existingFontCss;
@@ -450,7 +451,10 @@ function renderOverlay(ctx) {
     if (pxPerPsd > 0) {
       inner.style.fontSize = `${rect.ptInPsdPx * pxPerPsd}px`;
     }
-    renderInnerText(inner, nl.contents, nl.leadingPct ?? 125, nl.lineLeadings);
+    // 新規レイヤーには環境設定の連続記号ツメ（dash/tilde グループ別）を適用。PS 保存にも同じ値を書き戻す。
+    const dashMille = Number(getDefault("dashTrackingMille")) || 0;
+    const tildeMille = Number(getDefault("tildeTrackingMille")) || 0;
+    renderInnerText(inner, nl.contents, nl.leadingPct ?? 125, nl.lineLeadings, dashMille, tildeMille);
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
     ensureFontLoaded(nl.fontPostScriptName);
@@ -509,27 +513,109 @@ function countLines(s) {
   return String(s).split(/\r?\n/).length;
 }
 
+// 連続したとき自動でツメる対象記号 2 グループ。Photoshop 側でも同じ char code 集合を使う。
+// dash:  — U+2014 EM DASH / ― U+2015 HORIZONTAL BAR / – U+2013 EN DASH / ‒ U+2012 FIGURE DASH /
+//        ‐ U+2010 HYPHEN / ‑ U+2011 NON-BREAKING HYPHEN / ー U+30FC 長音記号 / － U+FF0D 全角ハイフン
+// tilde: 〜 U+301C WAVE DASH / ～ U+FF5E FULLWIDTH TILDE
+const DASH_CHARS = new Set(["—", "―", "–", "‒", "‐", "‑", "ー", "－"]);
+const TILDE_CHARS = new Set(["〜", "～"]);
+const REPEATED_TARGET_REGEX = /[—―–‒‐‑ー－〜～]/;
+
+function repeatedTargetGroup(ch) {
+  if (DASH_CHARS.has(ch)) return "dash";
+  if (TILDE_CHARS.has(ch)) return "tilde";
+  return null;
+}
+function isRepeatedTargetChar(ch) {
+  return repeatedTargetGroup(ch) !== null;
+}
+
+// 1 行を [{text, isTargetRun}] のセグメント列に分解する。
+// 例: "あ―――い" → [{あ, false}, {―――, true}, {い, false}]
+// 例: "―〜―あ" → [{―〜―, true}, {あ, false}]（混在連続も同じラン扱い）
+function findRepeatedTargetRuns(line) {
+  const out = [];
+  let i = 0;
+  while (i < line.length) {
+    const inRun = isRepeatedTargetChar(line[i]);
+    let j = i;
+    while (j < line.length && isRepeatedTargetChar(line[j]) === inRun) j++;
+    out.push({ text: line.slice(i, j), isTargetRun: inRun });
+    i = j;
+  }
+  return out;
+}
+
+// 1 行を parentEl に追加する。連続対象記号ランがあれば、各文字を per-char span で包み、
+// その文字のグループ (dash / tilde) に応じた magnitude で letter-spacing を当てる。
+// 連続ランの最後の 1 文字だけは span に包まず素のテキストとして外に出すので、後続の
+// 通常文字との字間は通常のまま保たれる（ユーザー要求の挙動）。
+// dashMille / tildeMille は正負どちらの符号でも「絶対値ぶん詰める」セマンティクスに統一。
+function appendLineWithTracking(parentEl, line, dashMille, tildeMille) {
+  const dashMag = Math.abs(Number(dashMille) || 0);
+  const tildeMag = Math.abs(Number(tildeMille) || 0);
+  if ((dashMag === 0 && tildeMag === 0) || !REPEATED_TARGET_REGEX.test(line)) {
+    parentEl.appendChild(document.createTextNode(line.length > 0 ? line : "​"));
+    return;
+  }
+  const segments = findRepeatedTargetRuns(line);
+  for (const seg of segments) {
+    if (seg.isTargetRun && seg.text.length >= 2) {
+      // 最初の N-1 文字 → グループ別の letter-spacing で per-char span
+      // 最後の 1 文字 → span 外の素テキスト
+      for (let idx = 0; idx < seg.text.length - 1; idx++) {
+        const ch = seg.text[idx];
+        const grp = repeatedTargetGroup(ch);
+        const mag = grp === "dash" ? dashMag : grp === "tilde" ? tildeMag : 0;
+        if (mag > 0) {
+          const span = document.createElement("span");
+          span.style.letterSpacing = `${-mag / 1000}em`;
+          span.textContent = ch;
+          parentEl.appendChild(span);
+        } else {
+          parentEl.appendChild(document.createTextNode(ch));
+        }
+      }
+      parentEl.appendChild(document.createTextNode(seg.text.slice(-1)));
+    } else {
+      parentEl.appendChild(document.createTextNode(seg.text));
+    }
+  }
+}
+
 // inner にテキストを描画する。lineLeadings に override があれば 1 行ずつ <div> に
-// 分けて per-line line-height を当てる。無ければ単一ブロックで描画（軽量）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings) {
+// 分けて per-line line-height を当てる。trackingMille が非ゼロかつテキストに対象記号があれば
+// span ベースで描画して連続記号のツメを反映する。それ以外は単一ブロックで描画（軽量）。
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
   const fallback = String((defaultLeadingPct ?? 125) / 100);
-  if (!overrides) {
-    inner.textContent = text ?? "";
+  const dashMag = Math.abs(Number(dashMille) || 0);
+  const tildeMag = Math.abs(Number(tildeMille) || 0);
+  const fullText = String(text ?? "");
+  // 高速パス：行間 override 無し + tracking 全グループ 0 or テキストに対象記号無し
+  if (!overrides && ((dashMag === 0 && tildeMag === 0) || !REPEATED_TARGET_REGEX.test(fullText))) {
+    inner.textContent = fullText;
     inner.style.lineHeight = fallback;
     return;
   }
-  const lines = String(text ?? "").split(/\r?\n/);
-  // 親自体の line-height はリセット（per-line div 側で個別に当てる）。
+  const lines = fullText.split(/\r?\n/);
   inner.style.lineHeight = fallback;
-  for (let i = 0; i < lines.length; i++) {
-    const lineEl = document.createElement("div");
-    const pct = Number.isFinite(overrides[i]) ? overrides[i] : (defaultLeadingPct ?? 125);
-    lineEl.style.lineHeight = String(pct / 100);
-    // 空行はゼロ幅スペースで高さ/幅を確保（CSS の writing-mode が縦書きでも有効）。
-    lineEl.textContent = lines[i].length > 0 ? lines[i] : "​";
-    inner.appendChild(lineEl);
+  if (overrides) {
+    // per-line line-height + 各行内で tracking 適用
+    for (let i = 0; i < lines.length; i++) {
+      const lineEl = document.createElement("div");
+      const pct = Number.isFinite(overrides[i]) ? overrides[i] : (defaultLeadingPct ?? 125);
+      lineEl.style.lineHeight = String(pct / 100);
+      appendLineWithTracking(lineEl, lines[i], dashMag, tildeMag);
+      inner.appendChild(lineEl);
+    }
+  } else {
+    // tracking のみ：inner 直下に各行を append、行の区切りは <br> で表現
+    for (let i = 0; i < lines.length; i++) {
+      if (i > 0) inner.appendChild(document.createElement("br"));
+      appendLineWithTracking(inner, lines[i], dashMag, tildeMag);
+    }
   }
 }
 

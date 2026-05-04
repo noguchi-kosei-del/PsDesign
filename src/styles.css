@@ -990,6 +990,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   min-height: 0;
   display: flex;
   flex-direction: row;
+  position: relative; /* proofread/editor area の absolute 配置基準 */
 }
 .workspace.flipped .spreads-stage {
   flex-direction: row-reverse;
@@ -1042,28 +1043,39 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .spreads-psd-area[hidden] { display: none; }
 
 /* ===== テキストエディタペイン =====
-   view-mode-segment の "editor" モード時のみ表示。.spreads-pdf-area と隣接する
-   flex: 1 のペインで、左ペイン (proofread overlay 利用) と並ぶ縦 flex column。 */
+   editor モード時に表示される右半分のドロワー。proofread-area と同じく absolute
+   レイヤーで PSD area の上に重なる。.spreads-stage.editor-visible が付くと左から
+   スライドイン（translateX(-200%) → 0 で stage 幅ぶん移動）。 */
 .spreads-editor-area {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 50%;
+  height: 100%;
+  z-index: 10; /* proofread-area (11) より背面 */
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   border-left: 1px solid var(--border);
   background: var(--panel);
+  transform: translateX(-200%);
+  opacity: 0;
+  pointer-events: none;
 }
-.spreads-editor-area[hidden] { display: none; }
+.spreads-stage.editor-visible .spreads-editor-area {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
 
-/* proofread モードは parallel と同じレイアウト（PDF + PSD）。校正パネルは pdf-area 内
-   absolute overlay として出るため pdf-stage 領域だけを覆い、psd 側は通常表示される。
-   サイドバー類は parallel と同じく表示。 */
+/* proofread モードは parallel と同じレイアウト（PDF + PSD）。校正パネルが
+   spreads-proofread-area として PDF 上にスライドオーバーレイ表示される。
+   サイドバー類は parallel と同じく表示。
 
-/* editor モード: 校正パネル（左）+ editor-area（右）の 2 ペイン。
-   pdf-area / psd-area / 側ツールバー / サイドパネル を全て隠して編集に集中。 */
-.workspace.editor-mode .spreads-pdf-area,
-.workspace.editor-mode .spreads-psd-area,
+   editor モード: 校正パネル（左）+ editor-area（右）の 2 ドロワーが PDF/PSD を
+   完全に覆う。サイドツールバー / サイドパネルは編集に集中するため display:none。
+   PDF/PSD area はドロワーが完全に被っているので display:none せず、スライド時の
+   背景として残しておく（パネルが左へ退場する瞬間に PDF/PSD が見える）。 */
 .workspace.editor-mode .side-toolbar,
 .workspace.editor-mode .side-panel {
   display: none !important;
@@ -1330,8 +1342,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   position: absolute;
   bottom: 8px;
   z-index: 2;
-  width: 28px;
-  height: 28px;
+  width: 24px;
+  height: 24px;
   padding: 0;
   background: var(--panel, rgba(40, 40, 40, 0.8));
   border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
@@ -1342,12 +1354,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   justify-content: center;
   cursor: pointer;
 }
+.pdf-rotate-btn svg,
+.psd-rotate-btn svg,
+.psd-guides-lock-btn svg,
+.psd-guides-apply-btn svg {
+  width: 14px;
+  height: 14px;
+}
 .pdf-rotate-btn,
 .psd-rotate-btn { right: 8px; }
-/* ロックボタンは回転ボタンの左隣（28px + 4px gap = 32px ぶん左へ） */
-.psd-guides-lock-btn { right: 44px; }
-/* 「ガイドを複数反映」はロックボタンのさらに左隣（44 + 28 + 8 = 80px） */
-.psd-guides-apply-btn { right: 80px; }
+/* ロックボタンは回転ボタンの左隣（8 + 24 + 8 = 40px ぶん右からのオフセット） */
+.psd-guides-lock-btn { right: 40px; }
+/* 「ガイドを複数反映」はロックボタンのさらに左隣（40 + 24 + 8 = 72px） */
+.psd-guides-apply-btn { right: 72px; }
 
 .pdf-rotate-btn:hover,
 .psd-rotate-btn:hover,
@@ -1876,42 +1895,54 @@ body.frames-hidden .layer-box-new.swap-target {
    24×24 アイコンのみ。TXT 未読込時の save/reload グレーアウトとは独立に常時アクティブな
    見た目を保つため、デフォルト色を muted ではなく通常 text 色にしている。
    aria-pressed="true" で accent 塗り。 */
-/* 校正パネル — editor モード時に .spreads-proofread-area に flex で全域表示。 */
-/* 校正パネル: モードに応じて 2 通りの配置を切り替える単一 DOM。
-   - .proofread-overlay: spreads-pdf-area 内 absolute overlay（proofread モード）
-   - .proofread-pane:    spreads-proofread-area 内 flex pane（editor モード）
-   bindParallelViewMode が proofread-panel の親と class を切替える。 */
+/* 校正パネル — proofread / editor モードどちらでも .spreads-proofread-area の中身として
+   表示される単一 DOM。pane の中で flex column を埋める。proofread モードでは親の
+   .spreads-proofread-area が PDF area の上に重なるドロワーとなり、editor モードでは
+   editor-area と並んで stage 全体を覆う。 */
 .proofread-panel {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   background: var(--panel-body);
   display: flex;
   flex-direction: column;
   overflow: hidden;
 }
-.proofread-panel.proofread-overlay {
-  position: absolute;
-  inset: 0;
-  z-index: 50;
-}
-.proofread-panel.proofread-pane {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
 .proofread-panel[hidden] { display: none; }
 
-/* editor モード時の左ペイン。proofread-panel が flex pane として中に乗る。 */
+/* 校正パネル ドロワー（左半分、PDF area の上に重なる absolute レイヤー）。
+   proofread モード / editor モードのどちらでも左半分に表示される。
+   .spreads-stage に .proofread-visible / .editor-visible が付くと
+   左からスライドイン（ハンバーガーメニュー風）。
+   transition は viewer-mode 用の共有ルール（body:not(.viewer-mode) ...）が
+   transform / opacity 両方を扱うので、ここでは値だけ設定する。 */
 .spreads-proofread-area {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 50%;
+  height: 100%;
+  z-index: 11; /* .spreads-editor-area (10) より前面に置きスライド中の重複を吸収 */
   display: flex;
   flex-direction: column;
   overflow: hidden;
   border-right: 1px solid var(--border);
   background: var(--panel-body);
+  transform: translateX(-100%);
+  opacity: 0;
+  pointer-events: none;
 }
-.spreads-proofread-area[hidden] { display: none; }
+.spreads-stage.proofread-visible .spreads-proofread-area,
+.spreads-stage.editor-visible .spreads-proofread-area {
+  transform: translateX(0);
+  opacity: 1;
+  pointer-events: auto;
+}
+.workspace.flipped .spreads-proofread-area {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
 /* 読込済み JSON のフォルダ名 / 巻数を panel-header と body の間に表示。
    results ビュー時のみ proofread.js が hidden 属性を外す。 */
 .proofread-meta {
@@ -4623,7 +4654,8 @@ body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
 .spreads-editor-area {
   transition:
     opacity 0.18s ease,
-    visibility 0s linear 0.18s;
+    visibility 0s linear 0.18s,
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 body.viewer-mode .toolbar {
   opacity: 0 !important;
@@ -4660,7 +4692,8 @@ body.viewer-mode .spreads-editor-area {
   border: none !important;
   overflow: hidden !important;
 }
-/* fade in 時は visibility を即座に元に戻す（待ってから可視化すると遅延が見えるため）。 */
+/* fade in 時は visibility を即座に元に戻す（待ってから可視化すると遅延が見えるため）。
+   transform もここで含めておくことで view-mode 切替の slide transition が壊れないようにする。 */
 body:not(.viewer-mode) .toolbar,
 body:not(.viewer-mode) .side-toolbar,
 body:not(.viewer-mode) .side-panel,
@@ -4669,7 +4702,8 @@ body:not(.viewer-mode) .spreads-proofread-area,
 body:not(.viewer-mode) .spreads-editor-area {
   transition:
     opacity 0.18s ease,
-    visibility 0s linear 0s;
+    visibility 0s linear 0s,
+    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
 /* PSD ペイン上のオーバーレイ（回転ボタン / ガイドロック / ガイド反映 / ルーラー / ガイド） */

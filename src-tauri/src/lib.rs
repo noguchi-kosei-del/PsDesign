@@ -77,6 +77,12 @@ pub struct EditPayload {
     pub save_mode: Option<String>,
     #[serde(rename = "targetDir", default)]
     pub target_dir: Option<String>,
+    // 連続記号のツメ（‰）。0 = OFF、負値（または絶対値）で詰まる。新規レイヤーのみ JSX で適用。
+    // dash 系（— ― – ‒ ‐ ‑ ー －）と tilde 系（〜 ～）で別々の値を持てる。
+    #[serde(rename = "dashTrackingMille", default)]
+    pub dash_tracking_mille: f64,
+    #[serde(rename = "tildeTrackingMille", default)]
+    pub tilde_tracking_mille: f64,
 }
 
 #[derive(Debug, Serialize)]

@@ -1,4 +1,4 @@
-import { getDefaults } from "./settings.js";
+import { getDefault, getDefaults } from "./settings.js";
 
 // 単純な observable スロット (tool, textSize, leadingPct, currentFont, stroke/fill,
 // zoom, rotation, pdfPageIndex, pdfSplitMode, pdfSkipFirstBlank, parallelSyncMode,
@@ -452,7 +452,14 @@ export function exportEdits() {
     ensure(psdPath).newLayers.push(sanitizeNumericFields(rest));
   }
 
+  // 連続記号のツメ（環境設定の global 値）。新規レイヤー（newLayers）にだけ JSX 側で適用する。
+  // 既存レイヤー（layers / edits）は触らない方針。0 のとき機能 OFF。dash/tilde グループ別。
+  const dashTrackingMille = Number(getDefault("dashTrackingMille")) || 0;
+  const tildeTrackingMille = Number(getDefault("tildeTrackingMille")) || 0;
+
   return {
+    dashTrackingMille,
+    tildeTrackingMille,
     edits: Array.from(byPsd.entries()).map(([psdPath, { layers, newLayers }]) => ({
       psdPath,
       layers,

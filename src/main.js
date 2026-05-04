@@ -17,7 +17,7 @@ import { bindAiOcrButton } from "./ai-ocr.js";
 import { bindAiPlaceButton } from "./ai-place.js";
 import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
-import { bindProofreadUi, openProofread, closeProofread } from "./proofread.js";
+import { bindProofreadUi, openProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import {
   confirmDialog,
@@ -999,12 +999,11 @@ function bindParallelViewMode() {
   const parallelBtn = document.getElementById("view-parallel-btn");
   const proofreadBtn = document.getElementById("view-proofread-btn");
   const editorBtn = document.getElementById("view-editor-btn");
-  const pdfArea = document.getElementById("spreads-pdf-area");
-  const psdArea = document.getElementById("spreads-psd-area");
-  const editorArea = document.getElementById("spreads-editor-area");
+  // ドロワー要素は CSS で制御するため bind は不要だが、初期 DOM の存在確認だけ行う。
   const proofreadArea = document.getElementById("spreads-proofread-area");
+  const editorArea = document.getElementById("spreads-editor-area");
   const proofreadPanel = document.getElementById("proofread-panel");
-  if (!parallelBtn || !proofreadBtn || !editorBtn || !pdfArea || !psdArea || !editorArea || !proofreadArea || !proofreadPanel) return;
+  if (!parallelBtn || !proofreadBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
 
   try {
     const saved = localStorage.getItem(VIEW_MODE_LS_KEY);
@@ -1018,15 +1017,16 @@ function bindParallelViewMode() {
   editorBtn.addEventListener("click", () => setParallelViewMode("editor"));
 
   // 3 モード構成:
-  //   parallel:  PDF + PSD（サイドバー類 表示、proofread 閉じる）
-  //   proofread: PDF + PSD（parallel と同レイアウト）+ pdf-stage 上に校正パネル overlay
-  //   editor:    校正パネル（左）+ エディタ（右）の 2 ペイン。pdf / psd / サイドバー類 非表示
+  //   parallel:  PDF + PSD のみ（proofread / editor ドロワーはどちらも左へ格納）
+  //   proofread: PDF + PSD + 校正パネルが左半分にスライドオーバーレイ（PDF area の上）
+  //   editor:    PDF/PSD は背景に残し、校正パネル（左）+ エディタ（右）が左からスライドして覆う
+  //              サイドバー類は display:none（編集に集中、本リクエスト対象外）
   //
-  // proofread-panel は単一 DOM。mode によって配置先と class を切替える:
-  //   - proofread モード: pdfArea 内 absolute overlay（.proofread-overlay、pdf-stage 領域のみを覆う）
-  //   - editor モード:    proofreadArea 内 flex pane（.proofread-pane）
-  //   - parallel モード:  pdfArea 内に置いておく（hidden 属性で非表示）
+  // proofread-panel は #spreads-proofread-area 内に固定配置。モード切替で DOM を移動しない。
+  // ドロワーの slide-in/out は CSS の transform transition + visibility で実装され、
+  // .spreads-stage に付ける `proofread-visible` / `editor-visible` クラスで制御する。
   const workspace = document.querySelector(".workspace");
+  const stage = document.getElementById("spreads-stage");
   const sync = () => {
     const mode = getParallelViewMode();
     const showEditor = mode === "editor";
@@ -1035,12 +1035,11 @@ function bindParallelViewMode() {
       workspace.classList.toggle("editor-mode", showEditor);
       workspace.classList.toggle("proofread-mode", showProofread);
     }
-    // proofread モードは parallel と同レイアウト（pdf + psd 並び）。
-    // proofread overlay は pdfArea 内に出るので pdf-stage 領域のみ覆う。
-    pdfArea.toggleAttribute("hidden", showEditor);
-    psdArea.toggleAttribute("hidden", showEditor);
-    editorArea.toggleAttribute("hidden", !showEditor);
-    proofreadArea.toggleAttribute("hidden", !showEditor);
+    // ドロワー表示クラス。proofread / editor どちらでも proofread-area は表示する。
+    if (stage) {
+      stage.classList.toggle("proofread-visible", showProofread || showEditor);
+      stage.classList.toggle("editor-visible", showEditor);
+    }
     parallelBtn.classList.toggle("active", mode === "parallel");
     proofreadBtn.classList.toggle("active", mode === "proofread");
     editorBtn.classList.toggle("active", mode === "editor");
@@ -1049,25 +1048,12 @@ function bindParallelViewMode() {
     editorBtn.setAttribute("aria-pressed", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
 
-    // proofread-panel の親と class を mode に応じて切替える。
-    if (showEditor) {
-      // editor モード → 左ペインの spreads-proofread-area へ flex pane として配置
-      if (proofreadPanel.parentElement !== proofreadArea) {
-        proofreadArea.appendChild(proofreadPanel);
-      }
-      proofreadPanel.classList.add("proofread-pane");
-      proofreadPanel.classList.remove("proofread-overlay");
-      openProofread();
-    } else {
-      // parallel / proofread モード → pdfArea 内に absolute overlay として配置
-      if (proofreadPanel.parentElement !== pdfArea) {
-        pdfArea.appendChild(proofreadPanel);
-      }
-      proofreadPanel.classList.add("proofread-overlay");
-      proofreadPanel.classList.remove("proofread-pane");
-      if (showProofread) openProofread();
-      else closeProofread();
-    }
+    // 校正パネルの内部状態（panel 表示）を確保。parent (.spreads-proofread-area) の
+    // opacity / transform で実際の表示制御を行うため、panel 自体は閉じない（閉じると
+    // スライドアウト中に内容が瞬時に display:none になり、空のドロワーが滑る不格好な
+    // アニメになる）。closeProofread は呼ばない。
+    if (showProofread || showEditor) openProofread();
+
     if (showEditor) focusEditor();
   };
   onParallelViewModeChange(sync);

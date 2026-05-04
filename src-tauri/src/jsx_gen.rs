@@ -136,7 +136,12 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             }
             out.push_str("},\n");
         }
-        out.push_str(&format!("], {});\n", js_string(&save_path)));
+        out.push_str(&format!(
+            "], {}, {}, {});\n",
+            js_string(&save_path),
+            payload.dash_tracking_mille,
+            payload.tilde_tracking_mille
+        ));
         out.push_str("    __saveOk++;\n");
         out.push_str("  } catch (eFile) {\n");
         out.push_str(&format!(
@@ -508,6 +513,126 @@ function applyLineLeadings(layer, lineLeadings, contents, fontSizePt) {
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
+// ===== 連続記号「— ― 〜 ～」の自動ツメ =====
+// 連続したラン（length >= 2）の最初の N-1 文字に tracking を当てる。最後の 1 文字は
+// ツメない（次の通常文字との字間が詰まりすぎないように。プレビュー側 CSS の挙動と一致）。
+// 既に textStyleRange が複数あれば（例：applyLineLeadings 後）、各範囲ごとに baseStyle を
+// 引き継いで tracking を上書きするため、行ごとの行間と併用しても情報を失わない。
+function applyRepeatedDashTracking(layer, contents, dashMille, tildeMille) {
+  var dashTrack = -Math.abs(dashMille || 0);
+  var tildeTrack = -Math.abs(tildeMille || 0);
+  if (dashTrack === 0 && tildeTrack === 0) return;
+  // 対象文字を char code で判定。regex の Unicode リテラルは ExtendScript のファイル
+  // エンコーディング（既定 Shift_JIS / Win JP）に左右されるため、char code 直接指定で安全に。
+  // dash:  — U+2014 / ― U+2015 / – U+2013 / ‒ U+2012 / ‐ U+2010 / ‑ U+2011 / ー U+30FC / － U+FF0D
+  // tilde: 〜 U+301C / ～ U+FF5E
+  function charGroup(s) {
+    var c = s.charCodeAt(0);
+    if (c === 0x2014 || c === 0x2015 || c === 0x2013 || c === 0x2012 ||
+        c === 0x2010 || c === 0x2011 || c === 0x30FC || c === 0xFF0D) return "dash";
+    if (c === 0x301C || c === 0xFF5E) return "tilde";
+    return null;
+  }
+  function isTargetChar(s) { return charGroup(s) !== null; }
+
+  var fullText = String(contents);
+  if (fullText.length === 0) return;
+
+  // 各 char に当てる tracking 値（0 = ツメなし）。連続ランの最後の 1 文字は常に 0。
+  var trackingPerChar = [];
+  for (var p0 = 0; p0 < fullText.length; p0++) trackingPerChar[p0] = 0;
+  var i = 0;
+  var anyTracked = false;
+  while (i < fullText.length) {
+    if (isTargetChar(fullText.charAt(i))) {
+      var j = i;
+      while (j < fullText.length && isTargetChar(fullText.charAt(j))) j++;
+      // ラン長 N >= 2 のとき、最初の N-1 文字に group 別の tracking を当てる
+      if (j - i >= 2) {
+        for (var k = i; k < j - 1; k++) {
+          var grp = charGroup(fullText.charAt(k));
+          var v = grp === "dash" ? dashTrack : grp === "tilde" ? tildeTrack : 0;
+          if (v !== 0) {
+            trackingPerChar[k] = v;
+            anyTracked = true;
+          }
+        }
+      }
+      i = j;
+    } else {
+      i++;
+    }
+  }
+  if (!anyTracked) return;
+
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  // 各 char index がどの old range に属するかを記録
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  // (srcRangeIndex, trackingValue) が連続している区間に圧縮し、textStyleRange を再構築
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curTrack = trackingPerChar[0] || 0;
+
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextTrack, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc;
+      nextTrack = curTrack;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextTrack = trackingPerChar[p] || 0;
+      boundary = (nextSrc !== curSrc) || (nextTrack !== curTrack);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      try {
+        styleClone.putInteger(sID("tracking"), curTrack);
+      } catch (eTrack) {}
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), p);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curTrack = nextTrack;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  // class は "textLayer" (charID "TxtL") を指定。"textKey" を指定すると Photoshop が
+  // 渡された textStyleRange を破棄して既存値を保持するケースがあるため、tracking のような
+  // per-character スタイル変更は "textLayer" class で set する必要がある。
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
 function disableStrokeEffect(layerRef) {
   app.activeDocument.activeLayer = layerRef;
   var desc = new ActionDescriptor();
@@ -523,7 +648,7 @@ function disableStrokeEffect(layerRef) {
   try { executeAction(sID("set"), desc, DialogModes.NO); } catch (e) {}
 }
 
-function applyToPsd(psdPath, edits, newLayers, savePath) {
+function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[PsDesign] skip missing: " + psdPath); return; }
   var prevUnits = app.preferences.rulerUnits;
@@ -681,6 +806,23 @@ function applyToPsd(psdPath, edits, newLayers, savePath) {
             applyLineLeadings(layerRef, nl.lineLeadings, nti.contents, __szNew);
           } catch (eLineLeadNew) {
             addWarning("新規レイヤーの行ごとの行間適用に失敗: " + eLineLeadNew);
+          }
+        }
+        // 連続記号のツメ（環境設定の global 値）。新規レイヤーのみ。
+        // 負値・正値どちらでも「絶対値ぶん詰める」セマンティクスに統一（ユーザー混乱を吸収）。
+        // dash 系と tilde 系で別々の値を per-char に当てる。
+        var __hasDashTrack = typeof dashTrackingMille === "number" && dashTrackingMille !== 0;
+        var __hasTildeTrack = typeof tildeTrackingMille === "number" && tildeTrackingMille !== 0;
+        if (__hasDashTrack || __hasTildeTrack) {
+          try {
+            applyRepeatedDashTracking(
+              layerRef,
+              nti.contents,
+              __hasDashTrack ? dashTrackingMille : 0,
+              __hasTildeTrack ? tildeTrackingMille : 0
+            );
+          } catch (eDashTrack) {
+            addWarning("連続記号のツメ適用に失敗: " + eDashTrack);
           }
         }
         if (typeof nl.rotation === "number" && nl.rotation !== 0) {
