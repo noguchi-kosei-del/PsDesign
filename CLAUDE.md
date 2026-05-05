@@ -2467,3 +2467,115 @@ H1. **`.psd-rulers` を bar 高さぶん下げる** ([src/styles.css](src/styles
 > - 旧: ルーラー有効時 ruler-top がバーの下に隠れる → 新: `.psd-rulers` 自体を bar 高さぶん下げてバー直下から目盛り開始
 > - 旧: layer-list は overflow:auto 設定だが grid/flex の min-height: 0 連鎖が壊れてスクロールできない → 新: `.workspace { grid-template-rows: 1fr; min-height: 0 }` + `.side-panel { min-height: 0; height: 100% }` + `.editor[hidden] { display: none }` + `.layer-list { flex: 1 1 0; min-height: 0; overflow-y: scroll }` の 4 連鎖修正で確実にスクロール
 
+---
+
+## v1.13.0: 初回起動セットアップ + ステージラベルバー常時表示 + 閲覧モードアニメ刷新
+
+### A. 初回起動セットアップ画面（ウェルカム → AI インストール導線）
+
+A1. **新規モジュール [src/first-run-setup.js](src/first-run-setup.js)** — アプリ初回起動時に AI（manga-ocr / comic-text-detector）インストールへ誘導するウェルカムモーダルを実装。
+- `bindFirstRunSetup()` — モーダル DOM のイベント配線（init() で 1 度だけ呼ぶ）
+- `maybeShowFirstRunSetup()` — フラグと AI 状態を判定して必要なら表示。`init()` 末尾で await せずに呼び出し（モーダルは UI に乗るだけで他処理を遅らせない）。
+- localStorage キー: `psdesign_setup_seen`。一度立てたら永続的にスキップ（再表示しない）。
+
+A2. **判定ロジック**:
+1. `psdesign_setup_seen === "1"` なら即終了
+2. `await checkAiModelsStatus()` が `available: true` を返したら、ウェルカムは出さずに静かにフラグを立てて終了（既に AI インストール済み環境の初回起動を煩わせない）
+3. それ以外（AI 未インストール + フラグなし）→ ウェルカムモーダル表示
+
+A3. **ウェルカムモーダル UI** ([index.html](index.html) + [src/styles.css](src/styles.css)):
+- ロゴ（`/PsDesign_icon.png` 96px）+ 「PsDesign へようこそ」 + 説明文（manga-ocr / comic-text-detector 紹介 + 「ダウンロード約 3GB / 所要 10〜20 分」）
+- 2 ボタン: `[あとで]` `[今すぐインストール]`（後者は accent 色 primary スタイル）
+- z-index: 220（既存 `.ai-install-modal` 200 より上、`.file-picker-modal` 250 より下）
+- 既存の `showModalAnimated` / `hideModalAnimated` ([src/ui-feedback.js](src/ui-feedback.js)) によるフェード+スケールアニメ
+
+A4. **動線**:
+- 「今すぐインストール」 → `markSeen()` → `hideModalAnimated(welcome)` → `await setTimeout(MODAL_ANIM_MS)` で close アニメ完了を待つ → `openAiInstallModal()`（ai-install.js から export 化）を呼ぶ → 既存 AI インストールフロー
+- 「あとで」 / Esc / 背景クリック → `markSeen()` + close アニメ
+- いずれの閉じ方も `localStorage.setItem(SETUP_SEEN_KEY, "1")` でフラグ立て
+
+A5. **`openAiInstallModal` を export 化** ([src/ai-install.js](src/ai-install.js):331): 元はモジュール内部関数だったため、first-run-setup.js から import で呼べるように `export async function openAiInstallModal()` に変更。`bindAiInstallMenu` 内のクリックハンドラはそのままなのでハンバーガーメニュー経由の動線に影響なし。
+
+A6. **触らない領域**: ハンバーガーメニューの「AIインストール」ボタン (`#ai-install-btn`) と赤バッジ (`#ai-install-menu-badge`) は完全に無変更。フラグ立て後も常時アクセス可能で、再インストール導線として温存。Rust 側 (`check_ai_models` / `install_ai_models` / `cancel_ai_install`) と PowerShell スクリプトも一切変更なし。
+
+### B. ステージラベルバーを読込前から常時表示（ボタンは disabled）
+
+B1. **問題**: `stage-label-bar` は中身（ファイル名）が空のとき `:has(.stage-label-text:empty) { display: none }` で完全非表示になっていた。読込前と読込後でペイン上部のレイアウトが変動し、また回転/ガイド系の操作対象がない状態がユーザーに見えなかった。
+
+B2. **`:has` ルール撤去** ([src/styles.css](src/styles.css)): `display: none` を解除し、ラベルが空でもバーは常時表示。`viewer-mode` 時の非表示は別途 `body.viewer-mode #pdf-stage-label-bar / #psd-stage-label-bar { ... }` で従来通り制御。
+
+B3. **4 ボタンを `disabled` で初期状態にグレーアウト** ([index.html](index.html)): `#pdf-rotate-btn` / `#psd-rotate-btn` / `#psd-guides-lock-btn` / `#psd-guides-apply-btn` の初期属性を `hidden` → `disabled` に変更。グローバル `button:disabled { opacity: 0.5; cursor: not-allowed }` ルールでグレー表示される。
+
+B4. **JS 側の visibility ロジック更新** ([src/main.js](src/main.js)):
+- `bindPdfWorkspaceToggle` / `updatePsdRotateVisibility`: `btn.hidden = ...` を `btn.disabled = ...` に変更（読込前は disabled）
+- `bindPsdGuidesLock` / `updatePsdGuidesLockVisibility`: `hidden` はルーラー OFF のときのみ（機能トグル）、PSD 未読込・ガイド無しは `disabled` で表現
+- `updatePsdGuidesApplyVisibility`: 同様。さらにツールチップを状態別に分岐（`PSD を読み込んでください` / `反映先のページがありません` / `現在のページにガイドが引かれていません` / `ガイドをロックすると反映できます` / 通常文言）
+
+B5. **ホーム復帰時の同期** ([src/hamburger-menu.js](src/hamburger-menu.js)): `goHome()` 内 `clearPages()` 後に `window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"))` を発火。これで [src/main.js](src/main.js) の listener が走り、`updatePageNav` / `updatePsdRotateVisibility` / `updatePsdGuidesLockVisibility` / `updatePsdGuidesApplyVisibility` が一括再評価され、ボタンが正しく disabled に戻る。`psdesign:psd-loaded` イベント名は元々 PSD 読込時のトリガーだが、「PSD state changed」を示す統合シグナルとして再利用（ホーム復帰でも同じ UI 同期処理が走るのが正解）。
+
+### C. プログレスバー背景の不透明度強化
+
+C1. **`#progress-modal .progress-bg` の `background`** ([src/styles.css](src/styles.css)): `rgba(0, 0, 0, 0.18)` → `rgba(0, 0, 0, 0.4)`。blur 14px は維持。dim を強めることで進捗中であることがより明確に。他のモーダル（confirm / settings / file-picker 等）には影響なし（ID スコープ限定）。
+
+### D. 閲覧モードのアニメーション全面リライト
+
+v1.9.0 H1/H2 で「opacity のみフェード、レイアウトは瞬時 snap」に最適化した結果、サイドパネルが「ぶちっと消える」印象になっていたのを段階的に改善。
+
+D1. **第一段階: opacity + transform スライドの併用** ([src/styles.css](src/styles.css)): 入場時にサイドパネル等を以下の transform で軽くスライドさせながらフェード:
+- `body.viewer-mode .toolbar { transform: translateY(-12px) }` — 上に消える
+- `body.viewer-mode .side-toolbar { transform: translateX(-16px) }` — 左に消える
+- `body.viewer-mode .side-panel { transform: translateX(16px) }` — 右に消える
+- `.spreads-pdf-area / proofread-area / editor-area` は既存の drawer slide transform と競合するため transform は付けず opacity のみ
+
+D2. **第二段階: PSD 中央移動のラグ解消**: 当初はレイアウト系プロパティ（width / height / padding / flex-basis）に `transition-delay: 0.3s` を入れて「フェード完了後にレイアウト snap」していたが、これだと PSD ペインが中央に移動するのが 0.3s 遅れて見えた。
+- 修正: レイアウトプロパティも opacity と同じ `0.3s cubic-bezier(0.4, 0, 0.2, 1)` で同時アニメさせる。サイドパネルが滑らかに 0 へ縮みつつ、PSD ペインが flex で同期して中央へ寄る動きに。
+- 退場時 (`body:not(.viewer-mode)`) も同パターン。レイアウトと opacity が逆再生で同期。
+- `visibility` / `overflow` だけは離散プロパティなので入場時 `0s linear 0.3s` (delay snap)、退場時 `0s linear 0s` (即復元) のまま。
+- canvas redraw は spread-view の rAF 合流で 60fps 追従、0.3s 限定の連続 reflow も体感ラグなし。
+
+D3. **第三段階: PSD「奥から手前にくる」演出** ([src/styles.css](src/styles.css)): `body.viewer-mode .workspace .psd-stage` に `@keyframes psd-bring-forward` を追加:
+
+```css
+@keyframes psd-bring-forward {
+  from { transform: scale(0.92); opacity: 0.55; }
+  to   { transform: scale(1);    opacity: 1;    }
+}
+```
+
+`animation: psd-bring-forward 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;`
+- 開始フレーム（scale 0.92 + opacity 0.55）が即時適用 → 0.45s で scale 1 / opacity 1 に到達
+- レイアウト拡張 (0.3s) より少し長めにすることで、エリアが広がりきった後も最後の一押しでズームインが完了する印象
+- ease-out 強め (`cubic-bezier(0.16, 1, 0.3, 1)`) で「奥からグイッと寄ってくる」減速感
+- `transform-origin: center center` でセンター起点にスケール
+- 退場時: `body.viewer-mode` クラスが外れた瞬間にアニメ rule が無効化され、`.psd-stage` は base 状態（transform なし = scale 1 / opacity 1）にスナップ。視覚的な逆再生 snap は発生しない。
+
+### E. F1 での閲覧モード終了を撤去（Esc 専用に固定）
+
+E1. **問題**: F1（または環境設定でカスタマイズしたショートカット）が toggle で動作していたため、閲覧モード中に F1 を押すと意図せず終了する事故があった。
+
+E2. **修正** ([src/viewer-mode.js](src/viewer-mode.js):97): `toggle()` 関数を「起動のみ」に変更:
+
+```js
+function toggle() {
+  if (!isActive) enter();
+  // isActive のときは no-op（Esc / 右上 × ボタンが唯一の終了手段）
+}
+```
+
+これで影響を受ける経路:
+- F1 ショートカット (`bindViewerMode` 内の capture-phase keydown listener) → 閲覧モード中に押しても無反応
+- ヘッダーの閲覧モードボタン → 元々閲覧モード中はトールバー自体が非表示なので変更前後で挙動同一
+- 環境設定でカスタマイズした任意のキー → 同様、起動のみ
+- 終了手段は **Esc / 右上 × ボタン** のみに固定
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.13.0`** に揃え。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: 新規ユーザーが AI 機能の存在に気付かず、画像スキャン押下時に notifyDialog で停止 → 新: 初回起動時にウェルカム画面が出て manga-ocr / comic-text-detector のインストールへ誘導。`psdesign_setup_seen` フラグで一度きり、ハンバーガーメニュー再インストールは温存
+> - 旧: ステージ上部のラベルバーは中身が空のとき `display: none` で完全非表示、4 つのアクションボタンも `hidden` 属性で見えなかった → 新: バー常時表示、ボタンは `disabled` でグレーアウト、ホーム復帰時も `psdesign:psd-loaded` イベントで状態同期
+> - 旧: progress-modal の背景 dim は `rgba(0,0,0,0.18)` で薄め → 新: `rgba(0,0,0,0.4)` で進捗中である視覚的合図を強化
+> - 旧: 閲覧モードは opacity のみフェード + レイアウト瞬時 snap で「ぶちっと消える」印象 → 新: opacity + transform スライド + レイアウトを同時 0.3s アニメで滑らかに、さらに PSD 自体は `@keyframes psd-bring-forward` で scale 0.92 → 1 に「奥から手前へ寄ってくる」ズームイン演出
+> - 旧: F1 で閲覧モードを toggle（誤って終了する事故あり） → 新: F1 / ショートカットは起動のみ、終了は Esc / 右上 × 専用
+

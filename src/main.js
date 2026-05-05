@@ -13,6 +13,7 @@ import {
 } from "./text-editor.js";
 import { deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { bindAiInstallMenu } from "./ai-install.js";
+import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
 import { bindAiPlaceButton } from "./ai-place.js";
 import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
@@ -137,10 +138,11 @@ async function handleOpenPdf() {
 }
 
 function bindPdfWorkspaceToggle() {
-  // PDF エリアは常時表示（未読込時は empty state を見せる）。回転ボタンだけ doc 有無で切替。
+  // PDF エリアは常時表示（未読込時は empty state を見せる）。
+  // 回転ボタンも常時表示し、doc 未読込時は disabled でグレーアウト。
   const rotateBtn = document.getElementById("pdf-rotate-btn");
   const apply = (doc) => {
-    if (rotateBtn) rotateBtn.hidden = !doc;
+    if (rotateBtn) rotateBtn.disabled = !doc;
   };
   onPdfChange(apply);
   apply(null);
@@ -165,7 +167,7 @@ function bindPsdRotate() {
 function updatePsdRotateVisibility() {
   const btn = document.getElementById("psd-rotate-btn");
   if (!btn) return;
-  btn.hidden = getPages().length === 0;
+  btn.disabled = getPages().length === 0;
 }
 
 function bindPsdGuidesLock() {
@@ -177,10 +179,10 @@ function bindPsdGuidesLock() {
     btn.title = locked ? "ガイドのロック解除" : "ガイドをロック";
     btn.setAttribute("aria-label", btn.title);
   };
-  // ガイドが 1 本も引かれていなければボタンをグレーアウト（ロック対象がないため）。
-  // 表示/非表示はルーラー有無 + PSD 有無で別途制御。
+  // PSD 未読込 or ガイドが 1 本も無い場合は disabled でグレーアウト。
+  // 表示/非表示はルーラー ON/OFF のみで制御（読込前でもバー上にボタンは出す）。
   const syncDisabled = () => {
-    btn.disabled = !hasAnyGuide();
+    btn.disabled = getPages().length === 0 || !hasAnyGuide();
   };
   btn.addEventListener("click", () => toggleGuidesLocked());
   onGuidesLockedChange(syncPressed);
@@ -188,9 +190,9 @@ function bindPsdGuidesLock() {
   onPageIndexChange(syncDisabled); // ページ切替で対象 PSD のガイド有無が変わる
   syncPressed();
   syncDisabled();
-  // ガイド表示と連動して表示/非表示。ルーラー OFF または PSD 未読込時は隠す。
+  // ルーラー OFF のときだけ完全非表示（機能トグル）。読込前は disabled で見せる。
   const updateVis = () => {
-    btn.hidden = !getRulersVisible() || getPages().length === 0;
+    btn.hidden = !getRulersVisible();
   };
   onRulersVisibleChange(updateVis);
   updateVis();
@@ -200,8 +202,8 @@ function bindPsdGuidesLock() {
 function updatePsdGuidesLockVisibility() {
   const btn = document.getElementById("psd-guides-lock-btn");
   if (!btn) return;
-  btn.hidden = !getRulersVisible() || getPages().length === 0;
-  btn.disabled = !hasAnyGuide();
+  btn.hidden = !getRulersVisible();
+  btn.disabled = getPages().length === 0 || !hasAnyGuide();
 }
 
 // 「ガイドを複数反映」ボタン: ロックボタンと同じく ルーラー ON + PSD 読込済 で可視。
@@ -222,17 +224,23 @@ function bindPsdGuidesApply() {
 function updatePsdGuidesApplyVisibility() {
   const btn = document.getElementById("psd-guides-apply-btn");
   if (!btn) return;
-  // 1 ページしか無い場合は反映先が存在しないので非表示。
-  btn.hidden = !getRulersVisible() || getPages().length < 2;
-  // 有効条件: 現ページにガイドあり、かつ ガイドロック中。
+  // ルーラー OFF のときだけ完全非表示（機能トグル）。読込前 / 1 ページしか無い場合は disabled で見せる。
+  btn.hidden = !getRulersVisible();
+  // 有効条件: PSD 2 ページ以上 + 現ページにガイドあり + ガイドロック中。
+  const pageCount = getPages().length;
+  const tooFewPages = pageCount < 2;
   const noGuides = !hasAnyGuide();
   const notLocked = !getGuidesLocked();
-  btn.disabled = noGuides || notLocked;
-  btn.title = noGuides
-    ? "現在のページにガイドが引かれていません"
-    : (notLocked
-      ? "ガイドをロックすると反映できます"
-      : "ガイドを複数ページに反映");
+  btn.disabled = tooFewPages || noGuides || notLocked;
+  btn.title = pageCount === 0
+    ? "PSD を読み込んでください"
+    : (tooFewPages
+      ? "反映先のページがありません"
+      : (noGuides
+        ? "現在のページにガイドが引かれていません"
+        : (notLocked
+          ? "ガイドをロックすると反映できます"
+          : "ガイドを複数ページに反映")));
   btn.setAttribute("aria-label", btn.title);
 }
 
@@ -1536,6 +1544,7 @@ function init() {
   bindPageJumpDialog();
   initTxtSource();
   bindAiInstallMenu();
+  bindFirstRunSetup();
   bindAiOcrButton();
   bindAiPlaceButton();
   bindProofreadUi();
@@ -1585,6 +1594,9 @@ function init() {
     updatePsdGuidesLockVisibility();
     updatePsdGuidesApplyVisibility();
   });
+  // 初回起動セットアップ画面: AI 未インストール かつ 未スキップの初回のみ表示。
+  // await しない: 内部の checkAiModelsStatus は非同期だが他の起動処理を遅らせない。
+  maybeShowFirstRunSetup();
 }
 
 // INPUT/TEXTAREA/contenteditable 以外をクリックしたら、現在フォーカス中のテキスト入力から

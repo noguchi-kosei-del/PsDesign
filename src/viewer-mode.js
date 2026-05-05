@@ -94,9 +94,11 @@ export function bindViewerMode() {
   );
 }
 
+// 閲覧モードのキーボード/ボタン経由のエントリポイント。
+// 仕様: 起動のみ。終了は Esc に固定（F1 等のショートカット連打で意図せず抜けるのを防ぐ）。
 function toggle() {
-  if (isActive) exit();
-  else enter();
+  if (!isActive) enter();
+  // isActive のときは no-op（Esc / 右上 × ボタンが唯一の終了手段）
 }
 
 // runShortcut からも呼べる外部 API。bindViewerMode 未呼出の段階や、

@@ -1830,11 +1830,7 @@ body.frames-hidden .layer-box-new.swap-target {
   align-items: center;
   gap: 4px;
 }
-/* テキスト未設定（見本未読込・PSD 未読込）のときは visual noise を避けるため
-   バー自体を非表示。:has() で動的に切り替える（HMR 即反映）。 */
-.stage-label-bar:has(.stage-label-text:empty) {
-  display: none;
-}
+/* バー自体は読込前でも常時表示し、ラベルは空・ボタンは disabled でグレーアウトさせる。 */
 
 .side-panel {
   width: 280px;
@@ -3236,7 +3232,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   -webkit-backdrop-filter: blur(14px);
 }
 #progress-modal .progress-bg {
-  background: rgba(0, 0, 0, 0.18);
+  background: rgba(0, 0, 0, 0.4);
 }
 
 #progress-modal .progress-card {
@@ -4873,10 +4869,16 @@ body.viewer-mode #viewer-mode-btn {
 }
 body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
 
-/* ヘッダー / サイドバー / 他ペインを fade out。
-   レイアウトを動かす width / height / padding / border はトランジションさせない（毎フレーム
-   reflow + spreads-psd-area の ResizeObserver による canvas 再描画で重くなるため）。
-   opacity のみを GPU 合成で軽く流し、レイアウトは 0 寸法に瞬時スナップする。 */
+/* ヘッダー / サイドバー / 他ペインを fade out / fade in。
+   仕様（v1.13.0 でなめらかさ強化、PSD 中央移動のラグ解消版）:
+     - opacity は 0.3s でなめらかにフェード
+     - 軽い transform スライドを併用（toolbar = 上、side-toolbar = 左、side-panel = 右）
+     - レイアウト系（width / height / padding / flex-basis）も 0.3s でアニメさせ、
+       PSD ペインが flex で自然に育つ動きを opacity と完全同期させる。
+       canvas redraw は spread-view 側で rAF 合流するため 60fps 追従で済み、
+       0.3s 限定の連続 reflow も体感的に問題ない（v1.9.0 で見送った理由は per-frame redraw
+       の累積コストだったが、rAF 合流により実害は無視できるレベルに収束）。
+     - visibility / overflow は離散プロパティなのでフェード完了後に snap (delay 0.3s)。 */
 .toolbar,
 .side-toolbar,
 .side-panel,
@@ -4884,12 +4886,23 @@ body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
 .spreads-proofread-area,
 .spreads-editor-area {
   transition:
-    opacity 0.18s ease,
-    visibility 0s linear 0.18s,
-    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    opacity 0.3s ease,
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    min-height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    padding 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    border-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    flex-grow 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    flex-basis 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.3s ease,
+    visibility 0s linear 0.3s,
+    overflow 0s linear 0.3s;
 }
 body.viewer-mode .toolbar {
   opacity: 0 !important;
+  transform: translateY(-12px);
   visibility: hidden !important;
   pointer-events: none !important;
   height: 0 !important;
@@ -4898,9 +4911,21 @@ body.viewer-mode .toolbar {
   border: none !important;
   overflow: hidden !important;
 }
-body.viewer-mode .side-toolbar,
+body.viewer-mode .side-toolbar {
+  opacity: 0 !important;
+  transform: translateX(-16px);
+  visibility: hidden !important;
+  pointer-events: none !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  overflow: hidden !important;
+  box-shadow: none !important;
+}
 body.viewer-mode .side-panel {
   opacity: 0 !important;
+  transform: translateX(16px);
   visibility: hidden !important;
   pointer-events: none !important;
   width: 0 !important;
@@ -4923,8 +4948,9 @@ body.viewer-mode .spreads-editor-area {
   border: none !important;
   overflow: hidden !important;
 }
-/* fade in 時は visibility を即座に元に戻す（待ってから可視化すると遅延が見えるため）。
-   transform もここで含めておくことで view-mode 切替の slide transition が壊れないようにする。 */
+/* 退場時: レイアウトと opacity を同時にフェードインしながら復元（PSD が左右に縮みつつ
+   サイドが伸びる動きが visually 同期して逆再生される）。
+   visibility / overflow は離散プロパティなので即座に元に戻す（delay 0s）。 */
 body:not(.viewer-mode) .toolbar,
 body:not(.viewer-mode) .side-toolbar,
 body:not(.viewer-mode) .side-panel,
@@ -4932,9 +4958,19 @@ body:not(.viewer-mode) .spreads-pdf-area,
 body:not(.viewer-mode) .spreads-proofread-area,
 body:not(.viewer-mode) .spreads-editor-area {
   transition:
-    opacity 0.18s ease,
+    opacity 0.3s ease,
+    transform 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    min-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    min-height 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    padding 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    border-width 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    flex-grow 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    flex-basis 0.3s cubic-bezier(0.4, 0, 0.2, 1),
+    box-shadow 0.3s ease,
     visibility 0s linear 0s,
-    transform 0.28s cubic-bezier(0.4, 0, 0.2, 1);
+    overflow 0s linear 0s;
 }
 
 /* PSD ペイン上のオーバーレイ（回転ボタン / ガイドロック / ガイド反映 / ルーラー / ガイド）。
@@ -4963,6 +4999,22 @@ body.viewer-mode .workspace .spreads-psd-area {
 body.viewer-mode .workspace .psd-stage {
   width: 100% !important;
   height: 100% !important;
+  /* 起動時に PSD が「奥から手前にくる」演出。scale 0.92 + opacity 0.55 から開始し、
+     ease-out で scale 1 / opacity 1 に到達。レイアウト拡張 (0.3s) より少し長めの 0.45s
+     にすることで、エリアが広がりきった後も最後の一押しでズームインが完了する印象になる。
+     animation-fill-mode: both で開始フレームを即時適用 → 終了状態を維持。 */
+  animation: psd-bring-forward 0.45s cubic-bezier(0.16, 1, 0.3, 1) both;
+  transform-origin: center center;
+}
+@keyframes psd-bring-forward {
+  from {
+    transform: scale(0.92);
+    opacity: 0.55;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 /* ナビゲーションヒント（入った直後に 3 秒間表示） */
@@ -5021,4 +5073,76 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   transform: scale(1.1);
 }
 
-
+/* ===== 初回起動ウェルカムモーダル =====
+   起動時に AI インストールへ誘導する 1 段目のダイアログ。z-index は既存 .ai-install-modal (200)
+   より上に置き、.file-picker-modal (250) より下にする。フェード+スケールは
+   .progress-modal などと同じ visible class パターンで制御 (ui-feedback.js のヘルパーが付与)。 */
+.welcome-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 220;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  transition: opacity 0.22s ease;
+  pointer-events: none;
+}
+.welcome-modal[hidden] { display: none; }
+.welcome-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.welcome-card {
+  background: var(--panel);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.45);
+  padding: 32px 36px 28px;
+  max-width: 480px;
+  width: calc(100% - 64px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  text-align: center;
+  transform: scale(0.92);
+  transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1.0);
+}
+.welcome-modal.visible .welcome-card { transform: scale(1); }
+.welcome-logo {
+  width: 96px;
+  height: 96px;
+  border-radius: 14px;
+  object-fit: contain;
+  flex-shrink: 0;
+}
+.welcome-title {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+}
+.welcome-message {
+  margin: 0;
+  line-height: 1.7;
+  color: var(--text-muted);
+  font-size: 13px;
+}
+.welcome-message-note {
+  display: inline-block;
+  margin-top: 4px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+.welcome-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 6px;
+}
+.welcome-actions .page-jump-btn {
+  padding: 8px 18px;
+  font-size: 13px;
+}

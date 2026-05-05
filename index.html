@@ -187,7 +187,7 @@
               <div class="stage-label-bar" id="pdf-stage-label-bar">
                 <span class="stage-label-text" id="pdf-stage-label"></span>
                 <div class="stage-label-actions">
-                  <button id="pdf-rotate-btn" class="pdf-rotate-btn icon-btn" type="button" title="PDF を 90° 回転（クリックごと）" aria-label="PDF を回転" hidden>
+                  <button id="pdf-rotate-btn" class="pdf-rotate-btn icon-btn" type="button" title="PDF を 90° 回転（クリックごと）" aria-label="PDF を回転" disabled>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <polyline points="21 2 21 8 15 8"/>
                       <path d="M21 8A9 9 0 1 0 18.4 16.9"/>
@@ -230,13 +230,13 @@
               <div class="stage-label-bar" id="psd-stage-label-bar">
                 <span class="stage-label-text" id="psd-stage-label"></span>
                 <div class="stage-label-actions">
-                  <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" hidden>
+                  <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" disabled>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
                       <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
                     </svg>
                   </button>
-                  <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" hidden>
+                  <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" disabled>
                     <svg class="lock-icon-unlocked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
                       <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
@@ -246,7 +246,7 @@
                       <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
                     </svg>
                   </button>
-                  <button id="psd-rotate-btn" class="psd-rotate-btn icon-btn" type="button" title="PSD を 90° 回転（クリックごと）" aria-label="PSD を回転" hidden>
+                  <button id="psd-rotate-btn" class="psd-rotate-btn icon-btn" type="button" title="PSD を 90° 回転（クリックごと）" aria-label="PSD を回転" disabled>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <polyline points="21 2 21 8 15 8"/>
                       <path d="M21 8A9 9 0 1 0 18.4 16.9"/>
@@ -844,6 +844,22 @@
         <div class="ai-install-actions">
           <button type="button" id="ai-install-start-btn" class="page-jump-btn page-jump-btn-primary">インストール開始</button>
           <button type="button" id="ai-install-cancel-btn" class="page-jump-btn" hidden>キャンセル</button>
+        </div>
+      </div>
+    </div>
+    <div class="welcome-modal" id="first-run-welcome-modal" hidden>
+      <div class="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
+        <img src="/PsDesign_icon.png" class="welcome-logo" alt="PsDesign" />
+        <h2 class="welcome-title" id="welcome-title">PsDesign へようこそ</h2>
+        <p class="welcome-message">
+          本アプリでは AI による吹き出しテキスト抽出（manga-ocr）と<br>
+          吹き出し検出（comic-text-detector）が利用できます。<br>
+          ご利用前にセットアップが必要です。<br>
+          <span class="welcome-message-note">（ダウンロード約 3GB / 所要 10〜20 分）</span>
+        </p>
+        <div class="welcome-actions">
+          <button id="welcome-skip-btn" class="page-jump-btn" type="button">あとで</button>
+          <button id="welcome-install-btn" class="page-jump-btn page-jump-btn-primary" type="button">今すぐインストール</button>
         </div>
       </div>
     </div>

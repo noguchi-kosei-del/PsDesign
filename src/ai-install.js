@@ -328,7 +328,7 @@ async function cancelInstall() {
 }
 
 // ===== モーダル開閉 =====
-async function openAiInstallModal() {
+export async function openAiInstallModal() {
   const modal = $("ai-install-modal");
   if (!modal) return;
   modal.hidden = false;
