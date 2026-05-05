@@ -41,14 +41,7 @@ async function pickSaveParentDir() {
 }
 
 function generateSaveFolderName() {
-  const src = getFolder();
-  const base = src ? baseName(src) : "PsDesign";
-  const now = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const ts =
-    `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}` +
-    `_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-  return `${base}_${ts}`;
+  return "写植";
 }
 
 async function runSaveWithMode({ saveMode, targetDir }) {
@@ -110,11 +103,42 @@ async function handleExplicitOverwrite() {
   await runSaveWithMode({ saveMode: "overwrite" });
 }
 
+// 親フォルダ直下に指定名のサブフォルダが既に存在するかを返す。
+// list_directory_entries は Vec<DirEntry { name, isDirectory, ... }> を返す。
+// 例外時は false（保存処理はそのまま続行 = create_dir_all で冪等的に成功する）。
+async function folderExistsIn(parent, folderName) {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const entries = await invoke("list_directory_entries", { path: parent });
+    if (!Array.isArray(entries)) return false;
+    const target = folderName.toLowerCase();
+    return entries.some(
+      (e) => e?.isDirectory === true && (e?.name ?? "").toLowerCase() === target,
+    );
+  } catch (e) {
+    console.error("[save] folder existence check failed:", e);
+    return false;
+  }
+}
+
 export async function handleSaveAs() {
   if (getPages().length === 0) return;
   const parent = await pickSaveParentDir();
   if (!parent) return;
-  const targetDir = joinPath(parent, generateSaveFolderName());
+  const folderName = generateSaveFolderName();
+  // 既に「写植」フォルダが存在する場合はユーザーに上書き確認。
+  // OK なら既存フォルダ内へ saveAs（Photoshop の saveAs は同名 PSD を上書きする）。
+  if (await folderExistsIn(parent, folderName)) {
+    const ok = await confirmDialog({
+      title: "フォルダが既に存在します",
+      message: `「${folderName}」フォルダが既に存在します。上書きで保存しますか？`,
+      confirmLabel: "上書き保存",
+      cancelLabel: "キャンセル",
+      kind: "warning",
+    });
+    if (!ok) return;
+  }
+  const targetDir = joinPath(parent, folderName);
   await runSaveWithMode({ saveMode: "saveAs", targetDir });
 }
 

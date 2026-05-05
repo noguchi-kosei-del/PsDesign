@@ -44,7 +44,15 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             } else {
                 "/"
             };
-            format!("{}{}{}", target_dir, sep, name)
+            let raw = format!("{}{}{}", target_dir, sep, name);
+            // Photoshop の File API はパス区切り文字の混在 (Windows の "\" と "/")
+            // に弱い。joinPath が forward slash を入れる一方で openFolder ダイアログから
+            // 返る親パスは backslash なので、そのままだと例えば
+            //   "C:\Users\foo\bar/写植/page1.psd"
+            // のような混在パスになり、outFile.parent の解決や saveAs の overwrite が
+            // 不安定になる（旧フォルダが残ったまま新規ファイルが作られない / 上書きされない）。
+            // すべて forward slash に正規化（Photoshop URI スタイル）して安定化。
+            raw.replace('\\', "/")
         } else {
             String::new()
         };
@@ -763,11 +771,18 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var _actualLeft  = _b[0].as("px");
           var _actualTop   = _b[1].as("px");
           var _actualRight = _b[2].as("px");
+          // _ptInPx と _padInset (CSS .new-layer-text の padding 0.2em ぶん) は両 direction で
+          // 共有するため if/else より前で算出。padding は v1.5.0 で bbox に +0.4em の安全余白を
+          // 入れた際、テキスト本体を bbox 中央に視覚配置するため CSS で 0.2em ずつ仕込まれている。
+          // 旧 JSX 補正は v1.4.0 時点 (padding 無し) の式のままで、この 0.2em 補正が抜けると
+          // 縦書きは Photoshop で 0.2em 左ズレ、横書きは 0.2em 上ズレになる
+          // (24pt/600dpi で約 40px)。
+          var _dpi = doc.resolution;
+          var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
+          var _ptInPx = _sizePt * (_dpi / 72);
+          var _padInset = 0.2 * _ptInPx;
           var _fixDx, _fixDy;
           if (nl.direction === "vertical") {
-            var _dpi = doc.resolution;
-            var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
-            var _ptInPx = _sizePt * (_dpi / 72);
             var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
             var _contentsForCount = String(nl.contents || "");
             var _lc = _contentsForCount.split(/\r?\n/).length;
@@ -781,12 +796,19 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             // 反復: 1/2 → 12px 右ズレ / 3/4 → 8px 右ズレ / 1 → ≈0px (本値)。
             var _halfLeading = (_lpFactor - 1) * _ptInPx;
             if (_halfLeading < 0) _halfLeading = 0;
-            var _boxRight = nl.x + _thick - _halfLeading;
+            // bbox.right (= nl.x + thick) は v1.5.0 で +0.4em 拡張されたが、
+            // CSS padding-right 0.2em で text 右端は bbox.right から 0.2em 内側に入る。
+            // よって preview の text 右端は nl.x + thick + 0.2em - halfLeading の位置にある。
+            // (nl.x 自身が bubble center 基準で 0.2em 左にシフトしている分も加味すると、
+            //  preview text 右端の絶対位置は v1.4.0 と同じ。JSX 補正にだけ +0.2em が抜けていた。)
+            var _boxRight = nl.x + _thick + _padInset - _halfLeading;
             _fixDx = _boxRight - _actualRight;
             _fixDy = nl.y - _actualTop;
           } else {
+            // 横書きも同様に CSS padding-top 0.2em ぶん bounds.top を下げる必要がある。
+            // 補正なしだと Photoshop でテキストが 0.2em 上にずれる。
             _fixDx = nl.x - _actualLeft;
-            _fixDy = nl.y - _actualTop;
+            _fixDy = (nl.y + _padInset) - _actualTop;
           }
           if (_fixDx !== 0 || _fixDy !== 0) {
             layerRef.translate(new UnitValue(_fixDx, "px"), new UnitValue(_fixDy, "px"));
@@ -857,6 +879,15 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         var outFolder = outFile.parent;
         if (outFolder && !outFolder.exists) outFolder.create();
       } catch (eMk) {}
+      // 既存ファイルがあれば事前に削除して saveAs の確実な上書きを保証する。
+      // asCopy=true の saveAs は本来上書きするが、ファイルロックや権限エラーで
+      // silent に失敗するケースがある（その場合 catch も走らずに古いファイルが残る）。
+      // 事前削除で「ファイルが存在しない状態で saveAs」する安全パスに揃える。
+      try {
+        if (outFile.exists) outFile.remove();
+      } catch (eRm) {
+        addWarning("既存ファイル削除失敗: " + outFile.fsName + " (" + eRm + ")");
+      }
       var opts = new PhotoshopSaveOptions();
       try { opts.embedColorProfile = true; } catch (eOpt1) {}
       try { opts.alphaChannels = true; } catch (eOpt2) {}

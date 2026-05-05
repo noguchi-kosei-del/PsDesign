@@ -169,6 +169,12 @@ function detectSizePtFromBlock(block, mokuroPage, psdPage) {
   return Math.round(clamped * 10) / 10;
 }
 
+// 自動配置時、吹き出し中心からテキストを少し下方向にずらすバイアス (em 単位)。
+// comic-text-detector の bbox が「上方向に寄っていて下が長め」になりやすく、
+// そのまま中心に置くと視覚的に上寄りに見えるため経験補正。
+// 単位は em (× ptInPsdPx)。値を増やすほど下に動く。0 で従来挙動。
+const BUBBLE_PLACEMENT_Y_BIAS_EM = 0.3;
+
 function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef) {
   const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
   const sy = psdPage.height / Math.max(mokuroPage.img_height, 1);
@@ -185,8 +191,12 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   const { width, height } = estimateLayerSize(
     psdPage, sizePt, text, defaults.leadingPct ?? 125, direction,
   );
+  // 下方向バイアス: ptInPsdPx 換算で BUBBLE_PLACEMENT_Y_BIAS_EM em ぶん下げる。
+  const dpi = psdPage.dpi ?? 72;
+  const ptInPsdPx = sizePt * (dpi / 72);
+  const yBias = ptInPsdPx * BUBBLE_PLACEMENT_Y_BIAS_EM;
   const x = cx - width / 2;
-  const y = cy - height / 2;
+  const y = cy - height / 2 + yBias;
   return {
     psdPath: psdPage.path,
     x,

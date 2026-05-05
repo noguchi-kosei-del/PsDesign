@@ -106,6 +106,22 @@ html, body, #app {
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   position: relative;
+  /* progress-modal (z-index: 100) のぼかし背景に隠されないよう前面に置く。
+     hamburger-menu (150/151) や settings/file-picker/confirm 等のモーダル (200+) は
+     引き続きツールバーの上に表示される。 */
+  z-index: 110;
+}
+
+/* progress-modal 表示中はツールバーをグレーアウト（ウインドウコントロールのみ操作可）。
+   pointer-events: none でクリック・hover も封じる。toolbar 自体は z-index 110 で
+   blur 背景の上に残るため、ユーザーには「処理中で操作できない」状態が視認できる。 */
+body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
+  opacity: 0.4;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.toolbar > *:not(.window-controls) {
+  transition: opacity 0.22s ease;
 }
 
 /* ヘッダーバー下端の立体グラデーション。

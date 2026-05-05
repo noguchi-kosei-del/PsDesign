@@ -2579,3 +2579,51 @@ function toggle() {
 > - 旧: 閲覧モードは opacity のみフェード + レイアウト瞬時 snap で「ぶちっと消える」印象 → 新: opacity + transform スライド + レイアウトを同時 0.3s アニメで滑らかに、さらに PSD 自体は `@keyframes psd-bring-forward` で scale 0.92 → 1 に「奥から手前へ寄ってくる」ズームイン演出
 > - 旧: F1 で閲覧モードを toggle（誤って終了する事故あり） → 新: F1 / ショートカットは起動のみ、終了は Esc / 右上 × 専用
 
+---
+
+## v1.14.0: 別名で保存「写植」フォルダ運用 + 自動配置位置補正 + プログレス中ヘッダー扱い
+
+### A. 別名で保存のフロー刷新
+
+A1. **デフォルトフォルダ名を `写植` 固定に** ([src/bind/save.js](src/bind/save.js)): 旧 `{元フォルダ名}_YYYYMMDD_HHMMSS` を撤去し、`generateSaveFolderName()` を `"写植"` 固定に変更。写植ワークフローでは「親フォルダ直下の `写植/` に出力」が標準なので、毎回ユニーク名を生成するよりこちらが実用的。
+
+A2. **既存「写植」フォルダの上書き確認ダイアログ** ([src/bind/save.js](src/bind/save.js) `folderExistsIn` + `handleSaveAs`): 親フォルダ選択直後に `list_directory_entries` で 直下の `写植/` 存在をチェック（大小文字非区別、Rust 側の Tauri コマンドを再利用）。
+- 存在しない: 従来通り `runSaveWithMode` へ
+- 存在する: `confirmDialog`（kind: warning / オレンジタイトル + 警告アイコン）で「『写植』フォルダが既に存在します。上書きで保存しますか？」を表示。「上書き保存」で従来通り進行、「キャンセル」で中止
+- 例外時は `false` を返して通常通り保存続行（`create_dir_all` は冪等で安全側に倒す）
+
+A3. **saveAs パス区切り文字の正規化** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)): JS 側 `joinPath` は `/` を入れる一方、openFolder ダイアログから返る親パスは Windows backslash なので、生成される save_path が `"C:\Users\foo\bar/写植/page1.psd"` のような混在状態になっていた。Photoshop の File API は混在パスで `outFile.parent` 解決が不安定で、`saveAs` の overwrite が silent fail することがあった。`save_path` 構築直後に `replace('\\', "/")` で全 forward slash に正規化（Photoshop URI スタイル）。
+
+A4. **既存ファイルの事前削除フェイルセーフ** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyToPsd`): `saveAs(file, opts, true, ...)` 直前に `if (outFile.exists) outFile.remove()` を実行。`asCopy=true` の `saveAs` は本来上書きするが、ファイルロック / 権限 / Photoshop バージョン差で silent fail することがあり、結果として古いファイルが残る原因になっていた。事前削除で「存在しない状態に saveAs」する安全パスに統一。削除失敗は `addWarning` に積んで保存トーストで可視化。
+
+### B. 自動配置の位置補正
+
+B1. **JSX 新規テキスト位置補正の +0.2em padding inset 漏れ修正** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)): v1.5.0 で PsDesign 側のレイヤー bbox を THICK 軸に +0.4em（小書き仮名・stroke overhang 用安全余白）拡張し、内側テキスト要素に CSS `padding: 0.2em` を入れて中央寄せ表示するようにした際、JSX 側の位置補正には CSS padding inset 0.2em の補正を入れ忘れていた。
+- 縦書き: Photoshop で 0.2em 左にずれる（24pt/600dpi で約 40px）
+- 横書き: Photoshop で 0.2em 上にずれる
+- 修正: `_padInset = 0.2 × _ptInPx` を新設し、縦書きは `_boxRight = nl.x + _thick + _padInset - _halfLeading`、横書きは `_fixDy = (nl.y + _padInset) - _actualTop` で `bounds.right` / `bounds.top` を 0.2em ぶん補正
+- 結果: アプリ内プレビューの位置と Photoshop 保存後の位置が一致
+
+B2. **吹き出し中心からの下方向バイアス** ([src/ai-place.js](src/ai-place.js) `mapBlockToNewLayer`): comic-text-detector の bbox が「上方向に寄っていて下が長め」になりやすく、bbox 中心にそのまま配置すると視覚的に上寄りに見える問題を経験補正で解消。
+- 新規定数 `BUBBLE_PLACEMENT_Y_BIAS_EM = 0.3` を導入（em 単位、増やすほど下に動く、`0` で従来挙動）
+- `yBias = ptInPsdPx × 0.3` を計算（24pt / 600dpi の場合 約 60 PSD px ≈ 約 2mm）
+- `y = cy - height / 2 + yBias` で下方向に shift
+- `syncPlacedFromTxt`（テキスト変更時の再配置）は既存レイヤーの bbox 中心を保持する設計なので、bias は初回配置時にのみ効き、編集で位置がリセットされる心配なし
+
+### C. プログレスバー表示中のヘッダーバー扱い
+
+C1. **ヘッダーバーをぼかし背景の上に出す** ([src/styles.css](src/styles.css) `.toolbar`): `.progress-modal` (z-index 100) の `::before` ぼかし dim がヘッダーバーまで覆ってしまい、ユーザーがウインドウコントロール（最小化 / 最大化 / 閉じる）を視認・操作できなくなる問題を解消。`.toolbar` に `z-index: 110` を追加し、progress-modal の上に来るように。hamburger-menu (150/151) や settings/file-picker/confirm 等のモーダル (200+) は引き続きツールバーの上に表示される。
+
+C2. **進捗中はウインドウコントロール以外をグレーアウト** ([src/styles.css](src/styles.css)): `body:has(.progress-modal.visible) .toolbar > *:not(.window-controls)` セレクタで `.toolbar` 直下の子要素（ロゴ / ハンバーガー / view-mode-segment / history / actions / settings / viewer-mode 等）に `opacity: 0.4 + pointer-events: none` を適用。0.22s フェードで progress-modal の入退場と同じ速度で同期。ユーザーには「処理中で操作できない」状態が視認でき、誤クリックも防止。ウインドウコントロール（最小化 / 最大化 / 閉じる）のみ通常通り操作可能。
+
+### バージョン同期
+
+D1. **1.13.0 → 1.14.0** ([package.json](package.json) / [src-tauri/Cargo.toml](src-tauri/Cargo.toml) / [src-tauri/tauri.conf.json](src-tauri/tauri.conf.json) を同期更新)。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: 別名で保存のフォルダ名は `{元フォルダ名}_YYYYMMDD_HHMMSS` で毎回ユニーク → 新: `写植` 固定 + 既存時は上書き確認ダイアログ
+> - 旧: saveAs パスは `\` と `/` が混在し Photoshop の outFile.parent / overwrite が silent fail することがあった → 新: 全 forward slash 正規化 + saveAs 直前に既存ファイル事前削除でフェイルセーフ
+> - 旧: 自動配置で Photoshop 保存後にテキストが縦書きは 0.2em 左 / 横書きは 0.2em 上にずれる → 新: CSS padding inset 0.2em ぶんを JSX 側補正に追加してプレビューと完全一致
+> - 旧: 吹き出し中心に置くと視覚的に上寄りに見える → 新: 0.3em の下方向バイアスを `BUBBLE_PLACEMENT_Y_BIAS_EM` で適用、初回配置のみ効きテキスト編集で位置はリセットされない
+> - 旧: progress-modal のぼかし dim がヘッダーバーまで覆い、ウインドウコントロールが操作不能 → 新: ツールバー z-index 110 で前面、進捗中はウインドウコントロール以外を opacity 0.4 + pointer-events: none でグレーアウト
+
