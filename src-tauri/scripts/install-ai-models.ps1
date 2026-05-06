@@ -1,4 +1,4 @@
-# Build a self-contained Python + comic-text-detector + manga-ocr + mokuro + CUDA torch runtime.
+﻿# Build a self-contained Python + 画像スキャンエンジン + CUDA torch runtime.
 #
 # Default output (dev mode):   src-tauri/resources/ai-runtime/
 # Production install location: %LOCALAPPDATA%/PsDesign/ai-runtime/
@@ -111,28 +111,28 @@ Write-Step "Phase 3. Build prerequisites"
 Invoke-Pip -PhaseLabel "Phase 3" -Args (@("-u", "-m", "pip", "install", "-q", "--no-warn-script-location", "--upgrade", "pip", "setuptools", "wheel"))
 
 # ---------------------------------------------------------------------------
-# Phase 4a. comic-text-detector (吹き出し領域検出 AI モデル)
+# Phase 4a. 画像スキャンエンジン (吹き出し検出)
 # ---------------------------------------------------------------------------
-# 注: comic-text-detector は単体パッケージとしては PyPI に存在しないため、
-# mokuro の依存を経由してインストールされる。ここでは進捗ログ用のフェーズ
-# 区切りとして mokuro 本体に含まれるテキスト検出ライブラリ群を先行インストールする。
-# pip のキャッシュがあるので mokuro 本体インストール時に再ダウンロードは発生しない。
-Write-Step "Phase 4a. Installing comic-text-detector (bubble detection model)"
+# 注: 吹き出し検出モデル本体は単体パッケージとして PyPI に存在しないため、
+# オーケストレータの依存を経由してインストールされる。ここでは進捗ログ用のフェーズ
+# 区切りとして検出に必要なライブラリ群を先行インストールする。
+# pip のキャッシュがあるので本体インストール時に再ダウンロードは発生しない。
+Write-Step "Phase 4a. 画像スキャンエンジン (吹き出し検出) をインストール中"
 Invoke-Pip -PhaseLabel "Phase 4a" -Args ($PipBaseArgs + @(
     "shapely", "scipy", "scikit-image", "opencv-python-headless", "pyclipper",
     "transformers", "natsort", "numpy", "Pillow"
 ))
 
 # ---------------------------------------------------------------------------
-# Phase 4b. manga-ocr (Japanese OCR model)
+# Phase 4b. 画像スキャンエンジン (テキスト抽出)
 # ---------------------------------------------------------------------------
-Write-Step "Phase 4b. Installing manga-ocr (Japanese OCR model)"
+Write-Step "Phase 4b. 画像スキャンエンジン (テキスト抽出) をインストール中"
 Invoke-Pip -PhaseLabel "Phase 4b" -Args ($PipBaseArgs + @("manga-ocr"))
 
 # ---------------------------------------------------------------------------
-# Phase 4c. mokuro (orchestrator)
+# Phase 4c. オーケストレータ
 # ---------------------------------------------------------------------------
-Write-Step "Phase 4c. Installing mokuro (orchestrator)"
+Write-Step "Phase 4c. オーケストレータをインストール中"
 Invoke-Pip -PhaseLabel "Phase 4c" -Args ($PipBaseArgs + @("mokuro"))
 
 # ---------------------------------------------------------------------------
@@ -149,7 +149,7 @@ Invoke-Pip -PhaseLabel "Phase 5" -Args ($PipBaseArgs + @(
 # Phase 6. Verify
 # ---------------------------------------------------------------------------
 Write-Step "Phase 6. Verifying runtime"
-# pkg_resources is deprecated 警告を抑制 (comic_text_detector の依存が古い API を使っている)
+# pkg_resources is deprecated 警告を抑制 (画像スキャンエンジンの依存が古い API を使っている)
 $env:PYTHONWARNINGS = "ignore::UserWarning"
 & $PythonExe -u -c "import torch, mokuro, manga_ocr; print('torch', torch.__version__, 'cuda', torch.cuda.is_available())"
 Remove-Item Env:PYTHONWARNINGS -ErrorAction SilentlyContinue
@@ -159,14 +159,14 @@ if (-not (Test-Path $mokuroExe)) {
 }
 
 # ---------------------------------------------------------------------------
-# Phase 6b. Pre-download AI model weights to ~/.cache/huggingface/
+# Phase 6b. 画像スキャンエンジンの重みファイルを事前ダウンロード
 # ---------------------------------------------------------------------------
-# manga-ocr / comic-text-detector の重みファイル (~500MB) は本来初回スキャン時に
+# 画像スキャンエンジンの重みファイル (~500MB) は本来初回スキャン時に
 # 遅延ダウンロードされるが、本アプリは ocr.rs で HF_HUB_OFFLINE=1 を強制しているため
 # キャッシュが無いとスキャンが起動できない。インストール時にネットがある今のうちに
 # from_pretrained() を一度走らせて HuggingFace から取得しておく。
 # 既にキャッシュ済みなら no-op で即終了する。
-Write-Step "Phase 6b. Pre-downloading AI model weights"
+Write-Step "Phase 6b. 画像スキャンエンジンの重みファイルを事前ダウンロード中"
 $env:PYTHONWARNINGS = "ignore::UserWarning"
 & $PythonExe -u -c "from manga_ocr import MangaOcr; MangaOcr()"
 Remove-Item Env:PYTHONWARNINGS -ErrorAction SilentlyContinue

@@ -103,7 +103,7 @@ async function runAiOcr(files, {
   if (!status?.available) {
     await notifyDialog({
       title: "AIモデル未インストール",
-      message: "画像スキャンには manga-ocr / comic-text-detector のインストールが必要です。\n左下メニューの「AIインストール」から実行してください。",
+      message: "画像スキャンには「画像スキャンエンジン」のインストールが必要です。\n左下メニューの「AIインストール」から実行してください。",
     });
     return;
   }
@@ -260,7 +260,8 @@ async function runAiOcr(files, {
 function detectStartupPhase(line) {
   if (!line) return null;
   const s = line.toLowerCase();
-  // text detection model (comic-text-detector)
+  // 吹き出し検出モデル (画像スキャンエンジンの一部) — 外部ライブラリのログに含まれる
+  // モジュール名 (comic_text_detector) を substring で検出する。
   if (
     s.includes("text detection model") ||
     s.includes("comic_text_detector") ||
@@ -269,7 +270,7 @@ function detectStartupPhase(line) {
   ) {
     return "テキスト検出モデルを読み込み中…";
   }
-  // OCR / recognition model (manga-ocr)
+  // テキスト抽出モデル (画像スキャンエンジンの一部) — 同様に外部モジュール名を検出。
   if (
     s.includes("manga_ocr") ||
     s.includes("manga-ocr") ||

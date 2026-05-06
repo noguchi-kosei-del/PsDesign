@@ -2627,3 +2627,83 @@ D1. **1.13.0 → 1.14.0** ([package.json](package.json) / [src-tauri/Cargo.toml]
 > - 旧: 吹き出し中心に置くと視覚的に上寄りに見える → 新: 0.3em の下方向バイアスを `BUBBLE_PLACEMENT_Y_BIAS_EM` で適用、初回配置のみ効きテキスト編集で位置はリセットされない
 > - 旧: progress-modal のぼかし dim がヘッダーバーまで覆い、ウインドウコントロールが操作不能 → 新: ツールバー z-index 110 で前面、進捗中はウインドウコントロール以外を opacity 0.4 + pointer-events: none でグレーアウト
 
+---
+
+## v1.15.0: AIインストール起動失敗修正・「画像スキャンエンジン」表記統一・初回ウェルカム改善・AI アンインストール機能
+
+### A. AIインストール起動直後の異常終了を修正（日本語 Windows 致命バグ）
+
+A1. **症状**: AI インストールボタンを押すと数秒で `AIインストールが異常終了 (exit code Some(1))` ダイアログが出てインストールが進まない。フェーズ表示はどのフェーズもアクティブにならない。
+
+A2. **根本原因** ([src-tauri/scripts/install-ai-models.ps1](src-tauri/scripts/install-ai-models.ps1)): スクリプトファイルが **UTF-8 without BOM** で保存されていたため、PowerShell 5.1（`powershell.exe`、Windows 11 標準）が日本語 Windows のシステムロケール (`ja-JP / CP932`) で読み込み、UTF-8 で書かれた日本語コメント・文字列がパース時に化け、構文エラー (`Unexpected token 'Runtime'` / `The string is missing the terminator: "`) で起動直後に exit code 1 で死んでいた。具体的には UTF-8 マルチバイトシーケンスの末尾が CP932 のリードバイト相当に当たり、直後の `"` を 2 バイト目として消費 → 文字列終端が壊れる連鎖。
+
+A3. **修正**: install-ai-models.ps1 に **UTF-8 BOM (`EF BB BF`) を付与**。PowerShell 5.1 は BOM があれば必ず UTF-8 として読み込む仕様。`[System.Management.Automation.PSParser]::Tokenize` での構文検証で 3 件のエラーが 0 件に解消。BOM の維持は今後の `.ps1` 編集でも必須なので memory に保存（feedback_ps_script_bom）。
+
+### B. AIインストール異常終了時の診断改善
+
+B1. **stderr 末尾 20 行をエラーメッセージに含める** ([src-tauri/src/ocr.rs](src-tauri/src/ocr.rs) `install_ai_models`): 旧 `AIインストールが異常終了 (exit code Some(1))` だけでは原因不明だった問題を改善。
+- stderr 読込スレッドに `Arc<Mutex<Vec<String>>>` のリングバッファ（最大 20 行）を追加
+- ログイベント emit と並行して内部バッファにも積む
+- `status.success() == false` のときに末尾を `--- エラー出力 (末尾) ---\n<最後の20行>` 形式で error message に追記
+- 今後類似トラブルが発生してもユーザーがエラーダイアログ本文だけで原因を特定可能に
+
+### C. 「画像スキャンエンジン」表記への統一（UI 全面）
+
+C1. **方針**: 旧 UI / ログメッセージで併記していた `manga-ocr` / `comic-text-detector` の技術名称をユーザー可視テキストから完全撤去し、**「画像スキャンエンジン」** に統一。内部の Python パッケージ名（pip install 引数）・モジュール検出 substring（mokuro 出力ログをマッチングするための内部実装）は変更不可なので保持。
+
+C2. **変更箇所**:
+| 場所 | 旧 | 新 |
+|---|---|---|
+| [index.html](index.html) AIインストールボタン tooltip | `(manga-ocr / comic-text-detector)` | `(画像スキャンエンジン)` |
+| [index.html](index.html) フェーズリスト | `comic-text-detector (吹き出し検出)` / `manga-ocr (日本語OCR)` | `画像スキャンエンジン (吹き出し検出)` / `画像スキャンエンジン (テキスト抽出)` |
+| [src/ai-install.js](src/ai-install.js) `PHASE_LABEL_BY_GROUP` | `comic-text-detector` / `manga-ocr` | `画像スキャンエンジン (吹き出し検出)` / `画像スキャンエンジン (テキスト抽出)` |
+| [src/ai-ocr.js](src/ai-ocr.js) 未インストール案内 | `画像スキャンには manga-ocr / comic-text-detector のインストールが必要` | `「画像スキャンエンジン」のインストールが必要` |
+| [install-ai-models.ps1](src-tauri/scripts/install-ai-models.ps1) `Write-Step` | `Phase 4a. Installing comic-text-detector ...` 等の英語表記 | `Phase 4a. 画像スキャンエンジン (吹き出し検出) をインストール中` 等の日本語表記 |
+| [src/first-run-setup.js](src/first-run-setup.js) ウェルカム説明文 | `manga-ocr` / `comic-text-detector` 併記 | `AI による画像スキャンエンジンを使ったテキスト抽出と吹き出し検出` |
+
+C3. **内部に残した箇所（変更不可）**:
+- `install-ai-models.ps1` の `pip install "manga-ocr"` 引数 — PyPI パッケージ名そのもの
+- `ai-ocr.js` の `s.includes("comic-text-detector")` / `s.includes("manga-ocr")` substring 検出 — mokuro 自身の Python 出力ログを起動フェーズ判定でマッチングするためのもので、画面には表示されない（コメントで「外部モジュール名を検出する」旨を明記）
+- `from manga_ocr import MangaOcr` Python import — Python 識別子
+
+C4. **副次クリーンアップ** ([src/ai-install.js](src/ai-install.js) `detectPhaseGroup`): PowerShell 文言が日本語化されたことで永続的に dead コードになった `/Installing comic-text-detector/` / `/Installing manga-ocr/` / `/Installing mokuro/` の二次マッチ regex を削除し、`Phase 4a/4b/4c` 等の Phase 番号 regex のみに整理。
+
+### D. 初回起動ウェルカム画面の改善
+
+D1. **背景クリックで閉じない** ([src/first-run-setup.js](src/first-run-setup.js) `attachDismissListeners`): 旧 `mousedown` の background listener を撤去。終了手段は **「あとで」/「今すぐインストール」のボタン or Esc キー** のみに限定。ユーザーが「インストール開始 / あとで」を明示的に選択するよう仕向ける UX に変更。
+
+D2. **説明文** ([index.html](index.html) `.welcome-message`): 「manga-ocr」「comic-text-detector」併記を撤廃し、「**AI による画像スキャンエンジンを使ったテキスト抽出と吹き出し検出**」というユーザー目線の機能ベースの文言に統一。
+
+### E. AI アンインストール機能の追加
+
+E1. **目的**: AI ランタイム + モデル重みファイル（合計 約 5〜5.5 GB）の手動削除が必要だった作業をアプリ内ボタンで完結。手動削除は「PsDesign を完全終了 → エクスプローラで `%LOCALAPPDATA%\PsDesign\ai-runtime` を削除 → `%USERPROFILE%\.cache\huggingface\hub\models--kha-white--manga-ocr-base` を削除」と煩雑だった。
+
+E2. **Rust コマンド `uninstall_ai_models`** ([src-tauri/src/ocr.rs](src-tauri/src/ocr.rs) + [src-tauri/src/lib.rs](src-tauri/src/lib.rs)):
+- 削除対象 2 箇所:
+  1. `%LOCALAPPDATA%\PsDesign\ai-runtime\` (約 5 GB、Python embeddable + pip インストール物全部)
+  2. `%USERPROFILE%\.cache\huggingface\hub\models--kha-white--manga-ocr-base` + `.locks/...`（約 500 MB）
+- 親フォルダ（`%LOCALAPPDATA%\PsDesign\` や `~/.cache/huggingface\hub`）は他に使われ得るので残す
+- HuggingFace キャッシュは PsDesign 専用のサブフォルダ 1 つだけを削除し、**他の HF 利用アプリ（Stable Diffusion / LM Studio 等）のキャッシュは温存**
+- 戻り値: `UninstallResult { deleted: Vec<String>, errors: Vec<String> }` — 部分成功（一部削除 + 一部失敗）に対応
+- 全失敗かつ何も削除できなかった場合のみ `Err` で返し UI で警告表示
+- ファイルロック等で削除失敗 → errors[] に詳細を入れて Ok で返し、UI 側で warning ダイアログ表示
+
+E3. **UI フロー** ([index.html](index.html) + [src/ai-install.js](src/ai-install.js) + [src/styles.css](src/styles.css)):
+- AI インストールモーダル下部、`#ai-install-start-btn` の左隣に **赤枠の「アンインストール」ボタン** (`#ai-uninstall-btn`) を追加
+- インストール済み時のみ表示（`status?.available === true && !runningInstall`）、インストール処理中は disabled
+- クリック → `confirmDialog({ kind: "danger", title: "画像スキャンエンジンをアンインストール", message: "...約 5〜5.5 GB を削除します。元に戻せません。" })`
+- 確認後 → `showProgress({ detail: "アンインストール中…" })` で進捗モーダル（indeterminate spinner）→ `invoke("uninstall_ai_models")`
+- 結果別の通知:
+  - 完全成功: `notifyDialog({ kind: "success" })` 緑チェックマーク + 「画像スキャンエンジンを削除しました」
+  - 部分成功（errors[] あり）: `notifyDialog({ kind: "warning" })` で削除件数 + 削除失敗の詳細リスト
+  - 完全失敗: `notifyDialog` でエラー本文 + 「PsDesign 再起動してから再試行」案内
+- 完了後 `refreshStatusBadge()` で UI 状態を未インストールに戻す（ハンバーガーの赤バッジ復活、再インストールボタン表示）
+
+E4. **`page-jump-btn-danger` クラス追加** ([src/styles.css](src/styles.css)): `page-jump-btn-place`（緑）と同じ pattern（透明背景 + 同色枠 + 同色文字、hover で塗り反転）の赤系バリアント。色は CSS 変数 `var(--danger)` を使用してテーマ追従。
+
+> **構造変更まとめ**:
+> - 旧: AI インストールボタンを押すと日本語 Windows で起動直後に exit code 1（PS 5.1 が UTF-8 without BOM スクリプトを CP932 として誤読 → 構文エラー）→ 新: スクリプトに UTF-8 BOM 付与で確実にパース可能、エラー時は stderr 末尾 20 行を error message に含めて診断容易化
+> - 旧: UI / ログに `manga-ocr` / `comic-text-detector` が併記されユーザーには技術的すぎた → 新: 「画像スキャンエンジン (吹き出し検出 / テキスト抽出)」に全面統一、内部の Python パッケージ名・モジュール検出 substring は保持
+> - 旧: 初回ウェルカムは背景クリックで閉じる + 技術名称を表示 → 新: ボタン or Esc のみで閉じる + 機能ベースの文言
+> - 旧: AI 削除はエクスプローラで 2 フォルダを手動削除 → 新: AI インストールモーダル下部の赤枠アンインストールボタン → 確認 → 進捗 → 結果通知の 4 段フロー、HF キャッシュは PsDesign 関連のみ削除して他アプリのキャッシュ温存
+

@@ -3228,6 +3228,21 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: #1b5e20;
 }
 
+/* AI アンインストール等の破壊的操作向け赤系ボタン。
+   page-jump-btn-place と同じ pattern (透明背景 + 同色枠 + 同色文字、hover で塗り反転) */
+.page-jump-btn-danger {
+  background: transparent;
+  border: 1px solid var(--danger);
+  color: var(--danger);
+  font-weight: 600;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.page-jump-btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+}
+
 .progress-detail {
   font-size: 11px;
   color: var(--text-muted);

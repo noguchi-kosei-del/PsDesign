@@ -311,6 +311,7 @@ pub fn run() {
             ocr::check_ai_models,
             ocr::install_ai_models,
             ocr::cancel_ai_install,
+            ocr::uninstall_ai_models,
             ocr::run_ai_ocr,
             ocr::export_ai_text
         ])

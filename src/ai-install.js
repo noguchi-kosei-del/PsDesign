@@ -1,4 +1,4 @@
-// AIインストール (manga-ocr / comic-text-detector / mokuro)
+// AIインストール (画像スキャンエンジン)
 //
 // PowerShell スクリプト install-ai-models.ps1 を起動し、
 // ai_install:log / ai_install:done イベントを購読して進捗 UI を駆動する。
@@ -11,15 +11,21 @@
 //
 // 元参照: serifu-memo/src/SetupWizard.tsx (Phase 検出 / pip 進捗パース / ETA)
 
-import { toast, notifyDialog } from "./ui-feedback.js";
+import {
+  toast,
+  notifyDialog,
+  confirmDialog,
+  showProgress,
+  hideProgress,
+} from "./ui-feedback.js";
 
 const $ = (id) => document.getElementById(id);
 
 const PHASE_GROUPS = ["base", "ctd", "mocr", "torch"];
 const PHASE_LABEL_BY_GROUP = {
   base: "共通基盤",
-  ctd: "comic-text-detector",
-  mocr: "manga-ocr",
+  ctd: "画像スキャンエンジン (吹き出し検出)",
+  mocr: "画像スキャンエンジン (テキスト抽出)",
   torch: "PyTorch (CUDA) + 検証",
 };
 
@@ -29,15 +35,10 @@ function detectPhaseGroup(line) {
   if (/Phase 2\./.test(line)) return "base";
   if (/Phase 3\./.test(line)) return "base";
   if (/Phase 4a\./.test(line)) return "ctd";
-  if (/Installing comic-text-detector/.test(line)) return "ctd";
   if (/Phase 4b\./.test(line)) return "mocr";
-  if (/Installing manga-ocr/.test(line)) return "mocr";
-  if (/Phase 4c\./.test(line)) return "mocr"; // mokuro まとめは manga-ocr に隣接させる
-  if (/Installing mokuro/.test(line)) return "mocr";
+  if (/Phase 4c\./.test(line)) return "mocr"; // オーケストレータ部分はテキスト抽出に隣接させる
   if (/Phase 5\./.test(line)) return "torch";
-  if (/Switching torch/.test(line)) return "torch";
   if (/Phase 6\./.test(line)) return "torch";
-  if (/Verifying runtime/.test(line)) return "torch";
   return null;
 }
 
@@ -215,6 +216,12 @@ async function refreshStatusBadge() {
       startBtn.disabled = !!runningInstall;
       startBtn.textContent = status?.available ? "再インストール" : "インストール開始";
     }
+    // アンインストールボタンはインストール済み + インストール処理中でない時のみ表示。
+    const uninstallBtn = $("ai-uninstall-btn");
+    if (uninstallBtn) {
+      uninstallBtn.hidden = !status?.available || !!runningInstall;
+      uninstallBtn.disabled = !!runningInstall;
+    }
     return status;
   } catch (e) {
     console.error(e);
@@ -327,6 +334,86 @@ async function cancelInstall() {
   // この後、install_ai_models 側の wait() が止まり runInstall の catch に入る
 }
 
+// 画像スキャンエンジン (AI ランタイム + 重みキャッシュ) のアンインストール。
+//   - 削除対象: %LOCALAPPDATA%\PsDesign\ai-runtime\ + ~/.cache/huggingface/hub/models--kha-white--manga-ocr-base
+//   - 削除総量: 約 5〜5.5 GB
+// インストール処理中は呼ばない。confirmDialog (kind: danger) で明示確認、
+// 成功で notifyDialog (success) → ステータス再評価で UI を未インストール状態に戻す。
+async function runUninstall() {
+  if (runningInstall) return;
+  // 念のため再確認: 既にアンインストール済みなら通知だけ。
+  let pre;
+  try { pre = await checkAiModelsStatus(); } catch (_) { pre = null; }
+  if (!pre?.available) {
+    await notifyDialog({
+      title: "アンインストール不要",
+      message: "画像スキャンエンジンは既にインストールされていません。",
+    });
+    await refreshStatusBadge();
+    return;
+  }
+
+  const ok = await confirmDialog({
+    title: "画像スキャンエンジンをアンインストール",
+    message:
+      "AI ランタイムとモデルファイル（合計 約 5〜5.5 GB）を削除します。\n" +
+      "この操作は元に戻せません。再度利用するにはインストールし直す必要があります。\n\n" +
+      "続行しますか？",
+    kind: "danger",
+    confirmLabel: "アンインストール",
+    cancelLabel: "キャンセル",
+  });
+  if (!ok) return;
+
+  // 進捗モーダル (current/total を渡さないので automatically indeterminate モード)。
+  // ファイル削除は通常数秒〜十数秒で終わるが 5GB の filesystem 削除なので環境次第。
+  showProgress({ title: "画像スキャンエンジン", detail: "アンインストール中…" });
+
+  let result = null;
+  let error = null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    result = await invoke("uninstall_ai_models");
+  } catch (e) {
+    error = e;
+  } finally {
+    await hideProgress();
+  }
+
+  await refreshStatusBadge();
+
+  if (error) {
+    await notifyDialog({
+      title: "アンインストール失敗",
+      message:
+        String(error?.message ?? error ?? "不明なエラー") +
+        "\n\nファイルが使用中の場合は PsDesign を再起動してから再試行してください。",
+    });
+    return;
+  }
+
+  // 部分成功: deleted は 1 件以上、errors も 0 件以上の混在 → warning ダイアログ。
+  const deletedCount = Array.isArray(result?.deleted) ? result.deleted.length : 0;
+  const errorList = Array.isArray(result?.errors) ? result.errors : [];
+
+  if (errorList.length > 0) {
+    await notifyDialog({
+      title: "アンインストール完了 (一部失敗)",
+      message:
+        `${deletedCount} 件の項目を削除しましたが、以下は削除できませんでした:\n\n` +
+        errorList.join("\n") +
+        "\n\nファイルが使用中の場合は PsDesign を再起動してから再試行してください。",
+      kind: "warning",
+    });
+  } else {
+    await notifyDialog({
+      title: "アンインストール完了",
+      message: "画像スキャンエンジンを削除しました。",
+      kind: "success",
+    });
+  }
+}
+
 // ===== モーダル開閉 =====
 export async function openAiInstallModal() {
   const modal = $("ai-install-modal");
@@ -379,6 +466,13 @@ export function bindAiInstallMenu() {
   if (startBtn) {
     startBtn.addEventListener("click", () => {
       runInstall();
+    });
+  }
+
+  const uninstallBtn = $("ai-uninstall-btn");
+  if (uninstallBtn) {
+    uninstallBtn.addEventListener("click", () => {
+      runUninstall();
     });
   }
 

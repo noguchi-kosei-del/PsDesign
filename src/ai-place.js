@@ -119,13 +119,13 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   };
 }
 
-// comic-text-detector が吹き出しごとに推定した font_size（OCR 入力画像のピクセル）を、
+// 画像スキャンエンジン (吹き出し検出側) が吹き出しごとに推定した font_size（OCR 入力画像のピクセル）を、
 // 対象 PSD の物理座標系での pt に換算する。
 // 換算式: pt = (font_size_px × 画像→PSD スケール) × 72 / psd.dpi
 //   - スケールは sx, sy の小さい方を採用（縦書き / 横書きどちらでも安全側になる）
-//   - キャリブレーション係数 0.92: comic-text-detector の font_size は em-box（行送り・上下余白を含む）
+//   - キャリブレーション係数 0.92: 検出器の font_size は em-box（行送り・上下余白を含む）
 //     寄りに出る傾向があるので、グリフ相当に揃えるべく約 8% 縮める。
-//     ※ あまり大きく縮めると 1 行吹き出し（detector が比較的正確）で過小化するため控えめに。
+//     ※ あまり大きく縮めると 1 行吹き出し（検出器が比較的正確）で過小化するため控えめに。
 //   - bbox 上限キャップ: 検出された吹き出しの "厚み" 軸（縦書き=横幅、横書き=縦高）から
 //     leading=1.25 を仮定して em 1 つ分の物理上限を逆算。多列吹き出しでの過大検出を抑える。
 //   - 環境設定の textSizeStep（0.1 / 0.5）に丸め、[6, 999] にクランプ。
@@ -170,7 +170,7 @@ function detectSizePtFromBlock(block, mokuroPage, psdPage) {
 }
 
 // 自動配置時、吹き出し中心からテキストを少し下方向にずらすバイアス (em 単位)。
-// comic-text-detector の bbox が「上方向に寄っていて下が長め」になりやすく、
+// 画像スキャンエンジン (吹き出し検出側) の bbox が「上方向に寄っていて下が長め」になりやすく、
 // そのまま中心に置くと視覚的に上寄りに見えるため経験補正。
 // 単位は em (× ptInPsdPx)。値を増やすほど下に動く。0 で従来挙動。
 const BUBBLE_PLACEMENT_Y_BIAS_EM = 0.3;

@@ -730,6 +730,12 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
     let stdout = child.stdout.take().expect("stdout pipe");
     let stderr = child.stderr.take().expect("stderr pipe");
 
+    // 異常終了時に診断情報として返すため、stderr の最後の行をリングバッファ的に保持する。
+    // PowerShell スクリプトが起動直後に構文エラー等で死ぬケースで「exit code N」だけだと
+    // 原因不明のままになるので、ユーザーに見える形で末尾を残す。
+    let stderr_tail: std::sync::Arc<std::sync::Mutex<Vec<String>>> =
+        std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+
     let app_out = app.clone();
     let h1 = std::thread::spawn(move || {
         let reader = BufReader::new(stdout);
@@ -746,9 +752,18 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
         }
     });
     let app_err = app.clone();
+    let stderr_tail_clone = std::sync::Arc::clone(&stderr_tail);
     let h2 = std::thread::spawn(move || {
         let reader = BufReader::new(stderr);
         for line in reader.lines().map_while(Result::ok) {
+            // tail バッファに積む (最大 20 行 / 古いものから drop)
+            if let Ok(mut buf) = stderr_tail_clone.lock() {
+                buf.push(line.clone());
+                if buf.len() > 20 {
+                    let drop_count = buf.len() - 20;
+                    buf.drain(0..drop_count);
+                }
+            }
             app_err
                 .emit(
                     "ai_install:log",
@@ -777,9 +792,20 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
     }
 
     if !status.success() {
+        let tail = stderr_tail
+            .lock()
+            .ok()
+            .map(|v| v.join("\n"))
+            .unwrap_or_default();
+        let detail = if tail.trim().is_empty() {
+            String::new()
+        } else {
+            format!("\n\n--- エラー出力 (末尾) ---\n{}", tail)
+        };
         return Err(format!(
-            "AIインストールが異常終了 (exit code {:?})",
-            status.code()
+            "AIインストールが異常終了 (exit code {:?}){}",
+            status.code(),
+            detail
         ));
     }
 
@@ -800,4 +826,70 @@ pub fn cancel_ai_install() -> Result<(), String> {
             .output();
     }
     Ok(())
+}
+
+#[derive(Serialize, Clone, Debug)]
+pub struct UninstallResult {
+    deleted: Vec<String>,
+    errors: Vec<String>,
+}
+
+/// 画像スキャンエンジンをアンインストールする。
+///   1. AI ランタイム本体: `%LOCALAPPDATA%\PsDesign\ai-runtime\`（約 5GB、Python + pip インストール物）
+///   2. HuggingFace モデルキャッシュのうち本アプリが使う models--kha-white--manga-ocr-base のみ
+///      （他の HuggingFace 利用アプリのキャッシュには触れない）
+/// 親フォルダ（`%LOCALAPPDATA%\PsDesign\` や `~/.cache/huggingface\hub`）は他に使われ得るので
+/// 残す。削除対象が存在しない場合は no-op、削除に失敗した場合は errors[] に詳細を入れて返す。
+#[tauri::command]
+pub async fn uninstall_ai_models(app: AppHandle) -> Result<UninstallResult, String> {
+    let mut deleted: Vec<String> = Vec::new();
+    let mut errors: Vec<String> = Vec::new();
+
+    // 1) AI ランタイム本体
+    if let Ok(rt) = user_runtime_dir(&app) {
+        if rt.exists() {
+            match std::fs::remove_dir_all(&rt) {
+                Ok(_) => deleted.push(rt.to_string_lossy().to_string()),
+                Err(e) => errors.push(format!("ランタイム削除失敗 {}: {}", rt.display(), e)),
+            }
+        }
+    }
+
+    // 2) HuggingFace キャッシュ内の manga-ocr-base モデルのみ削除
+    //    他の AI アプリの HF キャッシュを巻き込まないようピンポイントで消す。
+    let home = home_dir_path();
+    if let Some(home) = home {
+        let hf_hub = home.join(".cache").join("huggingface").join("hub");
+        let model_dir = hf_hub.join("models--kha-white--manga-ocr-base");
+        let lock_dir = hf_hub.join(".locks").join("models--kha-white--manga-ocr-base");
+        for p in [model_dir, lock_dir] {
+            if p.exists() {
+                match std::fs::remove_dir_all(&p) {
+                    Ok(_) => deleted.push(p.to_string_lossy().to_string()),
+                    Err(e) => {
+                        errors.push(format!("モデルキャッシュ削除失敗 {}: {}", p.display(), e))
+                    }
+                }
+            }
+        }
+    }
+
+    // 全部失敗した（ファイルロック等）かつ何も削除できなかったら Err にして UI で警告。
+    // 部分成功（一部削除 + 一部エラー）は Ok で返して JS 側でメッセージ表示する。
+    if deleted.is_empty() && !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
+
+    Ok(UninstallResult { deleted, errors })
+}
+
+fn home_dir_path() -> Option<PathBuf> {
+    #[cfg(target_os = "windows")]
+    {
+        std::env::var("USERPROFILE").ok().map(PathBuf::from)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::env::var("HOME").ok().map(PathBuf::from)
+    }
 }

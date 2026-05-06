@@ -4,7 +4,9 @@
 //  - localStorage `psdesign_setup_seen` が "1" なら表示しない（一度で永続スキップ）。
 //  - AI ランタイムが既にインストール済み (check_ai_models が available:true) なら、
 //    ウェルカムは出さずフラグだけ立てて静かに通過する。
-//  - 「あとで」「Esc」「背景クリック」「× ボタン」のいずれもフラグを立てて閉じる挙動。
+//  - 「あとで」「Esc」のいずれかでフラグを立てて閉じる挙動。
+//    背景クリックでは閉じない（ユーザーが「インストール開始 / あとで」のどちらか
+//    を明示的に選ぶよう仕向けるため）。
 //  - 「今すぐインストール」を押すとウェルカムを閉じてから既存の AI インストールモーダル
 //    (openAiInstallModal) を開く。
 //  - ハンバーガーメニューの再インストールボタンは無変更（フラグに関係なく常時起動可能）。
@@ -25,26 +27,19 @@ function alreadySeen() {
 }
 
 let escListener = null;
-let backdropListener = null;
 
 function attachDismissListeners(modal) {
-  // Esc / 背景クリックで「あとで」と同じ扱い。
+  // Esc で「あとで」と同じ扱い。背景クリックでは閉じない。
   escListener = (e) => {
     if (modal.hidden) return;
     if (e.key === "Escape") { e.preventDefault(); closeWelcome(modal); }
   };
   document.addEventListener("keydown", escListener);
-  backdropListener = (e) => {
-    if (e.target === modal) closeWelcome(modal);
-  };
-  modal.addEventListener("mousedown", backdropListener);
 }
 
-function detachDismissListeners(modal) {
+function detachDismissListeners(_modal) {
   if (escListener) document.removeEventListener("keydown", escListener);
-  if (backdropListener) modal.removeEventListener("mousedown", backdropListener);
   escListener = null;
-  backdropListener = null;
 }
 
 function closeWelcome(modal) {
