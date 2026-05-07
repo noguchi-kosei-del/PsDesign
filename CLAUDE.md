@@ -2707,3 +2707,113 @@ E4. **`page-jump-btn-danger` クラス追加** ([src/styles.css](src/styles.css)
 > - 旧: 初回ウェルカムは背景クリックで閉じる + 技術名称を表示 → 新: ボタン or Esc のみで閉じる + 機能ベースの文言
 > - 旧: AI 削除はエクスプローラで 2 フォルダを手動削除 → 新: AI インストールモーダル下部の赤枠アンインストールボタン → 確認 → 進捗 → 結果通知の 4 段フロー、HF キャッシュは PsDesign 関連のみ削除して他アプリのキャッシュ温存
 
+---
+
+## v1.16.0: V ツール統合 + 原稿テキスト新規入力 + ガイド/エクスプローラ拡張 + 縦中横自動適用 + UI 整備
+
+### A. V ツールへのテキスト入力統合 (T/Y 廃止)
+
+- **T/Y ツールを完全廃止し V に一本化** ([src/state.js](src/state.js) `_normTool`)。許容値は `"move" | "pan"` のみ。`text-v` / `text-h` は migrate で自動破棄
+- **V ツールの空所ダブルクリックで新規テキスト入力** ([src/canvas-tools.js](src/canvas-tools.js) `onCanvasMouseDown`):
+  - 350ms 以内・5px 以内の 2 連クリックを `isCanvasDoubleClick(now, x, y)` で自前検出（既存 `isLayerDoubleClick` と同パターンで `lastCanvasClickAt` / `lastCanvasClickPos` モジュール変数）
+  - V ツール mousedown フローを 4 段階に再編: (1) 既存 floater finalize → (2) 原稿 TXT ブロック選択中なら `placeTxtSelectionAt` → (3) 空所 dblclick なら `startTextInput` → (4) 単独クリックは従来 `startMarquee`
+  - `enterInPlaceEditFromMove` / `enterInPlaceEditForLayer` から `setTool("text-v"|"text-h")` を撤去（V のまま in-place 編集起動）
+  - `isTextTool` / `textToolDirection` ヘルパーも完全削除、`onLayerWheel` / nudge 判定 / cursor 指定もすべて `tool === "move"` に簡素化
+- **`$newTextDirection` observable 新設** ([src/state.js](src/state.js)): 既定 `"vertical"` の縦/横切替値。`localStorage` キー `psdesign_new_text_direction` で永続化
+- **サイドツールバーに縦型トグルスイッチ UI** ([index.html](index.html) + [src/styles.css](src/styles.css)):
+  - V ボタン直下に `#new-text-dir-switch`（`role="switch" aria-checked`）を配置。22×44px の縦型ピル形状トラックに 18×18 円形 thumb がスライド（top 1px ↔ 23px）
+  - thumb 上下に縦/横アイコン（lucide）、active 側は thumb (accent) に重なって白で表示
+  - クリックで `setNewTextDirection(getNewTextDirection() === "vertical" ? "horizontal" : "vertical")` でトグル
+  - `bindNewTextDirectionToggle` ([src/main.js](src/main.js)) で aria-checked / aria-label / localStorage を同期
+- **空所 dblclick で開く textarea も中央 anchor に** ([src/canvas-tools.js](src/canvas-tools.js) `startTextInput`): `createTextFloater` に `anchor: "center"` を渡し、textarea 中心 = 確定後レイヤー中心 = クリック点 を一貫させる。旧仕様では floater が top-left anchor / レイヤーが中央配置で「確定すると左上にズレた」と感じる UX 問題を解消
+- T / Y キーバインドも settings.js の defaults から削除。旧 `runShortcut` の `case "toolTextV/H"` も撤去
+
+### B. 原稿テキストパネルへの新規入力欄
+
+- **txt-source-viewer 直下に textarea + 配置ボタンを常駐** ([index.html](index.html) + [src/styles.css](src/styles.css)):
+  - `.txt-source-dropzone` を `flex-direction: column` に変更し、最下段に `.txt-source-new-input` (rows=1 textarea + 配置ボタン) を配置
+  - PSD 未読込時は disabled、入力ありで配置ボタンが enabled、Ctrl+Enter / クリックで確定
+- **`commitNewTxtInput` 新設** ([src/txt-source.js](src/txt-source.js)):
+  - PSD ページ幾何中心 `(width/2, height/2)` に `centerTopLeft` 経由でレイヤー作成（既存ヘルパーを export 化して再利用）
+  - `withHistoryTransient` で「原稿テキスト追記 + addNewLayer」を 1 トランザクションに集約。Ctrl+Z 一発で両方戻る
+  - `sourceTxtRef: { pageNumber, paragraphIndex }` を埋めるので、原稿の dblclick 編集 → `syncPlacedFromTxt` で配置済みフレーム contents も自動追従
+  - `appendBlockToCurrentPageContent` ヘルパーで「マーカー無し原稿は末尾追記」「対象ページマーカーあり = そのセクション末尾追記」「対象ページマーカー無し = 新セクション作成」の 3 パターンに対応
+- **半角数字 → 全角数字の自動変換**: `convertDigitsForVertical(text, direction)` で direction === "vertical" のときのみ `[0-9]` → `[０-９]` 置換。横書きはそのまま素通し
+- direction は `getNewTextDirection()` の状態に従う
+
+### C. テキスト編集 UX 改善
+
+- **in-place 編集確定時に bbox 中心を固定** ([src/canvas-tools.js](src/canvas-tools.js) `startInPlaceEdit.onCommit`): contents 変更で bbox サイズが変わる際、`(oldRect.width - newRect.width)/2` / `(oldRect.height - newRect.height)/2` を addEditOffset (existing) / x,y 直接更新 (new) に加算。`resizeSelectedLayers` と同じ center-fixed パターンで、編集後にフレームが top-left 起点で「動いた」と感じる事故を解消
+- **テキストフレーム下のサイズバッジに余白追加** ([src/styles.css](src/styles.css)): `margin-top: 2px` → `10px` で枠から離して視認性確保
+- **サイズバッジにフォント名併記** ([src/canvas-tools.js](src/canvas-tools.js) `createSizeBadge`): `(sizePt, page, fontPostScriptName)` シグネチャで `{フォント名} · {N}pt` 表示
+- **edit-font 入力中の値保護** ([src/text-editor.js](src/text-editor.js) `rebuildFontOptions`): `document.activeElement === input` のとき `input.value` 上書きをスキップし、入力途中の文字列が消える事故を防止
+
+### D. 自動配置 / OCR フロー強化
+
+- **自動配置のサイズスナップを 1pt 単位に固定** ([src/ai-place.js](src/ai-place.js) `detectSizePtFromBlock`): 環境設定の `textSizeStep` (0.1 / 0.5) ではなく `Math.round(pt)` で吹き出し間サイズを揃える。手動 +/- ボタンは textSizeStep そのまま
+- **画像スキャンが見本読込済みならファイル選択スキップ** ([src/ai-ocr.js](src/ai-ocr.js) `bindAiOcrButton`): `getPdfPaths()` が空でなければそのファイル群で直接 OCR 開始。未読込時のみ `pickInputFiles` ダイアログを開いて `loadReferenceFiles` 経由で見本表示してから OCR
+- **ホーム復帰時の状態リセット強化** ([src/hamburger-menu.js](src/hamburger-menu.js) `goHome`): `resetAutoPlaceState()` ([src/ai-place.js](src/ai-place.js)) を呼び `lastPlacedFingerprint` をクリア、同一テキスト警告ダイアログの誤発火を解消
+- **テキスト編集パネルを常時表示** ([src/text-editor.js](src/text-editor.js) `populateEditor` + [index.html](index.html)): `#editor` から初期 `hidden` 属性を撤去。0 件選択時は state 既定値を表示する「次に配置するテキストの初期値設定 UI」として機能、複数選択時のみフォント欄を非表示
+
+### E. ガイド/ルーラー機能の拡張
+
+- **ホーム復帰でガイドを完全クリア** ([src/rulers.js](src/rulers.js) `clearAllGuides` 新設 + [src/hamburger-menu.js](src/hamburger-menu.js) `goHome`): `guidesByPsd` Map を全消去 + 影響パスごとに `emitGuidesChange` 発火 + 再描画
+- **ガイド反映モーダルに「解除」ボタン** ([src/main.js](src/main.js) `openGuidesApplyModal` + [src/rulers.js](src/rulers.js) `clearGuidesForPaths`):
+  - 旧「反映済み」ページの disabled を撤廃して解除ターゲットとして選択可能に
+  - 全選択ボタンも現ページを含めて全件チェックに変更（実際の解除/反映は rulers.js 側で `path === srcPath` を弾くので二重防止）
+  - 「ガイドあり」suffix で対象ページが既存ガイドを持つことを表示
+  - 新フッターボタン「解除」(`page-jump-btn-danger`) で `clearGuidesForPaths` を呼び、ガイドを持つページのみカウント
+- **ルーラー ON 中の背景色強調を撤去** ([src/styles.css](src/styles.css) `.psd-rulers-toggle-btn`): `aria-pressed="true"` の accent 塗りルールを削除し、状態は実際の定規描画で判別する形に
+
+### F. ファイルピッカーの拡張
+
+- **デフォルト起点をデスクトップに変更** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs) `desktop_dir` コマンド新設 + [src/file-picker.js](src/file-picker.js) `getInitialPath`): `%USERPROFILE%\Desktop` (Windows) / `$HOME/Desktop` (Unix) を返す。フォルダが存在しない場合は home_dir フォールバック
+- **パス欄を input にしてコピペ可能に** ([index.html](index.html) + [src/file-picker.js](src/file-picker.js) + [src/styles.css](src/styles.css)):
+  - `<div id="file-picker-path">` → `<input type="text">` に変更
+  - フォーカス時に `select()` で全選択（Ctrl+C でコピー / Ctrl+V 貼付からの編集が容易）
+  - Enter で入力したパスへ即ナビゲーション、Esc で編集取り消し、blur で現在パス再表示
+  - フォーカス中は `value` 上書きを抑止して入力途中文字列を保護
+- **C: ボタンをデスクトップショートカットに置換** ([src/file-picker.js](src/file-picker.js) `renderDrives` + `navigateToDesktop`):
+  - drives ループから C: を `skip`、先頭にモニターアイコン (lucide `monitor`) のデスクトップショートカットボタンを配置
+  - C: ドライブはパス入力欄から `C:\` + Enter で到達可能
+
+### G. PSD 保存設定の統一
+
+- **保存される PSD 内の全テキストレイヤーを共通設定に揃える** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyDefaultTextSettingsToAllLayers` 新設):
+  - `textItem.autoKerning = AutoKernType.MANUAL`（カーニング: 0、自動カーニング無効）
+  - `textItem.antiAliasMethod = AntiAlias.SHARP`（アンチエイリアス: シャープ）
+  - 再帰スキャンで PsDesign が触っていない既存レイヤーも対象。`applyToPsd` の保存処理直前で実行
+- **半角 `!!` / `!?` の縦中横自動適用** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyTateChuYoko` 新設、長期診断結果に基づく):
+  - Photoshop の縦中横は `textStyleRange.textStyle.baselineDirection = enum("cross")` で実装されている（forum で言及される `tcy` boolean は実機で動作せず、Photoshop の textStyle 全 50+ key 中に tcy 関連 attribute は存在しないことを diagnosis dump で実証）
+  - `applyRepeatedDashTracking` と同じ Action Manager パターン: clone-and-replace で textStyleRange を per-character 再構築、ペア該当レンジのみ `putEnumerated(baselineDirection, baselineDirection, cross)`、`set` クラスは `textLayer`
+  - 半角 `!!` / `!?` を先頭から貪欲に 2 文字単位でペア化、3 文字以上連続のとき余り 1 文字は単独
+  - 縦書きレイヤーのみ対象、設定 `tateChuYokoEnabled` で ON/OFF（デフォルト ON）。プレビューも CSS `text-combine-upright: all` で同じ位置に表示
+  - フロント `state.exportEdits` payload + Rust `EditPayload.tate_chu_yoko_enabled: bool` で受け渡し
+  - 設定モーダル「サイドバー」タブに「`「!!」「!?」を縦中横に`」ドロップダウンを追加 ([index.html](index.html) + [src/settings-ui.js](src/settings-ui.js))
+
+### H. 保存ドロップダウン UI
+
+- **保存ドロップダウンの三角を中央配置 + 開閉アニメ** ([src/styles.css](src/styles.css) `.save-menu`):
+  - 旧 `right: 0` → 新 `left: 50%; transform: translateX(-50%)` で保存ボタンの中心軸に整列
+  - `::before` 三角も `left: 50%` で中央
+  - `transform-origin: top center` + `scale(0.85 → 1)` + `opacity` 連動の 0.18s トランジションで「三角の頂点から展開」する印象に。`[hidden]` を `display: none` から `visibility/opacity/transform` 切替に変更して閉じも逆再生
+
+### I. その他 UI / 操作系の改善
+
+- **Ctrl+A で現在ページの全テキストフレーム選択** ([src/main.js](src/main.js)): 入力欄外で Ctrl+A を `preventDefault` してブラウザ既定の「ページ全体テキスト選択」を抑止し、代わりに `selectAllTextFramesOnCurrentPage()` で現ページの既存 + 新規レイヤーを全選択。入力欄内では通常のフィールド全選択を維持
+- **ステージラベルバーに定規ボタンを移動** ([index.html](index.html) + [src/styles.css](src/styles.css)): サイドツールバーから `#toggle-rulers-btn` を撤去し、`.stage-label-actions` の先頭（ガイド反映ボタンの隣）に再配置。`.psd-rulers-toggle-btn` クラスで他のステージラベルバー系ボタンと同じ視覚言語に統一
+- **ステージラベルバーボタンのアイコンを少し拡大**: ボタン外径 20→**22px**、SVG 12→**15px** で視認性向上（バー高 24px に収まる範囲）
+- **システムフォントを MojiQ と統一** ([index.html](index.html) + [src/styles.css](src/styles.css)): Google Fonts から `Noto Sans JP` (300/400/500/700) を `<link>` で読み込み、`:root` font-family を `"Noto Sans JP", "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif` に変更。`input, button, textarea, select` も `"Noto Sans JP", sans-serif` を明示
+
+> **構造変更まとめ**:
+> - 旧: V (選択) / T (縦書き) / Y (横書き) / Pan の 4 ツール、テキスト操作はツール切替で分散 → 新: V + Pan の 2 ツール、新規テキスト入力は V の dblclick + 縦/横トグルスイッチに統合
+> - 旧: 原稿テキストは「読み込んだファイルを編集」のみ → 新: txt-source-viewer 直下に常駐入力欄、PSD ページ中央へ即配置、半角数字は縦書きで自動全角化
+> - 旧: in-place 編集後にフレームが top-left 起点で動いて見える → 新: bbox 中心固定でフレームが視覚的に動かない
+> - 旧: ガイド反映モーダルは「コピー」のみ → 新: 「反映」+「解除」両対応、ホーム復帰でも完全クリア
+> - 旧: ファイルピッカーは home_dir 起点 + パス文字列読み取り専用 → 新: デスクトップ起点 + input 化でコピペ可、C: ボタンはデスクトップショートカットに置換
+> - 旧: 保存 PSD のカーニング/アンチエイリアスはレイヤーごとにバラバラ → 新: 全テキストレイヤーで「カーニング: 0、アンチエイリアス: シャープ」に統一
+> - 旧: 縦書き `!!` `!?` は手動で縦中横適用が必要 → 新: 自動で `baselineDirection: cross` を当てる（Photoshop 内部実装を診断 dump で特定）
+> - 旧: フォントは `"Segoe UI", "Yu Gothic UI"` で MojiQ と異なる → 新: Google Fonts の Noto Sans JP に統一
+
+
+

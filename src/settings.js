@@ -24,6 +24,9 @@ export const DEFAULT_SETTINGS = {
     // 連続ランの最後の 1 文字は常に 0 のまま（後続文字との字間が詰まりすぎないように）。
     dashTrackingMille: -100,   // ダッシュ系（— ― – ‒ ‐ ‑ ー －）の連続詰め
     tildeTrackingMille: -300,  // チルダ系（〜 ～）の連続詰め
+    // 縦書きの新規レイヤーで半角 !! / !? を自動的に「縦中横」(text-combine-upright) に
+    // するか。Photoshop 書き戻しでも textStyleRange の tcy 属性を立てる。
+    tateChuYokoEnabled: true,
   },
   shortcuts: {
     save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
@@ -34,8 +37,6 @@ export const DEFAULT_SETTINGS = {
     pageLast:   { key: "ArrowRight", modifiers: ["ctrl"],          description: "最後のページ" },
     pageJump:   { key: "j",          modifiers: ["ctrl"],          description: "ページジャンプ" },
     toolSelect: { key: "v",          modifiers: [],                description: "選択ツール" },
-    toolTextV:  { key: "t",          modifiers: [],                description: "縦書きツール" },
-    toolTextH:  { key: "y",          modifiers: [],                description: "横書きツール" },
     zoomIn:     { key: "=",          modifiers: ["ctrl"],          description: "ズームイン" },
     zoomOut:    { key: "-",          modifiers: ["ctrl"],          description: "ズームアウト" },
     zoomReset:  { key: "0",          modifiers: ["ctrl"],          description: "ズーム 100%" },
@@ -101,6 +102,9 @@ function migrate(old) {
     }
     if (typeof d.tildeTrackingMille === "number" && Number.isFinite(d.tildeTrackingMille)) {
       out.defaults.tildeTrackingMille = d.tildeTrackingMille;
+    }
+    if (typeof d.tateChuYokoEnabled === "boolean") {
+      out.defaults.tateChuYokoEnabled = d.tateChuYokoEnabled;
     }
   }
   if (old.shortcuts && typeof old.shortcuts === "object") {

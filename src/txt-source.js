@@ -1,8 +1,16 @@
 import {
+  addNewLayer,
+  getCurrentFont,
   getCurrentPageIndex,
+  getFillColor,
+  getLeadingPct,
   getNewLayers,
   getPages,
   getPdfPageIndex,
+  getStrokeColor,
+  getStrokeWidthPx,
+  getTextSize,
+  getNewTextDirection,
   getTxtSelectedBlockIndex,
   getTxtSelection,
   getTxtSource,
@@ -20,7 +28,7 @@ import {
   withHistoryTransient,
 } from "./state.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
-import { refreshAllOverlays } from "./canvas-tools.js";
+import { centerTopLeft, refreshAllOverlays } from "./canvas-tools.js";
 import { rebuildLayerList } from "./text-editor.js";
 
 const $ = (id) => document.getElementById(id);
@@ -461,6 +469,149 @@ function replaceBlockInContent(content, pageNumber, oldText, newText) {
   return norm.slice(0, absStart) + newText + norm.slice(absStart + oldLF.length);
 }
 
+// 半角数字 (U+0030 - U+0039) を全角数字 (U+FF10 - U+FF19) に変換する。
+// 縦書きの写植では半角数字を縦に並べるとレイアウトが崩れるため、
+// direction === "vertical" のときだけ変換する (横書きは半角のままにする)。
+function convertDigitsForVertical(text, direction) {
+  if (direction !== "vertical") return String(text ?? "");
+  return String(text ?? "").replace(/[0-9]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) - 0x30 + 0xff10),
+  );
+}
+
+// 新規入力テキストを「現在ページの末尾」に追記し、新しい content と
+// その新パラグラフが visible blocks 上で持つ paragraphIndex を返す。
+//
+// ケース別:
+//   1) マーカー無し原稿: content 全体を 1 セクション扱い、末尾に追記。
+//      paragraphIndex = 既存ブロック数（追記後の最後の index）
+//   2) マーカー有り + 対象ページのセクション存在: そのセクション末尾に追記。
+//      paragraphIndex = そのページの既存ブロック数
+//   3) マーカー有り + 対象ページのマーカー無し: 末尾に新しい <<NPage>> セクションを生成。
+//      paragraphIndex = 0
+function appendBlockToCurrentPageContent(content, pageNumber, newText) {
+  const norm = (content ?? "").replace(/\r\n?/g, "\n");
+  const trimmedText = String(newText ?? "").trim();
+  if (!trimmedText) return { content: norm, paragraphIndex: -1 };
+
+  const parsed = parsePages(norm);
+
+  // ケース 1: マーカー無し
+  if (!parsed.hasMarkers) {
+    const existing = splitBlocksRaw(norm);
+    const newContent = existing.length > 0
+      ? `${existing.join("\n\n")}\n\n${trimmedText}`
+      : trimmedText;
+    return { content: newContent, paragraphIndex: existing.length };
+  }
+
+  // ケース 2: マーカー有り + 対象ページが存在
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let sectionStart = -1;
+  let sectionEnd = norm.length;
+  let inTarget = false;
+  let m;
+  while ((m = re.exec(norm)) !== null) {
+    const num = toHalfWidthInt(m[1]);
+    if (inTarget) { sectionEnd = m.index; break; }
+    if (num === pageNumber) {
+      inTarget = true;
+      sectionStart = m.index + m[0].length;
+    }
+  }
+
+  if (inTarget) {
+    const sectionText = norm.slice(sectionStart, sectionEnd);
+    const sectionBlocks = splitBlocksRaw(sectionText);
+    const newSectionText = sectionBlocks.length > 0
+      ? `\n${sectionBlocks.join("\n\n")}\n\n${trimmedText}\n`
+      : `\n${trimmedText}\n`;
+    const newContent = norm.slice(0, sectionStart) + newSectionText + norm.slice(sectionEnd);
+    return { content: newContent, paragraphIndex: sectionBlocks.length };
+  }
+
+  // ケース 3: 対象ページマーカー無し → 末尾に新セクション作成
+  const trimmedNorm = norm.replace(/\n+$/, "");
+  const sep = trimmedNorm.length > 0 ? "\n\n" : "";
+  const newContent = `${trimmedNorm}${sep}<<${pageNumber}Page>>\n\n${trimmedText}\n`;
+  return { content: newContent, paragraphIndex: 0 };
+}
+
+// 「新規テキストを入力欄から確定」ハンドラ。
+// PSD ページの幾何中心にテキストフレーム (newLayer) を生成し、原稿本文にも追記して
+// sourceTxtRef でリンクする。原稿編集 → 配置済みフレームの追従は ai-place.js が担当。
+function commitNewTxtInput() {
+  const inputEl = $("txt-new-input");
+  if (!inputEl) return;
+  const text = (inputEl.value ?? "").trim();
+  if (!text) return;
+  const pages = getPages();
+  if (pages.length === 0) {
+    toast("PSD が読み込まれていません", { kind: "error" });
+    return;
+  }
+
+  const pageIdx = getCurrentPageIndex();
+  const psdPage = pages[pageIdx];
+  if (!psdPage) return;
+  // V ツール統合後は「新規テキスト方向」トグルから direction を取得する。
+  const direction = getNewTextDirection();
+  const sizePt = getTextSize();
+  const leadingPct = getLeadingPct();
+  // 縦書きのときは半角数字を全角に置換 (横書きは入力のまま)。
+  // 配置レイヤーの contents と原稿本文の追記内容、両方に同じ変換後テキストを使う
+  // ことで、原稿 dblclick 編集 → ai-place の syncPlacedFromTxt 連動でも整合性を保つ。
+  const placedText = convertDigitsForVertical(text, direction);
+
+  const { x, y } = centerTopLeft(
+    psdPage,
+    { contents: placedText, sizePt, direction, leadingPct },
+    psdPage.width / 2,
+    psdPage.height / 2,
+  );
+
+  // PSD ページ index は 0-based、原稿のページ番号は 1-based
+  const pageNumber = pageIdx + 1;
+
+  withHistoryTransient(() => {
+    // 1) 原稿本文に追記 (txtSource が null なら空 content で初期化)
+    const src = getTxtSource() ?? { name: "新規テキスト.txt", content: "" };
+    const { content: newContent, paragraphIndex } =
+      appendBlockToCurrentPageContent(src.content, pageNumber, placedText);
+    setTxtSource({ name: src.name, content: newContent });
+
+    // 2) 中央配置のレイヤー追加 (sourceTxtRef でリンク)
+    addNewLayer({
+      psdPath: psdPage.path,
+      x, y, contents: placedText,
+      fontPostScriptName: getCurrentFont() || null,
+      sizePt, direction, leadingPct,
+      strokeColor: getStrokeColor(),
+      strokeWidthPx: getStrokeWidthPx(),
+      fillColor: getFillColor(),
+      sourceTxtRef: { pageNumber, paragraphIndex },
+    });
+  });
+
+  inputEl.value = "";
+  syncNewInputAvailability();
+  refreshAllOverlays();
+  rebuildLayerList();
+  // 連続入力できるよう textarea にフォーカスを残す
+  inputEl.focus();
+}
+
+// PSD 読込状態 + 入力内容に応じて textarea / button の disabled を切替。
+function syncNewInputAvailability() {
+  const inputEl = $("txt-new-input");
+  const btn = $("txt-new-input-btn");
+  if (!inputEl || !btn) return;
+  const psdLoaded = getPages().length > 0;
+  inputEl.disabled = !psdLoaded;
+  const hasText = (inputEl.value ?? "").trim().length > 0;
+  btn.disabled = !psdLoaded || !hasText;
+}
+
 function selectBlock(idx, text) {
   setTxtSelectedBlockIndex(idx);
   setTxtSelection(text);
@@ -683,8 +834,42 @@ export function initTxtSource() {
     if (!deleteSelectedTxtBlock()) return;
     toast("選択中のテキストを削除しました", { kind: "info", duration: 1500 });
   });
+
+  // 新規テキスト入力欄: PSD ページ中央にテキストフレームを生成するショートカット。
+  const newInputEl = $("txt-new-input");
+  const newInputBtn = $("txt-new-input-btn");
+  if (newInputEl) {
+    newInputEl.addEventListener("input", syncNewInputAvailability);
+    newInputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        commitNewTxtInput();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        if ((newInputEl.value ?? "").length > 0) {
+          newInputEl.value = "";
+          syncNewInputAvailability();
+        } else {
+          newInputEl.blur();
+        }
+      }
+    });
+  }
+  if (newInputBtn) {
+    newInputBtn.addEventListener("click", commitNewTxtInput);
+  }
+  // PSD 読込状態 + 入力内容で disabled を更新する listener 群。
+  // PSD ロード/クリアは psdesign:psd-loaded CustomEvent (main.js が dispatch) と
+  // onPageIndexChange の両方で発火する。両方を購読して取りこぼしを防ぐ。
+  window.addEventListener("psdesign:psd-loaded", syncNewInputAvailability);
+  // 既存の onPageIndexChange listener はこの関数より前に登録済みだが、
+  // syncNewInputAvailability は内部で getPages() を見るだけの軽量関数なので
+  // 二重 listener にしておく副作用は無い。
+  onPageIndexChange(syncNewInputAvailability);
+
   bindDropzone();
   renderViewer();
+  syncNewInputAvailability();
 }
 
 export function getActiveTxtSelection() {

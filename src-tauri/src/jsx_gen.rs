@@ -145,10 +145,11 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
             out.push_str("},\n");
         }
         out.push_str(&format!(
-            "], {}, {}, {});\n",
+            "], {}, {}, {}, {});\n",
             js_string(&save_path),
             payload.dash_tracking_mille,
-            payload.tilde_tracking_mille
+            payload.tilde_tracking_mille,
+            if payload.tate_chu_yoko_enabled { "true" } else { "false" }
         ));
         out.push_str("    __saveOk++;\n");
         out.push_str("  } catch (eFile) {\n");
@@ -641,6 +642,125 @@ function applyRepeatedDashTracking(layer, contents, dashMille, tildeMille) {
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
+// 半角 !! / !? を「縦中横」(textStyleRange の baselineDirection=cross) に。
+// 新規・縦書きレイヤーのみ対象。先頭から貪欲に 2 文字単位でペア化し、3 文字以上連続の
+// とき余り 1 文字は単独 (ユーザー仕様)。例: "!!!" → 先頭 !! のみ tcy / "!!?" → !! のみ tcy。
+//
+// 実機検証で判明:
+//   Photoshop は縦中横を `textStyleRange.textStyle.baselineDirection = cross` という
+//   enum 値で実装している。"cross" は「縦書きの line direction に対して垂直 (= 横並び)」を
+//   意味し、これが縦中横の本質的な挙動。手動で縦中横を適用済みの PSD で当該レンジを
+//   読むと bd=cross / 通常レンジは bd=(なし) になっていることを確認済み。
+//
+// 実装方針:
+//   1) clone-and-replace 方式で textStyleRange を per-character 再構築 (フォント等のスタイルを保持)
+//   2) ペア該当レンジに putEnumerated(baselineDirection, baselineDirection, cross) を当てる
+//   3) ペア外レンジは clone した style をそのまま (baselineDirection を触らない)
+//   4) set は textLayer クラス (tracking と同じパターン)
+function applyTateChuYoko(layer, contents, enabled, direction) {
+  if (!enabled) return;
+  if (direction !== "vertical") return;
+  var fullText = String(contents);
+  if (fullText.length < 2) return;
+
+  // ペア検出 (先頭から貪欲に 2 文字単位)
+  var pairs = [];
+  var i = 0;
+  while (i < fullText.length - 1) {
+    var two = fullText.charAt(i) + fullText.charAt(i + 1);
+    if (two === "!!" || two === "!?") {
+      pairs.push({ start: i, end: i + 2 });
+      i += 2;
+    } else {
+      i += 1;
+    }
+  }
+  if (pairs.length === 0) return;
+
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  // 各 char に pairId (0 = 非ペア、1+ = pairs[idx-1])。隣接ペアを別レンジに保つため。
+  var pairId = [];
+  for (var p0 = 0; p0 < totalChars; p0++) pairId[p0] = 0;
+  for (var pi2 = 0; pi2 < pairs.length; pi2++) {
+    var pp = pairs[pi2];
+    for (var pc = pp.start; pc < pp.end && pc < totalChars; pc++) {
+      pairId[pc] = pi2 + 1;
+    }
+  }
+
+  // (srcRangeIndex, pairId) 境界で textStyleRange を再構築。pairId 差分で boundary。
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curPair = pairId[0];
+  for (var pos = 1; pos <= totalChars; pos++) {
+    var nextSrc, nextPair, boundary;
+    if (pos === totalChars) {
+      boundary = true;
+      nextSrc = curSrc;
+      nextPair = curPair;
+    } else {
+      nextSrc = (typeof srcRangeIndex[pos] === "number") ? srcRangeIndex[pos] : curSrc;
+      nextPair = pairId[pos];
+      boundary = (nextSrc !== curSrc) || (nextPair !== curPair);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      if (curPair > 0) {
+        // ペア該当レンジのみ baselineDirection = cross を当てる (= 縦中横化)
+        try {
+          styleClone.putEnumerated(
+            sID("baselineDirection"),
+            sID("baselineDirection"),
+            sID("cross")
+          );
+        } catch (eBD) {}
+      }
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), pos);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = pos;
+      curSrc = nextSrc;
+      curPair = nextPair;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  try {
+    executeAction(sID("set"), setDesc, DialogModes.NO);
+  } catch (eSet) {
+    addWarning("縦中横の適用に失敗: " + eSet);
+  }
+}
+
 function disableStrokeEffect(layerRef) {
   app.activeDocument.activeLayer = layerRef;
   var desc = new ActionDescriptor();
@@ -656,7 +776,26 @@ function disableStrokeEffect(layerRef) {
   try { executeAction(sID("set"), desc, DialogModes.NO); } catch (e) {}
 }
 
-function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille) {
+// PsDesign が保存する PSD 内の全テキストレイヤーに、共通設定を適用する。
+//   - autoKerning = MANUAL (= UI の「カーニング: 0」、自動カーニング無効)
+//   - antiAliasMethod = SHARP (= 「シャープ」)
+// 既存・新規を問わず、保存される PSD 内のテキストはすべてこの設定で揃える方針。
+function applyDefaultTextSettingsToAllLayers(doc) {
+  function visit(parent) {
+    for (var i = 0; i < parent.layers.length; i++) {
+      var l = parent.layers[i];
+      if (l.typename === "LayerSet") {
+        visit(l);
+      } else if (l.kind === LayerKind.TEXT) {
+        try { l.textItem.autoKerning = AutoKernType.MANUAL; } catch (eAk) {}
+        try { l.textItem.antiAliasMethod = AntiAlias.SHARP; } catch (eAa) {}
+      }
+    }
+  }
+  visit(doc);
+}
+
+function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[PsDesign] skip missing: " + psdPath); return; }
   var prevUnits = app.preferences.rulerUnits;
@@ -847,6 +986,16 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             addWarning("連続記号のツメ適用に失敗: " + eDashTrack);
           }
         }
+        // 縦中横（!! / !? の自動 tcy）。設定 ON かつ縦書きレイヤーのみ。
+        // applyRepeatedDashTracking の後に呼ぶことで、tracking で再構築された textStyleRange
+        // を引き継ぎつつ baselineDirection=cross を上乗せする。
+        if (tateChuYokoEnabled) {
+          try {
+            applyTateChuYoko(layerRef, nti.contents, true, nl.direction);
+          } catch (eTcy) {
+            addWarning("縦中横 (!! / !?) の適用に失敗: " + eTcy);
+          }
+        }
         if (typeof nl.rotation === "number" && nl.rotation !== 0) {
           try {
             layerRef.rotate(nl.rotation, AnchorPosition.MIDDLECENTER);
@@ -872,6 +1021,11 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       if (__textGroup) {
         try { __textGroup.visible = true; } catch (eVisG) {}
       }
+    }
+    // 保存する PSD 内の全テキストレイヤーをカーニング 0 (MANUAL) + アンチエイリアス
+    // シャープに揃える。新規 / 既存問わず、書き出される PSD のテキスト設定を統一する。
+    try { applyDefaultTextSettingsToAllLayers(doc); } catch (eDefSet) {
+      addWarning("テキスト共通設定 (kerning/antialias) の適用に失敗: " + eDefSet);
     }
     if (typeof savePath === "string" && savePath.length > 0) {
       var outFile = new File(savePath);

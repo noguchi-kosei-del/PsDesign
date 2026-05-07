@@ -62,6 +62,7 @@ import {
   hasAnyGuide,
   onGuidesChange,
   applyGuidesToPaths,
+  clearGuidesForPaths,
   guidesMatchCurrent,
 } from "./rulers.js";
 import {
@@ -72,6 +73,7 @@ import {
   clearPages,
   getActivePane,
   getCurrentPageIndex,
+  getNewLayersForPsd,
   getPages,
   getParallelSyncMode,
   getParallelViewMode,
@@ -104,6 +106,7 @@ import {
   setParallelSyncMode,
   setParallelViewMode,
   setPdfPageIndex,
+  setSelectedLayers,
   setPdfRotation,
   setPdfSkipFirstBlank,
   setPdfZoom,
@@ -123,6 +126,9 @@ import {
   toggleFramesVisible,
   onFramesVisibleChange,
   getFramesVisible,
+  getNewTextDirection,
+  setNewTextDirection,
+  onNewTextDirectionChange,
   applyToolDefaults,
 } from "./state.js";
 import {
@@ -248,6 +254,7 @@ function openGuidesApplyModal() {
   const modal = document.getElementById("guides-apply-modal");
   const list = document.getElementById("guides-apply-list");
   const okBtn = document.getElementById("guides-apply-ok");
+  const unapplyBtn = document.getElementById("guides-apply-unapply");
   const cancelBtn = document.getElementById("guides-apply-cancel");
   const selAllBtn = document.getElementById("guides-apply-select-all");
   const selNoneBtn = document.getElementById("guides-apply-select-none");
@@ -259,8 +266,11 @@ function openGuidesApplyModal() {
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
     const isCurrent = i === currentIdx;
-    // 既に現ページとガイドが完全一致しているページは「反映済み」扱いで選択不可にする。
+    // 反映済み: 現ページとガイドが完全一致。
+    // ガイドあり: 何らかのガイドを持つが現ページと一致しない。
+    // 解除を後から行えるよう、現ページ以外は全て選択可能にする（disabled は外す）。
     const alreadyApplied = !isCurrent && guidesMatchCurrent(page?.path);
+    const otherHasGuides = !isCurrent && !alreadyApplied && hasAnyGuide(page?.path);
     const label = document.createElement("label");
     label.className = "guides-apply-item"
       + (isCurrent ? " guides-apply-item-current" : "")
@@ -268,7 +278,9 @@ function openGuidesApplyModal() {
     const cb = document.createElement("input");
     cb.type = "checkbox";
     cb.dataset.index = String(i);
-    if (isCurrent || alreadyApplied) cb.disabled = true;
+    cb.dataset.hasGuides = (alreadyApplied || otherHasGuides) ? "1" : "0";
+    // 現ページもチェック可能にしておく（全選択に含めるため）。
+    // 実際の反映 / 解除は rulers.js 側で path === srcPath を弾くので二重防止。
     const span = document.createElement("span");
     span.className = "guides-apply-item-name";
     const m = (page?.path ?? "").match(/[\\/]([^\\/]+)$/);
@@ -276,6 +288,7 @@ function openGuidesApplyModal() {
     let suffix = "";
     if (isCurrent) suffix = "（現在のページ）";
     else if (alreadyApplied) suffix = "（反映済み）";
+    else if (otherHasGuides) suffix = "（ガイドあり）";
     span.textContent = `${i + 1}: ${name}${suffix}`;
     label.appendChild(cb);
     label.appendChild(span);
@@ -287,26 +300,42 @@ function openGuidesApplyModal() {
   const cleanup = () => {
     hideModalAnimated(modal);
     okBtn.removeEventListener("click", onOk);
+    unapplyBtn?.removeEventListener("click", onUnapply);
     cancelBtn.removeEventListener("click", onCancel);
     selAllBtn?.removeEventListener("click", onSelAll);
     selNoneBtn?.removeEventListener("click", onSelNone);
     modal.removeEventListener("mousedown", onOverlay);
     document.removeEventListener("keydown", onKey);
   };
-  const onOk = () => {
-    const targetPaths = [];
+  const collectSelectedPaths = (filterFn) => {
+    const out = [];
     list.querySelectorAll("input[type=checkbox]:not(:disabled):checked").forEach((cb) => {
+      if (filterFn && !filterFn(cb)) return;
       const idx = Number(cb.dataset.index);
-      if (Number.isFinite(idx) && pages[idx]?.path) targetPaths.push(pages[idx].path);
+      if (Number.isFinite(idx) && pages[idx]?.path) out.push(pages[idx].path);
     });
+    return out;
+  };
+  const onOk = () => {
+    const targetPaths = collectSelectedPaths();
     cleanup();
     if (targetPaths.length === 0) return;
     const count = applyGuidesToPaths(targetPaths);
     if (count > 0) toast(`${count} ページにガイドを反映しました`, { kind: "success" });
   };
+  const onUnapply = () => {
+    // 解除はガイドを持つページのみ意味がある。
+    // ガイドのないページが混ざっていても rulers 側で no-op になるが、
+    // ユーザーには「N ページのガイドを解除しました」と実際に解除した数だけ通知する。
+    const targetPaths = collectSelectedPaths((cb) => cb.dataset.hasGuides === "1");
+    cleanup();
+    if (targetPaths.length === 0) return;
+    const count = clearGuidesForPaths(targetPaths);
+    if (count > 0) toast(`${count} ページのガイドを解除しました`, { kind: "success" });
+  };
   const onCancel = () => cleanup();
   const onOverlay = (e) => { if (e.target === modal) cleanup(); };
-  const onSelAll = () => list.querySelectorAll("input[type=checkbox]:not(:disabled)").forEach((cb) => { cb.checked = true; });
+  const onSelAll = () => list.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = true; });
   const onSelNone = () => list.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = false; });
   const onKey = (e) => {
     if (e.key === "Escape") { e.preventDefault(); cleanup(); }
@@ -314,6 +343,7 @@ function openGuidesApplyModal() {
   };
 
   okBtn.addEventListener("click", onOk);
+  unapplyBtn?.addEventListener("click", onUnapply);
   cancelBtn.addEventListener("click", onCancel);
   selAllBtn?.addEventListener("click", onSelAll);
   selNoneBtn?.addEventListener("click", onSelNone);
@@ -348,8 +378,6 @@ function runShortcut(id) {
     case "pageLast":   jumpToEdge(inv ? "first" : "last"); break;
     case "pageJump":   openPageJumpDialog(); break;
     case "toolSelect": setTool("move"); break;
-    case "toolTextV":  setTool("text-v"); break;
-    case "toolTextH":  setTool("text-h"); break;
     case "zoomIn":     zoomActivePaneBy(1.15); break;
     case "zoomOut":    zoomActivePaneBy(1 / 1.15); break;
     case "zoomReset":  resetActivePaneZoom(); break;
@@ -450,6 +478,26 @@ function bindTools() {
   });
   applyActive();
 
+  // 現在ページの全テキストフレーム (既存レイヤー + 新規レイヤー) を選択する。
+  // Ctrl+A 経由で呼ばれる。PSD 未読込時は no-op。
+  const selectAllTextFramesOnCurrentPage = () => {
+    const pages = getPages();
+    if (pages.length === 0) return;
+    const idx = Math.max(0, Math.min(pages.length - 1, getCurrentPageIndex()));
+    const page = pages[idx];
+    const selections = [];
+    for (const layer of page.textLayers ?? []) {
+      selections.push({ pageIndex: idx, layerId: layer.id });
+    }
+    for (const nl of getNewLayersForPsd(page.path)) {
+      selections.push({ pageIndex: idx, layerId: nl.tempId });
+    }
+    if (selections.length === 0) return;
+    setSelectedLayers(selections);
+    rebuildLayerList();
+    refreshAllOverlays();
+  };
+
   // Alt 単独押下/離上で Windows のシステムメニューが活性化し、次の Space で開いてしまう
   // 事故を防ぐ。Alt+wheel でズームした直後に Space を押すと左上にメニューが出る現象の対策。
   const suppressAltMenuActivation = (e) => {
@@ -492,7 +540,7 @@ function bindTools() {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
       const tool = getTool();
-      const nudgeTool = tool === "move" || tool === "text-v" || tool === "text-h";
+      const nudgeTool = tool === "move";
       if (!isInput && nudgeTool) {
         const step = e.shiftKey ? 10 : 1;
         let dx = 0, dy = 0;
@@ -547,6 +595,18 @@ function bindTools() {
         e.preventDefault();
         handleClearAllEdits();
         return;
+      }
+      // Ctrl+A: 入力欄/contenteditable 内では通常の「フィールド内テキスト全選択」を
+      // 維持。それ以外では現在ページの全テキストフレーム (既存 + 新規) を選択する。
+      // ブラウザ既定の「ページ全体テキスト選択」は preventDefault で抑止。
+      if (k === "a" && !e.shiftKey) {
+        const t = e.target;
+        const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+        if (!isInput) {
+          e.preventDefault();
+          selectAllTextFramesOnCurrentPage();
+          return;
+        }
       }
     }
 
@@ -1374,6 +1434,42 @@ function bindFramesToggle() {
   );
 }
 
+// V ツール直下の「新規テキスト方向」スイッチ (縦型トグル)。
+// 1 つのスイッチをクリックすると縦↔横が切替わる。
+// localStorage 永続化 + aria-checked 同期 (CSS が thumb 位置 / icon 色を担当)。
+const NEW_TEXT_DIR_LS_KEY = "psdesign_new_text_direction";
+function bindNewTextDirectionToggle() {
+  const sw = document.getElementById("new-text-dir-switch");
+  if (!sw) return;
+
+  // 起動時: localStorage から復元
+  try {
+    const saved = localStorage.getItem(NEW_TEXT_DIR_LS_KEY);
+    if (saved === "vertical" || saved === "horizontal") {
+      setNewTextDirection(saved);
+    }
+  } catch {}
+
+  const sync = () => {
+    const dir = getNewTextDirection();
+    const isV = dir === "vertical";
+    sw.setAttribute("aria-checked", isV ? "true" : "false");
+    sw.setAttribute(
+      "aria-label",
+      isV ? "新規テキストの方向: 縦書き" : "新規テキストの方向: 横書き",
+    );
+  };
+  sync();
+  onNewTextDirectionChange((dir) => {
+    sync();
+    try { localStorage.setItem(NEW_TEXT_DIR_LS_KEY, dir); } catch {}
+  });
+
+  sw.addEventListener("click", () => {
+    setNewTextDirection(getNewTextDirection() === "vertical" ? "horizontal" : "vertical");
+  });
+}
+
 function bindZoomTool() {
   const out = document.getElementById("zoom-out-btn");
   const inn = document.getElementById("zoom-in-btn");
@@ -1583,6 +1679,7 @@ function init() {
   initRulers();
   bindRulerToggle();
   bindFramesToggle();
+  bindNewTextDirectionToggle();
   bindViewerMode();
   // services/psd-load.js から読込フェーズの節目で投げられるイベントを購読し、
   // ページバー / 回転ボタン / ガイドロックボタンの可視状態を同期する。

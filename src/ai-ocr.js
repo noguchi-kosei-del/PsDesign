@@ -17,7 +17,7 @@ import {
   hideProgress,
   toast,
 } from "./ui-feedback.js";
-import { getTxtSource, setAiOcrDoc } from "./state.js";
+import { getPdfPaths, getTxtSource, setAiOcrDoc } from "./state.js";
 import { loadTxtFromContent } from "./txt-source.js";
 import { loadReferenceFiles } from "./pdf-loader.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
@@ -341,29 +341,36 @@ export function bindAiOcrButton() {
       });
       if (!ok) return;
     }
-    // 画像スキャンは毎回ファイル選択からやり直す。読込済み見本があれば
-    // loadReferenceFiles で上書き破棄され、選び直した新しい見本で OCR が走る。
-    let files;
-    try { files = await pickInputFiles(); }
-    catch (e) {
-      console.error(e);
-      toast(`ファイル選択失敗: ${e?.message ?? e}`, { kind: "error" });
-      return;
+    // 既に見本が読み込まれていればファイル選択をスキップしてその見本で OCR を走らせる。
+    // 未読込のときだけファイル選択ダイアログを開き、選んだファイルを見本として表示してから OCR。
+    let files = getPdfPaths();
+    let needLoadReference = false;
+    if (!files || files.length === 0) {
+      try {
+        files = await pickInputFiles();
+      } catch (e) {
+        console.error(e);
+        toast(`ファイル選択失敗: ${e?.message ?? e}`, { kind: "error" });
+        return;
+      }
+      if (!files || files.length === 0) return; // ユーザーがキャンセル
+      needLoadReference = true;
     }
-    if (!files || files.length === 0) return; // ユーザーがキャンセル
-    // 選択した PDF / 画像を pdf-stage の見本としても表示する。
+    // 新規選択時のみ pdf-stage の見本としても表示する。
     // OCR はファイルパス配列を直接 mokuro に渡すので、先に loadReferenceFiles を await して
     // 見本表示を確定させてから OCR フェーズに進む（ユーザーが進捗中も画像確認可）。
-    try {
-      await loadReferenceFiles(files);
-    } catch (e) {
-      console.error("loadReferenceFiles failed:", e);
-      // 見本表示に失敗しても OCR 自体は継続できるので、エラー toast だけ出して進行。
-      toast(`見本表示に失敗: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
+    if (needLoadReference) {
+      try {
+        await loadReferenceFiles(files);
+      } catch (e) {
+        console.error("loadReferenceFiles failed:", e);
+        // 見本表示に失敗しても OCR 自体は継続できるので、エラー toast だけ出して進行。
+        toast(`見本表示に失敗: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
+      }
     }
     await runAiOcr(files, { notifyOnComplete: true });
   });
 
   btn.disabled = false;
-  btn.title = "ファイルを選択して AI で画像スキャン";
+  btn.title = "見本画像を AI で画像スキャン（未読込ならファイル選択ダイアログを表示）";
 }

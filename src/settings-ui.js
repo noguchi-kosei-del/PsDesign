@@ -110,6 +110,7 @@ function syncDefaultsUi() {
   const sb = $("default-show-badge");
   const dt = $("default-dash-tracking");
   const tt = $("default-tilde-tracking");
+  const tcy = $("default-tcy-enabled");
   if (ts) ts.value = String(d.textSize ?? "");
   if (tss) tss.value = String(d.textSizeStep ?? 0.1);
   if (lp) lp.value = String(d.leadingPct ?? "");
@@ -118,6 +119,7 @@ function syncDefaultsUi() {
   if (sb) sb.value = d.showBadge === false ? "hide" : "show";
   if (dt) dt.value = String(d.dashTrackingMille ?? 0);
   if (tt) tt.value = String(d.tildeTrackingMille ?? 0);
+  if (tcy) tcy.value = d.tateChuYokoEnabled === false ? "off" : "on";
   populateFontDatalist();
 }
 
@@ -372,6 +374,13 @@ function bindDefaultsInputs() {
   if (sb) {
     sb.addEventListener("change", () => {
       setDefault("showBadge", sb.value !== "hide");
+    });
+  }
+
+  const tcy = $("default-tcy-enabled");
+  if (tcy) {
+    tcy.addEventListener("change", () => {
+      setDefault("tateChuYokoEnabled", tcy.value !== "off");
     });
   }
 

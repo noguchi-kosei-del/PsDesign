@@ -105,7 +105,11 @@ const _normStrokeWidth = (v) => {
   return Math.max(0, Math.min(999, r));
 };
 const _normTool = (v) =>
-  v === "move" || v === "text-v" || v === "text-h" || v === "pan" ? v : undefined;
+  v === "move" || v === "pan" ? v : undefined;
+// V ツールの「次に作る新規テキストの方向」。サイドツールバーの方向トグルで切替。
+// localStorage 永続化は main.js の bindNewTextDirectionToggle が担当。
+const _normNewTextDir = (v) =>
+  v === "vertical" || v === "horizontal" ? v : undefined;
 const _normStrokeColor = (v) => (v === "white" || v === "black" ? v : "none");
 const _normFillColor = (v) => (v === "white" || v === "black" ? v : "default");
 const _normActivePane = (v) => (v === "pdf" ? "pdf" : "psd");
@@ -135,6 +139,9 @@ const $parallelSyncMode = createObservable(true, _normBool);
 const $activePane = createObservable("psd", _normActivePane);
 const $parallelViewMode = createObservable("parallel", _normParallelViewMode);
 const $framesVisible = createObservable(true, _normBool);
+// V ツールで空所をダブルクリックして新規テキスト入力を開くときの方向。
+// サイドツールバーの V ボタン直下にあるトグルで切替・localStorage に永続化。
+const $newTextDirection = createObservable("vertical", _normNewTextDir);
 // テキストエディタ用: 現在編集中の TXT の元ファイルパス（読込元 / 上書き先）。
 // 「開く」「別名で保存」で更新。OCR 結果や browser D&D など path が無い経路は null。
 const $txtFilePath = createObservable(null, (v) => (v == null ? null : String(v)));
@@ -244,6 +251,11 @@ export const getFramesVisible = $framesVisible.get;
 export const setFramesVisible = $framesVisible.set;
 export const onFramesVisibleChange = $framesVisible.on;
 export function toggleFramesVisible() { setFramesVisible(!getFramesVisible()); }
+
+// V ツールの「新規テキスト方向」(vertical / horizontal)
+export const getNewTextDirection = $newTextDirection.get;
+export const setNewTextDirection = $newTextDirection.set;
+export const onNewTextDirectionChange = $newTextDirection.on;
 
 // ===== Undo / Redo 履歴 =====
 function snapshotState() {
@@ -456,10 +468,13 @@ export function exportEdits() {
   // 既存レイヤー（layers / edits）は触らない方針。0 のとき機能 OFF。dash/tilde グループ別。
   const dashTrackingMille = Number(getDefault("dashTrackingMille")) || 0;
   const tildeTrackingMille = Number(getDefault("tildeTrackingMille")) || 0;
+  // 縦中横（!! / !? の自動 tcy）も新規・縦書きレイヤーにだけ JSX 側で適用する。
+  const tateChuYokoEnabled = getDefault("tateChuYokoEnabled") !== false;
 
   return {
     dashTrackingMille,
     tildeTrackingMille,
+    tateChuYokoEnabled,
     edits: Array.from(byPsd.entries()).map(([psdPath, { layers, newLayers }]) => ({
       psdPath,
       layers,

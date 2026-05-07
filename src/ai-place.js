@@ -41,6 +41,12 @@ let runningPlace = false;
 // 同一テキストで連続して自動配置するときに確認ダイアログを出すために使う。
 let lastPlacedFingerprint = null;
 
+// ホームに戻る等のタイミングで自動配置の状態をリセットする。
+// (lastPlacedFingerprint が残っていると次の自動配置で「同一テキスト警告」が誤発火する)
+export function resetAutoPlaceState() {
+  lastPlacedFingerprint = null;
+}
+
 function planFingerprint(plan) {
   const seq = [];
   for (const row of plan.pages) {
@@ -128,7 +134,9 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
 //     ※ あまり大きく縮めると 1 行吹き出し（検出器が比較的正確）で過小化するため控えめに。
 //   - bbox 上限キャップ: 検出された吹き出しの "厚み" 軸（縦書き=横幅、横書き=縦高）から
 //     leading=1.25 を仮定して em 1 つ分の物理上限を逆算。多列吹き出しでの過大検出を抑える。
-//   - 環境設定の textSizeStep（0.1 / 0.5）に丸め、[6, 999] にクランプ。
+//   - 自動配置は 1pt 単位にスナップ（検出器の揺れを丸めて複数吹き出しのサイズを揃える）。
+//     環境設定の textSizeStep は手動 ± ボタン専用なので使わない。
+//   - [6, 999] にクランプ。
 //   - font_size が無効値のときは null を返してフォールバック。
 const FONT_SIZE_CALIBRATION = 0.92;
 const ASSUMED_LEADING_FACTOR = 1.25;
@@ -161,12 +169,11 @@ function detectSizePtFromBlock(block, mokuroPage, psdPage) {
   }
 
   if (!Number.isFinite(pt) || pt <= 0) return null;
-  // 環境設定の刻み（0.1 / 0.5）にスナップ。
-  const step = Number(getDefault("textSizeStep")) === 0.5 ? 0.5 : 0.1;
-  const snapped = Math.round(pt / step) * step;
+  // 自動配置は 1pt 単位にスナップ。検出器の細かい揺れで吹き出し間サイズが
+  // ばらつくのを防ぎ、複数吹き出しでサイズを揃える。
+  const snapped = Math.round(pt);
   // クランプ範囲は state.js setTextSize と一致させる。
-  const clamped = Math.max(6, Math.min(999, snapped));
-  return Math.round(clamped * 10) / 10;
+  return Math.max(6, Math.min(999, snapped));
 }
 
 // 自動配置時、吹き出し中心からテキストを少し下方向にずらすバイアス (em 単位)。

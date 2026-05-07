@@ -65,8 +65,13 @@ async function getInitialPath(opts) {
   if (opts.defaultPath) return opts.defaultPath;
   const remembered = readLastPath(opts.rememberKey);
   if (remembered) return remembered;
+  // 既定起点はデスクトップ。取得失敗時はホームへフォールバック。
   try {
     const { invoke } = await import("@tauri-apps/api/core");
+    try {
+      const desk = await invoke("desktop_dir");
+      if (typeof desk === "string" && desk.length > 0) return desk;
+    } catch {}
     const home = await invoke("home_dir");
     return typeof home === "string" ? home : null;
   } catch {
@@ -115,13 +120,46 @@ function getCurrentDriveLetter(p) {
 
 const FOLDER_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
 const FILE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
+// デスクトップへのショートカット用 (lucide monitor)。
+const DESKTOP_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>';
+
+async function navigateToDesktop() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    let desk = null;
+    try { desk = await invoke("desktop_dir"); } catch {}
+    if (typeof desk !== "string" || desk.length === 0) {
+      desk = await invoke("home_dir");
+    }
+    if (typeof desk === "string" && desk.length > 0) {
+      await navigateInto(desk);
+    }
+  } catch (e) {
+    console.error("[file-picker] navigate to desktop failed:", e);
+  }
+}
 
 function renderDrives() {
   const host = $("file-picker-drives");
   if (!host) return;
   const currentLetter = getCurrentDriveLetter(currentPath);
   host.innerHTML = "";
+
+  // 旧: C: ドライブのクイックアクセス → 新: デスクトップへのショートカット。
+  // C: ドライブ自体はパス欄に "C:\" と入力 → Enter で移動できるので、
+  // クイックアクセスはより使用頻度の高いデスクトップに置き換える。
+  const deskBtn = document.createElement("button");
+  deskBtn.type = "button";
+  deskBtn.className = "file-picker-drive-btn file-picker-desktop-btn";
+  deskBtn.innerHTML = DESKTOP_ICON;
+  deskBtn.title = "デスクトップ";
+  deskBtn.setAttribute("aria-label", "デスクトップ");
+  deskBtn.addEventListener("click", () => { void navigateToDesktop(); });
+  host.appendChild(deskBtn);
+
+  // 残りのドライブ (C: 以外)
   for (const d of drives) {
+    if (d.letter.toUpperCase() === "C:") continue;
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "file-picker-drive-btn";
@@ -140,7 +178,10 @@ function renderDrives() {
 function renderPath() {
   const el = $("file-picker-path");
   if (el) {
-    el.textContent = currentPath || "";
+    // input 化したので value で更新。フォーカス中はユーザーの入力中なので上書きしない。
+    if (document.activeElement !== el) {
+      el.value = currentPath || "";
+    }
     el.title = currentPath || "";
   }
   const back = $("file-picker-back-btn");
@@ -550,6 +591,37 @@ function bindUiOnce() {
     input.addEventListener("keydown", (e) => {
       // Enter は onKeyDown の capture で拾う
       if (e.key === "Enter") return;
+    });
+  }
+
+  // パス表示欄: コピー可能 + 直接編集してパス移動可能
+  const pathEl = $("file-picker-path");
+  if (pathEl) {
+    // フォーカス時にテキストを全選択して Ctrl+C / 上書き貼付しやすくする
+    pathEl.addEventListener("focus", () => {
+      try { pathEl.select(); } catch {}
+    });
+    pathEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        const target = (pathEl.value || "").trim();
+        if (target && target !== currentPath) {
+          void navigateInto(target);
+        }
+        // 移動成否に関わらずフォーカスを外す（選択ハイライトを外す）
+        pathEl.blur();
+      } else if (e.key === "Escape") {
+        // 編集を取りやめて現在パスを再表示
+        e.preventDefault();
+        e.stopPropagation();
+        pathEl.value = currentPath || "";
+        pathEl.blur();
+      }
+    });
+    // フォーカスが外れたら、ユーザー編集途中の値を破棄して現在パスへ戻す
+    pathEl.addEventListener("blur", () => {
+      pathEl.value = currentPath || "";
     });
   }
 }

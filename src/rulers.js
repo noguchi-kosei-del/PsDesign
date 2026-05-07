@@ -158,6 +158,16 @@ export function removeGuide(psdPath, axis, index) {
   emitGuidesChange(psdPath);
 }
 
+// 全 PSD のガイドを破棄する。ホームに戻る等で呼ぶ。
+// 影響を受けた各 path に emit してロックボタン等の disabled 状態も追従させる。
+export function clearAllGuides() {
+  if (guidesByPsd.size === 0) return;
+  const paths = Array.from(guidesByPsd.keys());
+  guidesByPsd.clear();
+  for (const p of paths) emitGuidesChange(p);
+  requestRulerRedraw();
+}
+
 // 指定 PSD パスのガイドが、現在ページのガイドと完全一致しているか。
 // 一致 = h / v 両方の配列が同じ長さで全要素が同値（順不同マッチ）。
 // 反映ボタンのモーダルで「既に反映済みのページ」をグレーアウトするのに使う。
@@ -202,6 +212,26 @@ export function applyGuidesToPaths(targetPaths) {
       h: [...src.h],
       v: [...src.v],
     });
+    emitGuidesChange(path);
+    count++;
+  }
+  if (count > 0) requestRulerRedraw();
+  return count;
+}
+
+// 指定 PSD パス群のガイドを削除する（反映の解除）。
+// applyGuidesToPaths と対になる API。実際に何らかのガイドを持っていたページのみカウント。
+// 自分自身（現ページ）を targetPaths に含めても無視（誤って現ページを消さないため）。
+export function clearGuidesForPaths(targetPaths) {
+  const srcPath = getCurrentPsdPath();
+  let count = 0;
+  for (const path of targetPaths) {
+    if (!path || path === srcPath) continue;
+    const g = guidesByPsd.get(path);
+    if (!g) continue;
+    const had = (g.h?.length ?? 0) + (g.v?.length ?? 0) > 0;
+    if (!had) continue;
+    guidesByPsd.delete(path);
     emitGuidesChange(path);
     count++;
   }

@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>PsDesign</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -230,6 +233,15 @@
               <div class="stage-label-bar" id="psd-stage-label-bar">
                 <span class="stage-label-text" id="psd-stage-label"></span>
                 <div class="stage-label-actions">
+                  <button id="toggle-rulers-btn" class="psd-rulers-toggle-btn icon-btn" type="button" title="定規 (Ctrl+R)" aria-label="定規" aria-pressed="false">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <rect x="2" y="9" width="20" height="6" rx="1"/>
+                      <line x1="6" y1="9" x2="6" y2="13"/>
+                      <line x1="10" y1="9" x2="10" y2="12"/>
+                      <line x1="14" y1="9" x2="14" y2="13"/>
+                      <line x1="18" y1="9" x2="18" y2="12"/>
+                    </svg>
+                  </button>
                   <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" disabled>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
@@ -318,7 +330,7 @@
               </svg>
             </button>
           </div>
-          <button id="tool-move" class="tool-btn icon-btn side-tool-btn" data-tool="move" title="選択ツール (V)" aria-label="選択ツール">
+          <button id="tool-move" class="tool-btn icon-btn side-tool-btn" data-tool="move" title="選択ツール (V) ／ 空所をダブルクリックで新規テキスト" aria-label="選択ツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <polyline points="5 9 2 12 5 15"/>
               <polyline points="9 5 12 2 15 5"/>
@@ -328,32 +340,26 @@
               <line x1="12" y1="2" x2="12" y2="22"/>
             </svg>
           </button>
-          <button id="toggle-rulers-btn" class="icon-btn side-tool-btn" type="button" title="定規 (Ctrl+R)" aria-label="定規" aria-pressed="false">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <rect x="2" y="9" width="20" height="6" rx="1"/>
-              <line x1="6" y1="9" x2="6" y2="13"/>
-              <line x1="10" y1="9" x2="10" y2="12"/>
-              <line x1="14" y1="9" x2="14" y2="13"/>
-              <line x1="18" y1="9" x2="18" y2="12"/>
-            </svg>
-          </button>
-          <button id="tool-text-v" class="tool-btn icon-btn side-tool-btn" data-tool="text-v" title="縦書きツール (T)" aria-label="縦書きツール">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="2 6 2 3 12 3 12 6"/>
-              <line x1="4" y1="20" x2="10" y2="20"/>
-              <line x1="7" y1="3" x2="7" y2="20"/>
-              <line x1="18" y1="5" x2="18" y2="19"/>
-              <polyline points="14 15 18 19 22 15"/>
-            </svg>
-          </button>
-          <button id="tool-text-h" class="tool-btn icon-btn side-tool-btn" data-tool="text-h" title="横書きツール (Y)" aria-label="横書きツール">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="2 6 2 3 12 3 12 6"/>
-              <line x1="4" y1="20" x2="10" y2="20"/>
-              <line x1="7" y1="3" x2="7" y2="20"/>
-              <line x1="13" y1="12" x2="22" y2="12"/>
-              <polyline points="18 8 22 12 18 16"/>
-            </svg>
+          <button id="new-text-dir-switch" class="new-text-dir-switch" type="button" role="switch" aria-checked="true" title="新規テキストの方向（クリックで縦/横を切替）" aria-label="新規テキストの方向: 縦書き">
+            <span class="new-text-dir-switch-icon new-text-dir-switch-icon-top" aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="2 6 2 3 12 3 12 6"/>
+                <line x1="4" y1="20" x2="10" y2="20"/>
+                <line x1="7" y1="3" x2="7" y2="20"/>
+                <line x1="18" y1="5" x2="18" y2="19"/>
+                <polyline points="14 15 18 19 22 15"/>
+              </svg>
+            </span>
+            <span class="new-text-dir-switch-icon new-text-dir-switch-icon-bot" aria-hidden="true">
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="2 6 2 3 12 3 12 6"/>
+                <line x1="4" y1="20" x2="10" y2="20"/>
+                <line x1="7" y1="3" x2="7" y2="20"/>
+                <line x1="13" y1="12" x2="22" y2="12"/>
+                <polyline points="18 8 22 12 18 16"/>
+              </svg>
+            </span>
+            <span class="new-text-dir-switch-thumb" aria-hidden="true"></span>
           </button>
           <button id="tool-pan" class="tool-btn icon-btn side-tool-btn" data-tool="pan" title="パンツール (Space長押し)" aria-label="パンツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -481,6 +487,20 @@
                 </svg>
                 <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
               </div>
+              <div class="txt-source-new-input" id="txt-source-new-input-area">
+                <textarea
+                  id="txt-new-input"
+                  class="txt-new-input"
+                  placeholder="新しいテキストを入力"
+                  rows="1"
+                  disabled></textarea>
+                <button
+                  id="txt-new-input-btn"
+                  class="txt-new-input-btn"
+                  type="button"
+                  title="入力したテキストを画像中央に配置 (Ctrl+Enter)"
+                  disabled>配置</button>
+              </div>
             </div>
           </section>
           <section class="panel-section" data-section="editor">
@@ -492,7 +512,7 @@
               </svg>
             </button>
           </h2>
-          <div id="editor" class="editor" hidden>
+          <div id="editor" class="editor">
             <label data-editor-scope="single">
               フォント
               <div class="font-combobox" id="edit-font-combobox">
@@ -660,8 +680,8 @@
     </div>
     <div class="progress-modal" id="guides-apply-modal" hidden>
       <div class="progress-card guides-apply-card" role="dialog" aria-modal="true" aria-label="ガイドを複数ページに反映">
-        <div class="progress-title">ガイドを複数ページに反映</div>
-        <div class="confirm-modal-message">現在のページのガイドを、選択したページに上書き反映します。</div>
+        <div class="progress-title">ガイドを複数ページに反映 / 解除</div>
+        <div class="confirm-modal-message">「反映」は現在のページのガイドを選択したページへ上書きします。「解除」は選択したページのガイドを削除します。</div>
         <div class="guides-apply-controls">
           <button type="button" id="guides-apply-select-all" class="page-jump-btn">全選択</button>
           <button type="button" id="guides-apply-select-none" class="page-jump-btn">全解除</button>
@@ -669,6 +689,7 @@
         <div class="guides-apply-list" id="guides-apply-list"></div>
         <div class="page-jump-actions">
           <button type="button" id="guides-apply-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="guides-apply-unapply" class="page-jump-btn page-jump-btn-danger">解除</button>
           <button type="button" id="guides-apply-ok" class="page-jump-btn page-jump-btn-primary">反映</button>
         </div>
       </div>
@@ -758,6 +779,13 @@
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-tilde-tracking">「～」連続のツメ (‰)</label>
               <input type="number" id="default-tilde-tracking" class="settings-default-input" min="-1000" max="1000" step="10" placeholder="0 で OFF" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-tcy-enabled">「!!」「!?」を縦中横に</label>
+              <select id="default-tcy-enabled" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
+              </select>
             </div>
           </div>
         </div>
@@ -924,7 +952,7 @@
             <button id="file-picker-forward-btn" class="file-picker-nav-btn" type="button" data-action="forward" disabled aria-label="進む" title="進む">→</button>
             <button id="file-picker-up-btn" class="file-picker-nav-btn" type="button" data-action="up" disabled aria-label="上へ" title="親フォルダへ">↑</button>
           </div>
-          <div id="file-picker-path" class="file-picker-path" title=""></div>
+          <input id="file-picker-path" class="file-picker-path" type="text" spellcheck="false" autocomplete="off" placeholder="パス（Enter で移動）" title="" />
         </div>
         <div id="file-picker-list" class="file-picker-list" tabindex="0"></div>
         <div id="file-picker-savebar" class="file-picker-savebar" hidden>

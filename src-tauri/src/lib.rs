@@ -83,6 +83,10 @@ pub struct EditPayload {
     pub dash_tracking_mille: f64,
     #[serde(rename = "tildeTrackingMille", default)]
     pub tilde_tracking_mille: f64,
+    // 縦書きの新規レイヤーで半角 !! / !? を「縦中横」(textStyleRange の tcy 属性) に
+    // するか。新規レイヤーのみ JSX で適用、既存レイヤーは触らない。
+    #[serde(rename = "tateChuYokoEnabled", default)]
+    pub tate_chu_yoko_enabled: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -260,6 +264,21 @@ async fn home_dir() -> Result<String, String> {
     }
 }
 
+// デスクトップディレクトリのパスを返す。カスタムファイル選択ダイアログの既定起点。
+// Windows: %USERPROFILE%\Desktop / Unix: $HOME/Desktop。
+// 存在しない場合はエラーで返し、呼び出し側で home_dir フォールバックさせる。
+#[tauri::command]
+async fn desktop_dir() -> Result<String, String> {
+    let home = home_dir().await?;
+    let sep = if cfg!(target_os = "windows") { "\\" } else { "/" };
+    let path = format!("{}{}Desktop", home, sep);
+    if std::path::Path::new(&path).is_dir() {
+        Ok(path)
+    } else {
+        Err(format!("Desktop ディレクトリが存在しません: {}", path))
+    }
+}
+
 // 校正パネルのカスタムフォルダブラウザ用に、ディレクトリの中身（フォルダ + ファイル）を返す。
 // 隠しファイル / シンボリックリンクの type 解決失敗は無視。サブツリー走査はしない（1 階層のみ）。
 #[tauri::command]
@@ -308,6 +327,7 @@ pub fn run() {
             list_directory_entries,
             list_drives,
             home_dir,
+            desktop_dir,
             ocr::check_ai_models,
             ocr::install_ai_models,
             ocr::cancel_ai_install,

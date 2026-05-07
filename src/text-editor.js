@@ -91,8 +91,8 @@ function formatDisplayPt(actualPt, page) {
 }
 
 // per-layer 縦／横トグルの SVG（lucide 由来、既存サイドバー版と同形）。
-const DIR_VERT_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 6 2 3 12 3 12 6"/><line x1="4" y1="20" x2="10" y2="20"/><line x1="7" y1="3" x2="7" y2="20"/><line x1="18" y1="5" x2="18" y2="19"/><polyline points="14 15 18 19 22 15"/></svg>`;
-const DIR_HORZ_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 6 2 3 12 3 12 6"/><line x1="4" y1="20" x2="10" y2="20"/><line x1="7" y1="3" x2="7" y2="20"/><line x1="13" y1="12" x2="22" y2="12"/><polyline points="18 8 22 12 18 16"/></svg>`;
+export const DIR_VERT_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 6 2 3 12 3 12 6"/><line x1="4" y1="20" x2="10" y2="20"/><line x1="7" y1="3" x2="7" y2="20"/><line x1="18" y1="5" x2="18" y2="19"/><polyline points="14 15 18 19 22 15"/></svg>`;
+export const DIR_HORZ_SVG = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="2 6 2 3 12 3 12 6"/><line x1="4" y1="20" x2="10" y2="20"/><line x1="7" y1="3" x2="7" y2="20"/><line x1="13" y1="12" x2="22" y2="12"/><polyline points="18 8 22 12 18 16"/></svg>`;
 
 function dirToggleHtml(direction) {
   const v = direction === "vertical" ? " active" : "";
@@ -306,49 +306,53 @@ function populateEditor() {
   const selections = getSelectedLayers();
   updateDeleteButtonVisibility();
 
+  // 編集パネルは選択の有無に関わらず常時表示。
+  // 選択 0 件のときは「次に配置するテキストの既定値」を編集する UI として機能する。
+  editor.hidden = false;
+
+  // フォントは単独選択 or 選択 0 件のときに表示（複数選択時のみ値が曖昧なので隠す）。
+  // サイズ/行間/フチタブは選択数に関わらず常に表示し、入力値は単独選択時のみレイヤー値に追従、
+  // 0 件 / 複数選択時はツール状態（state.textSize / state.leadingPct 等）を表示する。
+  const singleOnly = editor.querySelectorAll("[data-editor-scope='single']");
+  for (const el of singleOnly) el.hidden = selections.length > 1;
+
   if (selections.length === 0) {
-    editor.hidden = true;
-    // 選択解除でも文字色はツールバーに常駐しているため、
-    // 現在の state に合わせて UI だけ同期する（値は勝手に上書きしない）。
+    // 選択なし時は state（次に配置する既定値）を UI に反映するだけ。値は触らない。
+    rebuildFontOptions(getCurrentFont() ?? "");
+    syncStrokeToggle(getStrokeColor());
+    syncStrokeWidthInput(getStrokeWidthPx());
     syncFillToggle(getFillColor());
     return;
   }
-  editor.hidden = false;
-
-  // フォントは単独選択時のみ表示（複数だと値が曖昧）。サイズ/行間/フチタブは複数選択でも
-  // 一括適用できるため常に表示する。タブパネル内の入力値は単独選択時のみレイヤー値に追従し、
-  // 複数選択時はツール状態（state.textSize / state.leadingPct）の値を表示する。
-  const singleOnly = editor.querySelectorAll("[data-editor-scope='single']");
-  for (const el of singleOnly) el.hidden = selections.length !== 1;
 
   if (selections.length === 1) {
     const resolved = resolveSelection();
-    if (!resolved) { editor.hidden = true; return; }
+    if (resolved) {
+      let effectiveSize = null;
+      let effectiveFont = null;
+      let effectiveLeading = null;
+      if (resolved.kind === "existing") {
+        const { page, layer } = resolved;
+        const edit = getEdit(page.path, layer.id) ?? {};
+        // bounds 逆算後の実効 pt をサイズ入力にも反映（transform で縮められた写植テキスト対応）
+        effectiveSize = getExistingLayerEffectiveSizePt(page, layer, edit);
+        effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
+        // 既存レイヤーは PSD から行間を読み戻していないため、edit に明示があれば
+        // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
+        effectiveLeading = edit.leadingPct ?? 125;
+        rebuildFontOptions(effectiveFont);
+      } else {
+        const { newLayer } = resolved;
+        effectiveSize = newLayer.sizePt ?? null;
+        effectiveFont = newLayer.fontPostScriptName ?? null;
+        effectiveLeading = newLayer.leadingPct ?? 125;
+        rebuildFontOptions(effectiveFont ?? "");
+      }
 
-    let effectiveSize = null;
-    let effectiveFont = null;
-    let effectiveLeading = null;
-    if (resolved.kind === "existing") {
-      const { page, layer } = resolved;
-      const edit = getEdit(page.path, layer.id) ?? {};
-      // bounds 逆算後の実効 pt をサイズ入力にも反映（transform で縮められた写植テキスト対応）
-      effectiveSize = getExistingLayerEffectiveSizePt(page, layer, edit);
-      effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
-      // 既存レイヤーは PSD から行間を読み戻していないため、edit に明示があれば
-      // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
-      effectiveLeading = edit.leadingPct ?? 125;
-      rebuildFontOptions(effectiveFont);
-    } else {
-      const { newLayer } = resolved;
-      effectiveSize = newLayer.sizePt ?? null;
-      effectiveFont = newLayer.fontPostScriptName ?? null;
-      effectiveLeading = newLayer.leadingPct ?? 125;
-      rebuildFontOptions(effectiveFont ?? "");
+      if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
+      if (effectiveFont) setCurrentFont(effectiveFont);
+      if (Number.isFinite(effectiveLeading)) setLeadingPct(effectiveLeading);
     }
-
-    if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
-    if (effectiveFont) setCurrentFont(effectiveFont);
-    if (Number.isFinite(effectiveLeading)) setLeadingPct(effectiveLeading);
   }
 
   // フチ/文字色は単独/複数いずれでも共通値を表示。

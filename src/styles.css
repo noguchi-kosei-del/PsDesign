@@ -74,7 +74,9 @@
 }
 
 :root {
-  font-family: "Segoe UI", "Yu Gothic UI", sans-serif;
+  /* MojiQ と同じフォントスタックに揃える。Noto Sans JP は Google Fonts から
+     index.html の <link> 経由で読み込み。オフラインでも fallback で表示は維持される。 */
+  font-family: "Noto Sans JP", "Helvetica Neue", Arial, "Hiragino Kaku Gothic ProN", "Hiragino Sans", Meiryo, sans-serif;
   font-size: 13px;
   color: var(--text);
   background: var(--bg);
@@ -85,6 +87,14 @@
 }
 
 * { box-sizing: border-box; }
+
+/* MojiQ 互換: フォーム要素は明示的に Noto Sans JP を指定。
+   既存の `font-family: inherit` ルールは :root を経由して同じフォントになるが、
+   ここで stack を直接指定しておくことで、サードパーティ CSS の介入があっても
+   フォーム部品の見た目が統一される。 */
+input, button, textarea, select {
+  font-family: "Noto Sans JP", sans-serif;
+}
 
 html, body, #app {
   margin: 0;
@@ -171,7 +181,7 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
 .save-menu {
   position: absolute;
   top: calc(100% + 8px);
-  right: 0;
+  left: 50%;
   min-width: 220px;
   background: var(--panel);
   border: 1px solid var(--border);
@@ -180,21 +190,39 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   padding: 6px 0;
   z-index: 1000;
   color: var(--text);
+  transform: translateX(-50%) scale(1);
+  transform-origin: top center;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    transform 0.18s cubic-bezier(0.2, 0.7, 0.3, 1.0),
+    opacity 0.15s ease,
+    visibility 0s linear 0s;
 }
 
-.save-menu[hidden] { display: none; }
+.save-menu[hidden] {
+  display: block;
+  transform: translateX(-50%) scale(0.85);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    transform 0.18s cubic-bezier(0.2, 0.7, 0.3, 1.0),
+    opacity 0.15s ease,
+    visibility 0s linear 0.18s;
+}
 
 .save-menu::before {
   content: "";
   position: absolute;
   top: -6px;
-  right: 12px;
+  left: 50%;
   width: 10px;
   height: 10px;
   background: var(--panel);
   border-left: 1px solid var(--border);
   border-top: 1px solid var(--border);
-  transform: rotate(45deg);
+  transform: translateX(-50%) rotate(45deg);
 }
 
 .save-menu-header {
@@ -873,6 +901,68 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: #fff;
 }
 
+/* V ツール直下の「新規テキスト方向」スイッチ（縦型トグル）。
+   1 つのトラック内をスライドする thumb で 縦↔横 を切替える iOS 風スイッチを縦に倒した形。
+   aria-checked="true" = 縦 (thumb が上)、"false" = 横 (thumb が下)。
+   active 側のアイコンは thumb (accent) の上に重なって白で見える。 */
+.new-text-dir-switch {
+  position: relative;
+  width: 22px;
+  height: 44px;
+  margin: 0 auto;
+  padding: 0;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 11px;
+  cursor: pointer;
+  align-self: center;
+  transition: border-color 0.12s, background 0.12s;
+  /* 子要素の変形を確実に切り取り */
+  overflow: hidden;
+}
+.new-text-dir-switch:hover {
+  border-color: var(--accent);
+}
+.new-text-dir-switch-thumb {
+  position: absolute;
+  width: 18px;
+  height: 18px;
+  left: 1px;
+  top: 1px;
+  border-radius: 50%;
+  background: var(--accent);
+  z-index: 0;
+  transition: top 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  pointer-events: none;
+}
+.new-text-dir-switch[aria-checked="false"] .new-text-dir-switch-thumb {
+  top: 23px;
+}
+.new-text-dir-switch-icon {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  z-index: 1;
+  pointer-events: none;
+  transition: color 0.18s;
+}
+.new-text-dir-switch-icon-top { top: 4px; }
+.new-text-dir-switch-icon-bot { bottom: 4px; }
+.new-text-dir-switch-icon svg { display: block; }
+/* active 側（thumb が乗っている方）のアイコンを白で表示 */
+.new-text-dir-switch[aria-checked="true"] .new-text-dir-switch-icon-top {
+  color: #fff;
+}
+.new-text-dir-switch[aria-checked="false"] .new-text-dir-switch-icon-bot {
+  color: #fff;
+}
+
 /* ズーム群：サイドツールバー下部のボトムアンカー。
    旧 .page-nav の margin-top: auto / border-top の役目をここが引き継ぎ、
    ページ移動と文字色スウォッチがその下にぶら下がる構成。 */
@@ -1374,13 +1464,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* これらのボタンは旧仕様ではペイン右下に absolute 配置していたが、
    `.stage-label-bar > .stage-label-actions` の flex 子としてバー右端に並ぶ
-   方式に変更。バー高さ 24px に収めるため 20px 角・SVG 12px に縮小。 */
+   方式に変更。バー高さ 24px に収めるため 22px 角・SVG 15px に揃える。 */
 .pdf-rotate-btn,
 .psd-rotate-btn,
 .psd-guides-lock-btn,
-.psd-guides-apply-btn {
-  width: 20px;
-  height: 20px;
+.psd-guides-apply-btn,
+.psd-rulers-toggle-btn {
+  width: 22px;
+  height: 22px;
   padding: 0;
   background: transparent;
   border: 1px solid transparent;
@@ -1395,19 +1486,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .pdf-rotate-btn svg,
 .psd-rotate-btn svg,
 .psd-guides-lock-btn svg,
-.psd-guides-apply-btn svg {
-  width: 12px;
-  height: 12px;
+.psd-guides-apply-btn svg,
+.psd-rulers-toggle-btn svg {
+  width: 15px;
+  height: 15px;
 }
 
 .pdf-rotate-btn:hover:not(:disabled),
 .psd-rotate-btn:hover:not(:disabled),
 .psd-guides-lock-btn:hover:not(:disabled),
-.psd-guides-apply-btn:hover:not(:disabled) {
+.psd-guides-apply-btn:hover:not(:disabled),
+.psd-rulers-toggle-btn:hover:not(:disabled) {
   background: var(--panel-hover);
   border-color: var(--border);
   color: var(--text);
 }
+
 
 /* ロックボタンの状態に応じたアイコン切替（押下＝ロック中） */
 .psd-guides-lock-btn .lock-icon-locked { display: none; }
@@ -1462,14 +1556,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
   flex-shrink: 0;
 }
-.guides-apply-item-current,
-.guides-apply-item-applied {
-  cursor: default;
-  opacity: 0.5;
-}
-.guides-apply-item-current:hover,
-.guides-apply-item-applied:hover {
-  background: transparent;
+/* 現ページ / 反映済み: 操作対象としては rulers.js 側で安全に skip されるが、
+   全選択でチェックは入る。視覚的にはラベルを muted 色にして区別する。 */
+.guides-apply-item-current .guides-apply-item-name,
+.guides-apply-item-applied .guides-apply-item-name {
+  color: var(--text-muted);
 }
 .guides-apply-item-name {
   flex: 1;
@@ -1671,6 +1762,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-orientation: mixed;
 }
 
+/* 縦中横 (tate-chu-yoko): 半角 !! / !? を 1 文字幅に詰めて縦書き 1 セルに収める。
+   canvas-tools.js の appendLineWithTracking が <span class="tcy-span">!!</span> 等で
+   ラップしたものを WebView2 (Chromium) が標準サポートする text-combine-upright で描画。
+   text-orientation は親の vertical-rl コンテキスト下では tcy span 内で upright 扱いになる。 */
+.tcy-span {
+  text-combine-upright: all;
+  -webkit-text-combine: horizontal;
+}
+
 /* layerRectFor* の THICK_SAFETY (= 0.4em) と対応する内側 padding。
    bbox が広がった分だけ padding を入れ、テキスト本体を bbox 中央に視覚配置する。
    これにより bbox サイズ変更でテキスト位置がずれない。
@@ -1763,12 +1863,6 @@ body.frames-hidden .layer-box-new.swap-target {
   box-shadow: 0 0 0 3px #10b981, 0 0 0 5px rgba(255, 255, 255, 0.6) !important;
 }
 
-.page-overlay[data-tool="text-v"] .layer-box {
-  cursor: vertical-text;
-}
-.page-overlay[data-tool="text-h"] .layer-box {
-  cursor: text;
-}
 .page-overlay[data-tool="pan"] .layer-box {
   pointer-events: none;
   cursor: grab;
@@ -2570,6 +2664,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   min-height: 80px;
   overflow: hidden;
   display: flex;
+  flex-direction: column;
 }
 
 .txt-source-dropzone.dragover {
@@ -2646,6 +2741,59 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 11px;
   text-align: center;
   padding: 12px;
+}
+
+/* 原稿テキストパネル下部に常駐する新規テキスト入力欄 (中央配置のショートカット)。
+   PSD 未読込時は disabled。Ctrl+Enter / 配置ボタンで現在ページの中央にレイヤー作成。 */
+.txt-source-new-input {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--border);
+  background: var(--panel-body);
+}
+.txt-new-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  resize: none;
+  padding: 6px 8px;
+  font-family: "Yu Gothic", "Hiragino Kaku Gothic ProN", "Meiryo", sans-serif;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  outline: none;
+}
+.txt-new-input:focus:not(:disabled) {
+  border-color: var(--accent);
+}
+.txt-new-input:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.txt-new-input-btn {
+  flex: 0 0 auto;
+  padding: 0 12px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.txt-new-input-btn:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.txt-new-input-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .txt-source-empty-icon {
@@ -4705,6 +4853,22 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--accent);
   border-color: var(--accent);
 }
+/* デスクトップへのショートカット: アイコンのみ、ドライブボタンと並ぶサイズに揃える */
+.file-picker-desktop-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px 8px;
+  color: var(--text);
+}
+.file-picker-desktop-btn:hover {
+  background: var(--panel-hover);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.file-picker-desktop-btn svg {
+  display: block;
+}
 .file-picker-nav {
   display: flex;
   gap: 4px;
@@ -4739,7 +4903,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   min-width: 0;
   padding: 4px 10px;
   font-size: 12px;
-  color: var(--text-muted);
+  color: var(--text);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: 3px;
@@ -4747,6 +4911,20 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow: hidden;
   text-overflow: ellipsis;
   user-select: text;
+  -webkit-user-select: text;
+  font-family: inherit;
+  outline: none;
+  cursor: text;
+}
+.file-picker-path:focus {
+  border-color: var(--accent);
+  color: var(--text);
+  background: var(--panel);
+  text-overflow: clip;
+}
+.file-picker-path::placeholder {
+  color: var(--text-muted);
+  opacity: 0.7;
 }
 .file-picker-list {
   flex: 1 1 auto;
