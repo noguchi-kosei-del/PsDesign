@@ -5,7 +5,6 @@ import {
   getEdit,
   getFillColor,
   getFonts,
-  getLeadingPct,
   getNewLayersForPsd,
   getPages,
   getSelectedLayer,
@@ -30,7 +29,7 @@ import {
   toggleLayerSelected,
   updateNewLayer,
 } from "./state.js";
-import { refreshAllOverlays, getExistingLayerEffectiveSizePt } from "./canvas-tools.js";
+import { refreshAllOverlays, getExistingLayerEffectiveSizePt, maybeApplyStickyFont } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { confirmDialog } from "./ui-feedback.js";
 
@@ -197,6 +196,11 @@ function selectLayer(pageIndex, layerId, event) {
   } else {
     setSelectedLayer(pageIndex, layerId);
   }
+  // ブラシモード（fontPickerStuck）: スタイルパレットや edit-font で選んだフォントを
+  // 新しい選択にも自動適用する。canvas-tools.js の onExistingLayerMouseDown と同じ仕様。
+  // commitFontToSelections は内部で rebuildLayerList + refreshAllOverlays を呼ぶので
+  // apply 成功時は明示的な再描画は不要。
+  if (maybeApplyStickyFont()) return;
   applySelectionHighlight();
   populateEditor();
   refreshAllOverlays();
@@ -310,10 +314,15 @@ function populateEditor() {
   // 選択 0 件のときは「次に配置するテキストの既定値」を編集する UI として機能する。
   editor.hidden = false;
 
-  // フォントは単独選択 or 選択 0 件のときに表示（複数選択時のみ値が曖昧なので隠す）。
+  // [data-editor-scope="single"] が付いている要素は単独選択時のみ表示。
+  // font-combobox-label / editor-tabs-section は txt-source セクションへ移動したため、
+  // #editor 内ではなく side-panel 全体を対象にクエリする。
   // サイズ/行間/フチタブは選択数に関わらず常に表示し、入力値は単独選択時のみレイヤー値に追従、
   // 0 件 / 複数選択時はツール状態（state.textSize / state.leadingPct 等）を表示する。
-  const singleOnly = editor.querySelectorAll("[data-editor-scope='single']");
+  const sidePanel = document.querySelector(".side-panel");
+  const singleOnly = sidePanel
+    ? sidePanel.querySelectorAll("[data-editor-scope='single']")
+    : [];
   for (const el of singleOnly) el.hidden = selections.length > 1;
 
   if (selections.length === 0) {
@@ -367,9 +376,13 @@ function populateEditor() {
   syncFillToggle(fillColor);
 }
 
+// ========== フォント検索コンボボックス ==========
+// editor-tabs-section の上に配置されたインストール済み全フォント検索 UI。
+// スタイルパレットは社内 curated プリセット用で、こちらは検索代替経路。
 let comboItems = [];
 let comboHighlighted = -1;
 let comboOpen = false;
+let fontPreviewObserver = null;
 
 function ensureComboBuilt() {
   const list = fontListEl();
@@ -384,7 +397,6 @@ function ensureComboBuilt() {
     const main = document.createElement("span");
     main.className = "font-combobox-name";
     main.textContent = font.name || font.postScriptName;
-    // 実フォントでの描画は viewport に入った時点で適用（初期表示の 500+ 件を一気にレンダしない）。
     li.appendChild(main);
     if (font.name && font.postScriptName && font.name !== font.postScriptName) {
       const sub = document.createElement("span");
@@ -400,7 +412,6 @@ function ensureComboBuilt() {
   attachFontPreviewObserver(list);
 }
 
-let fontPreviewObserver = null;
 function attachFontPreviewObserver(list) {
   if (fontPreviewObserver) {
     fontPreviewObserver.disconnect();
@@ -490,14 +501,17 @@ function moveComboHighlight(dir) {
 
 function commitFont(font) {
   const input = fontEl();
+  if (!input) return;
   input.value = font.name || font.postScriptName;
   input.dataset.ps = font.postScriptName;
   ensureFontLoaded(font.postScriptName);
   setCurrentFont(font.postScriptName);
   setFontPickerStuck(true);
-  commitField("fontPostScriptName", font.postScriptName);
+  // 選択中レイヤーへ即時適用 (ブラシモード起動)。layer 選択がない場合は「次に
+  // 配置するテキスト」の既定フォントとして state に残る。
+  commitFontToSelections(font.postScriptName);
   closeCombo();
-  // 選択直後は input からフォーカスを外して Space などのキーがキャンバス側に届くようにする。
+  // フォーカスを外して Space などのキーがキャンバス側に届くようにする。
   input.blur();
 }
 
@@ -543,24 +557,33 @@ function rebuildFontOptions(currentValue) {
   input.dataset.ps = ps;
 }
 
+function syncFontInputFromState() {
+  rebuildFontOptions(getCurrentFont() ?? "");
+}
+
 // editor タブ：サイズ / 行間 / フチ の表示切替。
+// editor-tabs-section は txt-source セクションに移動済みのため、#editor 経由ではなく
+// `.editor-tabs-section` を直接クエリする。
+function editorTabsSectionEl() {
+  return document.querySelector(".editor-tabs-section");
+}
 function setEditorTab(tab) {
-  const editor = editorEl();
-  if (!editor) return;
-  for (const btn of editor.querySelectorAll(".editor-tab")) {
+  const section = editorTabsSectionEl();
+  if (!section) return;
+  for (const btn of section.querySelectorAll(".editor-tab")) {
     const isActive = btn.dataset.tab === tab;
     btn.classList.toggle("active", isActive);
     btn.setAttribute("aria-selected", isActive ? "true" : "false");
   }
-  for (const panel of editor.querySelectorAll(".editor-tab-panel")) {
+  for (const panel of section.querySelectorAll(".editor-tab-panel")) {
     panel.hidden = panel.dataset.tabPanel !== tab;
   }
 }
 
 function bindEditorTabs() {
-  const editor = editorEl();
-  if (!editor) return;
-  for (const btn of editor.querySelectorAll(".editor-tab")) {
+  const section = editorTabsSectionEl();
+  if (!section) return;
+  for (const btn of section.querySelectorAll(".editor-tab")) {
     // mousedown.preventDefault でフォーカス移動を抑止。in-place 編集 textarea に
     // フォーカスが残るので、行間タブで per-line 編集を続行できる。
     btn.addEventListener("mousedown", (e) => e.preventDefault());
@@ -570,56 +593,71 @@ function bindEditorTabs() {
 
 export function bindEditorEvents() {
   bindEditorTabs();
+
+  // フォント検索コンボボックスの配線。
   const input = fontEl();
-  input.addEventListener("focus", () => openCombo());
-  input.addEventListener("input", () => {
-    if (!comboOpen) openCombo();
-    else filterCombo(input.value);
-  });
-  input.addEventListener("keydown", (e) => {
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      moveComboHighlight(+1);
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      moveComboHighlight(-1);
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      if (comboOpen && comboHighlighted >= 0) {
-        commitFont(comboItems[comboHighlighted].font);
-      } else {
-        const font = resolveFontFromInput(input.value);
-        if (font) commitFont(font);
-      }
-      input.blur();
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      closeCombo();
-      input.blur();
-    }
-  });
-  input.addEventListener("blur", () => {
-    setTimeout(() => {
-      const active = document.activeElement;
-      if (!active || !fontComboboxEl()?.contains(active)) closeCombo();
-    }, 120);
-  });
-  const toggleBtn = fontToggleEl();
-  if (toggleBtn) {
-    toggleBtn.addEventListener("mousedown", (e) => {
-      e.preventDefault();
-      if (comboOpen) {
+  if (input) {
+    input.addEventListener("focus", () => openCombo());
+    input.addEventListener("input", () => {
+      if (!comboOpen) openCombo();
+      else filterCombo(input.value);
+    });
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        moveComboHighlight(+1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        moveComboHighlight(-1);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (comboOpen && comboHighlighted >= 0) {
+          commitFont(comboItems[comboHighlighted].font);
+        } else {
+          const font = resolveFontFromInput(input.value);
+          if (font) commitFont(font);
+        }
+        input.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
         closeCombo();
-      } else {
-        input.focus();
-        openCombo();
+        input.blur();
       }
     });
+    input.addEventListener("blur", () => {
+      setTimeout(() => {
+        const active = document.activeElement;
+        if (!active || !fontComboboxEl()?.contains(active)) closeCombo();
+      }, 120);
+    });
+    const toggleBtn = fontToggleEl();
+    if (toggleBtn) {
+      toggleBtn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        if (comboOpen) {
+          closeCombo();
+        } else {
+          input.focus();
+          openCombo();
+        }
+      });
+    }
+    document.addEventListener("mousedown", (e) => {
+      if (!comboOpen) return;
+      if (!fontComboboxEl()?.contains(e.target)) closeCombo();
+    });
+
+    // 起動時 / 環境設定変更時に、選択 0 件でも state.currentFont を入力欄に表示。
+    // フォント一覧は font-loader が非同期で揃えるので、登録完了後にも再同期する。
+    syncFontInputFromState();
+    onCurrentFontChange(() => {
+      if (getSelectedLayers().length === 0) syncFontInputFromState();
+    });
+    onFontsRegistered(() => {
+      if (getSelectedLayers().length === 0) syncFontInputFromState();
+    });
   }
-  document.addEventListener("mousedown", (e) => {
-    if (!comboOpen) return;
-    if (!fontComboboxEl()?.contains(e.target)) closeCombo();
-  });
+
   const deleteBtn = document.getElementById("delete-new-layer-btn");
   if (deleteBtn) {
     deleteBtn.addEventListener("click", async () => {
@@ -708,24 +746,6 @@ export function bindEditorEvents() {
   const widthInc = document.getElementById("stroke-width-inc-btn");
   if (widthDec) widthDec.addEventListener("click", () => adjustStrokeWidth(-0.5));
   if (widthInc) widthInc.addEventListener("click", () => adjustStrokeWidth(+0.5));
-
-  // 起動時 / 環境設定の「デフォルト」変更時に、選択が無くてもフォント欄に
-  // 現在の state.currentFontPostScriptName を表示する。フォント一覧は font-loader が
-  // 非同期で揃えるので、登録完了後にも再同期して display name 解決を確定させる。
-  syncFontInputFromState();
-  onCurrentFontChange(() => {
-    if (getSelectedLayers().length === 0) syncFontInputFromState();
-  });
-  onFontsRegistered(() => {
-    if (getSelectedLayers().length === 0) syncFontInputFromState();
-  });
-}
-
-// state.currentFontPostScriptName を edit-font 入力欄に反映する。
-// 何も選択されていない初期状態でも環境設定で指定したデフォルトフォント名が見えるようにする。
-function syncFontInputFromState() {
-  const ps = getCurrentFont();
-  rebuildFontOptions(ps || "");
 }
 
 // colorOrNull / widthOrNull に null を渡すと「各レイヤーの現在値を保持」の意味。

@@ -939,11 +939,12 @@ function onLayerWheel(e, ctx, layerId) {
   resizeSelectedLayers(baseStep, sign, multiplier);
 }
 
-// edit-font 欄でユーザーがフォントを選んだ後（fontPickerStuck === true）、move ツールでの
-// 単独クリック・shift クリック・マーキー選択など、選択集合が確定した直後に呼ぶ。
-// 現在の選択リスト全体に currentFont を一括適用し、1 件以上書き込まれたら true。
-// false（apply しなかった）の場合、呼び出し側が rebuildLayerList を行うこと。
-function maybeApplyStickyFont() {
+// edit-font 欄 / スタイルパレットでユーザーがフォントを選んだ後（fontPickerStuck === true）、
+// move ツールでの単独クリック・shift クリック・マーキー選択や、サイド「レイヤー」一覧での
+// 行クリック等、選択集合が確定した直後に呼ぶ。現在の選択リスト全体に currentFont を一括適用し、
+// 1 件以上書き込まれたら true。false（apply しなかった）の場合、呼び出し側が
+// rebuildLayerList / overlay 更新を行うこと。
+export function maybeApplyStickyFont() {
   if (!getFontPickerStuck()) return false;
   const ps = getCurrentFont();
   if (!ps) return false;

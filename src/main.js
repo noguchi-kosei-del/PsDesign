@@ -20,6 +20,7 @@ import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
+import { bindStylePalette } from "./style-palette.js";
 import {
   confirmDialog,
   hideModalAnimated,
@@ -764,6 +765,65 @@ function bindSectionToggles() {
       saveSectionState(state);
     });
   }
+}
+
+// レイヤードロワー：サイドツールバーの #layers-toggle-btn から横（左方向）スライドで開閉。
+// MojiQ の「指示ツール / 文字サイズ」ドロップダウンと同じシンプルパターン:
+// .open クラスのトグルだけで opacity / transform の transition を発火させる。
+// visibility / hidden 属性は使わず、display は常に flex 固定（CSS transition が
+// 両方向で確実に走るようにする）。永続化なし（毎セッション closed で起動）。
+function isLayersDrawerOpen() {
+  return !!document.getElementById("layers-drawer")?.classList.contains("open");
+}
+function openLayersDrawer() {
+  const drawer = document.getElementById("layers-drawer");
+  const btn = document.getElementById("layers-toggle-btn");
+  if (!drawer) return;
+  drawer.classList.add("open");
+  drawer.setAttribute("aria-hidden", "false");
+  if (btn) btn.setAttribute("aria-expanded", "true");
+}
+function closeLayersDrawer() {
+  const drawer = document.getElementById("layers-drawer");
+  const btn = document.getElementById("layers-toggle-btn");
+  if (!drawer) return;
+  drawer.classList.remove("open");
+  drawer.setAttribute("aria-hidden", "true");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+function toggleLayersDrawer() {
+  if (isLayersDrawerOpen()) closeLayersDrawer();
+  else openLayersDrawer();
+}
+function bindLayersDrawer() {
+  const btn = document.getElementById("layers-toggle-btn");
+  if (btn) {
+    btn.addEventListener("click", (e) => {
+      // ドキュメントレベルの outside-click ハンドラに伝播させない。
+      e.stopPropagation();
+      toggleLayersDrawer();
+    });
+  }
+  const closeBtn = document.getElementById("layers-drawer-close-btn");
+  if (closeBtn) closeBtn.addEventListener("click", closeLayersDrawer);
+  // 外側クリックで閉じる。
+  // ボタン自身のクリックは stopPropagation で除外、ドロワー内のクリックは
+  // drawer.contains で除外。両者とも .side-toolbar 直下に配置されているので、
+  // 個別に contains 判定する。
+  document.addEventListener("mousedown", (e) => {
+    if (!isLayersDrawerOpen()) return;
+    const drawer = document.getElementById("layers-drawer");
+    const triggerBtn = document.getElementById("layers-toggle-btn");
+    if (drawer && drawer.contains(e.target)) return;
+    if (triggerBtn && triggerBtn.contains(e.target)) return;
+    closeLayersDrawer();
+  });
+  // Esc で閉じる（他のモーダル類は自前で Esc を stopPropagation する設計のため安全）。
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && isLayersDrawerOpen()) {
+      closeLayersDrawer();
+    }
+  });
 }
 
 // サイドツールバーの上下ボタン（ページ移動）配線 + 表示更新。
@@ -1635,6 +1695,7 @@ function init() {
   bindLeadingTool();
   bindZoomTool();
   bindPageChange();
+  bindStylePalette();
   bindEditorEvents();
   bindWindowControls();
   bindPageJumpDialog();
@@ -1648,6 +1709,7 @@ function init() {
   bindPageNav();
   bindCollapseToggles();
   bindSectionToggles();
+  bindLayersDrawer();
   bindPdfWorkspaceToggle();
   bindPdfRotate();
   bindPsdRotate();
@@ -1714,7 +1776,7 @@ function bindGlobalBlurOnOutsideClick() {
     if (target === active || active.contains(target)) return;
     // editor パネル内のクリックも安全ゾーンに含める。in-place 編集 textarea が active な
     // ときに行間 input / +/- / ルビボタンを触っても勝手に textarea が blur しないようにする。
-    const near = target.closest?.("input, textarea, [contenteditable], .font-combobox, .save-menu, .text-input-floater, .editor");
+    const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .text-input-floater, .editor");
     if (near) return;
     active.blur();
   }, true);

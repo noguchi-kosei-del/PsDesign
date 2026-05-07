@@ -330,18 +330,8 @@
               </svg>
             </button>
           </div>
-          <button id="tool-move" class="tool-btn icon-btn side-tool-btn" data-tool="move" title="選択ツール (V) ／ 空所をダブルクリックで新規テキスト" aria-label="選択ツール">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-              <polyline points="5 9 2 12 5 15"/>
-              <polyline points="9 5 12 2 15 5"/>
-              <polyline points="15 19 12 22 9 19"/>
-              <polyline points="19 9 22 12 19 15"/>
-              <line x1="2" y1="12" x2="22" y2="12"/>
-              <line x1="12" y1="2" x2="12" y2="22"/>
-            </svg>
-          </button>
           <button id="new-text-dir-switch" class="new-text-dir-switch" type="button" role="switch" aria-checked="true" title="新規テキストの方向（クリックで縦/横を切替）" aria-label="新規テキストの方向: 縦書き">
-            <span class="new-text-dir-switch-icon new-text-dir-switch-icon-top" aria-hidden="true">
+            <span class="new-text-dir-switch-icon new-text-dir-switch-icon-left" aria-hidden="true">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="2 6 2 3 12 3 12 6"/>
                 <line x1="4" y1="20" x2="10" y2="20"/>
@@ -350,7 +340,7 @@
                 <polyline points="14 15 18 19 22 15"/>
               </svg>
             </span>
-            <span class="new-text-dir-switch-icon new-text-dir-switch-icon-bot" aria-hidden="true">
+            <span class="new-text-dir-switch-icon new-text-dir-switch-icon-right" aria-hidden="true">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="2 6 2 3 12 3 12 6"/>
                 <line x1="4" y1="20" x2="10" y2="20"/>
@@ -361,12 +351,29 @@
             </span>
             <span class="new-text-dir-switch-thumb" aria-hidden="true"></span>
           </button>
+          <button id="tool-move" class="tool-btn icon-btn side-tool-btn" data-tool="move" title="選択ツール (V) ／ 空所をダブルクリックで新規テキスト" aria-label="選択ツール">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="5 9 2 12 5 15"/>
+              <polyline points="9 5 12 2 15 5"/>
+              <polyline points="15 19 12 22 9 19"/>
+              <polyline points="19 9 22 12 19 15"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <line x1="12" y1="2" x2="12" y2="22"/>
+            </svg>
+          </button>
           <button id="tool-pan" class="tool-btn icon-btn side-tool-btn" data-tool="pan" title="パンツール (Space長押し)" aria-label="パンツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <path d="M18 11V6a2 2 0 0 0-4 0v5"/>
               <path d="M14 10V4a2 2 0 0 0-4 0v6"/>
               <path d="M10 10.5V6a2 2 0 0 0-4 0v8"/>
               <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
+            </svg>
+          </button>
+          <button id="layers-toggle-btn" class="icon-btn side-tool-btn layers-toggle-btn" type="button" title="レイヤー" aria-label="レイヤー" aria-expanded="false">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+              <polyline points="2 17 12 22 22 17"/>
+              <polyline points="2 12 12 17 22 12"/>
             </svg>
           </button>
           <div class="side-page-zoom" role="group" aria-label="ズーム">
@@ -406,6 +413,29 @@
               <button id="fill-black-btn" class="fill-swatch fill-swatch-black" type="button" data-fill="black" title="黒文字（もう一度クリックで解除）" aria-label="黒文字"></button>
             </div>
           </div>
+          <aside class="layers-drawer" id="layers-drawer" aria-label="レイヤー">
+            <div class="layers-drawer-header">
+              <span class="layers-drawer-title">レイヤー</span>
+              <button id="layers-drawer-close-btn" class="icon-btn layers-drawer-close-btn" type="button" title="閉じる" aria-label="閉じる">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <line x1="18" y1="6" x2="6" y2="18"/>
+                  <line x1="6" y1="6" x2="18" y2="18"/>
+                </svg>
+              </button>
+            </div>
+            <ul id="layer-list" class="layer-list"></ul>
+            <div class="layer-list-footer">
+              <button id="delete-new-layer-btn" class="icon-btn layer-delete-btn" type="button" title="レイヤー削除" aria-label="レイヤー削除" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"/>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                  <path d="M10 11v6"/>
+                  <path d="M14 11v6"/>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                </svg>
+              </button>
+            </div>
+          </aside>
         </nav>
         <aside class="side-panel">
           <div class="panel-header">
@@ -502,18 +532,7 @@
                   disabled>配置</button>
               </div>
             </div>
-          </section>
-          <section class="panel-section" data-section="editor">
-          <h2 class="panel-section-h2">
-            <span>テキスト編集</span>
-            <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
-              <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-          </h2>
-          <div id="editor" class="editor">
-            <label data-editor-scope="single">
+            <label data-editor-scope="single" class="font-combobox-label">
               フォント
               <div class="font-combobox" id="edit-font-combobox">
                 <input id="edit-font" class="font-input" type="text" autocomplete="off" placeholder="フォント名で検索..." />
@@ -568,18 +587,31 @@
                 </div>
               </div>
             </div>
-          </div>
-          <ul id="layer-list" class="layer-list"></ul>
-          <div class="layer-list-footer">
-            <button id="delete-new-layer-btn" class="icon-btn layer-delete-btn" type="button" title="レイヤー削除" aria-label="レイヤー削除" disabled>
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="3 6 5 6 21 6"/>
-                <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                <path d="M10 11v6"/>
-                <path d="M14 11v6"/>
-                <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+          </section>
+          <section class="panel-section" data-section="editor">
+          <h2 class="panel-section-h2">
+            <span>テキスト編集</span>
+            <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
+              <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polyline points="6 9 12 15 18 9"/>
               </svg>
             </button>
+          </h2>
+          <div id="editor" class="editor">
+            <div class="style-palette" id="style-palette">
+              <div class="style-palette-toolbar">
+                <input type="text" id="style-palette-search" class="style-palette-search" placeholder="フォント検索…" autocomplete="off" />
+                <button type="button" id="style-palette-load-btn" class="style-palette-load-btn" title="プリセット JSON を読込" aria-label="プリセット JSON を読込">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+                  </svg>
+                </button>
+              </div>
+              <select id="style-palette-category" class="style-palette-category" hidden></select>
+              <div id="style-palette-list" class="style-palette-list">
+                <div class="style-palette-empty">プリセット JSON を読み込んでください</div>
+              </div>
+            </div>
           </div>
           </section>
         </aside>
@@ -597,6 +629,21 @@
           <div class="progress-fill" id="progress-fill"></div>
         </div>
         <div class="progress-count" id="progress-count" data-tauri-drag-region></div>
+      </div>
+    </div>
+    <div class="progress-modal style-palette-browser-modal" id="style-palette-browser-modal" hidden>
+      <div class="progress-card style-palette-browser-card" role="dialog" aria-label="プリセット JSON を選択">
+        <div class="style-palette-browser-header">
+          <div class="style-palette-browser-title">プリセット JSON を選択</div>
+          <div class="style-palette-browser-nav">
+            <button id="style-palette-browser-back-btn" class="style-palette-nav-btn" type="button" title="戻る" aria-label="戻る">←</button>
+            <button id="style-palette-browser-forward-btn" class="style-palette-nav-btn" type="button" title="進む" aria-label="進む">→</button>
+            <button id="style-palette-browser-cancel-btn" class="style-palette-nav-btn style-palette-nav-cancel" type="button">キャンセル</button>
+          </div>
+        </div>
+        <div id="style-palette-browser-list" class="style-palette-browser-list">
+          <div class="style-palette-browser-loading">読み込み中…</div>
+        </div>
       </div>
     </div>
     <div class="hamburger-overlay" id="hamburger-overlay" hidden></div>

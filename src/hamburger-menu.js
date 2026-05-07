@@ -22,6 +22,7 @@ import { confirmDialog } from "./ui-feedback.js";
 import { openSettingsModal } from "./settings-ui.js";
 import { clearAllGuides, setGuidesLocked } from "./rulers.js";
 import { resetAutoPlaceState } from "./ai-place.js";
+import { resetStylePaletteState } from "./style-palette.js";
 
 const THEME_KEY = "psdesign_theme";
 const FLIPPED_KEY = "psdesign_layout_flipped";
@@ -116,6 +117,7 @@ async function goHome() {
   setGuidesLocked(false);
   clearAllGuides();
   resetAutoPlaceState();
+  resetStylePaletteState();
   clearPdf();
   setPdfRotation(0);
   setPsdRotation(0);

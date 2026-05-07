@@ -2815,5 +2815,142 @@ E4. **`page-jump-btn-danger` クラス追加** ([src/styles.css](src/styles.css)
 > - 旧: 縦書き `!!` `!?` は手動で縦中横適用が必要 → 新: 自動で `baselineDirection: cross` を当てる（Photoshop 内部実装を診断 dump で特定）
 > - 旧: フォントは `"Segoe UI", "Yu Gothic UI"` で MojiQ と異なる → 新: Google Fonts の Noto Sans JP に統一
 
+---
+
+## v1.17.0: スタイルパレット移植 + レイヤードロワー化 + 編集パネル再構成
+
+### A. スタイルパレット新設（curated フォントプリセット）
+
+A1. **新規モジュール [src/style-palette.js](src/style-palette.js)**: Photoshop UXP プラグイン `stylepallet` (`C:\Users\noguchi-kosei\Desktop\ネイティブデータ\stylepallet`) の中核機能を Vanilla ES module で移植。Photoshop UXP API 依存（`require("photoshop")` / `action.batchPlay`）は全削除し、PsDesign の既存 state API + `commitFontToSelections` ([src/text-editor.js](src/text-editor.js)) に置き換え。
+
+**JSON 3 形式互換**（stylepallet と同じ）:
+- 新形式: `{ presetData: { presets: { [category]: [...] } } }`
+- 旧形式: `{ presets: { [category]: [...] } }`
+- 最古形式: ルート直下が `{ [category]: [...] }`
+- `workInfo / strokeSizes / fontSizeStats` キーは無視
+
+**プリセット 1 件のデータモデル**:
+```js
+{
+  displayName: "ゴシック / 小塚ゴシック Pro",
+  name: "小塚ゴシック Pro",      // 和名
+  subName: "ゴシック",            // 表示補助名（任意）
+  fontName: "KozGoPro-Regular",   // PostScript 名
+  description: "...",             // 説明文
+  category: "カテゴリ名",
+}
+```
+
+**JSON ソース**: 校正パネルと同じ共有ドライブ参照。`STYLE_PALETTE_ROOT_PATH = "G:\\共有ドライブ\\CLLENN\\編集部フォルダ\\編集企画部\\編集企画_C班(AT業務推進)\\DTP制作部\\JSONフォルダ"`。`localStorage psdesign_style_palette_last_json` で直前 JSON パスを記憶し、次回起動時に自動再読込（失敗してもサイレント）。
+
+**フォルダブラウザモーダル** (`#style-palette-browser-modal`): 校正パネル流の戻る/進むスタック付きフォルダブラウザ。`list_directory_entries` Tauri コマンドを再利用。`Intl.Collator("ja", { numeric: true })` で自然順ソート。
+
+A2. **DOM 構造**: テキスト編集セクション内 `#editor` 直下:
+- `.style-palette-toolbar`（検索 input + JSON 読込ボタン）
+- `select#style-palette-category`（複数カテゴリ時のみ表示、フィルタ中は非表示）
+- `.style-palette-list`（プリセット行のスクロールリスト、最大 260px 高）
+
+各プリセット行は `.style-palette-item`（subName と name の 2 行表示、selected で accent 色塗り）。フィルタ無し + 複数カテゴリ時は dropdown でカテゴリ切替、フィルタ中は flat 表示。
+
+A3. **適用フロー**: dblclick だった「適用」を **1 クリック化**。プリセット行クリック → `applyPreset(preset)` を発火:
+- 選択中レイヤーがあれば `commitFontToSelections(preset.fontName)` で一括適用（Ctrl+Z 1 回で巻き戻る）
+- 選択 0 件のときは `setCurrentFont(preset.fontName)` だけで「次に配置するテキスト」の既定フォントとして state に残す
+- 両ケースで `setFontPickerStuck(true)` を立て、次の V ツール 1 クリックでも brush mode で自動適用
+
+A4. **外側クリックで選択解除** ([src/style-palette.js](src/style-palette.js) `bindStylePalette`): document `click` リスナー（`mousedown` ではない）で `#style-palette` 外のクリックを検知 → `.selected` ハイライトと `setFontPickerStuck(false)` を解除。`mousedown` ではなく `click` を使うことで、frame click（mousedown で brush apply → click で brush clear）の順序を保証し、apply が阻害されない。
+
+A5. **「ホームに戻る」でリセット** ([src/style-palette.js](src/style-palette.js) `resetStylePaletteState` + [src/hamburger-menu.js](src/hamburger-menu.js) `goHome`): 読み込んだ JSON / プリセット一覧 / 直前パスの localStorage / 検索欄 / カテゴリ dropdown を全クリアし、起動直後の「プリセット JSON を読み込んでください」状態に戻す。`localStorage.removeItem(LAST_JSON_KEY)` で次回起動時の自動再読込も無効化。
+
+### B. レイヤー一覧をドロワー化（MojiQ 流の横スライドパネル）
+
+B1. **設計判断の経緯**: 当初「テキスト編集」セクション内に同居していた `#layer-list` を独立した `panel-section[data-section="layers"]` に分離 → さらにドロワー化へと進化。最終形は MojiQ ver_2.24 の「指示ツール / 文字サイズ」ドロップダウンと同じ横スライドパターン（`position: absolute; right: 100%; top: 0` で anchor、`translateX(20px) → 0` でスライド + フェードイン）。
+
+**アニメーションの試行錯誤**:
+- 第一案: 右側からの drawer (`translateX(100%) → 0`、画面右端から横スライド) — 違和感
+- 第二案: トップツールバー直下から落ちてくるドロップダウン (`translateY(-100%) → 0`) — 「ツールバーから出てくる」想定と異なる
+- 第三案: MojiQ 流の横スライド with scale + transform-origin — close 時に「右下に吸い込まれる」ぎこちない動きに
+- 第四案: scale 撤去で純粋な横スライドのみ + visibility 透過 — close が瞬時に消える
+- 第五案: visibility 撤去 + 等速 linear opacity + ease-out transform — 採用
+
+B2. **HTML 構造** ([index.html](index.html)): サイドツールバー (`<nav class="side-toolbar">`) 内、fill-color-picker の後（`</nav>` 直前）に `<aside id="layers-drawer">` を直接配置。`<button id="layers-toggle-btn">` は `#tool-pan` の直後に独立配置（`margin-top: auto` でツールバー底辺へ押し下げ）。`#layer-list` と `#delete-new-layer-btn` は drawer 内に移動（ID 据え置きで [src/text-editor.js](src/text-editor.js) `rebuildLayerList` / 削除ハンドラは無改変）。
+
+B3. **CSS 実装** ([src/styles.css](src/styles.css)):
+- `.side-toolbar { position: relative; overflow: visible }` — drawer の anchor + 左方向への展開を許可（旧 `overflow: hidden` は collapse 時の子 `display: none` で代替）
+- `.layers-drawer`:
+  - `position: absolute; bottom: 0; right: 100%; margin-right: 8px;` — サイドツールバー底辺（= viewport 下端付近）にドロワー下端を揃え、ボタン真左に anchor
+  - `width: 280px; height: 40vh; min-height: 240px; max-height: calc(100vh - 80px);`
+  - closed: `opacity: 0; pointer-events: none; transform: translateX(24px);`
+  - open: `opacity: 1; pointer-events: auto; transform: translateX(0);`
+  - transition: `opacity 0.2s linear, transform 0.22s cubic-bezier(0, 0, 0.2, 1)` — opacity を等速にすることで「最初に留まる / 最後に張り付く」curve 由来の不自然さを排除
+  - `box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22)` — 影を控えめにしてフェード中のゴースト感を回避
+- `visibility` プロパティは使わず `display: flex` 常時、`pointer-events` で非インタラクト化 — `visibility: hidden` の transition が一部ブラウザで close 時に即時 hidden 扱いになり opacity アニメをスキップする問題を回避
+- ワークスペース反転時 (`.workspace.flipped .layers-drawer`) は anchor を `left: 100%` に反転し `transform: translateX(-24px)` で鏡映
+
+B4. **開閉ロジック** ([src/main.js](src/main.js) `bindLayersDrawer`):
+- `.open` クラスのトグルだけで CSS transition 発火（hidden 属性 / rAF タイマーは不要）
+- ボタンクリックで toggle（`stopPropagation` で document click handler に伝播させない）
+- × ボタン / Esc / 外側 mousedown で close
+- `aria-expanded` / `aria-hidden` を併せて切替えてアクセシビリティを担保
+- 永続化なし（毎セッション closed で起動 — Photoshop 風フローティングパレット）
+
+B5. **トグルボタン** (`#layers-toggle-btn`): lucide `layers` SVG（重ねた菱形 3 枚）。`.icon-btn .side-tool-btn .layers-toggle-btn` クラス。`aria-expanded="true"` 時に accent 塗り。
+
+### C. 編集パネルの構造再編
+
+C1. **編集セクションの DOM 順入替** ([index.html](index.html)): 旧 `style-palette → editor-tabs-section` を **`editor-tabs-section → style-palette`** に入替え。サイズ / 行間 / フチ タブを上、フォントプリセット選択を下に配置。
+
+C2. **font-combobox-label / editor-tabs-section を txt-source セクションへ移動** ([index.html](index.html)): 旧 `panel-section[data-section="editor"]` 内 `#editor` 配下にあった `<label class="font-combobox-label">` と `<div class="editor-tabs-section">` を、`panel-section[data-section="txt"]` 内 `txt-source-dropzone` の直後に移動。「テキスト編集」セクションは style-palette のみを内包する形に。
+
+C3. **JS クエリの追従**:
+- `populateEditor` の `[data-editor-scope='single']` 対象を `editor.querySelectorAll(...)` から **`document.querySelector(".side-panel").querySelectorAll(...)`** に拡張
+- `setEditorTab` / `bindEditorTabs` を新ヘルパー **`editorTabsSectionEl() = document.querySelector(".editor-tabs-section")`** 経由でクエリ
+- `.editor input` の visual styling を **`.font-combobox-label input/select/textarea`** にもフォールバック適用（移動後 `#editor` 外でも背景・border・padding が同等）
+
+C4. **style-palette-current（「現在のフォント」表示）撤去** ([src/style-palette.js](src/style-palette.js)): 当初 stylepallet 互換で実装した「テキストレイヤーを選択してください / 次に配置: <font> / 選択中: N個」の上部表示エリアを削除。サイドの combobox + サイズタブ + フレーム下のサイズバッジで既に同等情報が提供されているため重複排除。`refreshCurrentFontDisplay` / `formatCurrent` / `displayNameForPostScript` 関数とリスナー購読も撤去。
+
+C5. **style-palette-description（説明文パネル）撤去**: クリックでプリセットの description を表示する `.style-palette-description` ブロックを削除。説明文は `.style-palette-item .title` 属性に集約（hover でツールチップ表示）。スタイルパレットは「検索 + JSON 読込ボタン / カテゴリ dropdown / プリセットリスト」の 3 段構成にスリム化。
+
+C6. **font-combobox の復帰** ([index.html](index.html) + [src/text-editor.js](src/text-editor.js) + [src/styles.css](src/styles.css)): 一時撤去していたインストール済み全フォント検索 combobox を復活。スタイルパレット（社内 curated プリセット）と並列の代替経路として、`editor-tabs-section` の上に配置。`commitFont` は `commitFontToSelections` を呼ぶよう更新し、style-palette と挙動を統一（即時適用 + brush mode 起動）。
+
+### D. 新規テキスト方向トグルの再配置・横型化
+
+D1. **位置を `#tool-move` の上に移動** ([index.html](index.html)): サイドツールバー上部、選択ツール (V) の**直上**に `#new-text-dir-switch` を配置（旧位置は V の直下）。
+
+D2. **縦型ピル → 横型ピル** ([src/styles.css](src/styles.css)):
+- 旧: 22w × 44h、thumb 18×18 が上下にスライド（`top: 1px ↔ 23px`）、アイコン `-top` / `-bot`
+- 新: **32w × 18h**、thumb 14×14 が左右にスライド（`left: 1px ↔ 15px`）、アイコン `-left` / `-right`
+- サイドツールバー content 幅（44px - padding 12px = 32px）に収まるサイズ
+- `flex-shrink: 0` でツールバー縮小時も潰れない
+- HTML のアイコン class も `-top / -bot` → `-left / -right` に rename
+
+D3. **JS は無変更**: `aria-checked` のトグルと state.newTextDirection 連動のみで、アイコンクラス名は参照していない。
+
+### E. ブラシモードのバグ修正（layer-list 経由でフォント適用が効かない）
+
+**症状**: スタイルパレットでフォント B を選んでブラシ起動した後、レイヤー一覧（drawer 内の layer-list）から別 layer 行をクリックすると、選択 layer の旧フォント A に表示が戻ってしまう。
+
+**原因** ([src/text-editor.js](src/text-editor.js) `selectLayer`): canvas 上の frame クリックは [src/canvas-tools.js](src/canvas-tools.js) `onExistingLayerMouseDown` が `maybeApplyStickyFont()` を呼ぶが、layer-list 行クリックの `selectLayer` ではブラシモード判定をしていなかった。`populateEditor` が layer の旧フォント A を読み `setCurrentFont(A)` で上書きしていた。
+
+**修正**:
+- [src/canvas-tools.js](src/canvas-tools.js): `function maybeApplyStickyFont()` を **`export function`** に変更
+- [src/text-editor.js](src/text-editor.js): `maybeApplyStickyFont` を import し、`selectLayer` 内 `setSelectedLayer` の直後に呼出。apply 成功時は `commitFontToSelections` 内で rebuild が走るので追加の `populateEditor` / `refreshAllOverlays` をスキップ（canvas-tools.js と同じパターン）
+
+### F. txt-source セクションの視覚調整
+
+F1. **`.txt-source-empty` の背景色とボーダー** ([src/styles.css](src/styles.css)):
+- `background: var(--bg)` を追加 — `.style-palette-item` の表示色（list コンテナ `var(--bg)` 背景）と統一
+- `border-bottom: 1px solid var(--border)` を追加 — 直下に移動した font-combobox-label / editor-tabs-section との視覚的区切り線
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.17.0`** に揃え。Cargo.lock も自動追従。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: フォント選択 = `#edit-font-combobox`（インストール済み全フォント検索のみ） → 新: combobox + curated 社内 JSON プリセットのスタイルパレット（共有ドライブ自動読込 + 1 クリック適用 + brush mode）
+> - 旧: layer-list は「テキスト編集」セクション内に同居 → 新: サイドツールバー底辺の独立ドロワーに分離、MojiQ 流横スライドアニメ（`right: 100%` anchor、`translateX(24px) → 0`、0.22s linear opacity + ease-out transform）
+> - 旧: 新規テキスト方向トグルは V ツール直下 + 縦型ピル (22×44) → 新: V ツールの上 + 横型ピル (32×18)、サイドツールバー content 幅にぴったりフィット
+> - 旧: 編集パネル = 1 セクションに style-palette + editor-tabs が同居 → 新: txt-source セクションに font-combobox + editor-tabs を集約、編集セクションは style-palette 専用
+> - 旧: ブラシモードは canvas frame クリック経由でしか発動しない → 新: layer-list 行クリック経由でも `maybeApplyStickyFont` が走る（export 化して selectLayer から呼出）
+> - 旧: スタイルパレットの読み込み状態は永続化 → 新: ホームに戻るで完全リセット（`localStorage` の直前パスも削除）
 
 

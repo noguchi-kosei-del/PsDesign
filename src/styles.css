@@ -810,7 +810,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-right: 1px solid var(--border);
   box-sizing: border-box;
   transition: width 0.25s ease;
-  overflow: hidden;
+  /* overflow: visible にして、レイヤードロワーが左方向へ展開できるようにする。
+     折り畳み時は子要素が display: none になるため、はみ出しは発生しない。 */
+  overflow: visible;
+  /* レイヤードロワー (.layers-drawer) の anchor。bottom: 0 でドロワー下端を
+     サイドツールバー底辺（= viewport 下端付近）に揃える。 */
+  position: relative;
 }
 
 .side-toolbar.collapsed {
@@ -901,49 +906,52 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: #fff;
 }
 
-/* V ツール直下の「新規テキスト方向」スイッチ（縦型トグル）。
-   1 つのトラック内をスライドする thumb で 縦↔横 を切替える iOS 風スイッチを縦に倒した形。
-   aria-checked="true" = 縦 (thumb が上)、"false" = 横 (thumb が下)。
+/* 選択ツール直上の「新規テキスト方向」スイッチ（横型トグル）。
+   1 つのトラック内を左右にスライドする thumb で 縦↔横 を切替える iOS 風スイッチ。
+   サイドツールバー content 幅 (44px - padding 12px = 32px) に収まるサイズに合わせる。
+   aria-checked="true" = 縦書き (thumb が左)、"false" = 横書き (thumb が右)。
    active 側のアイコンは thumb (accent) の上に重なって白で見える。 */
 .new-text-dir-switch {
   position: relative;
-  width: 22px;
-  height: 44px;
+  width: 32px;
+  height: 18px;
   margin: 0 auto;
   padding: 0;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 11px;
+  border-radius: 9px;
   cursor: pointer;
   align-self: center;
   transition: border-color 0.12s, background 0.12s;
   /* 子要素の変形を確実に切り取り */
   overflow: hidden;
+  /* flex 子としては最小幅を尊重して縮まないように */
+  flex-shrink: 0;
 }
 .new-text-dir-switch:hover {
   border-color: var(--accent);
 }
 .new-text-dir-switch-thumb {
   position: absolute;
-  width: 18px;
-  height: 18px;
-  left: 1px;
+  width: 14px;
+  height: 14px;
   top: 1px;
+  left: 1px;
   border-radius: 50%;
   background: var(--accent);
   z-index: 0;
-  transition: top 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  transition: left 0.18s cubic-bezier(0.4, 0, 0.2, 1);
   pointer-events: none;
 }
 .new-text-dir-switch[aria-checked="false"] .new-text-dir-switch-thumb {
-  top: 23px;
+  left: 15px;
 }
 .new-text-dir-switch-icon {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 12px;
-  height: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 10px;
+  height: 10px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -952,22 +960,36 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: none;
   transition: color 0.18s;
 }
-.new-text-dir-switch-icon-top { top: 4px; }
-.new-text-dir-switch-icon-bot { bottom: 4px; }
-.new-text-dir-switch-icon svg { display: block; }
+.new-text-dir-switch-icon-left { left: 3px; }
+.new-text-dir-switch-icon-right { right: 3px; }
+.new-text-dir-switch-icon svg {
+  display: block;
+  width: 10px;
+  height: 10px;
+}
 /* active 側（thumb が乗っている方）のアイコンを白で表示 */
-.new-text-dir-switch[aria-checked="true"] .new-text-dir-switch-icon-top {
+.new-text-dir-switch[aria-checked="true"] .new-text-dir-switch-icon-left {
   color: #fff;
 }
-.new-text-dir-switch[aria-checked="false"] .new-text-dir-switch-icon-bot {
+.new-text-dir-switch[aria-checked="false"] .new-text-dir-switch-icon-right {
   color: #fff;
 }
 
-/* ズーム群：サイドツールバー下部のボトムアンカー。
-   旧 .page-nav の margin-top: auto / border-top の役目をここが引き継ぎ、
-   ページ移動と文字色スウォッチがその下にぶら下がる構成。 */
-.side-page-zoom {
+/* レイヤートグルボタン：margin-top: auto でサイドツールバー底辺へ押し下げ、
+   自身以下の zoom / page-nav / fill-color-picker もボトムアンカー位置に収まる。
+   ドロワー本体は .side-toolbar 直下に配置されており、サイドツールバーの
+   下端を anchor として展開する。 */
+.layers-toggle-btn {
   margin-top: auto;
+}
+.layers-toggle-btn[aria-expanded="true"] {
+  background: var(--accent);
+  color: #fff;
+}
+
+/* ズーム群：レイヤーボタンの直下に配置。ボトムアンカーは layers-toggle-btn が担うため
+   ここでは margin-top: auto を持たない（持つと sibling 同士で空きを取り合う）。 */
+.side-page-zoom {
   padding: 8px 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -2741,6 +2763,10 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 11px;
   text-align: center;
   padding: 12px;
+  /* style-palette-item と同じ背景に揃える（list 背景の var(--bg)） */
+  background: var(--bg);
+  /* 下端に区切り線。font-combobox-label / editor-tabs-section との視覚的セパレーター。 */
+  border-bottom: 1px solid var(--border);
 }
 
 /* 原稿テキストパネル下部に常駐する新規テキスト入力欄 (中央配置のショートカット)。
@@ -3025,7 +3051,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .editor-tab-panel { display: block; }
 .editor-tab-panel[hidden] { display: none; }
 
-.editor textarea, .editor input, .editor select {
+.editor textarea, .editor input, .editor select,
+.font-combobox-label input, .font-combobox-label select, .font-combobox-label textarea {
   background: var(--bg);
   color: var(--text);
   border: 1px solid var(--border);
@@ -3037,6 +3064,16 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 
 .editor textarea { resize: vertical; }
 
+/* ========== フォント検索コンボボックス ==========
+   editor-tabs-section の上に配置されるフォント全件検索 UI。スタイルパレット (curated) の
+   下にあるが、こちらはインストール済み全フォントを検索できる代替経路。 */
+.font-combobox-label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
 .font-combobox {
   position: relative;
   display: flex;
@@ -3102,26 +3139,206 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-overflow: ellipsis;
 }
 
-/* テキストレイヤーセクションを残り高さいっぱいに広げ、内側の layer-list が
-   flex:1 で伸び、footer (削除ボタン) が常にセクション最下部に固定されるようにする。
-   min-height: 0 を入れないと flex 子が overflow:auto でも縮まない（仕様）。 */
-/* テキスト編集セクションは layer-list を内包するため、
-   残余高をすべて吸収して layer-list がスクロール可能になるようにする。 */
+/* ========== Style Palette ==========
+   テキスト編集セクション内のフォントピッカー領域。stylepallet UXP プラグインの UI を
+   PsDesign に移植。「現在のフォント」表示 / 検索 + JSON 読込ボタン / カテゴリドロップダウン
+   / プリセットリスト / 説明文パネル の 5 段構成。 */
+.style-palette {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.style-palette-toolbar {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+}
+.style-palette-search {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+}
+.style-palette-search:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.style-palette-load-btn {
+  flex: 0 0 auto;
+  width: 28px;
+  height: auto;
+  padding: 0;
+  background: var(--panel);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.style-palette-load-btn:hover { color: var(--text); border-color: var(--accent); }
+.style-palette-category {
+  width: 100%;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+}
+.style-palette-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  scrollbar-color: var(--scrollbar-thumb) var(--bg);
+}
+.style-palette-list::-webkit-scrollbar { width: 8px; }
+.style-palette-list::-webkit-scrollbar-track { background: var(--bg); }
+.style-palette-list::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 4px; }
+.style-palette-empty {
+  padding: 12px 10px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.style-palette-item {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 12px;
+  color: var(--text);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.style-palette-item:last-child { border-bottom: none; }
+.style-palette-item:nth-child(even) { background: rgba(255, 255, 255, 0.02); }
+.style-palette-item:hover { background: var(--panel-hover); }
+.style-palette-item.selected {
+  background: var(--accent);
+  color: #fff;
+  border-left: 3px solid var(--accent);
+  padding-left: 7px;
+}
+.style-palette-item-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.style-palette-item-sub {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.style-palette-item.selected .style-palette-item-sub { color: rgba(255, 255, 255, 0.8); }
+
+/* スタイルパレット用フォルダブラウザモーダル。校正パネルの browser と同じ視覚言語。 */
+#style-palette-browser-modal .style-palette-browser-card {
+  width: min(90vw, 520px);
+  max-width: 520px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 16px 18px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.style-palette-browser-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.style-palette-browser-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+.style-palette-browser-nav {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.style-palette-nav-btn {
+  height: 26px;
+  padding: 0 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+}
+.style-palette-nav-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.style-palette-nav-btn:hover:not(:disabled) { border-color: var(--accent); }
+.style-palette-nav-cancel:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
+.style-palette-browser-list {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  min-height: 200px;
+}
+.style-palette-browser-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text);
+}
+.style-palette-browser-row:last-child { border-bottom: none; }
+.style-palette-browser-row:hover { background: var(--panel-hover); }
+.style-palette-browser-row.folder { color: var(--text); }
+.style-palette-browser-row.folder .style-palette-browser-icon { color: #ffcc00; }
+.style-palette-browser-icon {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  color: var(--text-muted);
+}
+.style-palette-browser-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.style-palette-browser-loading,
+.style-palette-browser-empty,
+.style-palette-browser-error {
+  padding: 12px 10px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.style-palette-browser-error { color: var(--danger); }
+
+/* テキスト編集セクションは layer-list が drawer に分離された後も、フォントピッカーや
+   タブ群が残るため通常の flex column ブロックとして扱う。サイドパネルの残余高は
+   原稿テキストの :has() ルール側で吸収させる（v1.4.4 F1 と同方針）。 */
 .panel-section[data-section="editor"] {
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
-/* テキスト編集を折り畳んだとき、編集セクション (h2 のみ) は残余高を取らない。
-   さらに「原稿テキストが展開中」のときだけ margin-top:auto でサイドバー最底辺に貼り付け、
-   原稿テキストとの間にできる空き高を埋める（原稿テキストの :has() ルールで残余高を
-   吸収させる挙動と組み合わせ）。両方とも折り畳み中なら margin-top:auto は発動せず、
-   編集 h2 は原稿 h2 のすぐ下に並ぶ自然な配置になる。 */
-.side-panel .panel-section[data-section="editor"].collapsed {
   flex: 0 0 auto;
 }
+
+/* テキスト編集を折り畳んだとき、原稿テキストが展開中ならサイドバー最下部に貼り付け。 */
 .side-panel:has(.panel-section[data-section="txt"]:not(.collapsed)) .panel-section[data-section="editor"].collapsed {
   margin-top: auto;
 }
@@ -5354,4 +5571,109 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 .welcome-actions .page-jump-btn {
   padding: 8px 18px;
   font-size: 13px;
+}
+
+/* ========== Layers Drawer ==========
+   レイヤートグルボタンから横（左方向）にスライドして出てくるパネル。
+   MojiQ の「指示ツール / 文字サイズ」ドロップダウンと同じパターン:
+   親 (.layers-toggle-area) を anchor として、ボタンの真左 (right: 100%) に貼り付け、
+   closed 時は translateX(20px) でわずかに右にずれた位置で透明、
+   open 時は translateX(0) で元の位置に戻りつつフェードイン。
+   背景オーバーレイは置かず、PSD キャンバスや他のサイドパネルとの並行操作を許可する。 */
+.layers-drawer {
+  position: absolute;
+  /* anchor は .side-toolbar (position: relative)。
+     bottom: 0 でドロワー下端をサイドツールバー content 底辺（= viewport 下端 - padding 10px）
+     に揃え、削除ボタンが画面下にぴったり並ぶようにする。
+     right: 100% でサイドツールバー左端の真隣（= レイヤーボタンの真左相当）に展開。 */
+  bottom: 0;
+  right: 100%;
+  margin-right: 8px; /* サイドツールバーとパネルの間に 8px の隙間 */
+  width: 280px;
+  max-width: calc(100vw - 80px);
+  height: 40vh;
+  /* 縦方向も画面外に出ないよう、上端のはみ出し分を抑える。
+     ヘッダー (~50px) ぶん控えて画面に収まる範囲にクランプ。 */
+  max-height: calc(100vh - 80px);
+  min-height: 240px;
+  background: var(--panel-body);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  /* 控えめな影。フェード中に強い影が中間 alpha で残ると「ゴースト感」が出るため
+     blur と alpha を弱めにして、close 時のフェードが自然に見えるようにする。 */
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.22);
+  z-index: 100;
+  /* 常時 display: flex でレイアウト確定。可視性は opacity + pointer-events で制御し、
+     visibility は使わない（visibility transition が close 時に即時 hidden 扱いになって
+     アニメをスキップする一部ブラウザの挙動を回避）。 */
+  display: flex;
+  flex-direction: column;
+  /* closed: 右にスライドアウト + 透明 + クリック不可。
+     scale や transform-origin は使わず、純粋な横スライド + フェードのみで
+     滑らかに展開／収納する（MojiQ の指示ツール / 文字サイズドロップダウン同様）。 */
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(24px);
+  /* opacity は linear（等速）にして curve 由来の「最初に留まる / 最後に張り付く」
+     不自然な見え方を排除。transform は ease-out で着地時に減速。
+     open / close で同じ transition を使い、両方向の挙動を統一。 */
+  transition:
+    opacity 0.2s linear,
+    transform 0.22s cubic-bezier(0, 0, 0.2, 1);
+}
+.layers-drawer.open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(0);
+  transition:
+    opacity 0.2s linear,
+    transform 0.22s cubic-bezier(0, 0, 0.2, 1);
+}
+
+.layers-drawer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  border-radius: 8px 8px 0 0;
+  flex-shrink: 0;
+}
+.layers-drawer-title {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: 0.02em;
+}
+.layers-drawer-close-btn {
+  width: 26px;
+  height: 26px;
+  color: var(--text-muted);
+}
+.layers-drawer-close-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+  color: var(--text);
+}
+
+/* drawer 内の layer-list は flex column 構造で残余高を吸収する。
+   既存 .layer-list の flex / overflow 設定がそのまま動く。 */
+.layers-drawer #layer-list { flex: 1 1 0; min-height: 0; }
+.layers-drawer .layer-list-footer {
+  flex-shrink: 0;
+  border-radius: 0 0 8px 8px;
+}
+
+/* ワークスペース反転時はサイドツールバーが左側に来るため、ドロワーは右側に展開する。
+   anchor / 初期 translateX を鏡映反転。 */
+.workspace.flipped .layers-drawer {
+  right: auto;
+  left: 100%;
+  margin-right: 0;
+  margin-left: 8px;
+  transform: translateX(-24px);
+}
+.workspace.flipped .layers-drawer.open {
+  transform: translateX(0);
 }
