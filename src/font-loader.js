@@ -60,7 +60,19 @@ async function loadFontInternal(psName) {
   if (!font || !font.path) return;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    const rawBytes = await invoke("read_binary_file", { path: font.path });
+    // 【v1.16.0】TTC face 抽出: read_font_face_bytes を最優先で呼び、Rust 側で
+    // TTC の該当 face を切り出した単独 TTF bytes を取得する。faceIndex == 0 の
+    // 場合 Rust 側は元 bytes をそのまま返すので、単独 TTF/OTF も同じ経路で動く。
+    // - 旧 read_binary_file 単体 → TTC 第 2 face 以降が登録できない（Yu Gothic Bold 等）
+    // - read_font_face_bytes → 該当 face を抜き出した単独 TTF として登録可能
+    // 失敗時は read_binary_file にフォールバックして旧挙動を保証する。
+    const faceIndex = Number.isFinite(font.faceIndex) ? font.faceIndex : 0;
+    let rawBytes;
+    try {
+      rawBytes = await invoke("read_font_face_bytes", { path: font.path, faceIndex });
+    } catch (_) {
+      rawBytes = await invoke("read_binary_file", { path: font.path });
+    }
     // FontFace は buffer を消費するので名前ごとに新しいコピーを渡す必要がある。
     const makeBuffer = () => new Uint8Array(rawBytes).buffer;
     // family 名と PS 名の両方で登録し、cssFontFamily の "Family", "PS", sans-serif どちらでもヒットさせる。
@@ -79,6 +91,22 @@ async function loadFontInternal(psName) {
         // TTC の第 2 face 以降など、FontFace が扱えないケースは暫定的にスキップ
         console.warn(`FontFace 登録失敗 (${familyName})`, e);
       }
+    }
+    // 【v1.16.0】最終フォールバック: 上の試行が全て失敗していたら、
+    // 元の TTC bytes 全体で再挑戦する。FontFace は TTC を渡されると先頭 face を
+    // 採用するため、抽出済み TTF が壊れていた場合でも何かしら登録できる可能性がある。
+    if (!registered) {
+      try {
+        const fallbackBytes = await invoke("read_binary_file", { path: font.path });
+        for (const familyName of names) {
+          try {
+            const ff = new FontFace(familyName, new Uint8Array(fallbackBytes).buffer, { display: "swap" });
+            await ff.load();
+            document.fonts.add(ff);
+            registered = true;
+          } catch (_) {}
+        }
+      } catch (_) {}
     }
     if (registered) {
       loaded.add(psName);

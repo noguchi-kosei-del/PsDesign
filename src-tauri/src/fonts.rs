@@ -64,6 +64,9 @@ fn extract_fonts(bytes: &[u8], path: &Path, seen: &mut HashSet<String>, out: &mu
             continue;
         }
         entry.path = Some(path_str.clone());
+        // 【v1.16.0】TTC / OTC 内の何番目の face かを保持。JS 側で
+        // read_font_face_bytes(path, faceIndex) を呼ぶときに渡す。
+        entry.face_index = index;
         if seen.insert(entry.post_script_name.clone()) {
             out.push(entry);
         }
@@ -103,6 +106,8 @@ fn build_entry(face: &ttf_parser::Face) -> Option<FontEntry> {
         name: display,
         post_script_name: ps,
         path: None,
+        // 【v1.16.0】extract_fonts 側でループ中に上書きされる初期値。
+        face_index: 0,
     })
 }
 
@@ -178,10 +183,15 @@ fn read_cache() -> Option<Vec<FontEntry>> {
         ps: String,
         #[serde(default)]
         path: Option<String>,
+        // 【v1.16.0】v2 キャッシュ。旧キャッシュ（face_index なし）は None になる。
+        #[serde(rename = "faceIndex", default)]
+        face_index: Option<u32>,
     }
     let rows: Vec<Row> = serde_json::from_str(&raw).ok()?;
-    // 旧キャッシュ（path なし）は破棄して再ビルド
-    if rows.iter().any(|r| r.path.is_none()) {
+    // 旧 v1 キャッシュ（path なし or face_index なし）は破棄して再ビルド。
+    // face_index が無いと TTC 第 2 face 以降の Yu Gothic Bold 等が一切登録できないため、
+    // 必ず再ビルドして全 face をキャッシュに含める必要がある。
+    if rows.iter().any(|r| r.path.is_none() || r.face_index.is_none()) {
         return None;
     }
     Some(
@@ -190,6 +200,7 @@ fn read_cache() -> Option<Vec<FontEntry>> {
                 name: r.name,
                 post_script_name: r.ps,
                 path: r.path,
+                face_index: r.face_index.unwrap_or(0),
             })
             .collect(),
     )

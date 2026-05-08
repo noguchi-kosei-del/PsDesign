@@ -5825,3 +5825,55 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 .workspace.flipped .layers-drawer.open {
   transform: translateX(0);
 }
+
+/* ===== 【v1.16.0】行間の一部変更（サイドバー行セレクタ） ===== */
+/* レイヤー単独選択時に行間タブ内に表示される行セレクタ。
+   active なボタン（現在対象になっている行 or 全行）は accent 背景 + 白文字で強調する。
+   has-override クラスは値変更済みの行に小さな青ドットを付与してユーザーに状態を伝える。 */
+.leading-row-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+.leading-row-selector[hidden] { display: none; }
+
+.leading-row-btn {
+  min-width: 28px;
+  height: 24px;
+  padding: 0 6px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.leading-row-btn:hover:not(:disabled):not(.active) {
+  background: var(--panel-hover);
+}
+.leading-row-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+.leading-row-btn.has-override:not(.active)::after {
+  content: "•";
+  margin-left: 2px;
+  color: var(--accent);
+}
+
+/* ===== 【v1.16.0】per-char 編集の文字選択インジケータ ===== */
+/* in-place 編集中、textarea で文字選択があるときだけ「選択中: N 文字」を表示。
+   サイドバーから per-char 操作対象が認識できているかをユーザーに視認させる。 */
+.char-selection-indicator {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 2px 6px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  margin-bottom: 6px;
+}
+.char-selection-indicator[hidden] { display: none; }

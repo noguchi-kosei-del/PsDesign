@@ -44,6 +44,31 @@ const mounts = new Map();
 const resizeObservers = new Set();
 let toolListenerBound = false;
 
+// 【v1.16.0】in-place 編集 textarea 上の文字選択範囲のキャッシュ。
+// reportCursor の発火点で必ずモジュール変数に保存しておくことで、focus 変動の影響を回避。
+// editingContext は select イベントのタイミングで更新するが、フォーカスが他の input
+// (size / font 入力欄など) に移ったときに古い値が残ることがある。これを補うため、
+// reportCursor が走るたびに module-level でも選択範囲を保持する。サイドバーから直接
+// 参照できるよう listener API で通知する。
+let _lastInplaceSelection = null;
+const _selectionChangeListeners = new Set();
+export function getLastInplaceSelection() { return _lastInplaceSelection; }
+export function onInplaceSelectionChange(fn) {
+  _selectionChangeListeners.add(fn);
+  return () => _selectionChangeListeners.delete(fn);
+}
+function setLastInplaceSelection(v) {
+  // 値が同じなら listener を発火しない（連続 keystroke で大量発火を抑止）
+  const a = _lastInplaceSelection;
+  const b = v;
+  if (a === b) return;
+  if (a && b && a.start === b.start && a.end === b.end
+      && a.psdPath === b.psdPath
+      && a.layerId === b.layerId && a.tempId === b.tempId) return;
+  _lastInplaceSelection = b;
+  for (const fn of _selectionChangeListeners) fn(b);
+}
+
 // MojiQ 流パン状態：モジュールレベルで保持し、canvas に常設リスナーで扱う。
 let panState = null;
 // マーキー（V ツールの矩形選択）状態。
@@ -299,12 +324,17 @@ function layerRectForExisting(page, layer, edit) {
   const previewText = edit.contents ?? layer.text ?? "";
   const chars = Math.max(1, longestLine(previewText));
   const lineCount = Math.max(1, countLines(previewText));
+  // 【v1.16.0】枠の自動調整 — フォント実描画幅 + per-char サイズ/フォント override で long を再算出。
+  // 測定失敗 / 未ロード時は null → 従来の chars 推定にフォールバック。
+  const fontPs = edit.fontPostScriptName ?? layer.font ?? null;
   // 行間 (autoLeadingAmount %) を厚み（行スタック方向）の係数に反映。125% を最低値として
   // 設定しても既存の見た目より細くしないように clamp。
   const leadingFactor = Math.max(1.25, ((edit.leadingPct ?? 125) / 100));
 
   const sizePt = getExistingLayerEffectiveSizePt(page, layer, edit);
   const ptInPsdPx = sizePt * (dpi / 72);
+  // 【v1.16.0】measureMaxLineExtentEm はここで sizePt が確定してから呼ぶ（per-char override も反映）。
+  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, edit.charFonts);
   // CJK 縦書きで小書き仮名（ょ・っ・ゃ等）や glyph の line-box overhang、
   // text-stroke の outset 半分（stroke 既定 20 PSD px → ~0.16em）を吸収するため
   // 列方向に 0.4em の安全余白を足す。テキスト本体は CSS で bbox 中央に配置するので
@@ -313,8 +343,34 @@ function layerRectForExisting(page, layer, edit) {
   // 超えてはみ出すぶんの安全余白を 0.4em 加える。
   const THICK_SAFETY = 0.4;
   const LONG_SAFETY = 0.4;
-  const fallbackThick = ptInPsdPx * (leadingFactor * lineCount + THICK_SAFETY);
-  const fallbackLong = ptInPsdPx * (1.05 * chars + LONG_SAFETY);
+  // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
+  // 行 N の override = 行 N-1 と行 N の隙間（marginBlockStart）。行 0 は「前の行」がないので無視。
+  // per-char サイズ override がある行はその行の最大文字サイズで line-height をスケール。
+  const lineLeadings = edit.lineLeadings ?? {};
+  const charSizesMap = edit.charSizes ?? {};
+  const linesArrE = previewText.split(/\r?\n/);
+  const lineStartsE = getLineStartOffsets(previewText);
+  let thickSum = 0;
+  for (let i = 0; i < lineCount; i++) {
+    const v = (i > 0 && Number.isFinite(lineLeadings[i])) ? lineLeadings[i] / 100 : leadingFactor;
+    const leading = Math.max(1.25, v);
+    let lineMaxRatio = 1;
+    const line = linesArrE[i] ?? "";
+    const startIdx = lineStartsE[i] ?? 0;
+    for (let k = 0; k < line.length; k++) {
+      const cs = charSizesMap[startIdx + k];
+      if (Number.isFinite(cs) && cs > 0) {
+        const ratio = cs / sizePt;
+        if (ratio > lineMaxRatio) lineMaxRatio = ratio;
+      }
+    }
+    thickSum += leading * lineMaxRatio;
+  }
+  const fallbackThick = ptInPsdPx * (thickSum + THICK_SAFETY);
+  // long 軸: 実測 em があればそれ、無ければ chars × 1.05 のヒューリスティック。
+  // CJK 縦書き等は chars と em がほぼ等価、Latin 系では em < chars になるので bbox が縮む。
+  const longChars = Number.isFinite(measuredEm) && measuredEm > 0 ? measuredEm : 1.05 * chars;
+  const fallbackLong = ptInPsdPx * (longChars + LONG_SAFETY);
   const minThick = Math.max(ptInPsdPx * (leadingFactor + THICK_SAFETY), 20);
   const minLong = Math.max(ptInPsdPx * 2, 48);
 
@@ -341,13 +397,36 @@ function layerRectForNew(page, nl) {
   const contents = nl.contents ?? "";
   const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
+  // 【v1.16.0】枠の自動調整 — 実描画幅で long を auto-fit（フォント変更 + per-char サイズ/フォント変更で bbox 自動更新）。
+  const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts);
   // 行間 (%) を厚み係数に反映。125 が既定。
   // 小書き仮名 + stroke overhang を吸収する 0.4em の安全余白を THICK 軸に加算。テキスト本体は
   // CSS padding で bbox 中央に配置されるので、bbox が広がっても視覚位置は変わらない。
   // LONG 軸（流し方向）にも display 系フォントの ascender/descender overshoot 用に 0.4em 加える。
   const leadingFactor = (nl.leadingPct ?? 125) / 100;
-  const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + 0.4));
-  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (1.05 * chars + 0.4));
+  // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
+  const lineLeadings = nl.lineLeadings ?? {};
+  const charSizesMap = nl.charSizes ?? {};
+  const linesArrN = contents.split(/\r?\n/);
+  const lineStartsN = getLineStartOffsets(contents);
+  let thickSum = 0;
+  for (let i = 0; i < lineCount; i++) {
+    const v = (i > 0 && Number.isFinite(lineLeadings[i])) ? lineLeadings[i] / 100 : leadingFactor;
+    let lineMaxRatio = 1;
+    const line = linesArrN[i] ?? "";
+    const startIdx = lineStartsN[i] ?? 0;
+    for (let k = 0; k < line.length; k++) {
+      const cs = charSizesMap[startIdx + k];
+      if (Number.isFinite(cs) && cs > 0) {
+        const ratio = cs / sizePt;
+        if (ratio > lineMaxRatio) lineMaxRatio = ratio;
+      }
+    }
+    thickSum += v * lineMaxRatio;
+  }
+  const thick = Math.max(24, ptInPsdPx * (thickSum + 0.4));
+  const longChars = Number.isFinite(measuredEm) && measuredEm > 0 ? measuredEm : 1.05 * chars;
+  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (longChars + 0.4));
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
   const width = isVertical ? thick : long;
@@ -378,7 +457,12 @@ function applyStrokePreview(inner, strokeColor, strokeWidthPx, pxPerPsd) {
 
 function renderOverlay(ctx) {
   const { overlay, page, pageIndex } = ctx;
-  overlay.innerHTML = "";
+  // 【v1.16.0】innerHTML = "" を撤廃し layer-box / marquee-rect だけ削除する。
+  // これにより in-place 編集の textarea (.text-input-floater) が overlay 内に残り、
+  // フォントロード完了 → onFontsRegistered → refreshAllOverlays の連鎖で
+  // 編集中 textarea が消失する事故を防ぐ。マーキー矩形は marqueeState の復元コードが
+  // drawMarquee() で再描画する。
+  for (const el of overlay.querySelectorAll(".layer-box, .marquee-rect")) el.remove();
 
   const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
 
@@ -402,7 +486,14 @@ function renderOverlay(ctx) {
     // tcy（縦中横）は「見た目の確認」用途で縦書きの既存レイヤープレビューにも反映する（PS 側の実値とは独立）。
     const defaultLeadPct = Number.isFinite(edit.leadingPct) ? edit.leadingPct : 105;
     const tcyEnabled = getDefault("tateChuYokoEnabled") !== false;
-    renderInnerText(inner, rect.previewText, defaultLeadPct, edit.lineLeadings, 0, 0, tcyEnabled && rect.isVertical);
+    // 【v1.16.0】per-char サイズ/フォント override + sizePt を渡して per-line bbox / 文字描画を反映。
+    const existingSizePt = getExistingLayerEffectiveSizePt(page, layer, edit);
+    renderInnerText(
+      inner, rect.previewText, defaultLeadPct, edit.lineLeadings, 0, 0,
+      tcyEnabled && rect.isVertical,
+      rect.isVertical,
+      edit.charSizes, existingSizePt, edit.charFonts,
+    );
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
     if (existingFontCss) inner.style.fontFamily = existingFontCss;
@@ -448,7 +539,13 @@ function renderOverlay(ctx) {
     const dashMille = Number(getDefault("dashTrackingMille")) || 0;
     const tildeMille = Number(getDefault("tildeTrackingMille")) || 0;
     const tcyEnabledNew = getDefault("tateChuYokoEnabled") !== false;
-    renderInnerText(inner, nl.contents, nl.leadingPct ?? 125, nl.lineLeadings, dashMille, tildeMille, tcyEnabledNew && rect.isVertical);
+    // 【v1.16.0】per-char サイズ/フォント override + sizePt を渡して per-line bbox / 文字描画を反映。
+    renderInnerText(
+      inner, nl.contents, nl.leadingPct ?? 125, nl.lineLeadings, dashMille, tildeMille,
+      tcyEnabledNew && rect.isVertical,
+      rect.isVertical,
+      nl.charSizes, nl.sizePt ?? 24, nl.charFonts,
+    );
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
     ensureFontLoaded(nl.fontPostScriptName);
@@ -473,13 +570,55 @@ function renderOverlay(ctx) {
 
   // マーキー矩形を復元（ドラッグ中に renderOverlay が走った場合に消えないように）
   if (marqueeState && marqueeState.ctx === ctx) drawMarquee();
+
+  // 【v1.16.0】枠の自動調整（後置の保険）— 実描画後に各 box の inner overflow を検査して、
+  // もし内容が box を超えているなら box を伸ばす（フォント/per-char サイズ変更で
+  // measureText の予測がズレた際の最終フォールバック）。
+  scheduleBoxAutoFit(ctx);
 }
 
+// 【v1.16.0】枠の自動調整（後置の保険）— measureText の予測がズレた場合の最終フォールバック。
+// 各 layer-box の inner.scrollWidth/Height を測って、box を超えていたら box CSS を伸ばす。
+// PSD 座標 → % 換算で指定。直接的な auto-fit 保険として動作する。
+function scheduleBoxAutoFit(ctx) {
+  if (typeof requestAnimationFrame !== "function") return;
+  if (ctx._autoFitScheduled) return;
+  ctx._autoFitScheduled = true;
+  requestAnimationFrame(() => {
+    ctx._autoFitScheduled = false;
+    if (!ctx.overlay || !ctx.canvas) return;
+    const overlayW = ctx.overlay.clientWidth;
+    const overlayH = ctx.overlay.clientHeight;
+    if (overlayW <= 0 || overlayH <= 0) return;
+    for (const box of ctx.overlay.querySelectorAll(".layer-box")) {
+      const inner = box.querySelector(".existing-layer-text, .new-layer-text");
+      if (!inner) continue;
+      const sw = inner.scrollWidth;
+      const sh = inner.scrollHeight;
+      const cw = inner.clientWidth;
+      const ch = inner.clientHeight;
+      const overflowW = sw - cw;
+      const overflowH = sh - ch;
+      if (overflowW > 1) {
+        const newW = (box.offsetWidth + overflowW + 4); // 4px 余裕
+        box.style.width = `${(newW / overlayW) * 100}%`;
+      }
+      if (overflowH > 1) {
+        const newH = (box.offsetHeight + overflowH + 4);
+        box.style.height = `${(newH / overlayH) * 100}%`;
+      }
+    }
+  });
+}
+
+// 【v1.16.0】非対応フォントの対応 — 常に引用で数字始まり / 非 ASCII 名 / 予約語衝突を一括対処。
+// 旧: `[\s,'"()]` を含むときだけ引用 → `851チカラヅヨク` のような数字始まり PS 名や
+// 非 ASCII 名フォントが unquoted で CSS parse error を起こし、font-family 全体が
+// 無効化される事故が発生していた。常時引用にすればこれらを完全に防げる。
 function quoteFontFamily(name) {
   if (!name) return null;
-  const needsQuote = /[\s,'"()]/.test(name);
   const escaped = String(name).replace(/["\\]/g, "\\$&");
-  return needsQuote ? `"${escaped}"` : escaped;
+  return `"${escaped}"`;
 }
 
 function cssFontFamily(psName) {
@@ -505,6 +644,121 @@ function longestLine(s) {
 function countLines(s) {
   if (!s) return 0;
   return String(s).split(/\r?\n/).length;
+}
+
+// fullText の各行の絶対開始 index を返す（textarea selectionStart と同じインデックス系）。
+// 【v1.16.0】per-char サイズ/フォント機能で行内 i 番目の char の絶対 index を引くために使う。
+function getLineStartOffsets(fullText) {
+  const offsets = [0];
+  const regex = /\r?\n/g;
+  let m;
+  while ((m = regex.exec(fullText))) {
+    offsets.push(m.index + m[0].length);
+  }
+  return offsets;
+}
+
+// 【v1.16.0】枠の自動調整 — canvas.measureText で実描画幅を測って bbox を auto-fit。
+// canvas.measureText 用のオフスクリーン context（モジュール singleton）。
+// 各行の実描画幅を em で返す。フォントが未ロードのときは fallback フォントで測定されるが、
+// font-loader が登録完了時に refreshAllOverlays を呼ぶので次の render で正確な値に更新される。
+let _measureCanvas = null;
+function getMeasureContext() {
+  if (!_measureCanvas) _measureCanvas = document.createElement("canvas");
+  return _measureCanvas.getContext("2d");
+}
+
+// 【v1.16.0】枠の自動調整 — per-char サイズ/フォント override を反映した実描画幅を返す。
+// 1 行の実描画幅を「layer のフォントサイズ単位」の em で返す。
+// charSizes / charFonts による per-char オーバーライドを反映する。
+// 連続する同じ (font, size) の文字を 1 セグメントにまとめて canvas.measureText で測り、
+// セグメントの寸法を「(layer.sizePt) を 1 とした比率」に換算して合算する。
+// charSize がオーバーライドされている文字は、その文字のサイズで測ったうえで
+// (charSize / layerSize) 倍してから加算する → bbox が大きい文字に応じて伸びる。
+//
+// 戻り値: 0 〜 ∞（layer.sizePt em 単位）。空行は 0。測定不能なら null。
+function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs) {
+  if (!line) return 0;
+  if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
+  let ctx;
+  try { ctx = getMeasureContext(); } catch { return null; }
+  const refSizePx = 100;
+  let totalEm = 0;
+  let i = 0;
+  while (i < line.length) {
+    const sizeStart = Number.isFinite(charSizes?.[lineStartIdx + i]) ? charSizes[lineStartIdx + i] : layerSizePt;
+    const fontStart = (typeof charFonts?.[lineStartIdx + i] === "string" && charFonts[lineStartIdx + i].length > 0)
+      ? charFonts[lineStartIdx + i] : layerFontPs;
+    let j = i + 1;
+    while (j < line.length) {
+      const sz = Number.isFinite(charSizes?.[lineStartIdx + j]) ? charSizes[lineStartIdx + j] : layerSizePt;
+      const fn = (typeof charFonts?.[lineStartIdx + j] === "string" && charFonts[lineStartIdx + j].length > 0)
+        ? charFonts[lineStartIdx + j] : layerFontPs;
+      if (sz !== sizeStart || fn !== fontStart) break;
+      j++;
+    }
+    const segText = line.slice(i, j);
+    const fam = cssFontFamily(fontStart) || "sans-serif";
+    // bbox 計算で参照する font を先読み開始（ロード完了後に onFontsRegistered →
+    // refreshAllOverlays で再描画されて bbox が確定する）。
+    if (fontStart) ensureFontLoaded(fontStart);
+    const fontShorthand = `${refSizePx}px ${fam}`;
+    // フォント未ロード時は measureText が fallback フォントで誤った値を返す。
+    // それを使うと bbox が一時的に小さく計算されて、CSS 側の `white-space: pre-wrap` で
+    // 改行が走り「フォント変更で改行位置が変わる」事故になるため、未ロード時は
+    // 保守的な 1em per char にフォールバックする（CJK で正確、Latin で大きめ）。
+    //
+    // 注意: `document.fonts.check(fontShorthand)` は font shorthand 全体に sans-serif が
+    // 含まれているため常に true を返す（sans-serif は常時利用可能）。これでは未ロード時の
+    // フォールバックが発動しない。primary の family 名だけで check する必要がある。
+    let fontReady = true;
+    if (typeof document !== "undefined" && document.fonts && fontStart) {
+      try {
+        const display = getFontDisplayName(fontStart);
+        const primary = quoteFontFamily(display) || quoteFontFamily(fontStart);
+        if (primary) {
+          fontReady = document.fonts.check(`${refSizePx}px ${primary}`);
+        }
+      } catch { fontReady = false; }
+    }
+    let w;
+    if (fontReady) {
+      ctx.font = fontShorthand;
+      try { w = ctx.measureText(segText).width; } catch { return null; }
+      if (!Number.isFinite(w) || w <= 0) {
+        w = segText.length * refSizePx;
+      }
+    } else {
+      // フォント未ロード → 1em per char で大きめの bbox を確保
+      w = segText.length * refSizePx;
+    }
+    // refSizePx font-size での実幅（CSS px）→ そのセグメントの「sizeStart pt」での幅に正規化
+    // → さらに「layerSizePt em」に換算（layer サイズを 1 とした比率）
+    const segWidthAtCharSizeEm = w / refSizePx;
+    const segWidthAtLayerEm = segWidthAtCharSizeEm * (sizeStart / layerSizePt);
+    totalEm += segWidthAtLayerEm;
+    i = j;
+  }
+  return totalEm;
+}
+
+// 全行の最大行幅を「layer.sizePt em 単位」で返す。
+// charSizes / charFonts に override があれば反映、なければ layer フォント単一で測定。
+function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts) {
+  if (!text) return 0;
+  if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
+  const fullText = String(text);
+  const linesArr = fullText.split(/\r?\n/);
+  const lineStarts = getLineStartOffsets(fullText);
+  let maxEm = 0;
+  for (let li = 0; li < linesArr.length; li++) {
+    const em = measureLineExtentEmWithOverrides(
+      linesArr[li], lineStarts[li], charSizes, charFonts, layerSizePt, postScriptName,
+    );
+    if (em == null) continue;
+    if (em > maxEm) maxEm = em;
+  }
+  return maxEm;
 }
 
 // 連続したとき自動でツメる対象記号 2 グループ。Photoshop 側でも同じ char code 集合を使う。
@@ -561,59 +815,61 @@ function findTcyPairs(line) {
   return pairs;
 }
 
-// 連続記号ラン (dash / tilde) のみを処理してセグメントを parentEl に追加する。
-// tcy ペアの境界で分割された後の「tcy 外」セグメントから呼ばれる前提なので、tcy 判定は不要。
-function appendNonTcySegment(parentEl, segment, dashMag, tildeMag) {
-  if ((dashMag === 0 && tildeMag === 0) || !REPEATED_TARGET_REGEX.test(segment)) {
-    if (segment.length > 0) parentEl.appendChild(document.createTextNode(segment));
-    return;
-  }
-  const segments = findRepeatedTargetRuns(segment);
-  for (const seg of segments) {
-    if (seg.isTargetRun && seg.text.length >= 2) {
-      // 最初の N-1 文字 → グループ別の letter-spacing で per-char span
-      // 最後の 1 文字 → span 外の素テキスト
-      for (let idx = 0; idx < seg.text.length - 1; idx++) {
-        const ch = seg.text[idx];
-        const grp = repeatedTargetGroup(ch);
-        const mag = grp === "dash" ? dashMag : grp === "tilde" ? tildeMag : 0;
-        if (mag > 0) {
-          const span = document.createElement("span");
-          span.style.letterSpacing = `${-mag / 1000}em`;
-          span.textContent = ch;
-          parentEl.appendChild(span);
-        } else {
-          parentEl.appendChild(document.createTextNode(ch));
-        }
-      }
-      parentEl.appendChild(document.createTextNode(seg.text.slice(-1)));
-    } else {
-      parentEl.appendChild(document.createTextNode(seg.text));
-    }
-  }
-}
-
+// 【v1.16.0】per-char サイズ/フォント描画 + 連続記号ツメ + TCY 統合ヘルパー。
+// 4 要素 (TCY + DASH/TILDE 連続記号ツメ + per-char-size + per-char-font) を 1 関数で処理する。
+//
 // 1 行を parentEl に追加する。
 // - tcyOn のとき、!! / !? のペアを <span class="tcy-span"> でラップ（CSS の text-combine-upright で
-//   2 文字を 1 文字幅に詰めて縦書き 1 セルに収める）。
-// - 連続対象記号ラン (dash / tilde) は per-char span に letter-spacing を当ててツメ表示。
+//   2 文字を 1 文字幅に詰めて縦書き 1 セルに収める）。tcy 内では per-char サイズ/フォントは適用しない。
+// - 連続対象記号ラン (dash / tilde) は per-char letter-spacing を当ててツメ表示（最後の 1 文字は除外）。
+// - charSizes: contents 文字列の絶対 index をキーとする pt サポート。layer の defaultSizePt との
+//   比率を em で指定して inner の font-size に対する相対サイズに変換する。
+// - charFonts: 絶対 index をキーとする PostScript 名。inner の font-family を上書きする。
+//
+// lineStartIdx: この行が full contents 文字列のどの位置から始まるか（0-based）。
 // dashMille / tildeMille は正負どちらの符号でも「絶対値ぶん詰める」セマンティクスに統一。
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
-function appendLineWithTracking(parentEl, line, dashMille, tildeMille, tcyOn) {
+//
+// 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
+function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts) {
+  if (!line.length) {
+    // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
+    parentEl.appendChild(document.createTextNode("​"));
+    return;
+  }
   const dashMag = Math.abs(Number(dashMille) || 0);
   const tildeMag = Math.abs(Number(tildeMille) || 0);
   const tcyPairs = tcyOn ? findTcyPairs(line) : [];
-  const hasTracking = (dashMag > 0 || tildeMag > 0) && REPEATED_TARGET_REGEX.test(line);
-  // 何も適用しない場合は textNode 1 つで終わり（空行は zero-width space で line-box を保つ）
-  if (!hasTracking && tcyPairs.length === 0) {
-    parentEl.appendChild(document.createTextNode(line.length > 0 ? line : "​"));
+  const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
+  const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
+  const trackingActive = (dashMag > 0 || tildeMag > 0) && REPEATED_TARGET_REGEX.test(line);
+  // 高速パス：何も装飾なし → 単純テキストノード 1 つで終わり
+  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts) {
+    parentEl.appendChild(document.createTextNode(line));
     return;
   }
-  // tcy ペア境界で分割し、各セグメントを順に append。
+  // 各文字の tracking 値（em 単位、負）を事前計算。連続ランの最後の文字は 0。
+  const trackings = new Array(line.length).fill(0);
+  if (trackingActive) {
+    const segments = findRepeatedTargetRuns(line);
+    let pos = 0;
+    for (const seg of segments) {
+      if (seg.isTargetRun && seg.text.length >= 2) {
+        for (let k = 0; k < seg.text.length - 1; k++) {
+          const grp = repeatedTargetGroup(seg.text[k]);
+          const mag = grp === "dash" ? dashMag : grp === "tilde" ? tildeMag : 0;
+          if (mag > 0) trackings[pos + k] = -mag / 1000;
+        }
+      }
+      pos += seg.text.length;
+    }
+  }
+  // tcy ペア境界で分割し、各セグメントを「tcy 内」(text-combine-upright) または
+  // 「tcy 外」(per-char signature 統合) として出力する。
   let pos = 0;
   for (const pair of tcyPairs) {
     if (pair.start > pos) {
-      appendNonTcySegment(parentEl, line.slice(pos, pair.start), dashMag, tildeMag);
+      appendStyledSegment(parentEl, line.slice(pos, pair.start), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts);
     }
     const span = document.createElement("span");
     span.className = "tcy-span";
@@ -622,45 +878,131 @@ function appendLineWithTracking(parentEl, line, dashMille, tildeMille, tcyOn) {
     pos = pair.end;
   }
   if (pos < line.length) {
-    appendNonTcySegment(parentEl, line.slice(pos), dashMag, tildeMag);
+    appendStyledSegment(parentEl, line.slice(pos), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts);
   }
 }
 
-// inner にテキストを描画する。lineLeadings に override があれば 1 行ずつ <div> に
-// 分けて per-line line-height を当てる。trackingMille が非ゼロかつテキストに対象記号があれば
-// span ベースで描画して連続記号のツメを反映する。tcy が ON かつ縦書き、テキストに !! / !? が
-// 含まれる場合も同様に span 描画。それ以外は単一ブロックで描画（軽量）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn) {
+// 【v1.16.0】tcy 外セグメントを per-char signature (size, tracking, font) 統合で append。
+// segStartInLine: このセグメントが line のどの位置から始まるか（trackings 配列の index 算出用）
+// lineStartIdx: line が full contents のどの位置から始まるか（charSizes / charFonts の絶対 index 算出用）
+function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts) {
+  if (!segText.length) return;
+  let i = 0;
+  while (i < segText.length) {
+    const absIdx = lineStartIdx + segStartInLine + i;
+    const sigSize = hasCharSizes ? charSizes[absIdx] : undefined;
+    const sigTrack = trackings[segStartInLine + i];
+    const sigFont = hasCharFonts ? charFonts[absIdx] : undefined;
+    let j = i + 1;
+    while (j < segText.length) {
+      const absJ = lineStartIdx + segStartInLine + j;
+      const s = hasCharSizes ? charSizes[absJ] : undefined;
+      const t = trackings[segStartInLine + j];
+      const f = hasCharFonts ? charFonts[absJ] : undefined;
+      if (s !== sigSize || t !== sigTrack || f !== sigFont) break;
+      j++;
+    }
+    const text = segText.slice(i, j);
+    const needsSpan = Number.isFinite(sigSize) || sigTrack !== 0 || (typeof sigFont === "string" && sigFont.length > 0);
+    if (needsSpan) {
+      const span = document.createElement("span");
+      if (Number.isFinite(sigSize) && Number.isFinite(defaultSizePt) && defaultSizePt > 0) {
+        // sigSize は pt 単位。inner の font-size は layer default を screen px で持つので
+        // (sigSize / defaultSizePt) em 表記で相対指定する。
+        span.style.fontSize = `${sigSize / defaultSizePt}em`;
+      }
+      if (sigTrack !== 0) {
+        span.style.letterSpacing = `${sigTrack}em`;
+      }
+      if (typeof sigFont === "string" && sigFont.length > 0) {
+        // PostScript 名から family-name 解決 → font-family を上書き。
+        const fam = cssFontFamily(sigFont);
+        if (fam) span.style.fontFamily = fam;
+        ensureFontLoaded(sigFont);
+      }
+      span.textContent = text;
+      parentEl.appendChild(span);
+    } else {
+      parentEl.appendChild(document.createTextNode(text));
+    }
+    i = j;
+  }
+}
+
+// 【v1.16.0】行間/サイズ/フォントの per-line・per-char 描画統合。
+// inner にテキストを描画する。
+// - lineLeadings に override があれば 1 行ずつ <div> に分けて margin-block-start で per-line の
+//   行間を表現する（行 N の値 = 行 N-1 と行 N の間隔のみ。CSS line-height ではなく
+//   margin-block-start を使うことで「行自身のサイズや次の行との間隔は不変」を実現）。
+// - charSizes / charFonts に override があれば各行内で文字ごとに span を作って per-char の
+//   サイズ / フォントを反映する。
+// - dashMille / tildeMille は連続記号のツメ（letter-spacing）を制御する。
+// - tcyOn が ON かつ縦書きで !! / !? が含まれる場合は <span class="tcy-span"> でラップ。
+// それ以外は単一テキストノードで描画（最軽量）。
+// isVertical: true なら writing-mode: vertical-rl 想定で per-line の幅 (列幅) を切替える。
+// defaultSizePt: layer 全体の sizePt（charSizes の em 換算に使う）。
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
+  const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
+  const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const fallback = String((defaultLeadingPct ?? 125) / 100);
   const dashMag = Math.abs(Number(dashMille) || 0);
   const tildeMag = Math.abs(Number(tildeMille) || 0);
   const fullText = String(text ?? "");
   const trackingHits = (dashMag > 0 || tildeMag > 0) && REPEATED_TARGET_REGEX.test(fullText);
   const tcyHits = !!tcyOn && TCY_PAIR_REGEX.test(fullText);
-  // 高速パス：行間 override 無し + tracking / tcy のいずれもヒットしない
-  if (!overrides && !trackingHits && !tcyHits) {
+  // 高速パス：何も装飾なし
+  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts) {
     inner.textContent = fullText;
     inner.style.lineHeight = fallback;
     return;
   }
   const lines = fullText.split(/\r?\n/);
+  const lineStarts = getLineStartOffsets(fullText);
   inner.style.lineHeight = fallback;
   if (overrides) {
-    // per-line line-height + 各行内で tracking / tcy 適用
+    const layerFactor = (defaultLeadingPct ?? 125) / 100;
     for (let i = 0; i < lines.length; i++) {
       const lineEl = document.createElement("div");
-      const pct = Number.isFinite(overrides[i]) ? overrides[i] : (defaultLeadingPct ?? 125);
-      lineEl.style.lineHeight = String(pct / 100);
-      appendLineWithTracking(lineEl, lines[i], dashMag, tildeMag, tcyOn);
+      // この行の最大文字サイズ ratio（per-char override 反映）。layer サイズを 1 とした倍率。
+      let lineMaxRatio = 1;
+      if (hasCharSizes && Number.isFinite(defaultSizePt) && defaultSizePt > 0) {
+        const startIdx = lineStarts[i] ?? 0;
+        for (let k = 0; k < lines[i].length; k++) {
+          const cs = charSizes[startIdx + k];
+          if (Number.isFinite(cs) && cs > 0) {
+            const ratio = cs / defaultSizePt;
+            if (ratio > lineMaxRatio) lineMaxRatio = ratio;
+          }
+        }
+      }
+      const effectiveLineSize = layerFactor * lineMaxRatio;
+      lineEl.style.lineHeight = String(effectiveLineSize);
+      lineEl.style.display = "block";
+      lineEl.style.boxSizing = "border-box";
+      if (isVertical) {
+        lineEl.style.width = `${effectiveLineSize}em`;
+      } else {
+        lineEl.style.minHeight = `${effectiveLineSize}em`;
+      }
+      // 行 i の override 値 = 行 i-1 と 行 i の隙間のみ（margin-block-start で表現）。
+      // layer 全体の leadingFactor との差分だけを margin に追加する。
+      // 行 0 は「前の行」が無いので override を無視。
+      if (i > 0 && Number.isFinite(overrides[i])) {
+        const overrideFactor = overrides[i] / 100;
+        const extra = overrideFactor - layerFactor;
+        if (Math.abs(extra) > 0.001) {
+          lineEl.style.marginBlockStart = `${extra}em`;
+        }
+      }
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts);
       inner.appendChild(lineEl);
     }
   } else {
-    // tracking / tcy のみ：inner 直下に各行を append、行の区切りは <br> で表現
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createElement("br"));
-      appendLineWithTracking(inner, lines[i], dashMag, tildeMag, tcyOn);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts);
     }
   }
 }
@@ -1490,6 +1832,11 @@ function createTextFloater(ctx, {
   onCommit,
   onClose,
   onCursorChange,
+  // 【v1.16.0】per-char 編集対象を識別するためのレイヤー情報。
+  // { psdPath, layerId | tempId }。これがあれば textarea 上の文字選択を
+  // _lastInplaceSelection キャッシュに保存し、サイドバーの commitFont /
+  // applyTextSize から参照できるようにする（focus 移動の影響を回避）。
+  layerMeta = null,
 }) {
   const { page } = ctx;
   const isVertical = direction !== "horizontal";
@@ -1540,18 +1887,42 @@ function createTextFloater(ctx, {
     finished = true;
     const value = input.value.replace(/\s+$/, "");
     input.remove();
+    // 【v1.16.0】floater が消えるタイミングで選択キャッシュもクリア。
+    setLastInplaceSelection(null);
     if (commit) onCommit(value);
     if (onClose) onClose(commit);
   };
   input.__finalize = finalize;
   // カーソル位置から現在行を算出して通知。selectionStart までの \n の数 = 0-based 行番号。
+  // selectionStart === selectionEnd の場合は単純カーソル、異なれば文字選択中。
   const reportCursor = () => {
+    const start = input.selectionStart ?? 0;
+    const end = input.selectionEnd ?? start;
+    // 【v1.16.0】module-level の選択範囲キャッシュも同時に更新。サイドバー側の
+    // commitFont / applyTextSize はこちらから読むので focus 移動の影響を受けない。
+    if (layerMeta) {
+      if (end > start) {
+        setLastInplaceSelection({
+          start, end,
+          psdPath: layerMeta.psdPath,
+          layerId: layerMeta.layerId ?? null,
+          tempId: layerMeta.tempId ?? null,
+        });
+      } else {
+        setLastInplaceSelection(null);
+      }
+    }
     if (!onCursorChange) return;
-    const pos = input.selectionStart ?? 0;
-    const before = input.value.slice(0, pos);
+    const before = input.value.slice(0, start);
     const lineIndex = (before.match(/\n/g) ?? []).length;
     const totalLines = (input.value.match(/\n/g) ?? []).length + 1;
-    onCursorChange({ lineIndex, totalLines, contents: input.value });
+    onCursorChange({
+      lineIndex,
+      totalLines,
+      contents: input.value,
+      selectionStart: start,
+      selectionEnd: end,
+    });
   };
   input.addEventListener("focus", () => { hasFocused = true; reportCursor(); });
   input.addEventListener("keyup", reportCursor);
@@ -1636,8 +2007,18 @@ function startInPlaceEdit(ctx, target, options = {}) {
     initialText,
     selectAll: true,
     anchor: "center",
-    onCursorChange: ({ lineIndex, totalLines, contents }) => {
-      setEditingContext({ ...editTargetMeta, currentLineIndex: lineIndex, totalLines, contents });
+    // 【v1.16.0】in-place 編集中の textarea 上の文字選択を _lastInplaceSelection に
+    // キャッシュさせる。サイドバーの commitFont / applyTextSize はそちらを参照する。
+    layerMeta: editTargetMeta,
+    onCursorChange: ({ lineIndex, totalLines, contents, selectionStart, selectionEnd }) => {
+      setEditingContext({
+        ...editTargetMeta,
+        currentLineIndex: lineIndex,
+        totalLines,
+        contents,
+        selectionStart,
+        selectionEnd,
+      });
     },
     onCommit: (value) => {
       // afterCommit 付き（原稿テキスト dblclick 経由など）はレイヤー編集と

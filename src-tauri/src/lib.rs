@@ -89,6 +89,7 @@ pub struct EditPayload {
     pub tate_chu_yoko_enabled: bool,
 }
 
+// 【v1.16.0】使用フォントの拡張 — TTC face_index を保持して全 face を個別管理。
 #[derive(Debug, Serialize)]
 pub struct FontEntry {
     pub name: String,
@@ -96,6 +97,11 @@ pub struct FontEntry {
     pub post_script_name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    // TTC / OTC 内の何番目の face か（0-based）。単独 TTF/OTF は 0。
+    // JS 側 (font-loader.js) は read_font_face_bytes 呼び出し時にこの値を渡し、
+    // Rust が TTC からその face を切り出して標準 TTF として返す。
+    #[serde(rename = "faceIndex")]
+    pub face_index: u32,
 }
 
 #[tauri::command]
@@ -119,6 +125,192 @@ async fn list_fonts() -> Result<Vec<FontEntry>, String> {
 #[tauri::command]
 async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))
+}
+
+// 【v1.16.0】使用フォントの拡張 — TTC face 抽出コマンド（FontFace API は TTC をそのまま渡すと
+// 先頭 face しか登録できないため、Rust 側で該当 face を切り出して標準 TTF にして返す）。
+// 指定したフォントファイルから face_index で示された 1 つのフォント face を取り出して
+// 標準 TTF として返す。
+// - 単独 TTF/OTF（"OTTO" / 0x00010000 / "true" など）の場合は元の bytes をそのまま返す
+// - TTC/OTC（"ttcf"）の場合は内包する SFNT offset table を解析し、該当 face のテーブルだけ
+//   抽出して標準 SFNT 形式で再構築する。これにより JS の FontFace API が認識できる
+//
+// FontFace API は TTC バイト列を渡すと先頭 face しか登録できず、2 番目以降のフォントが
+// CSS で参照できなくなる。日本語環境では游ゴシック M/B/D など多くのフォントが TTC に
+// 同居しているため、この変換が無いと「フォント一覧に出るのに UI に反映されない」状態になる。
+#[tauri::command]
+async fn read_font_face_bytes(path: String, face_index: u32) -> Result<Vec<u8>, String> {
+    let bytes = std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))?;
+    // face_index == 0 は旧挙動と同じく元のファイル bytes をそのまま返す。
+    // - 単独 TTF/OTF: 通常通り
+    // - TTC の先頭 face: FontFace は TTC bytes を渡されると先頭 face を自動採用するので
+    //   ここで TTC をそのまま返しても旧 read_binary_file と等価動作
+    // 抽出ロジックは face_index >= 1 のみで動かして、face[0] には絶対影響を与えないようにする。
+    if face_index == 0 {
+        return Ok(bytes);
+    }
+    if bytes.len() >= 4 && &bytes[0..4] == b"ttcf" {
+        if let Some(extracted) = extract_face_from_ttc(&bytes, face_index) {
+            // ttf-parser で構造を検証してから返す。検証失敗時は元 TTC bytes に
+            // フォールバックして「先頭 face が登録される」旧挙動に戻す。
+            // FontFace.load が完全に失敗するよりは何かしら登録される方がマシ。
+            if ttf_parser::Face::parse(&extracted, 0).is_ok() {
+                return Ok(extracted);
+            }
+        }
+        // 抽出 / 検証失敗 → 元 TTC bytes を返す（FontFace は先頭 face を読む）
+        return Ok(bytes);
+    }
+    // 単独 TTF/OTF で face_index > 0 → 仕様上不正だが、互換のため元 bytes を返す。
+    Ok(bytes)
+}
+
+// 【v1.16.0】使用フォントの拡張 — TTC → 単独 TTF 再構築のコア実装。
+// TTC ヘッダ → 該当 face の SFNT offset table → 各 table 領域を抽出して
+// 単独 TTF を再構築する。table データは TTC 内のオフセット参照なので、
+// 新しいファイル先頭からの相対オフセットに書き換える。
+// - ディレクトリエントリは tag 昇順にソート（OpenType 仕様）
+// - head テーブルの checkSumAdjustment を再計算（厳格パーサ対策）
+fn extract_face_from_ttc(ttc: &[u8], face_index: u32) -> Option<Vec<u8>> {
+    if ttc.len() < 12 || &ttc[0..4] != b"ttcf" {
+        return None;
+    }
+    let num_fonts = u32::from_be_bytes([ttc[8], ttc[9], ttc[10], ttc[11]]);
+    if face_index >= num_fonts {
+        return None;
+    }
+    let off_pos = 12usize.checked_add((face_index as usize).checked_mul(4)?)?;
+    if ttc.len() < off_pos + 4 {
+        return None;
+    }
+    let sfnt_off = u32::from_be_bytes([
+        ttc[off_pos],
+        ttc[off_pos + 1],
+        ttc[off_pos + 2],
+        ttc[off_pos + 3],
+    ]) as usize;
+    if ttc.len() < sfnt_off + 12 {
+        return None;
+    }
+    let num_tables = u16::from_be_bytes([ttc[sfnt_off + 4], ttc[sfnt_off + 5]]) as usize;
+    let dir_size = num_tables.checked_mul(16)?;
+    if ttc.len() < sfnt_off + 12 + dir_size {
+        return None;
+    }
+    // (tag, checksum, offset, length) を読む
+    let mut entries: Vec<(u32, u32, u32, u32)> = Vec::with_capacity(num_tables);
+    for i in 0..num_tables {
+        let p = sfnt_off + 12 + i * 16;
+        let tag = u32::from_be_bytes([ttc[p], ttc[p + 1], ttc[p + 2], ttc[p + 3]]);
+        let checksum =
+            u32::from_be_bytes([ttc[p + 4], ttc[p + 5], ttc[p + 6], ttc[p + 7]]);
+        let offset =
+            u32::from_be_bytes([ttc[p + 8], ttc[p + 9], ttc[p + 10], ttc[p + 11]]);
+        let length =
+            u32::from_be_bytes([ttc[p + 12], ttc[p + 13], ttc[p + 14], ttc[p + 15]]);
+        entries.push((tag, checksum, offset, length));
+    }
+    // OpenType spec はディレクトリエントリを tag 昇順でソートすることを要求。
+    // 多くの TTC は既にソート済みだが、稀に違反するファイルがあるため明示的にソート。
+    // 厳格なフォントパーサ（DirectWrite 等）は順序違反で全体を却下するため重要。
+    entries.sort_by_key(|&(tag, _, _, _)| tag);
+    let header_size = 12 + dir_size; // sfnt header + table dir
+    // 各 table は 4-byte 境界で padding して連結。新しいオフセットを計算。
+    let mut new_offsets: Vec<u32> = Vec::with_capacity(num_tables);
+    let mut tables_size = 0usize;
+    for &(_, _, _, length) in &entries {
+        new_offsets.push((header_size + tables_size) as u32);
+        tables_size += pad4(length as usize);
+    }
+    let mut out: Vec<u8> = Vec::with_capacity(header_size + tables_size);
+    // sfntVersion は元の SFNT offset table から複製
+    out.extend_from_slice(&ttc[sfnt_off..sfnt_off + 4]);
+    out.extend_from_slice(&(num_tables as u16).to_be_bytes());
+    // searchRange / entrySelector / rangeShift（仕様通り計算）
+    let entry_selector = if num_tables == 0 {
+        0
+    } else {
+        (num_tables as f64).log2().floor() as u16
+    };
+    let search_range = (1u16 << entry_selector) * 16;
+    let range_shift = (num_tables as u16).saturating_mul(16).saturating_sub(search_range);
+    out.extend_from_slice(&search_range.to_be_bytes());
+    out.extend_from_slice(&entry_selector.to_be_bytes());
+    out.extend_from_slice(&range_shift.to_be_bytes());
+    // table directory（offset を新しい値に差し替え、それ以外は維持）
+    for (i, &(tag, checksum, _orig_off, length)) in entries.iter().enumerate() {
+        out.extend_from_slice(&tag.to_be_bytes());
+        out.extend_from_slice(&checksum.to_be_bytes());
+        out.extend_from_slice(&new_offsets[i].to_be_bytes());
+        out.extend_from_slice(&length.to_be_bytes());
+    }
+    // table data（4-byte padding 付き）
+    for &(_, _, offset, length) in &entries {
+        let off = offset as usize;
+        let len = length as usize;
+        if ttc.len() < off + len {
+            return None;
+        }
+        out.extend_from_slice(&ttc[off..off + len]);
+        let pad = pad4(len) - len;
+        for _ in 0..pad {
+            out.push(0);
+        }
+    }
+
+    // head テーブルの checkSumAdjustment を再計算する。
+    // SFNT 仕様:
+    //   1. head.checkSumAdjustment（head 先頭から +8 の 4 バイト）を 0 にする
+    //   2. ファイル全体の 4 バイト境界での u32 の合計を計算（最後の半端は 0 padding）
+    //   3. checkSumAdjustment = 0xB1B0_AFBA - sum（u32 wrap）
+    //   4. その値を head に書き戻す
+    // TTC から face を取り出すと directory 内の offset が変わるため、元ファイルの
+    // head.checkSumAdjustment が無効になる。一部のフォント検証が厳しいパーサ（特に
+    // Windows DirectWrite 系）はこれを検証して却下するため、必ず再計算する。
+    let head_tag: u32 = u32::from_be_bytes(*b"head");
+    let mut head_table_off: Option<usize> = None;
+    for (i, &(tag, _, _, _)) in entries.iter().enumerate() {
+        if tag == head_tag {
+            head_table_off = Some(new_offsets[i] as usize);
+            break;
+        }
+    }
+    if let Some(head_off) = head_table_off {
+        if out.len() >= head_off + 12 {
+            // checkSumAdjustment を 0 に
+            out[head_off + 8] = 0;
+            out[head_off + 9] = 0;
+            out[head_off + 10] = 0;
+            out[head_off + 11] = 0;
+            // ファイル全体の u32 BE sum を計算
+            let mut sum: u32 = 0;
+            let mut idx = 0usize;
+            while idx + 4 <= out.len() {
+                let v = u32::from_be_bytes([out[idx], out[idx + 1], out[idx + 2], out[idx + 3]]);
+                sum = sum.wrapping_add(v);
+                idx += 4;
+            }
+            // 残りバイト（あれば）を 0 padding して u32 として加算
+            if idx < out.len() {
+                let mut tail = [0u8; 4];
+                let n = out.len() - idx;
+                for k in 0..n {
+                    tail[k] = out[idx + k];
+                }
+                let v = u32::from_be_bytes(tail);
+                sum = sum.wrapping_add(v);
+            }
+            let adjustment: u32 = 0xB1B0_AFBA_u32.wrapping_sub(sum);
+            let bytes_adj = adjustment.to_be_bytes();
+            out[head_off + 8..head_off + 12].copy_from_slice(&bytes_adj);
+        }
+    }
+    Some(out)
+}
+
+#[inline]
+fn pad4(n: usize) -> usize {
+    (n + 3) & !3
 }
 
 #[tauri::command]
@@ -323,6 +515,7 @@ pub fn run() {
             apply_edits_via_photoshop,
             list_fonts,
             read_binary_file,
+            read_font_face_bytes,
             list_psd_files,
             list_directory_entries,
             list_drives,

@@ -1,6 +1,13 @@
 import { loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
-import { deleteSelectedLayers, nudgeSelectedLayers, refreshAllOverlays, snapNextSize } from "./canvas-tools.js";
+import {
+  deleteSelectedLayers,
+  nudgeSelectedLayers,
+  refreshAllOverlays,
+  snapNextSize,
+  // 【v1.16.0】in-place 編集 textarea 上の文字選択キャッシュ
+  getLastInplaceSelection,
+} from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
 import {
@@ -124,6 +131,14 @@ import {
   onEditingContextChange,
   setLineLeading,
   getLineLeading,
+  // 【v1.16.0】行間の一部変更（サイドバー行セレクタ）
+  getActiveLeadingLine,
+  setActiveLeadingLine,
+  onActiveLeadingLineChange,
+  // 【v1.16.0】per-char サイズ
+  setCharSizesRange,
+  getEdit,
+  getSelectedLayers,
   toggleFramesVisible,
   onFramesVisibleChange,
   getFramesVisible,
@@ -1178,10 +1193,29 @@ function bindParallelViewMode() {
   sync();
 }
 
+// 【v1.16.0】フォントサイズ一部変更 — 選択範囲があれば per-char、無ければ layer 全体に適用。
 function applyTextSize(n) {
+  // in-place 編集中で文字選択がある → per-char サイズ適用。
+  // 選択範囲は canvas-tools の module-level キャッシュから取る（select イベントで保存される）。
+  const sel = getLastInplaceSelection();
+  if (sel && sel.end > sel.start) {
+    const v = clampSize(n);
+    const targetId = sel.tempId ?? sel.layerId;
+    setCharSizesRange(sel.psdPath, targetId, sel.start, sel.end, v);
+    refreshAllOverlays();
+    rebuildLayerList();
+    setTextSize(v); // サイドバー入力欄の値も同期
+    return;
+  }
   setTextSize(n);
   // 選択中の全レイヤーに同じサイズを適用（複数選択でも一括反映）。
   commitSizeToSelections(getTextSize());
+}
+
+function clampSize(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return getTextSize();
+  return Math.max(6, Math.min(999, Math.round(v * 10) / 10));
 }
 
 function getSizeStep() {
@@ -1229,8 +1263,10 @@ function bindSizeTool() {
 
 // 行間を適用。in-place 編集中（editingContext あり）はカーソル行の per-line override に
 // 書き込み、そうでなければ従来どおり layer 全体の leadingPct を更新する。
+// 【v1.16.0】行間の一部変更 — 3 段階優先順位: editingContext > activeLeadingLine > 全行。
 function applyLeading(n) {
   const v = clampLeading(n);
+  // 1. in-place 編集中はカーソル行の per-line override（既存挙動）
   const ec = getEditingContext();
   if (ec) {
     const targetId = ec.tempId ?? ec.layerId;
@@ -1240,14 +1276,148 @@ function applyLeading(n) {
     syncLeadingInputForEditingContext();
     return;
   }
+  // 2. サイドバーで対象行が選ばれている → 単独選択中レイヤーのその行に per-line override。
+  //    行 N の override は「行 N と行 N-1 の間隔」を意味するので 1 以上のみ有効。
+  const lineIdx = getActiveLeadingLine();
+  if (Number.isInteger(lineIdx) && lineIdx >= 1) {
+    const target = resolveSingleSelectedLayer();
+    if (target) {
+      setLineLeading(target.psdPath, target.layerKey, lineIdx, v);
+      refreshAllOverlays();
+      rebuildLayerList();
+      syncLeadingRowSelector();
+      // 入力欄と ルビ ボタンを「いま書き込んだ値」に揃える。
+      // global leadingPct が変わっていないので onLeadingPctChange 経由の同期は走らないため、
+      // ここで明示的に呼ばないと「ルビを押したのに UI が変わらない」ように見える。
+      syncLeadingInputForActiveRow(v);
+      return;
+    }
+    // 単独選択でない / 解決できないときは全行モードへフォールバック
+    setActiveLeadingLine(null);
+  }
+  // 3. 全行：選択中レイヤー全体に一括適用（既存挙動）
   setLeadingPct(v);
-  // 選択中の全レイヤーに同じ行間を適用（複数選択でも一括反映）。
   commitLeadingToSelections(getLeadingPct());
 }
 function clampLeading(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) return getLeadingPct();
   return Math.max(50, Math.min(500, Math.round(v)));
+}
+
+// 【v1.16.0】サイドバー行選択用に「現在単独選択中のレイヤー」を解決する。
+// 戻り値: { psdPath, layerKey, contents, lineCount, lineLeadings } | null
+function resolveSingleSelectedLayer() {
+  const sels = getSelectedLayers();
+  if (sels.length !== 1) return null;
+  const pages = getPages();
+  const sel = sels[0];
+  const page = pages[sel.pageIndex];
+  if (!page) return null;
+  if (typeof sel.layerId === "string") {
+    // 新規レイヤー
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+    if (!nl) return null;
+    const contents = nl.contents ?? "";
+    return {
+      psdPath: page.path,
+      layerKey: nl.tempId,
+      contents,
+      lineCount: contents.split(/\r?\n/).length,
+      lineLeadings: nl.lineLeadings ?? {},
+    };
+  }
+  // 既存レイヤー
+  const layer = page.textLayers.find((l) => l.id === sel.layerId);
+  if (!layer) return null;
+  const edit = getEdit(page.path, layer.id) ?? {};
+  const contents = edit.contents ?? layer.text ?? "";
+  return {
+    psdPath: page.path,
+    layerKey: layer.id,
+    contents,
+    lineCount: contents.split(/\r?\n/).length,
+    lineLeadings: edit.lineLeadings ?? {},
+  };
+}
+
+// 【v1.16.0】行間の一部変更 — 行間タブ内の「全行 / 2 / 3 / …」セグメント描画。
+// 行間タブの「対象行セレクタ」を再描画。レイヤー単独選択時のみ表示し、行数 1 のときも非表示。
+// in-place 編集中（editingContext）はサイドバー行選択を使わないので非表示にする。
+function syncLeadingRowSelector() {
+  const sel = document.getElementById("leading-row-selector");
+  if (!sel) return;
+  if (getEditingContext()) {
+    sel.hidden = true;
+    sel.innerHTML = "";
+    return;
+  }
+  const target = resolveSingleSelectedLayer();
+  if (!target || target.lineCount < 2) {
+    sel.hidden = true;
+    sel.innerHTML = "";
+    if (target == null) setActiveLeadingLine(null);
+    return;
+  }
+  // 行数を超える activeLeadingLine は無効化（contents が短くなった等）。
+  // 行 0 も「前の行」が無いため override 対象外 → 全行モードへ寄せる。
+  const active = getActiveLeadingLine();
+  if (active === 0 || (Number.isInteger(active) && active >= target.lineCount)) {
+    setActiveLeadingLine(null);
+    return; // setActiveLeadingLine の listener でこの関数が再実行される
+  }
+  sel.hidden = false;
+  // 行 N のボタン = 「行 N と行 N-1 の間隔」を調整する意味なので、行 0（先頭）は除外。
+  // 「全行」ボタンが層全体を一括変更する経路として行 0 のフォールバックを兼ねる。
+  const buttons = [`<button type="button" class="leading-row-btn${active == null ? " active" : ""}" data-row="all" title="全行に適用（layer 全体の行間）">全行</button>`];
+  for (let i = 1; i < target.lineCount; i++) {
+    const isActive = active === i;
+    const hasOverride = Number.isFinite(target.lineLeadings?.[i]);
+    const cls = "leading-row-btn"
+      + (isActive ? " active" : "")
+      + (hasOverride ? " has-override" : "");
+    const title = hasOverride
+      ? `${i + 1}行目の前の間隔（${target.lineLeadings[i]}% に変更済）`
+      : `${i + 1}行目の前の間隔`;
+    buttons.push(`<button type="button" class="${cls}" data-row="${i}" title="${title}">${i + 1}</button>`);
+  }
+  sel.innerHTML = buttons.join("");
+  // クリック → activeLeadingLine 切替（listener 経由で再描画 + leading-input に値同期）
+  for (const btn of sel.querySelectorAll(".leading-row-btn")) {
+    btn.addEventListener("mousedown", (e) => e.preventDefault()); // フォーカス移動を抑止
+    btn.addEventListener("click", () => {
+      const r = btn.dataset.row;
+      if (r === "all") setActiveLeadingLine(null);
+      else setActiveLeadingLine(parseInt(r, 10));
+    });
+  }
+}
+
+// 【v1.16.0】activeLeadingLine が立っている / 切替えられたとき、leading-input にその行の値を表示する。
+// forcedValue を渡すと state 読み取りをスキップして直接その値を反映する（applyLeading 直後に
+// 押した瞬間「ルビ active が変わらない」事故を防ぐ）。input が focus 中でも上書きする。
+function syncLeadingInputForActiveRow(forcedValue) {
+  const input = document.getElementById("leading-input");
+  if (!input) return;
+  if (getEditingContext()) return; // in-place 編集中は別ハンドラが担う
+  const lineIdx = getActiveLeadingLine();
+  if (!Number.isInteger(lineIdx) || lineIdx < 1) return;
+  let v;
+  if (Number.isFinite(forcedValue)) {
+    v = forcedValue;
+    input.value = String(v); // 強制同期（focus 中でも上書き）
+  } else {
+    const target = resolveSingleSelectedLayer();
+    if (!target) return;
+    v = getLineLeading(target.psdPath, target.layerKey, lineIdx) ?? getLeadingPct();
+    if (document.activeElement !== input) input.value = String(v);
+  }
+  // ルビトグルも追従
+  const onActive = v >= 150;
+  const off = document.getElementById("ruby-off-btn");
+  const on = document.getElementById("ruby-on-btn");
+  if (off) off.classList.toggle("active", !onActive);
+  if (on) on.classList.toggle("active", onActive);
 }
 function adjustLeading(delta) {
   const ec = getEditingContext();
@@ -1256,6 +1426,16 @@ function adjustLeading(delta) {
     const cur = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
     applyLeading(cur + delta);
     return;
+  }
+  // 【v1.16.0】サイドバー行選択中はその行の値を起点に増減
+  const lineIdx = getActiveLeadingLine();
+  if (Number.isInteger(lineIdx) && lineIdx >= 1) {
+    const target = resolveSingleSelectedLayer();
+    if (target) {
+      const cur = getLineLeading(target.psdPath, target.layerKey, lineIdx) ?? getLeadingPct();
+      applyLeading(cur + delta);
+      return;
+    }
   }
   applyLeading(getLeadingPct() + delta);
 }
@@ -1320,15 +1500,24 @@ function bindLeadingTool() {
     applyLeading(v);
   });
   input.addEventListener("blur", () => {
-    // editingContext があれば対象行の値を、なければ global を表示。
+    // 【v1.16.0】editingContext > activeLeadingLine > 全行 の優先順で表示値を決める。
     const ec = getEditingContext();
     if (ec) {
       const targetId = ec.tempId ?? ec.layerId;
       const v = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
       input.value = String(v);
-    } else {
-      input.value = String(getLeadingPct());
+      return;
     }
+    const lineIdx = getActiveLeadingLine();
+    if (Number.isInteger(lineIdx) && lineIdx >= 1) {
+      const target = resolveSingleSelectedLayer();
+      if (target) {
+        const v = getLineLeading(target.psdPath, target.layerKey, lineIdx) ?? getLeadingPct();
+        input.value = String(v);
+        return;
+      }
+    }
+    input.value = String(getLeadingPct());
   });
   // ボタン群は in-place 編集 textarea からのフォーカス移動を抑止する。これがないと
   // + を押すたびに textarea が blur → カーソル行が失われ、editingContext が消える。
@@ -1341,16 +1530,50 @@ function bindLeadingTool() {
 
   // in-place 編集の context 変化に追従して input/ボタンの表示を更新。
   // context が立つ → カーソル行の per-line 値（無ければ global）を表示し対象行ラベル ON。
-  // context が消える → global 値に戻し、ラベル OFF。
+  // context が消える → global 値に戻し、ラベル OFF。サイドバー行セレクタも再描画
+  // （editingContext が立っている間は隠す、消えたら復活させる）。
   onEditingContextChange((ec) => {
     if (ec) {
       syncLeadingInputForEditingContext();
     } else {
       clearLeadingTargetLabel();
+      // 【v1.16.0】editingContext を抜けた直後は activeLeadingLine は維持。
+      // サイドバー行が選ばれていればその値を、なければ global を表示。
+      const lineIdx = getActiveLeadingLine();
+      if (Number.isInteger(lineIdx) && lineIdx >= 1) {
+        syncLeadingInputForActiveRow();
+      } else {
+        input.value = String(getLeadingPct());
+        syncRuby(getLeadingPct());
+      }
+    }
+    syncLeadingRowSelector();
+  });
+
+  // 【v1.16.0】サイドバー行選択の変化 → 入力欄に該当行の値を表示し、行セレクタの active 表示を更新。
+  onActiveLeadingLineChange(() => {
+    syncLeadingRowSelector();
+    const a = getActiveLeadingLine();
+    if (Number.isInteger(a) && a >= 1) {
+      syncLeadingInputForActiveRow();
+    } else {
+      // 全行に戻った → global を表示
       input.value = String(getLeadingPct());
       syncRuby(getLeadingPct());
     }
   });
+
+  // 【v1.16.0】populateEditor（選択変化）後に行セレクタを再描画。レイヤー数 / contents が変わったときも追従。
+  // populateEditor 自身が `psdesign:editor-populated` を dispatch する（text-editor.js 側で実装）。
+  window.addEventListener("psdesign:editor-populated", () => {
+    syncLeadingRowSelector();
+  });
+  // 【v1.16.0】履歴変化（mutate）でも contents 行数が変わり得るので再描画。
+  onHistoryChange(() => {
+    syncLeadingRowSelector();
+  });
+
+  syncLeadingRowSelector();
 }
 
 async function handleDroppedPaths(paths) {

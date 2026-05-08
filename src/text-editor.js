@@ -28,8 +28,18 @@ import {
   toDisplaySizePt,
   toggleLayerSelected,
   updateNewLayer,
+  // 【v1.16.0】per-char フォント編集
+  setCharFontsRange,
+  getCharFont,
 } from "./state.js";
-import { refreshAllOverlays, getExistingLayerEffectiveSizePt, maybeApplyStickyFont } from "./canvas-tools.js";
+import {
+  refreshAllOverlays,
+  getExistingLayerEffectiveSizePt,
+  maybeApplyStickyFont,
+  // 【v1.16.0】in-place 編集 textarea 上の文字選択キャッシュ
+  getLastInplaceSelection,
+  onInplaceSelectionChange,
+} from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { confirmDialog } from "./ui-feedback.js";
 
@@ -370,6 +380,10 @@ function populateEditor() {
   const fillColor = computeCommonFill(selections);
   if (fillColor != null) setFillColor(fillColor);
   syncFillToggle(fillColor);
+
+  // 【v1.16.0】サイドバー側の派生 UI（行間タブの行セレクタ等）に「選択が変わった /
+  // 内容が変わった」通知。main.js の syncLeadingRowSelector がこのイベントを listen する。
+  window.dispatchEvent(new CustomEvent("psdesign:editor-populated"));
 }
 
 // ========== フォント検索コンボボックス ==========
@@ -520,20 +534,37 @@ function moveComboHighlight(dir) {
   setComboHighlight(visible[pos]);
 }
 
+// 【v1.16.0】フォント変更 — 選択範囲があれば per-char、無ければ layer 全体に適用。
 function commitFont(font) {
   const input = fontEl();
   if (!input) return;
   input.value = font.name || font.postScriptName;
   input.dataset.ps = font.postScriptName;
+  // フォントロードは非同期で開始（fire-and-forget）。await はしない。
+  // 未ロード状態で renderOverlay が走ると bbox は「1em per char」の保守的フォールバックで
+  // 計算されるので改行は起きず、ロード完了後に onFontsRegistered → refreshAllOverlays で
+  // 再描画されて bbox が確定する。
   ensureFontLoaded(font.postScriptName);
-  setCurrentFont(font.postScriptName);
-  setFontPickerStuck(true);
-  // 選択中レイヤーへ即時適用 (ブラシモード起動)。layer 選択がない場合は「次に
-  // 配置するテキスト」の既定フォントとして state に残る。
-  commitFontToSelections(font.postScriptName);
+  // in-place 編集中で文字選択がある → per-char フォント適用。
+  // 選択範囲は canvas-tools の module-level キャッシュから読む（select イベント発火時に
+  // 必ず保存される。textarea の focus/blur 変動の影響を受けない）。
+  const sel = getLastInplaceSelection();
+  if (sel && sel.end > sel.start) {
+    const targetId = sel.tempId ?? sel.layerId;
+    setCharFontsRange(sel.psdPath, targetId, sel.start, sel.end, font.postScriptName);
+    refreshAllOverlays();
+    rebuildLayerList();
+  } else {
+    setCurrentFont(font.postScriptName);
+    setFontPickerStuck(true);
+    // 選択中レイヤーへ即時適用 (ブラシモード起動)。layer 選択がない場合は「次に
+    // 配置するテキスト」の既定フォントとして state に残る。
+    commitFontToSelections(font.postScriptName);
+  }
   closeCombo();
-  // フォーカスを外して Space などのキーがキャンバス側に届くようにする。
-  input.blur();
+  // 選択直後は input からフォーカスを外して Space などのキーがキャンバス側に届くようにする。
+  // ただし per-char 適用時は textarea のフォーカスを保持したいので blur しない。
+  if (!(sel && sel.end > sel.start)) input.blur();
   rebuildWeightSelector();
 }
 
@@ -668,6 +699,33 @@ function syncFontInputFromState() {
   rebuildFontOptions(getCurrentFont() ?? "");
 }
 
+// 【v1.16.0】per-char 編集用の文字選択インジケータ。
+// 編集パネル先頭に「選択: N 文字」インジケータを差し込む。in-place 編集中に textarea で
+// 文字選択があるときだけ表示し、サイドバーから per-char 操作対象が認識できているかを
+// ユーザーが視認できるようにする。
+function setupCharSelectionIndicator() {
+  const editor = editorEl();
+  if (!editor) return;
+  if (editor.querySelector(".char-selection-indicator")) return;
+  const el = document.createElement("div");
+  el.className = "char-selection-indicator";
+  el.hidden = true;
+  el.textContent = "";
+  editor.insertBefore(el, editor.firstChild);
+}
+
+function updateCharSelectionIndicator(sel) {
+  const el = document.querySelector(".char-selection-indicator");
+  if (!el) return;
+  if (sel && sel.end > sel.start) {
+    const len = sel.end - sel.start;
+    el.textContent = `選択中: ${len} 文字（サイズ・フォント変更が選択範囲に適用されます）`;
+    el.hidden = false;
+  } else {
+    el.hidden = true;
+  }
+}
+
 // editor タブ：サイズ / 行間 / フチ の表示切替。
 // editor-tabs-section はテキスト編集セクション内 (#editor) に配置。
 function editorTabsSectionEl() {
@@ -797,6 +855,21 @@ export function bindEditorEvents() {
     });
     onFontsRegistered(() => {
       if (getSelectedLayers().length === 0) syncFontInputFromState();
+    });
+    // 【v1.16.0】per-char フォント編集の UI 連動 — 選択範囲のキャッシュ変化に追従。
+    // in-place 編集の選択範囲変化（module-level キャッシュ）に追従してフォント入力欄を更新。
+    // 加えて、editor 上部に「選択: N 文字」のインジケータを出してユーザーに現状を伝える。
+    setupCharSelectionIndicator();
+    onInplaceSelectionChange((sel) => {
+      updateCharSelectionIndicator(sel);
+      if (!sel) return;
+      const targetId = sel.tempId ?? sel.layerId;
+      const ps = getCharFont(sel.psdPath, targetId, sel.start);
+      if (ps) {
+        // override がある → そのフォントを表示
+        rebuildFontOptions(ps);
+      }
+      // override が無いケースは現状の表示（layer.font）を維持
     });
   }
 

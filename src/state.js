@@ -39,6 +39,10 @@ const state = {
   // 行間コントロールはこれが set のとき per-line override に書き込み、unset のとき global に書く。
   editingContext: null,
   editingContextListeners: new Set(),
+  // 【v1.16.0】サイドバー「行間」タブで行選択中の対象行 index（null = 全行）。
+  // editingContext が立っているときはそちらを優先（in-place 編集中のカーソル行が勝つ）。
+  activeLeadingLine: null,
+  activeLeadingLineListeners: new Set(),
   // AI 画像スキャン (run_ai_ocr) の最新結果。自動配置 (ai-place.js) で参照する。
   // { doc: MokuroDocument, sourcePath: string } | null
   aiOcrDoc: null,
@@ -168,6 +172,11 @@ export function clearPages() {
   if (prev !== 0) {
     for (const fn of state.pageIndexListeners) fn(0);
   }
+  // 【v1.16.0】PSD 切替で行セレクタの古い state を残さない。
+  if (state.activeLeadingLine !== null) {
+    state.activeLeadingLine = null;
+    for (const fn of state.activeLeadingLineListeners) fn(null);
+  }
   setStrokeColor("none");
   setFillColor("default");
   // OCR キャッシュ (aiOcrDoc) は PDF に紐付いている。PSD 切替では消さない。
@@ -236,6 +245,99 @@ export function getLineLeading(psdPath, layerIdOrTempId, lineIndex) {
   return e?.lineLeadings?.[lineIndex];
 }
 
+// ===== 文字ごとのサイズオーバーライド =====
+// 【v1.16.0】フォントサイズ一部変更 — in-place 編集中に textarea で文字選択 → サイズ変更で
+// 選択範囲の文字だけサイズが変わる。layer 全体の sizePt とは別管理。
+// 既存レイヤーの edit / 新規レイヤーの nl に charSizes: {[charIndex]: sizePt} を保持。
+// charIndex は contents 文字列の絶対 index（textarea selectionStart と同じ）。
+// 値を null にすると当該文字のオーバーライドを除去（layer 全体の sizePt にフォールバック）。
+export function setCharSize(psdPath, layerIdOrTempId, charIndex, sizePtOrNull) {
+  if (!Number.isInteger(charIndex) || charIndex < 0) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].charSizes ?? {}) };
+    if (sizePtOrNull == null) delete cur[charIndex]; else cur[charIndex] = Math.round(sizePtOrNull * 10) / 10;
+    state.newLayers[idx] = { ...state.newLayers[idx], charSizes: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.charSizes ?? {}) };
+    if (sizePtOrNull == null) delete cur[charIndex]; else cur[charIndex] = Math.round(sizePtOrNull * 10) / 10;
+    setEdit(psdPath, layerIdOrTempId, { charSizes: cur });
+  }
+}
+
+// charIdx の範囲 [from, to) に sizePt を適用（textarea の selectionStart/End そのまま）。
+// sizePtOrNull == null で範囲内のオーバーライドを除去。
+export function setCharSizesRange(psdPath, layerIdOrTempId, from, to, sizePtOrNull) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].charSizes ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (sizePtOrNull == null) delete cur[i]; else cur[i] = Math.round(sizePtOrNull * 10) / 10;
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], charSizes: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.charSizes ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (sizePtOrNull == null) delete cur[i]; else cur[i] = Math.round(sizePtOrNull * 10) / 10;
+    }
+    setEdit(psdPath, layerIdOrTempId, { charSizes: cur });
+  }
+}
+
+export function getCharSize(psdPath, layerIdOrTempId, charIndex) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.charSizes?.[charIndex];
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  return e?.charSizes?.[charIndex];
+}
+
+// ===== 文字ごとのフォントオーバーライド =====
+// 【v1.16.0】フォント種類一部変更 — in-place 編集中に textarea で文字選択 → フォント変更で
+// 選択範囲の文字だけフォントが変わる。layer 全体の fontPostScriptName とは別管理。
+// 既存レイヤーの edit / 新規レイヤーの nl に charFonts: {[charIndex]: postScriptName} を保持。
+// charIndex は contents 文字列の絶対 index（textarea selectionStart と同じ）。
+// 値を null にすると当該文字のオーバーライドを除去（layer 全体の fontPostScriptName にフォールバック）。
+export function setCharFontsRange(psdPath, layerIdOrTempId, from, to, postScriptNameOrNull) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].charFonts ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (postScriptNameOrNull == null) delete cur[i]; else cur[i] = postScriptNameOrNull;
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], charFonts: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.charFonts ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (postScriptNameOrNull == null) delete cur[i]; else cur[i] = postScriptNameOrNull;
+    }
+    setEdit(psdPath, layerIdOrTempId, { charFonts: cur });
+  }
+}
+
+export function getCharFont(psdPath, layerIdOrTempId, charIndex) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.charFonts?.[charIndex];
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  return e?.charFonts?.[charIndex];
+}
+
 export function getEditingContext() { return state.editingContext; }
 export function setEditingContext(ctx) {
   state.editingContext = ctx ?? null;
@@ -244,6 +346,23 @@ export function setEditingContext(ctx) {
 export function onEditingContextChange(fn) {
   state.editingContextListeners.add(fn);
   return () => state.editingContextListeners.delete(fn);
+}
+
+// サイドバー「行間」タブで行選択中の対象行 index。
+// 【v1.16.0】行間の一部変更 — in-place 編集を開かなくても、サイドバーの「行間」タブで
+// 「全行 / 2 / 3 / …」のセグメントから対象行を選択して per-line override 可能。
+// null = 全行（layer 全体に書く）、整数 = その行 index に per-line override で書く。
+// 優先順位は applyLeading 内で editingContext > activeLeadingLine > 全行。
+export function getActiveLeadingLine() { return state.activeLeadingLine; }
+export function setActiveLeadingLine(idxOrNull) {
+  const next = Number.isInteger(idxOrNull) && idxOrNull >= 0 ? idxOrNull : null;
+  if (state.activeLeadingLine === next) return;
+  state.activeLeadingLine = next;
+  for (const fn of state.activeLeadingLineListeners) fn(state.activeLeadingLine);
+}
+export function onActiveLeadingLineChange(fn) {
+  state.activeLeadingLineListeners.add(fn);
+  return () => state.activeLeadingLineListeners.delete(fn);
 }
 
 // テキストフレーム（layer-box overlay）表示。Ctrl+H から切り替え。
@@ -567,6 +686,11 @@ export function addNewLayer({
     // 行ごとの行間オーバーライド。キーは 0-based の行番号、値は %。
     // 未指定の行は層の leadingPct（autoLeading）を使う。
     lineLeadings: {},
+    // 【v1.16.0】文字ごとのサイズ / フォントオーバーライド。
+    // キーは contents 文字列の絶対 index（textarea selectionStart と同じ）。
+    // UI プレビューのみ反映、Photoshop には書き戻されない（layer 全体の sizePt/font が使われる）。
+    charSizes: {},
+    charFonts: {},
     // 自動配置 (ai-place.js) で生成されたレイヤーは元 TXT 段落への参照を持つ。
     // { pageNumber, paragraphIndex } を保持し、後から TXT が編集されたときに
     // syncPlacedFromTxt が contents を追従させる。手動配置レイヤーは null。

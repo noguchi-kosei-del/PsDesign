@@ -3140,4 +3140,134 @@ F3. **CSS** ([src/styles.css](src/styles.css)):
 > - 旧: `.style-palette-list` は `max-height: 260px` で頭打ち、サイドバー下に空き領域 → 新: `editor → font-source-panel[palette] → style-palette → style-palette-list` の flex-grow チェーンでサイドバー下端までフィット
 > - 旧: レイヤートグルボタンは `margin-top: auto` でツールバー底辺、ドロワーも `bottom: 0` で画面下端基準 → 新: レイヤーボタンはパンツール直下に並び、`.layers-toggle-wrap` を anchor にドロワーが `top: 0` でボタンの高さから展開（ボトムアンカー役は `.side-page-zoom` に移譲）
 
+---
+
+## v1.20.0: モンブラン由来 4 機能の合体（行間一部変更 + フォント種類サイズ一部変更 + 枠の自動調整 + 非対応フォント対応）
+
+### 概要
+
+別フォーク (`PsDesign-main`) で実装済みだった v1.16.0 の 4 機能（CHANGES_v1.16.0.md に詳細仕様あり）をユーザー要望でこのフォーク (ver_1.0) に合体。ver_1.0 側は既に v1.17.0〜v1.19.0 まで進化していたため、既存機能（スタイルパレット / フォントウェイト切替 / サイドパネル排他タブ / TCY + DASH/TILDE 連続記号ツメ等）と非干渉な形で統合した。**全 4 機能の API / 実装は PsDesign-main をベースにコピーし、ver_1.0 の独自進化部分との衝突点を個別解決**。
+
+### A. 行間の一部変更（サイドバー行セレクタ + per-line override）
+
+A1. **`activeLeadingLine` state 新設** ([src/state.js](src/state.js)): `state.activeLeadingLine: null | number` + `getActiveLeadingLine` / `setActiveLeadingLine` / `onActiveLeadingLineChange` を export。`null = 全行（layer 全体に書く）`、`>= 1 = その行 index に per-line override で書く`（行 N の値 = 行 N-1 と行 N の隙間）。`clearPages()` で null にリセット。
+
+A2. **`#leading-row-selector` UI 新設** ([index.html](index.html) + [src/styles.css](src/styles.css)): 行間タブ panel 内、`<div id="leading-row-selector" hidden>` を追加。クリックで `setActiveLeadingLine` を駆動。CSS は `.leading-row-selector` (flex 横並び) + `.leading-row-btn` (28×24 / accent active / has-override で青ドット)。
+
+A3. **`applyLeading` 3 段優先順位化** ([src/main.js](src/main.js)): 旧 `editingContext > 全行` の 2 段から `editingContext > activeLeadingLine > 全行` に拡張。中間段は `resolveSingleSelectedLayer()` で単独選択中レイヤーを解決し、`setLineLeading(...)` で per-line override に書き込む。in-place 編集中は editingContext が常に勝つので従来挙動完全保護。
+
+A4. **`resolveSingleSelectedLayer` / `syncLeadingRowSelector` / `syncLeadingInputForActiveRow` ヘルパー新規** ([src/main.js](src/main.js)):
+- `resolveSingleSelectedLayer()`: 選択数 = 1 のときに `{psdPath, layerKey, contents, lineCount, lineLeadings}` を返す。複数選択 / 0 件で null
+- `syncLeadingRowSelector()`: `#leading-row-selector` の HTML を再生成。「全行 / 2 / 3 / …」のボタン群を組み立て、各ボタンに `.active` / `.has-override` を付与。in-place 編集中（editingContext あり）は隠す
+- `syncLeadingInputForActiveRow(forcedValue)`: leading-input の表示値を「activeLeadingLine が指す行の per-line 値、なければ全行値」に同期。`forcedValue` を渡すと focus 中でも上書き
+
+A5. **`bindLeadingTool` listener 4 種追加** ([src/main.js](src/main.js)): `onActiveLeadingLineChange` / `psdesign:editor-populated` (window event) / `onHistoryChange` / `onEditingContextChange` を購読し、いずれの変化でも `syncLeadingRowSelector` を再実行。`adjustLeading(delta)` も activeLeadingLine 優先順位に対応。
+
+A6. **`populateEditor` で `psdesign:editor-populated` dispatch** ([src/text-editor.js](src/text-editor.js)): `populateEditor` 末尾で `window.dispatchEvent(new CustomEvent("psdesign:editor-populated"))`。main.js の listener がこれを受けて行セレクタを再描画する。
+
+> ⚠️ **意味論の差**: PsDesign-main 流の「行 N の値 = 行 N-1 と行 N の隙間（margin-block-start）」を採用。一方 jsx_gen.rs の `applyLineLeadings` は「行 N 自身の line-height」として書き戻す（v1.16.0 機能 A の Photoshop 書き戻しは無変更）。プレビュー上は隙間のみ変化、Photoshop 保存後は行 N 全体の高さが変わる、という差分が生じる可能性あり（v1.16.0 設計仕様通り）。
+
+### B. フォント種類・サイズの一部変更（per-char override + 文字選択キャッシュ）
+
+B1. **`charSizes` / `charFonts` state 新設** ([src/state.js](src/state.js)):
+- `addNewLayer` 戻り値に `charSizes: {}` / `charFonts: {}` フィールドを追加（既存の `lineLeadings: {}` と同パターン）
+- 既存レイヤーの `edit` にも `setEdit` 経由で同フィールドが追加され得る
+- API: `setCharSize(psdPath, layerIdOrTempId, charIndex, sizePtOrNull)` / `setCharSizesRange(...,from, to, ...)` / `getCharSize` / `setCharFontsRange` / `getCharFont`
+- charIndex は contents 文字列の絶対 index（textarea selectionStart と同じ）。null 値で当該文字の override を除去（layer 全体の sizePt / font にフォールバック）
+- per-char override は **UI プレビューのみ反映**、Photoshop 書き戻しは無変更（jsx_gen.rs / EditPayload は変更なし）
+
+B2. **`_lastInplaceSelection` モジュールキャッシュ** ([src/canvas-tools.js](src/canvas-tools.js)): in-place 編集 textarea 上の文字選択範囲を `{start, end, psdPath, layerId|tempId}` で保持。`select` イベント発火時に `setLastInplaceSelection` で更新、textarea の close (`finalize`) で null クリア。
+- editingContext は textarea blur で消えやすいが、_lastInplaceSelection は明示的にクリアされるまで保持
+- サイドバーの size / font 入力は editor 内クリックで textarea から focus が移動するため、editingContext に頼らずこちらから読むことで focus 移動の影響を回避
+- `getLastInplaceSelection()` / `onInplaceSelectionChange(fn)` を export
+
+B3. **`createTextFloater` の `layerMeta` オプション + select listener** ([src/canvas-tools.js](src/canvas-tools.js)):
+- 新オプション `layerMeta: { psdPath, layerId | tempId } | null` 追加
+- 内部 `reportCursor` 関数で `selectionStart` / `selectionEnd` を取得 → `end > start` のとき `setLastInplaceSelection({start, end, ...layerMeta})`、それ以外で null
+- onCursorChange の戻り値にも `selectionStart` / `selectionEnd` を含めて editingContext に伝搬
+
+B4. **`startInPlaceEdit` で `layerMeta` を渡す** ([src/canvas-tools.js](src/canvas-tools.js)): `editTargetMeta = { psdPath, layerId | tempId }` を作って createTextFloater に渡し、編集中の textarea が常に正しいレイヤーを指すようにする。
+
+B5. **`commitFont` per-char 分岐** ([src/text-editor.js](src/text-editor.js)): `getLastInplaceSelection()` で文字選択ありを検出すると `setCharFontsRange(...)` で per-char 適用、選択なしは従来どおり `setFontPickerStuck(true)` + `commitFontToSelections(...)`（ブラシモード継続）。per-char 適用時は textarea のフォーカスを保持したいので `input.blur()` をスキップ。
+
+B6. **`applyTextSize` / `clampSize` per-char 分岐** ([src/main.js](src/main.js)): 同パターンで `getLastInplaceSelection()` あり時は `setCharSizesRange(...)`、なしは `commitSizeToSelections`。`clampSize(n)` ヘルパーは `[6, 999]` + 0.1 刻みクランプ。
+
+B7. **`setupCharSelectionIndicator` / `updateCharSelectionIndicator`** ([src/text-editor.js](src/text-editor.js)): 編集パネル先頭に「選択中: N 文字（サイズ・フォント変更が選択範囲に適用されます）」を表示。`onInplaceSelectionChange` 購読で sel 変化に追従。フォント入力欄も `getCharFont(sel.psdPath, targetId, sel.start)` で override を表示する。
+
+### C. 枠の自動調整（canvas.measureText で実描画幅 auto-fit + per-char 反映）
+
+C1. **`canvas.measureText` ベースの実描画測定** ([src/canvas-tools.js](src/canvas-tools.js)):
+- `getMeasureContext()`: オフスクリーン canvas 2D context の singleton
+- `measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs)`: 1 行の実描画幅を「layer.sizePt em 単位」で返す。連続する同じ (font, size) の文字を 1 セグメントにまとめて measureText し、各セグメントを `(charSize / layerSize)` で正規化合算
+- `measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts)`: 全行の最大行幅を返す
+- フォント未ロード時 (`document.fonts.check(\`100px "<primary>"\`)` が false) は `1em per char` の保守的フォールバック（CJK で正確、Latin で大きめ） — wrap 事故防止
+
+C2. **`getLineStartOffsets(fullText)` 新規** ([src/canvas-tools.js](src/canvas-tools.js)): 各行の絶対開始 index を返す（textarea selectionStart と同じインデックス系）。`charSizes[lineStartIdx + i]` で行内 i 番目の char の override を引く。
+
+C3. **`renderInnerText` シグネチャ拡張 (7 → 11 引数)** ([src/canvas-tools.js](src/canvas-tools.js)): `(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts)` に拡張。
+- 各行 `<div>` の `width` (vertical) / `min-height` (horizontal) を `effectiveLineSize = layerFactor × lineMaxRatio em` でセット（per-char サイズ override が反映された行高/列幅）
+- per-line `lineLeadings[i]` の override は `marginBlockStart` で「行 i-1 と行 i の隙間のみ」を表現（layer 全体の leadingFactor との差分のみ加算）
+
+C4. **`appendLineWithTracking` 4 要素統合 (5 → 9 引数)** ([src/canvas-tools.js](src/canvas-tools.js)): TCY + DASH/TILDE + per-char-size + per-char-font を 1 関数で統合（**ユーザー確定: 関数名は維持**）。
+- `(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts)`
+- 旧 `appendNonTcySegment` を `appendStyledSegment` に置換（per-char signature で同じ (size, tracking, font) の連続文字を 1 span にまとめて DOM 軽量化）
+- tcy ペアは `<span class="tcy-span">` で別途 wrap、tcy 内では per-char サイズ/フォント未適用（tcy span 自身が固定の 1 セルのため）
+
+C5. **`layerRectFor*` の per-line max char-size + 実描画 em 反映** ([src/canvas-tools.js](src/canvas-tools.js)):
+- `thickSum`: 各行 ` leading × lineMaxRatio` を合算（per-char サイズ override がある行は最大文字サイズで line-height をスケール）
+- `longChars`: `measuredEm` (実描画幅 em) があればそれ、無ければ `1.05 × chars` の旧ヒューリスティック
+- LONG / THICK 両軸に既存 0.4em 安全余白を維持
+
+C6. **`renderOverlay` の textarea 保持化** ([src/canvas-tools.js](src/canvas-tools.js)): 旧 `overlay.innerHTML = ""` (全消し) を `overlay.querySelectorAll(".layer-box, .marquee-rect")` の選択削除に変更。`.text-input-floater` (in-place 編集 textarea) が overlay 内に残るので、フォントロード完了 → `onFontsRegistered` → `refreshAllOverlays` の連鎖で編集中 textarea が消失する事故が解消。マーキー矩形は既存 `marqueeState` の復元コード (`drawMarquee()`) で再描画されるので無問題。
+
+C7. **`scheduleBoxAutoFit` 後置の保険** ([src/canvas-tools.js](src/canvas-tools.js)): `renderOverlay` 末尾で requestAnimationFrame 経由に登録、layout 確定後に各 layer-box の `inner.scrollWidth/Height` を測って `clientWidth/Height` を超えていれば box CSS を `+4px 余裕` で伸ばす。`measureText` の予測がズレた場合の最終フォールバック。
+
+### D. 非対応フォントの対応（TTC face 抽出 + quoteFontFamily 強化）
+
+D1. **`FontEntry.face_index: u32` 追加** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs) + [src-tauri/src/fonts.rs](src-tauri/src/fonts.rs)): TTC / OTC 内の何番目の face かを 0-based で保持。`extract_fonts` で各 face に index を割当、`build_entry` の戻り値初期値 0、`fonts.json` キャッシュ v2 化（旧 v1 キャッシュ = `face_index` なしは `read_cache` で None 判定 → 自動再ビルド）。
+
+D2. **`read_font_face_bytes(path, face_index)` Tauri command** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)):
+- `face_index == 0`: 元のファイル bytes をそのまま返す（旧挙動完全維持）
+- `bytes[0..4] == b"ttcf"` (TTC magic) かつ `face_index >= 1`: `extract_face_from_ttc` で該当 face を切り出し、`ttf_parser::Face::parse` で構造検証 → 失敗時は元 TTC bytes フォールバック
+- 単独 TTF/OTF で face_index > 0 → 互換のため元 bytes 返却
+
+D3. **`extract_face_from_ttc` 新規（約 90 行）** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)):
+- TTC ヘッダ → 該当 face の SFNT offset table → 各 table の (tag, checksum, offset, length) を読み取り
+- ディレクトリエントリは tag 昇順にソート（OpenType 仕様、DirectWrite 等の厳格パーサ対策）
+- 4-byte boundary で padding しつつ新オフセットで再構築
+- `head` テーブルの `checkSumAdjustment` を再計算（仕様: 0xB1B0_AFBA - file u32 sum）
+
+D4. **`pad4(n)` ヘルパー** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)): `(n + 3) & !3` の 4-byte 境界切り上げ。
+
+D5. **invoke_handler 登録** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)): `tauri::generate_handler![...]` に `read_font_face_bytes` を追加。
+
+D6. **`loadFontInternal` の TTC 対応 + 多段フォールバック** ([src/font-loader.js](src/font-loader.js)):
+- 第一試行: `invoke("read_font_face_bytes", { path, faceIndex })` で TTC face 抽出済み単独 TTF を取得 → FontFace 登録
+- 第二試行: invoke 失敗 / FontFace.load 失敗時に `read_binary_file` で元 TTC bytes 全体を取得して再挑戦（FontFace は TTC bytes 渡しで先頭 face を採用するため、抽出済み TTF が壊れていても何かしら登録できる可能性）
+- 全失敗で warn のみ（描画は sans-serif で続行）
+
+D7. **`quoteFontFamily` 常に引用** ([src/canvas-tools.js](src/canvas-tools.js)): 旧 `[\s,'"()]` 含有時のみ引用 → 新 **常に引用**。これで以下を一括対処:
+- 数字始まり PS 名（`851チカラヅヨク` 等）→ 旧版では `851` が数値として CSS パースで弾かれて font-family 全体が無効化
+- 非 ASCII 名フォント（`07あかずきんポップ Heavy` 等）→ unrecognized identifier 扱いの事故
+- 予約語衝突（`serif` / `sans-serif` / `inherit` 等）
+
+### マイグレーション影響
+
+- **fonts.json キャッシュ**: v1 → v2 自動再ビルド（初回起動時に数秒の遅延、以降は通常通り）
+- **新規 state フィールド**: `state.activeLeadingLine` / `addNewLayer` の `charSizes` / `charFonts` / `editingContext.selectionStart/End` — いずれも spread 互換で履歴 snapshot にも自動含まれ、旧バージョンの snapshot 読込でも問題なし
+- **per-char override は UI のみ**: `exportEdits` payload / `EditPayload` (Rust) / jsx_gen.rs はすべて変更なし。Photoshop 保存時には layer 全体の sizePt / font が使われる（per-char は無視）
+- **既存機能との非干渉**: スタイルパレット (v1.17) / フォントウェイト切替 (v1.18) / サイドパネル排他タブ (v1.18) / TCY + DASH/TILDE 連続記号ツメ / V ツール double-click in-place 編集 / ブラシモード — すべて従来挙動を維持
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.20.0`** に揃え。Cargo.lock も自動追従。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: 行間は in-place 編集中のカーソル行 or layer 全体の二択 → 新: サイドバー「全行 / 2 / 3 / …」セグメントで in-place 編集なしで per-line 変更可能（行 N の値 = 行 N-1 と行 N の **隙間のみ**、`margin-block-start` 採用）
+> - 旧: フォント / サイズ変更は layer 全体一括 → 新: in-place 編集の textarea で文字選択 → 選択範囲の文字だけ変更（`charSizes` / `charFonts` per-char override + `_lastInplaceSelection` キャッシュで focus 変動に強い）
+> - 旧: bbox は char count × 1.05em の固定式 → 新: `canvas.measureText` で実描画幅 + per-char override 反映、未ロード時は 1em per char 保守的フォールバック、最終手段として `scheduleBoxAutoFit` 後置 measurement
+> - 旧: TTC は先頭 face のみ FontFace 登録可（Yu Gothic Bold 等が UI に反映できない）→ 新: Rust の `read_font_face_bytes` が TTC を解析して該当 face を単独 TTF として返す（checkSumAdjustment 再計算 + tag ソート + ttf-parser 検証）
+> - 旧: PS 名が数字始まりや非 ASCII の場合 CSS parse error で font-family 全体が無効化 → 新: `quoteFontFamily` 常に引用で全フォント名対応
+> - 旧: `renderOverlay` で `innerHTML = ""` → in-place 編集 textarea が drag 中 / フォントロード完了時に消失 → 新: layer-box / marquee-rect だけ選択削除、textarea は保持
+> - 旧: 既存 `appendLineWithTracking` (5 引数) は TCY + DASH/TILDE のみ → 新: 9 引数に拡張して per-char-size + per-char-font も統合（関数名は維持）
 
