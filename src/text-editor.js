@@ -315,14 +315,10 @@ function populateEditor() {
   editor.hidden = false;
 
   // [data-editor-scope="single"] が付いている要素は単独選択時のみ表示。
-  // font-combobox-label / editor-tabs-section は txt-source セクションへ移動したため、
-  // #editor 内ではなく side-panel 全体を対象にクエリする。
+  // font-combobox-label / editor-tabs-section はテキスト編集セクション内 (#editor) に格納。
   // サイズ/行間/フチタブは選択数に関わらず常に表示し、入力値は単独選択時のみレイヤー値に追従、
   // 0 件 / 複数選択時はツール状態（state.textSize / state.leadingPct 等）を表示する。
-  const sidePanel = document.querySelector(".side-panel");
-  const singleOnly = sidePanel
-    ? sidePanel.querySelectorAll("[data-editor-scope='single']")
-    : [];
+  const singleOnly = editor.querySelectorAll("[data-editor-scope='single']");
   for (const el of singleOnly) el.hidden = selections.length > 1;
 
   if (selections.length === 0) {
@@ -465,13 +461,38 @@ function setComboHighlight(idx) {
   }
 }
 
-function openCombo() {
+// position: fixed なので親 (.panel-section の overflow: hidden) に左右されず、
+// input の直下に絶対座標で表示。スクロール / リサイズで openCombo 中の場合は再計算。
+function positionCombo() {
+  const list = fontListEl();
+  const combo = fontComboboxEl();
+  if (!list || !combo) return;
+  const r = combo.getBoundingClientRect();
+  list.style.top = `${r.bottom + 2}px`;
+  list.style.left = `${r.left}px`;
+  list.style.width = `${r.width}px`;
+}
+
+let comboReposBound = false;
+function bindComboRepositionWhileOpen() {
+  if (comboReposBound) return;
+  comboReposBound = true;
+  const repos = () => { if (comboOpen) positionCombo(); };
+  window.addEventListener("scroll", repos, true);
+  window.addEventListener("resize", repos);
+}
+
+// showAll=true: 入力欄の値を無視して全フォントを表示（▾ トグルボタン専用）。
+// 通常 (focus / input イベント) は入力欄の値で絞り込む。
+function openCombo(showAll = false) {
   ensureComboBuilt();
   const list = fontListEl();
   if (!list || !comboItems.length) return;
   list.hidden = false;
   comboOpen = true;
-  filterCombo(fontEl().value);
+  positionCombo();
+  bindComboRepositionWhileOpen();
+  filterCombo(showAll ? "" : fontEl().value);
   const currentPs = fontEl().dataset.ps || "";
   if (currentPs) {
     const idx = comboItems.findIndex(({ font, el }) =>
@@ -513,6 +534,72 @@ function commitFont(font) {
   closeCombo();
   // フォーカスを外して Space などのキーがキャンバス側に届くようにする。
   input.blur();
+  rebuildWeightSelector();
+}
+
+// ========== フォント太さ (W) セレクタ ==========
+// 「A-OTF 新ゴ Pro W3」のような W 番号付きフォントを選択中なら、同じファミリーで
+// インストール済みの全 W 番号バリアントをボタン化する。
+
+function extractWeight(displayName) {
+  if (!displayName) return null;
+  const m = String(displayName).match(/\bW(\d+)\b/);
+  return m ? parseInt(m[1], 10) : null;
+}
+
+// W\d+ を取り除いてファミリー名の根を返す（前後余白も整理）。
+function familyRoot(displayName) {
+  if (!displayName) return null;
+  return String(displayName).replace(/\s*\bW\d+\b\s*/g, " ").replace(/\s+/g, " ").trim();
+}
+
+function findWeightVariants(currentFont) {
+  if (!currentFont) return [];
+  const baseName = currentFont.name || currentFont.postScriptName || "";
+  const root = familyRoot(baseName);
+  if (!root) return [];
+  if (extractWeight(baseName) === null) return []; // current font has no W
+  const seen = new Map(); // weight -> font (最初に見つけた一件を採用)
+  for (const f of getFonts()) {
+    const name = f.name || f.postScriptName || "";
+    if (familyRoot(name) !== root) continue;
+    const w = extractWeight(name);
+    if (w === null) continue;
+    if (!seen.has(w)) seen.set(w, f);
+  }
+  return [...seen.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([weight, font]) => ({ weight, font }));
+}
+
+function rebuildWeightSelector() {
+  const el = document.getElementById("font-weight-selector");
+  if (!el) return;
+  const input = fontEl();
+  const psName = input?.dataset.ps || "";
+  const currentFont = psName
+    ? getFonts().find((f) => f.postScriptName === psName)
+    : null;
+  const variants = currentFont ? findWeightVariants(currentFont) : [];
+  if (variants.length <= 1) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  const currentW = extractWeight(currentFont.name || currentFont.postScriptName);
+  el.innerHTML = "";
+  for (const { weight, font } of variants) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "font-weight-btn";
+    btn.textContent = `W${weight}`;
+    btn.title = font.name || font.postScriptName;
+    if (weight === currentW) btn.classList.add("active");
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => commitFont(font));
+    el.appendChild(btn);
+  }
+  el.hidden = false;
 }
 
 function resolveFontFromInput(typed) {
@@ -555,6 +642,7 @@ function rebuildFontOptions(currentValue) {
   }
   if (!isTypingHere) input.value = displayText;
   input.dataset.ps = ps;
+  rebuildWeightSelector();
 }
 
 function syncFontInputFromState() {
@@ -562,8 +650,7 @@ function syncFontInputFromState() {
 }
 
 // editor タブ：サイズ / 行間 / フチ の表示切替。
-// editor-tabs-section は txt-source セクションに移動済みのため、#editor 経由ではなく
-// `.editor-tabs-section` を直接クエリする。
+// editor-tabs-section はテキスト編集セクション内 (#editor) に配置。
 function editorTabsSectionEl() {
   return document.querySelector(".editor-tabs-section");
 }
@@ -591,8 +678,42 @@ function bindEditorTabs() {
   }
 }
 
+// font-source タブ：edit-font-combobox（フォント検索）と style-palette（プリセット）を
+// 排他切替する。ユーザーの選択は localStorage に永続化。
+const FONT_SOURCE_KEY = "psdesign_font_source";
+function setFontSourceTab(source) {
+  const tabs = document.querySelectorAll(".font-source-tab");
+  const panels = document.querySelectorAll(".font-source-panel");
+  for (const btn of tabs) {
+    const isActive = btn.dataset.source === source;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", isActive ? "true" : "false");
+  }
+  for (const panel of panels) {
+    panel.hidden = panel.dataset.sourcePanel !== source;
+  }
+  try { localStorage.setItem(FONT_SOURCE_KEY, source); } catch (_) {}
+}
+
+function bindFontSourceTabs() {
+  const tabs = document.querySelectorAll(".font-source-tab");
+  if (!tabs.length) return;
+  for (const btn of tabs) {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => setFontSourceTab(btn.dataset.source));
+  }
+  // 初期状態を localStorage から復元（既定: combobox）
+  let initial = "combobox";
+  try {
+    const saved = localStorage.getItem(FONT_SOURCE_KEY);
+    if (saved === "combobox" || saved === "palette") initial = saved;
+  } catch (_) {}
+  setFontSourceTab(initial);
+}
+
 export function bindEditorEvents() {
   bindEditorTabs();
+  bindFontSourceTabs();
 
   // フォント検索コンボボックスの配線。
   const input = fontEl();
@@ -637,8 +758,10 @@ export function bindEditorEvents() {
         if (comboOpen) {
           closeCombo();
         } else {
+          // ▾ トグル経由は入力欄のフィルタを無視してインストール済み全フォントを一覧表示。
+          // input.focus() は input イベントを発火しないので showAll=true のまま維持される。
           input.focus();
-          openCombo();
+          openCombo(true);
         }
       });
     }

@@ -2657,9 +2657,40 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .txt-source {
   display: flex;
   flex-direction: column;
-  max-height: 34vh;
-  border-bottom: 1px solid var(--border);
+  /* タブ単独表示時はサイドバー残余高を全部使う。tab 切替で hidden 化されるので
+     max-height 制限は不要（旧仕様の 34vh を撤去）。 */
+  flex: 1 1 auto;
+  min-height: 0;
 }
+
+/* ========== サイドパネル タブバー ==========
+   原稿テキスト / テキスト編集 を排他表示。tab 選択は localStorage に永続化。 */
+.side-panel-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+}
+.side-panel-tab {
+  flex: 1 1 0;
+  padding: 8px 6px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.1s, border-color 0.1s;
+}
+.side-panel-tab:hover:not(.active) { color: var(--text); }
+.side-panel-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.side-panel .panel-section[hidden] { display: none; }
 
 .txt-source-actions {
   display: flex;
@@ -2765,8 +2796,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 12px;
   /* style-palette-item と同じ背景に揃える（list 背景の var(--bg)） */
   background: var(--bg);
-  /* 下端に区切り線。font-combobox-label / editor-tabs-section との視覚的セパレーター。 */
-  border-bottom: 1px solid var(--border);
 }
 
 /* 原稿テキストパネル下部に常駐する新規テキスト入力欄 (中央配置のショートカット)。
@@ -3051,6 +3080,36 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .editor-tab-panel { display: block; }
 .editor-tab-panel[hidden] { display: none; }
 
+/* ========== フォントソース切替タブ ==========
+   edit-font-combobox（インストール済み全フォント検索）と style-palette（社内プリセット）を
+   2 択タブで切替表示。片方を選ぶと他方は閉じる排他トグル。 */
+.font-source-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  margin: 8px 0;
+}
+.font-source-tab {
+  flex: 1;
+  padding: 6px 4px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.1s, border-color 0.1s;
+}
+.font-source-tab:hover:not(.active) { color: var(--text); }
+.font-source-tab.active {
+  color: var(--text);
+  border-bottom-color: var(--accent);
+}
+.font-source-panel { display: block; }
+.font-source-panel[hidden] { display: none; }
+
 .editor textarea, .editor input, .editor select,
 .font-combobox-label input, .font-combobox-label select, .font-combobox-label textarea {
   background: var(--bg);
@@ -3100,11 +3159,47 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 0;
 }
 .font-combobox-toggle:hover { color: var(--text); }
+
+/* フォント太さ (W) セレクタ。
+   現在選択中のフォントが W 番号付き (新ゴ Pro W3 など) のとき、同ファミリーで
+   利用可能な W 番号をボタン化。クリックでその太さに即時切替（ブラシモード化）。 */
+.font-weight-selector {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 3px;
+  margin-top: 4px;
+}
+.font-weight-selector[hidden] { display: none; }
+.font-weight-btn {
+  flex: 0 0 auto;
+  min-width: 30px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--bg);
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  cursor: pointer;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.font-weight-btn:hover:not(.active) {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.font-weight-btn.active {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
 .font-combobox-list {
-  position: absolute;
-  top: calc(100% + 2px);
+  /* position: fixed で親 (.panel-section の overflow: hidden) のクリップから脱出。
+     top/left/width は openCombo 時に JS で input 直下に動的設定。 */
+  position: fixed;
+  top: 0;
   left: 0;
-  right: 0;
   z-index: 30;
   max-height: 240px;
   overflow-y: auto;
@@ -3183,6 +3278,34 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   justify-content: center;
 }
 .style-palette-load-btn:hover { color: var(--text); border-color: var(--accent); }
+.style-palette-filename {
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-family: inherit;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* filename と次の要素 (category / list) を視覚的に 1 ブロックに連結。
+   filename の border-bottom が区切り線として残る。 */
+.style-palette-filename:not([hidden]) {
+  margin-bottom: -6px;
+  border-radius: 4px 4px 0 0;
+}
+.style-palette-filename:not([hidden]) + .style-palette-category:not([hidden]) {
+  border-radius: 0;
+  border-top-width: 0;
+  margin-bottom: -6px;
+}
+.style-palette-filename:not([hidden]) ~ .style-palette-list {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+  border-top-width: 0;
+}
 .style-palette-category {
   width: 100%;
   padding: 4px 6px;
@@ -3243,6 +3366,22 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-overflow: ellipsis;
 }
 .style-palette-item.selected .style-palette-item-sub { color: rgba(255, 255, 255, 0.8); }
+
+/* 「デフォルト」option を太字で強調（OS により効かない場合あり、許容）。 */
+#style-palette-category option[value="__default__"] {
+  font-weight: 600;
+}
+
+/* PostScript 名が解決できなかった (フォント未インストール) エントリは灰色化 + クリック無反応。
+   :not(.selected) は念のため。loadDefaults では未解決項目に selected が付くことはない。 */
+.style-palette-item--unresolved {
+  opacity: 0.45;
+  cursor: not-allowed;
+  color: var(--text-muted);
+}
+.style-palette-item--unresolved:hover {
+  background: transparent;
+}
 
 /* スタイルパレット用フォルダブラウザモーダル。校正パネルの browser と同じ視覚言語。 */
 #style-palette-browser-modal .style-palette-browser-card {
@@ -3329,18 +3468,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .style-palette-browser-error { color: var(--danger); }
 
-/* テキスト編集セクションは layer-list が drawer に分離された後も、フォントピッカーや
-   タブ群が残るため通常の flex column ブロックとして扱う。サイドパネルの残余高は
-   原稿テキストの :has() ルール側で吸収させる（v1.4.4 F1 と同方針）。 */
+/* テキスト編集セクション。サイドバータブで排他表示されるので、active 時はサイドバー残余高を
+   全部吸収する（min-height: 0 で内側 flex の縮小を許可）。 */
 .panel-section[data-section="editor"] {
   display: flex;
   flex-direction: column;
-  flex: 0 0 auto;
-}
-
-/* テキスト編集を折り畳んだとき、原稿テキストが展開中ならサイドバー最下部に貼り付け。 */
-.side-panel:has(.panel-section[data-section="txt"]:not(.collapsed)) .panel-section[data-section="editor"].collapsed {
-  margin-top: auto;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .layer-list-footer {

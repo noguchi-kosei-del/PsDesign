@@ -726,45 +726,35 @@ function bindCollapseToggles() {
   );
 }
 
-// サイドパネル内 2 セクション（原稿テキスト / テキスト編集）の折り畳み。
-// テキストレイヤー一覧は「テキスト編集」セクションに統合済みなのでトグルは持たない。
-// 各 .panel-section[data-section] の h2 内トグルボタンで開閉、状態は localStorage に保存。
-const SECTION_COLLAPSED_KEY = "psdesign_panel_section_collapsed";
-function loadSectionState() {
-  const defaults = { txt: false, editor: false };
+// サイドパネル先頭の排他タブ（原稿テキスト / テキスト編集）。
+// active なタブの panel-section だけ表示し、他は hidden。状態は localStorage に保存。
+const SIDE_PANEL_TAB_KEY = "psdesign_side_panel_tab";
+function loadSidePanelTab() {
   try {
-    const raw = localStorage.getItem(SECTION_COLLAPSED_KEY);
-    if (!raw) return defaults;
-    const parsed = JSON.parse(raw);
-    if (parsed && typeof parsed === "object") {
-      return { ...defaults, ...parsed };
-    }
+    const v = localStorage.getItem(SIDE_PANEL_TAB_KEY);
+    if (v === "txt" || v === "editor") return v;
   } catch (_) {}
-  return defaults;
+  return "txt";
 }
-function saveSectionState(s) {
-  try { localStorage.setItem(SECTION_COLLAPSED_KEY, JSON.stringify(s)); } catch (_) {}
-}
-function bindSectionToggles() {
-  const state = loadSectionState();
-  for (const id of ["txt", "editor"]) {
-    const sec = document.querySelector(`.panel-section[data-section="${id}"]`);
-    const btn = sec?.querySelector(":scope > .panel-section-h2 > .section-toggle-btn");
-    if (!sec || !btn) continue;
-    const apply = () => {
-      sec.classList.toggle("collapsed", !!state[id]);
-      const t = state[id] ? "展開" : "折りたたむ";
-      btn.title = t;
-      btn.setAttribute("aria-label", t);
-      btn.setAttribute("aria-expanded", state[id] ? "false" : "true");
-    };
-    apply();
-    btn.addEventListener("click", () => {
-      state[id] = !state[id];
-      apply();
-      saveSectionState(state);
-    });
+function setSidePanelTab(tab) {
+  for (const btn of document.querySelectorAll(".side-panel-tab")) {
+    const isActive = btn.dataset.tab === tab;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", isActive ? "true" : "false");
   }
+  for (const sec of document.querySelectorAll(".side-panel .panel-section")) {
+    sec.hidden = sec.dataset.section !== tab;
+  }
+  try { localStorage.setItem(SIDE_PANEL_TAB_KEY, tab); } catch (_) {}
+}
+function bindSidePanelTabs() {
+  const tabs = document.querySelectorAll(".side-panel-tab");
+  if (!tabs.length) return;
+  for (const btn of tabs) {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => setSidePanelTab(btn.dataset.tab));
+  }
+  setSidePanelTab(loadSidePanelTab());
 }
 
 // レイヤードロワー：サイドツールバーの #layers-toggle-btn から横（左方向）スライドで開閉。
@@ -1708,7 +1698,7 @@ function init() {
   bindAutoUpdater();
   bindPageNav();
   bindCollapseToggles();
-  bindSectionToggles();
+  bindSidePanelTabs();
   bindLayersDrawer();
   bindPdfWorkspaceToggle();
   bindPdfRotate();

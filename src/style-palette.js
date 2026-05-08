@@ -21,24 +21,55 @@ import {
   setCurrentFont,
   getSelectedLayers,
   setFontPickerStuck,
+  getFonts,
 } from "./state.js";
 import { commitFontToSelections } from "./text-editor.js";
 import { showModalAnimated, hideModalAnimated } from "./ui-feedback.js";
+import { onFontsRegistered } from "./font-loader.js";
 
 // 校正パネルと同じ共有ドライブベース。stylepallet オリジナルの ROOT_PATH を踏襲。
 const STYLE_PALETTE_ROOT_PATH =
   "G:\\共有ドライブ\\CLLENN\\編集部フォルダ\\編集企画部\\編集企画_C班(AT業務推進)\\DTP制作部\\JSONフォルダ";
 
-const LAST_JSON_KEY = "psdesign_style_palette_last_json";
+// 旧バージョンの localStorage 残骸を一掃するために key 文字列だけ保持。
+// 新仕様では永続化なし（起動時は必ず「デフォルト」）。
+const LEGACY_LAST_JSON_KEY = "psdesign_style_palette_last_json";
+
+// 写植ワークフローでよく使う 4 種をハードコードのデフォルトとして起動直後から表示する。
+// `name` は表示名（フォントの display name）。`fontName` (PostScript 名) は
+// resolveFontPsName で getFonts() から自動解決する（loadDefaults 内で実行）。
+const DEFAULT_PRESETS_SEED = [
+  { subName: "セリフ",       name: "F910コミックW4-IPA Regular" },
+  { subName: "モノローグ",   name: "ＤＦ中丸ゴシック体 Regular" },
+  { subName: "回想",         name: "ＤＦ平成明朝体 W7" },
+  { subName: "電話・テレビ", name: "源暎ラテミン v2 Medium" },
+];
 
 // ---------- モジュール状態 ----------
 let presets = [];                  // Array<Preset>
 let categoryMap = null;            // {[category]: Preset[]}
 let categoryOrder = [];            // 表示順保持（Object.keys は挿入順）
-let activeCategory = null;         // 現在表示中のカテゴリ名（null = フィルタ中の flat 表示）
+let activeCategory = null;         // 現在表示中のカテゴリ名（null = flat 表示）
 let selectedPresetIndex = -1;      // クリック選択中の preset の originalIndex（-1 = 未選択）
 let lastLoadedJsonPath = null;
 let searchTimer = null;
+
+// 表示中ソースの種別。
+//   "default"  = ハードコードのデフォルト 4 件（テンプレ未取得時のフォールバック）
+//   "template" = STYLE_PALETTE_ROOT_PATH 直下の ●●テンプレ.json
+//   "browser"  = 任意 JSON 読込ボタン経由
+let activeSource = "default";
+
+// テンプレ JSON 一覧（dropdown 用）と、スキャン状態。
+// scanTemplates() で起動時に 1 回だけ取得しキャッシュする。
+let templateList = [];             // Array<{ name, displayLabel, path }>
+let templateScanState = "idle";    // "idle" | "loading" | "ready" | "error"
+
+// 起動時の自動テンプレ読込が完了済みかどうか（goHome リセット時に false に戻して再実行する）。
+let initialAutoloadDone = false;
+
+// 起動時の既定テンプレとして優先選択するファイル名キーワード。
+const DEFAULT_TEMPLATE_KEYWORD = "汎用統一表記テンプレ";
 
 // フォルダブラウザ状態（校正パネル流の戻る/進むスタック）
 let browserCurrentPath = "";
@@ -46,6 +77,51 @@ let browserNavStack = [];
 let browserForwardStack = [];
 
 const $ = (id) => document.getElementById(id);
+
+function basename(path) {
+  if (!path) return "";
+  const m = String(path).split(/[\\/]/);
+  return m[m.length - 1] || "";
+}
+
+function updateFilenameDisplay(path) {
+  const el = $("style-palette-filename");
+  if (!el) return;
+  if (!path) {
+    el.textContent = "";
+    el.title = "";
+    el.hidden = true;
+    return;
+  }
+  const name = basename(path);
+  el.textContent = name;
+  el.title = path;
+  el.hidden = false;
+}
+
+// 表示名から PostScript 名を 3 段フォールバックで解決する。
+// インストールされていなければ null（呼び出し側で未解決として扱う）。
+//   1. 完全一致 (f.name === displayName)
+//   2. 大小・幅違い吸収 (localeCompare with sensitivity: "base")
+//   3. PS 名直書き保険 (f.postScriptName === displayName)
+// 正規化（"Regular"/"W4" のスペース揺れ等）は誤マッチ防止のため導入しない。
+function resolveFontPsName(displayName) {
+  if (!displayName) return null;
+  const fonts = getFonts();
+  if (!fonts || fonts.length === 0) return null;
+  const exact = fonts.find((f) => f && f.name === displayName);
+  if (exact) return exact.postScriptName || null;
+  const ci = fonts.find(
+    (f) =>
+      f &&
+      typeof f.name === "string" &&
+      f.name.localeCompare(displayName, "ja", { sensitivity: "base" }) === 0,
+  );
+  if (ci) return ci.postScriptName || null;
+  const ps = fonts.find((f) => f && f.postScriptName === displayName);
+  if (ps) return ps.postScriptName;
+  return null;
+}
 
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
@@ -113,17 +189,15 @@ function rebuildCategoryMap() {
 
 function renderList(filterText = "") {
   const list = $("style-palette-list");
-  const catSelect = $("style-palette-category");
   if (!list) return;
 
   if (presets.length === 0) {
-    list.innerHTML = '<div class="style-palette-empty">プリセット JSON を読み込んでください</div>';
-    if (catSelect) catSelect.hidden = true;
+    list.innerHTML = '<div class="style-palette-empty">プリセットがありません</div>';
     return;
   }
 
   const filter = (filterText || "").toLowerCase();
-  // originalIndex を埋め込み（dblclick で参照）
+  // originalIndex を埋め込み（クリック時に参照）
   for (let i = 0; i < presets.length; i++) presets[i].originalIndex = i;
 
   const filtered = filter
@@ -135,35 +209,13 @@ function renderList(filterText = "") {
 
   if (filtered.length === 0) {
     list.innerHTML = '<div class="style-palette-empty">該当するフォントがありません</div>';
-    if (catSelect) catSelect.hidden = true;
     return;
   }
 
-  // フィルタ中はカテゴリ dropdown 非表示・flat 表示。
-  // フィルタ無し + 複数カテゴリのときだけ dropdown を出して切替式に。
-  const useDropdown = !filter && categoryOrder.length > 1;
-
-  if (useDropdown) {
-    if (catSelect) {
-      catSelect.hidden = false;
-      catSelect.innerHTML = "";
-      if (!activeCategory || !categoryMap[activeCategory]) {
-        activeCategory = categoryOrder[0];
-      }
-      for (const cat of categoryOrder) {
-        const opt = document.createElement("option");
-        opt.value = cat;
-        opt.textContent = `${cat} (${categoryMap[cat].length})`;
-        if (cat === activeCategory) opt.selected = true;
-        catSelect.appendChild(opt);
-      }
-    }
-    renderItems(categoryMap[activeCategory] || []);
-  } else {
-    if (catSelect) catSelect.hidden = true;
-    activeCategory = null;
-    renderItems(filtered);
-  }
+  // category dropdown は populateTemplateDropdown 専任なのでここでは触らない。
+  // JSON 内に複数 category がある場合も全件 flat 表示（内部 category 切替は廃止）。
+  activeCategory = null;
+  renderItems(filtered);
 }
 
 function renderItems(items) {
@@ -182,7 +234,12 @@ function createPresetItem(preset) {
   if (preset.originalIndex === selectedPresetIndex) {
     item.classList.add("selected");
   }
-  item.title = preset.description || preset.displayName;
+  // PostScript 名が解決できなかった (フォント未インストール) エントリは灰色化 + クリック無反応。
+  const isUnresolved = !preset.fontName;
+  if (isUnresolved) item.classList.add("style-palette-item--unresolved");
+  item.title = isUnresolved
+    ? `フォント未インストール: ${preset.name}`
+    : (preset.description || preset.displayName);
 
   const main = document.createElement("div");
   main.className = "style-palette-item-name";
@@ -203,6 +260,7 @@ function createPresetItem(preset) {
   // 両ケースで setFontPickerStuck(true) を立てるので、その後 V ツールで別フレームを
   // 1 クリックすると brush mode で自動適用される。
   item.addEventListener("click", () => {
+    if (isUnresolved) return;  // 未インストール時はハイライトも適用もしない
     selectedPresetIndex = preset.originalIndex;
     for (const el of $("style-palette-list").querySelectorAll(".style-palette-item")) {
       el.classList.remove("selected");
@@ -238,7 +296,11 @@ function applyPreset(preset) {
 }
 
 // ---------- JSON 読込 ----------
-export async function loadJsonFromPath(path) {
+// source: "default" | "template" | "browser"
+//   "template" = #style-palette-category dropdown 経由
+//   "browser"  = 任意 JSON 読込ボタン (#style-palette-load-btn) 経由
+//   localStorage への永続化はしない（起動時は必ずデフォルト）。
+export async function loadJsonFromPath(path, { source = "browser" } = {}) {
   if (!path) return false;
   let raw;
   try {
@@ -258,8 +320,9 @@ export async function loadJsonFromPath(path) {
   rebuildCategoryMap();
   selectedPresetIndex = -1;
   activeCategory = null;
+  activeSource = source;
   lastLoadedJsonPath = path;
-  try { localStorage.setItem(LAST_JSON_KEY, path); } catch (_) {}
+  updateFilenameDisplay(path);
   // 検索欄もリセット
   const search = $("style-palette-search");
   if (search) search.value = "";
@@ -267,9 +330,114 @@ export async function loadJsonFromPath(path) {
   return true;
 }
 
-// 「ホームに戻る」で呼ばれるリセット関数。読み込んだ JSON / プリセット一覧 /
-// 直前パスの localStorage / 検索欄 / カテゴリ dropdown / 説明文表示 を全てクリアし、
-// 起動直後の「プリセット JSON を読み込んでください」状態に戻す。
+// ハードコードのデフォルト 4 件を表示する。表示名から PS 名を解決するため
+// onFontsRegistered の発火後に再呼び出しすれば未解決項目もカラー復帰する。
+function loadDefaults() {
+  presets = DEFAULT_PRESETS_SEED.map((seed) => ({
+    displayName: `${seed.subName} / ${seed.name}`,
+    name: seed.name,
+    subName: seed.subName,
+    fontName: resolveFontPsName(seed.name), // null 可（未インストール）
+    description: "",
+    category: "デフォルト",
+  }));
+  rebuildCategoryMap();
+  selectedPresetIndex = -1;
+  activeCategory = null;
+  activeSource = "default";
+  lastLoadedJsonPath = null;
+  updateFilenameDisplay(null);
+  const search = $("style-palette-search");
+  if (search) search.value = "";
+  renderList("");
+  // dropdown 同期（外部から呼ばれた場合）
+  const sel = $("style-palette-category");
+  if (sel && sel.value !== "__default__") sel.value = "__default__";
+}
+
+// STYLE_PALETTE_ROOT_PATH 直下を起動時に 1 回スキャンし、`*テンプレ*.json` を抽出。
+// 失敗してもデフォルトプリセットは正常動作するので UX を阻害しない（warn のみ）。
+async function scanTemplates() {
+  templateScanState = "loading";
+  try {
+    const entries = await invoke("list_directory_entries", { path: STYLE_PALETTE_ROOT_PATH });
+    const collator = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
+    templateList = (entries || [])
+      .filter((e) => e && e.isFile && /テンプレ.*\.json$/i.test(e.name))
+      .map((e) => ({
+        name: e.name,
+        displayLabel: e.name.replace(/\.json$/i, ""),
+        path: e.path,
+      }))
+      .sort((a, b) => collator.compare(a.displayLabel, b.displayLabel));
+    templateScanState = "ready";
+  } catch (e) {
+    console.warn("[style-palette] テンプレスキャン失敗:", e);
+    templateList = [];
+    templateScanState = "error";
+  }
+  populateTemplateDropdown();
+  // スキャン後に初回限定で既定テンプレを自動読込。
+  if (!initialAutoloadDone) {
+    initialAutoloadDone = true;
+    await autoLoadDefaultTemplate();
+  }
+}
+
+// dropdown をテンプレ群で再構築。現在選択値は可能な限り維持。
+// テンプレが見つからない場合は disabled プレースホルダを表示。
+function populateTemplateDropdown() {
+  const sel = $("style-palette-category");
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = "";
+  if (templateList.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "テンプレートが見つかりません";
+    opt.disabled = true;
+    sel.appendChild(opt);
+    sel.disabled = true;
+    sel.hidden = false;
+    return;
+  }
+  sel.disabled = false;
+  for (const t of templateList) {
+    const opt = document.createElement("option");
+    opt.value = `tpl::${t.path}`;
+    opt.textContent = t.displayLabel;
+    sel.appendChild(opt);
+  }
+  if (prev && Array.from(sel.options).some((o) => o.value === prev)) {
+    sel.value = prev;
+  }
+  sel.hidden = false;
+}
+
+// 起動時 / リセット時に呼ばれる「既定テンプレを自動選択して読み込む」関数。
+// 1) 汎用統一表記テンプレ を最優先
+// 2) 見つからなければ先頭テンプレ
+// 3) テンプレ自体が無い / 読込失敗ならハードコード defaults にフォールバック
+async function autoLoadDefaultTemplate() {
+  if (templateList.length === 0) {
+    loadDefaults();
+    return;
+  }
+  const target =
+    templateList.find((t) => t.displayLabel.includes(DEFAULT_TEMPLATE_KEYWORD)) ||
+    templateList[0];
+  const ok = await loadJsonFromPath(target.path, { source: "template" });
+  if (!ok) {
+    loadDefaults();
+    return;
+  }
+  const sel = $("style-palette-category");
+  if (sel) sel.value = `tpl::${target.path}`;
+}
+
+// 「ホームに戻る」で呼ばれるリセット関数。
+// 既定テンプレ（汎用統一表記テンプレ）を再読込する。templateList が空のときのみ
+// ハードコード defaults にフォールバック。
 export function resetStylePaletteState() {
   presets = [];
   categoryMap = null;
@@ -277,18 +445,10 @@ export function resetStylePaletteState() {
   activeCategory = null;
   selectedPresetIndex = -1;
   lastLoadedJsonPath = null;
-  try { localStorage.removeItem(LAST_JSON_KEY); } catch (_) {}
   const search = $("style-palette-search");
   if (search) search.value = "";
-  const catSelect = $("style-palette-category");
-  if (catSelect) {
-    catSelect.innerHTML = "";
-    catSelect.hidden = true;
-  }
-  const list = $("style-palette-list");
-  if (list) {
-    list.innerHTML = '<div class="style-palette-empty">プリセット JSON を読み込んでください</div>';
-  }
+  updateFilenameDisplay(null);
+  void autoLoadDefaultTemplate();
 }
 
 function showLoadError(message) {
@@ -396,7 +556,7 @@ function renderBrowserList(entries) {
       if (entry.isDirectory) {
         await browserNavigateInto(entry.path);
       } else {
-        const ok = await loadJsonFromPath(entry.path);
+        const ok = await loadJsonFromPath(entry.path, { source: "browser" });
         if (ok) closeBrowser();
       }
     };
@@ -426,12 +586,15 @@ export function bindStylePalette() {
     search.addEventListener("input", handleSearch);
   }
 
-  // カテゴリ切替
+  // テンプレ切替 (旧: 単一 JSON 内の category 切替 → 新: テンプレ JSON 切替)
   const catSelect = $("style-palette-category");
   if (catSelect) {
     catSelect.addEventListener("change", () => {
-      activeCategory = catSelect.value;
-      renderItems(categoryMap?.[activeCategory] ?? []);
+      const v = catSelect.value;
+      if (v && v.startsWith("tpl::")) {
+        const path = v.slice(5);
+        void loadJsonFromPath(path, { source: "template" });
+      }
     });
   }
 
@@ -481,10 +644,20 @@ export function bindStylePalette() {
     });
   }
 
-  // 起動時に直前 JSON パスから自動再読込（失敗してもサイレント）
-  let autoPath = null;
-  try { autoPath = localStorage.getItem(LAST_JSON_KEY); } catch (_) {}
-  if (autoPath) {
-    void loadJsonFromPath(autoPath).catch(() => { /* silent */ });
+  // 旧バージョンの localStorage 残骸を一掃（新仕様では永続化なし）
+  try { localStorage.removeItem(LEGACY_LAST_JSON_KEY); } catch (_) {}
+
+  // テンプレスキャン完了後に汎用統一表記テンプレを自動読込する。
+  // スキャン中はリスト領域に読み込み中表示を出してユーザーに状況を伝える。
+  const list = $("style-palette-list");
+  if (list) {
+    list.innerHTML = '<div class="style-palette-empty">テンプレートを読み込み中…</div>';
   }
+  void scanTemplates();
+
+  // フォント登録完了で未解決のフォールバック defaults を再解決。
+  // テンプレ表示中は no-op、defaults フォールバック中なら再描画して灰色解除。
+  onFontsRegistered(() => {
+    if (activeSource === "default") loadDefaults();
+  });
 }

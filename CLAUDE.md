@@ -2953,4 +2953,107 @@ F1. **`.txt-source-empty` の背景色とボーダー** ([src/styles.css](src/st
 > - 旧: ブラシモードは canvas frame クリック経由でしか発動しない → 新: layer-list 行クリック経由でも `maybeApplyStickyFont` が走る（export 化して selectLayer から呼出）
 > - 旧: スタイルパレットの読み込み状態は永続化 → 新: ホームに戻るで完全リセット（`localStorage` の直前パスも削除）
 
+---
+
+## v1.18.0: サイドパネル排他タブ化 + フォントソースタブ + 太さセレクタ + スタイルパレット既定テンプレ自動読込
+
+### A. サイドパネルを排他タブ化（原稿テキスト / テキスト編集）
+
+A1. **旧: 折り畳み式 2 セクション → 新: 排他タブ** ([index.html](index.html) + [src/main.js](src/main.js) + [src/styles.css](src/styles.css)):
+- サイドパネル先頭に `<div class="side-panel-tabs">` を追加し、`#side-panel-tab-txt`（原稿テキスト）と `#side-panel-tab-editor`（テキスト編集）の 2 ボタンで排他切替
+- 各 `.panel-section[data-section]` の `<h2 class="panel-section-h2">`（折り畳みボタン付き）を撤去 — タブヘッダーが代替
+- アクティブタブの `panel-section` だけ表示し、他は `hidden` 属性で非表示
+- 状態は localStorage キー `psdesign_side_panel_tab` (`"txt" | "editor"`) に永続化
+
+A2. **JS 制御** ([src/main.js](src/main.js)): 旧 `bindSectionToggles`（折り畳み 2 連 toggle）を **`bindSidePanelTabs`** に置換
+- `loadSidePanelTab()`: localStorage から復元、不正値は既定 `"txt"`
+- `setSidePanelTab(tab)`: 全 `.side-panel-tab` の active/aria-selected を切替 + 全 `.panel-section` の hidden を切替 + localStorage 保存
+- `bindSidePanelTabs()`: ボタンに `mousedown`（preventDefault でフォーカス遷移を抑止）と `click` を配線、初期化時に `setSidePanelTab(loadSidePanelTab())`
+- 旧 `SECTION_COLLAPSED_KEY` / `loadSectionState` / `saveSectionState` は撤去
+
+A3. **CSS** ([src/styles.css](src/styles.css)):
+- `.side-panel-tabs`: flex 横並び + 下端 1px ボーダー + `var(--panel)` 背景
+- `.side-panel-tab`: 等幅 (`flex: 1 1 0`) + 12px / 600 / muted 色、active で `var(--text)` + accent ボーダー
+- `.side-panel .panel-section[hidden] { display: none }` で非アクティブ側を完全消失
+- `.txt-source` を `flex: 1 1 auto; min-height: 0` に変更（旧 `max-height: 34vh` を撤去 — タブ単独表示時はサイドバー残余高を全部使う）
+- `.panel-section[data-section="editor"]` も `flex: 1 1 auto; min-height: 0` に変更
+- 旧 `.side-panel:has(...).collapsed` の連動ルール一式を撤去
+
+### B. フォントソース排他タブ（フォント検索 / スタイルパレット）
+
+B1. **テキスト編集セクション内で combobox と style-palette を切替** ([index.html](index.html) + [src/text-editor.js](src/text-editor.js) + [src/styles.css](src/styles.css)):
+- 旧: `font-combobox-label` と `editor-tabs-section` を「原稿テキスト」セクションに置く構成（v1.17.0）
+- 新: 両方とも「テキスト編集」セクション (`#editor`) 内に戻し、その中で **`<div class="font-source-tabs">`** で `#font-source-tab-combobox`（フォント検索）と `#font-source-tab-palette`（スタイルパレット）を排他切替
+- 各 panel は `<div class="font-source-panel" data-source-panel="combobox|palette">` で wrap、active のみ表示
+- 状態は localStorage キー `psdesign_font_source` (`"combobox" | "palette"`) に永続化、既定は `"combobox"`
+
+B2. **JS 制御** ([src/text-editor.js](src/text-editor.js) `setFontSourceTab` / `bindFontSourceTabs`): サイドパネルタブと同パターン。`bindEditorEvents` 末尾で `bindFontSourceTabs()` を呼出
+
+B3. **CSS** ([src/styles.css](src/styles.css)): `.font-source-tabs` / `.font-source-tab` / `.font-source-panel` をサイドパネルタブと相似形のスタイル。font-size は 11px（サイドパネルタブ 12px より一段細く、階層が下であることを示す）
+
+### C. フォント太さ (W) セレクタ
+
+C1. **同ファミリーの W 番号バリアントをボタン化** ([src/text-editor.js](src/text-editor.js)):
+- フォント名から `\bW(\d+)\b` 正規表現で太さ番号を抽出（例: 「A-OTF 新ゴ Pro W3」→ 3）
+- `familyRoot(name)`: `W\d+` を取り除いた根の名前（「A-OTF 新ゴ Pro」）
+- `findWeightVariants(currentFont)`: `getFonts()` から `familyRoot` が一致する全フォントを集め、W 番号別に最初の 1 件だけ採用
+- 現在選択中フォントが W 番号付きで、かつバリアントが 2 件以上あるときだけ `#font-weight-selector` を表示
+- ボタンクリックで `commitFont(font)` を呼びそのフォント名で即時切替（ブラシモード化も継承）
+
+C2. **DOM** ([index.html](index.html)): `font-combobox-label` 内 `<div class="font-combobox">` の直後に `<div id="font-weight-selector" class="font-weight-selector" hidden>` を追加。`hidden` で初期非表示
+
+C3. **CSS** ([src/styles.css](src/styles.css)) `.font-weight-selector / .font-weight-btn`:
+- `flex-wrap: wrap; gap: 3px` で複数行折り返し
+- ボタンは `min-width: 30px / padding: 3px 6px / font-size: 11px / 600` のコンパクト矩形
+- active で `var(--accent)` 塗り + 白文字、hover で accent ボーダー
+
+C4. **発火タイミング** ([src/text-editor.js](src/text-editor.js)): `commitFont` 末尾と `rebuildFontOptions` 末尾で `rebuildWeightSelector()` を呼出。state.currentFont 変更時 / フォント一覧再構築時の両方で同期
+
+### D. フォントコンボボックスの position: fixed 化
+
+D1. **問題**: サイドパネルタブ化に伴い `.panel-section` に `overflow: hidden` 系の制約が生じやすくなり、絶対配置の `.font-combobox-list`（`position: absolute; top: 100%; left: 0; right: 0`）が親に縦クリップされてドロップダウン下半分が見えない問題が発生
+
+D2. **`position: fixed` + JS で位置追従** ([src/text-editor.js](src/text-editor.js) + [src/styles.css](src/styles.css)):
+- `.font-combobox-list` を `position: fixed; top: 0; left: 0` に変更（top/left/width は openCombo 時に JS 動的設定）
+- `positionCombo()`: `combo.getBoundingClientRect()` から `bottom + 2px / left / width` を計算して style 直書き
+- `bindComboRepositionWhileOpen()`: モジュール変数 `comboReposBound` で重複登録ガードしつつ、`window.scroll`（capture: true）と `window.resize` で `positionCombo` を再実行 — combo 開いてる間だけ追従
+- 親 `overflow: hidden` から脱出するため `z-index: 30` のまま機能
+- 閉じる時は CSS の `[hidden]` で非表示 — listener はぶら下がりっぱなしだが軽量で副作用なし
+
+### E. ▾ トグルでのインストール済み全フォント表示
+
+E1. **`openCombo(showAll = false)`** ([src/text-editor.js](src/text-editor.js)): デフォルトは入力欄の値で絞り込み（focus / input イベント経由）、引数 `true` で値を無視して全件表示
+
+E2. **▾ トグルボタン** ([src/text-editor.js](src/text-editor.js) `bindEditorEvents`): 旧 `input.focus(); openCombo();` → 新 `input.focus(); openCombo(true);`。`input.focus()` 自体は input イベントを発火しないので showAll=true のまま維持される。**ユーザーが入力欄をフォーカスして文字を打ち始めた時点で input イベントが発火 → `filterCombo(input.value)` で絞り込みに切替** という自然な遷移
+
+### F. スタイルパレットのデフォルト撤去・汎用統一表記テンプレ自動読込
+
+F1. **「デフォルト」option を `#style-palette-category` から撤去** ([src/style-palette.js](src/style-palette.js) `populateTemplateDropdown`):
+- 旧: dropdown に `__default__`（ハードコード 4 件）+ テンプレ JSON 群を並列表示
+- 新: テンプレ JSON のみ表示、テンプレが 1 件も無いとき `disabled` プレースホルダ「テンプレートが見つかりません」
+
+F2. **`autoLoadDefaultTemplate()` 新設** ([src/style-palette.js](src/style-palette.js)):
+- `displayLabel.includes("汎用統一表記テンプレ")` を最優先 → 無ければ先頭テンプレ → 読込失敗 / テンプレ無しはハードコード `loadDefaults()` フォールバック
+- スキャン後に初回限定で発火（`initialAutoloadDone` フラグでガード）
+
+F3. **`scanTemplates()` 末尾に自動発火を追加** ([src/style-palette.js](src/style-palette.js)): `populateTemplateDropdown()` の後に `autoLoadDefaultTemplate()` を await
+
+F4. **`bindStylePalette` の起動時 `loadDefaults()` 呼出を撤去**: スキャン中は `<div class="style-palette-empty">テンプレートを読み込み中…</div>` 表示 → スキャン完了後の `autoLoadDefaultTemplate` に主導権を委譲
+
+F5. **`resetStylePaletteState`（ホームに戻る）も同テンプレ再読込に変更**: 旧 `loadDefaults()` → 新 `autoLoadDefaultTemplate()`。templateList は再スキャン不要なので保持し、再読込のみ実行
+
+F6. **ドロップダウン change から `__default__` 分岐撤去**: `tpl::` プレフィックス付きの値のみ受理
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.18.0`** に揃え。Cargo.lock も自動追従
+
+> **このセッションの構造変更まとめ**:
+> - 旧: サイドパネル = 原稿テキスト + テキスト編集 の 2 セクションを折り畳みで上下に並べる → 新: 先頭タブで排他切替、active タブが残余高を全占有
+> - 旧: テキスト編集 = style-palette のみ / 原稿テキスト = font-combobox + editor-tabs（v1.17.0 配置）→ 新: テキスト編集 = font-source タブで combobox と style-palette を排他切替 + editor-tabs、原稿テキストは原稿のみ
+> - 旧: フォントの太さ切替 = combobox から W3/W6 等を別フォントとして都度検索 → 新: 同ファミリーの W バリアントを `font-weight-selector` ボタン群で 1 クリック切替（ブラシモード継承）
+> - 旧: `font-combobox-list` = `position: absolute` で親に縦クリップされる事故 → 新: `position: fixed` + scroll/resize 中の `positionCombo` 再実行で常に input 直下に表示
+> - 旧: ▾ トグルは入力欄値で絞り込んで開く → 新: 入力欄値を無視してインストール済み全フォントを展開（タイプ開始で input イベント経由の絞り込みに自然遷移）
+> - 旧: スタイルパレット = 起動時にハードコード 4 件 (DEFAULT_PRESETS_SEED) を表示、dropdown に「デフォルト」option あり → 新: スキャン完了後に「汎用統一表記テンプレ」を自動読込、dropdown はテンプレ JSON 群のみ、フォールバックとしてハードコード defaults は内部温存
+
 

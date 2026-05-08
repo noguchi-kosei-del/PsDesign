@@ -473,15 +473,11 @@
               <span>自動配置</span>
             </button>
           </div>
+          <div class="side-panel-tabs" role="tablist">
+            <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
+            <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">テキスト編集</button>
+          </div>
           <section class="panel-section txt-source" id="txt-source" data-section="txt">
-            <h2 class="panel-section-h2">
-              <span>原稿テキスト</span>
-              <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
-                <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="6 9 12 15 18 9"/>
-                </svg>
-              </button>
-            </h2>
             <div id="txt-source-actions" class="txt-source-actions">
               <span id="txt-source-name" class="txt-source-name"></span>
               <button id="save-txt-btn" class="icon-btn txt-source-save-btn" type="button" title="テキストを TXT ファイルとして保存" aria-label="テキストを TXT ファイルとして保存" disabled>
@@ -532,14 +528,9 @@
                   disabled>配置</button>
               </div>
             </div>
-            <label data-editor-scope="single" class="font-combobox-label">
-              フォント
-              <div class="font-combobox" id="edit-font-combobox">
-                <input id="edit-font" class="font-input" type="text" autocomplete="off" placeholder="フォント名で検索..." />
-                <button type="button" id="edit-font-toggle" class="font-combobox-toggle" aria-label="フォント一覧" tabindex="-1">▾</button>
-                <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
-              </div>
-            </label>
+          </section>
+          <section class="panel-section" data-section="editor" hidden>
+          <div id="editor" class="editor">
             <div class="editor-tabs-section">
               <div class="editor-tabs" role="tablist">
                 <button id="editor-tab-size" class="editor-tab active" data-tab="size" type="button" role="tab" aria-selected="true">サイズ</button>
@@ -587,29 +578,36 @@
                 </div>
               </div>
             </div>
-          </section>
-          <section class="panel-section" data-section="editor">
-          <h2 class="panel-section-h2">
-            <span>テキスト編集</span>
-            <button class="section-toggle-btn" type="button" title="折りたたむ" aria-label="折りたたむ" aria-expanded="true">
-              <svg class="section-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <polyline points="6 9 12 15 18 9"/>
-              </svg>
-            </button>
-          </h2>
-          <div id="editor" class="editor">
-            <div class="style-palette" id="style-palette">
-              <div class="style-palette-toolbar">
-                <input type="text" id="style-palette-search" class="style-palette-search" placeholder="フォント検索…" autocomplete="off" />
-                <button type="button" id="style-palette-load-btn" class="style-palette-load-btn" title="プリセット JSON を読込" aria-label="プリセット JSON を読込">
-                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
-                  </svg>
-                </button>
-              </div>
-              <select id="style-palette-category" class="style-palette-category" hidden></select>
-              <div id="style-palette-list" class="style-palette-list">
-                <div class="style-palette-empty">プリセット JSON を読み込んでください</div>
+            <div class="font-source-tabs" role="tablist">
+              <button id="font-source-tab-combobox" class="font-source-tab active" data-source="combobox" type="button" role="tab" aria-selected="true">フォント検索</button>
+              <button id="font-source-tab-palette" class="font-source-tab" data-source="palette" type="button" role="tab" aria-selected="false">スタイルパレット</button>
+            </div>
+            <div class="font-source-panel" data-source-panel="combobox" role="tabpanel">
+              <label data-editor-scope="single" class="font-combobox-label">
+                フォント
+                <div class="font-combobox" id="edit-font-combobox">
+                  <input id="edit-font" class="font-input" type="text" autocomplete="off" placeholder="フォント名で検索..." />
+                  <button type="button" id="edit-font-toggle" class="font-combobox-toggle" aria-label="フォント一覧" tabindex="-1">▾</button>
+                  <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
+                </div>
+                <div id="font-weight-selector" class="font-weight-selector" hidden role="group" aria-label="フォントの太さ"></div>
+              </label>
+            </div>
+            <div class="font-source-panel" data-source-panel="palette" role="tabpanel" hidden>
+              <div class="style-palette" id="style-palette">
+                <div class="style-palette-toolbar">
+                  <input type="text" id="style-palette-search" class="style-palette-search" placeholder="フォント検索…" autocomplete="off" />
+                  <button type="button" id="style-palette-load-btn" class="style-palette-load-btn" title="プリセット JSON を読込" aria-label="プリセット JSON を読込">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+                    </svg>
+                  </button>
+                </div>
+                <div id="style-palette-filename" class="style-palette-filename" hidden></div>
+                <select id="style-palette-category" class="style-palette-category" aria-label="プリセット選択" hidden></select>
+                <div id="style-palette-list" class="style-palette-list">
+                  <div class="style-palette-empty">プリセット JSON を読み込んでください</div>
+                </div>
               </div>
             </div>
           </div>
