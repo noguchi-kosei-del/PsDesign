@@ -369,13 +369,38 @@
               <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
             </svg>
           </button>
-          <button id="layers-toggle-btn" class="icon-btn side-tool-btn layers-toggle-btn" type="button" title="レイヤー" aria-label="レイヤー" aria-expanded="false">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <polygon points="12 2 2 7 12 12 22 7 12 2"/>
-              <polyline points="2 17 12 22 22 17"/>
-              <polyline points="2 12 12 17 22 12"/>
-            </svg>
-          </button>
+          <div class="layers-toggle-wrap">
+            <button id="layers-toggle-btn" class="icon-btn side-tool-btn layers-toggle-btn" type="button" title="レイヤー" aria-label="レイヤー" aria-expanded="false">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <polygon points="12 2 2 7 12 12 22 7 12 2"/>
+                <polyline points="2 17 12 22 22 17"/>
+                <polyline points="2 12 12 17 22 12"/>
+              </svg>
+            </button>
+            <aside class="layers-drawer" id="layers-drawer" aria-label="レイヤー">
+              <div class="layers-drawer-header">
+                <span class="layers-drawer-title">レイヤー</span>
+                <button id="layers-drawer-close-btn" class="icon-btn layers-drawer-close-btn" type="button" title="閉じる" aria-label="閉じる">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <line x1="18" y1="6" x2="6" y2="18"/>
+                    <line x1="6" y1="6" x2="18" y2="18"/>
+                  </svg>
+                </button>
+              </div>
+              <ul id="layer-list" class="layer-list"></ul>
+              <div class="layer-list-footer">
+                <button id="delete-new-layer-btn" class="icon-btn layer-delete-btn" type="button" title="レイヤー削除" aria-label="レイヤー削除" disabled>
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <polyline points="3 6 5 6 21 6"/>
+                    <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+                    <path d="M10 11v6"/>
+                    <path d="M14 11v6"/>
+                    <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+                  </svg>
+                </button>
+              </div>
+            </aside>
+          </div>
           <div class="side-page-zoom" role="group" aria-label="ズーム">
             <button id="zoom-in-btn" class="icon-btn page-zoom-btn" type="button" title="ズームイン (Alt+スクロール)" aria-label="ズームイン">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -413,29 +438,6 @@
               <button id="fill-black-btn" class="fill-swatch fill-swatch-black" type="button" data-fill="black" title="黒文字（もう一度クリックで解除）" aria-label="黒文字"></button>
             </div>
           </div>
-          <aside class="layers-drawer" id="layers-drawer" aria-label="レイヤー">
-            <div class="layers-drawer-header">
-              <span class="layers-drawer-title">レイヤー</span>
-              <button id="layers-drawer-close-btn" class="icon-btn layers-drawer-close-btn" type="button" title="閉じる" aria-label="閉じる">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <line x1="18" y1="6" x2="6" y2="18"/>
-                  <line x1="6" y1="6" x2="18" y2="18"/>
-                </svg>
-              </button>
-            </div>
-            <ul id="layer-list" class="layer-list"></ul>
-            <div class="layer-list-footer">
-              <button id="delete-new-layer-btn" class="icon-btn layer-delete-btn" type="button" title="レイヤー削除" aria-label="レイヤー削除" disabled>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <polyline points="3 6 5 6 21 6"/>
-                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-                  <path d="M10 11v6"/>
-                  <path d="M14 11v6"/>
-                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-                </svg>
-              </button>
-            </div>
-          </aside>
         </nav>
         <aside class="side-panel">
           <div class="panel-header">
@@ -590,13 +592,13 @@
                   <button type="button" id="edit-font-toggle" class="font-combobox-toggle" aria-label="フォント一覧" tabindex="-1">▾</button>
                   <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
                 </div>
-                <div id="font-weight-selector" class="font-weight-selector" hidden role="group" aria-label="フォントの太さ"></div>
+                <div id="font-weight-selector" class="font-weight-selector" role="group" aria-label="フォントの太さ"></div>
               </label>
             </div>
             <div class="font-source-panel" data-source-panel="palette" role="tabpanel" hidden>
               <div class="style-palette" id="style-palette">
                 <div class="style-palette-toolbar">
-                  <input type="text" id="style-palette-search" class="style-palette-search" placeholder="フォント検索…" autocomplete="off" />
+                  <select id="style-palette-category" class="style-palette-category" aria-label="プリセット選択" hidden></select>
                   <button type="button" id="style-palette-load-btn" class="style-palette-load-btn" title="プリセット JSON を読込" aria-label="プリセット JSON を読込">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
@@ -604,7 +606,6 @@
                   </button>
                 </div>
                 <div id="style-palette-filename" class="style-palette-filename" hidden></div>
-                <select id="style-palette-category" class="style-palette-category" aria-label="プリセット選択" hidden></select>
                 <div id="style-palette-list" class="style-palette-list">
                   <div class="style-palette-empty">プリセット JSON を読み込んでください</div>
                 </div>

@@ -540,6 +540,11 @@ function commitFont(font) {
 // ========== フォント太さ (W) セレクタ ==========
 // 「A-OTF 新ゴ Pro W3」のような W 番号付きフォントを選択中なら、同じファミリーで
 // インストール済みの全 W 番号バリアントをボタン化する。
+// バリアントが見つからない / 現在のフォントに W が無い場合も UI 一貫性のため
+// プレースホルダの disabled ボタンを描画して常時表示する。
+
+// プレースホルダとして表示する代表的な日本語書体ウェイト（regular / bold）。
+const FONT_WEIGHT_PLACEHOLDERS = [3, 6];
 
 function extractWeight(displayName) {
   if (!displayName) return null;
@@ -581,25 +586,39 @@ function rebuildWeightSelector() {
     ? getFonts().find((f) => f.postScriptName === psName)
     : null;
   const variants = currentFont ? findWeightVariants(currentFont) : [];
-  if (variants.length <= 1) {
-    el.hidden = true;
-    el.innerHTML = "";
+  el.innerHTML = "";
+  el.hidden = false;
+
+  if (variants.length >= 2) {
+    // 複数のバリアントが見つかったケース: クリック可能な実ボタン群を表示
+    const currentW = extractWeight(currentFont.name || currentFont.postScriptName);
+    for (const { weight, font } of variants) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "font-weight-btn";
+      btn.textContent = `W${weight}`;
+      btn.title = font.name || font.postScriptName;
+      if (weight === currentW) btn.classList.add("active");
+      btn.addEventListener("mousedown", (e) => e.preventDefault());
+      btn.addEventListener("click", () => commitFont(font));
+      el.appendChild(btn);
+    }
     return;
   }
-  const currentW = extractWeight(currentFont.name || currentFont.postScriptName);
-  el.innerHTML = "";
-  for (const { weight, font } of variants) {
+
+  // バリアントなし / 現在のフォントに W 番号なし: プレースホルダを disabled で表示
+  const placeholderTitle = currentFont
+    ? "このフォントには W ウェイトのバリエーションがありません"
+    : "フォントを選択するとウェイトを切替できます";
+  for (const w of FONT_WEIGHT_PLACEHOLDERS) {
     const btn = document.createElement("button");
     btn.type = "button";
     btn.className = "font-weight-btn";
-    btn.textContent = `W${weight}`;
-    btn.title = font.name || font.postScriptName;
-    if (weight === currentW) btn.classList.add("active");
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => commitFont(font));
+    btn.textContent = `W${w}`;
+    btn.disabled = true;
+    btn.title = placeholderTitle;
     el.appendChild(btn);
   }
-  el.hidden = false;
 }
 
 function resolveFontFromInput(typed) {

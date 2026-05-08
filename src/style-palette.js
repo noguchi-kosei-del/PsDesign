@@ -30,6 +30,9 @@ import { onFontsRegistered } from "./font-loader.js";
 // 校正パネルと同じ共有ドライブベース。stylepallet オリジナルの ROOT_PATH を踏襲。
 const STYLE_PALETTE_ROOT_PATH =
   "G:\\共有ドライブ\\CLLENN\\編集部フォルダ\\編集企画部\\編集企画_C班(AT業務推進)\\DTP制作部\\JSONフォルダ";
+// レーベル別テンプレ。直下の全 .json ファイルを取り込む。
+const STYLE_PALETTE_LABEL_TEMPLATE_PATH =
+  STYLE_PALETTE_ROOT_PATH + "\\_レーベルテンプレ";
 
 // 旧バージョンの localStorage 残骸を一掃するために key 文字列だけ保持。
 // 新仕様では永続化なし（起動時は必ず「デフォルト」）。
@@ -52,7 +55,6 @@ let categoryOrder = [];            // 表示順保持（Object.keys は挿入順
 let activeCategory = null;         // 現在表示中のカテゴリ名（null = flat 表示）
 let selectedPresetIndex = -1;      // クリック選択中の preset の originalIndex（-1 = 未選択）
 let lastLoadedJsonPath = null;
-let searchTimer = null;
 
 // 表示中ソースの種別。
 //   "default"  = ハードコードのデフォルト 4 件（テンプレ未取得時のフォールバック）
@@ -187,7 +189,7 @@ function rebuildCategoryMap() {
   }
 }
 
-function renderList(filterText = "") {
+function renderList() {
   const list = $("style-palette-list");
   if (!list) return;
 
@@ -196,26 +198,13 @@ function renderList(filterText = "") {
     return;
   }
 
-  const filter = (filterText || "").toLowerCase();
   // originalIndex を埋め込み（クリック時に参照）
   for (let i = 0; i < presets.length; i++) presets[i].originalIndex = i;
-
-  const filtered = filter
-    ? presets.filter((d) =>
-        (d.displayName ?? "").toLowerCase().includes(filter) ||
-        (d.fontName ?? "").toLowerCase().includes(filter) ||
-        (d.category ?? "").toLowerCase().includes(filter))
-    : presets;
-
-  if (filtered.length === 0) {
-    list.innerHTML = '<div class="style-palette-empty">該当するフォントがありません</div>';
-    return;
-  }
 
   // category dropdown は populateTemplateDropdown 専任なのでここでは触らない。
   // JSON 内に複数 category がある場合も全件 flat 表示（内部 category 切替は廃止）。
   activeCategory = null;
-  renderItems(filtered);
+  renderItems(presets);
 }
 
 function renderItems(items) {
@@ -272,15 +261,6 @@ function createPresetItem(preset) {
   return item;
 }
 
-// ---------- 検索（200ms デバウンス） ----------
-function handleSearch() {
-  if (searchTimer) clearTimeout(searchTimer);
-  searchTimer = setTimeout(() => {
-    const input = $("style-palette-search");
-    renderList(input ? input.value : "");
-  }, 200);
-}
-
 // ---------- プリセット適用 ----------
 function applyPreset(preset) {
   if (!preset?.fontName) return;
@@ -323,10 +303,7 @@ export async function loadJsonFromPath(path, { source = "browser" } = {}) {
   activeSource = source;
   lastLoadedJsonPath = path;
   updateFilenameDisplay(path);
-  // 検索欄もリセット
-  const search = $("style-palette-search");
-  if (search) search.value = "";
-  renderList("");
+  renderList();
   return true;
 }
 
@@ -347,35 +324,57 @@ function loadDefaults() {
   activeSource = "default";
   lastLoadedJsonPath = null;
   updateFilenameDisplay(null);
-  const search = $("style-palette-search");
-  if (search) search.value = "";
-  renderList("");
+  renderList();
   // dropdown 同期（外部から呼ばれた場合）
   const sel = $("style-palette-category");
   if (sel && sel.value !== "__default__") sel.value = "__default__";
 }
 
-// STYLE_PALETTE_ROOT_PATH 直下を起動時に 1 回スキャンし、`*テンプレ*.json` を抽出。
-// 失敗してもデフォルトプリセットは正常動作するので UX を阻害しない（warn のみ）。
+// 起動時に 2 つのフォルダをスキャンしてテンプレ一覧を構築する:
+// 1) STYLE_PALETTE_ROOT_PATH 直下の `*テンプレ*.json`           → group: "テンプレート"
+// 2) STYLE_PALETTE_LABEL_TEMPLATE_PATH (\_レーベルテンプレ\) 直下の全 .json → group: "レーベルテンプレ"
+// どちらの取得失敗もデフォルトプリセットの動作を阻害しない（warn のみ）。
 async function scanTemplates() {
   templateScanState = "loading";
+  const collator = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
+
+  // メインフォルダ: ファイル名に「テンプレ」を含む JSON のみ採用
+  let mainEntries = [];
   try {
     const entries = await invoke("list_directory_entries", { path: STYLE_PALETTE_ROOT_PATH });
-    const collator = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
-    templateList = (entries || [])
+    mainEntries = (entries || [])
       .filter((e) => e && e.isFile && /テンプレ.*\.json$/i.test(e.name))
       .map((e) => ({
         name: e.name,
         displayLabel: e.name.replace(/\.json$/i, ""),
         path: e.path,
+        group: "テンプレート",
       }))
       .sort((a, b) => collator.compare(a.displayLabel, b.displayLabel));
-    templateScanState = "ready";
   } catch (e) {
     console.warn("[style-palette] テンプレスキャン失敗:", e);
-    templateList = [];
-    templateScanState = "error";
   }
+
+  // レーベルテンプレフォルダ: 直下の全 .json
+  let labelEntries = [];
+  try {
+    const entries = await invoke("list_directory_entries", { path: STYLE_PALETTE_LABEL_TEMPLATE_PATH });
+    labelEntries = (entries || [])
+      .filter((e) => e && e.isFile && /\.json$/i.test(e.name))
+      .map((e) => ({
+        name: e.name,
+        displayLabel: e.name.replace(/\.json$/i, ""),
+        path: e.path,
+        group: "レーベルテンプレ",
+      }))
+      .sort((a, b) => collator.compare(a.displayLabel, b.displayLabel));
+  } catch (e) {
+    console.warn("[style-palette] レーベルテンプレスキャン失敗:", e);
+  }
+
+  templateList = [...mainEntries, ...labelEntries];
+  templateScanState = templateList.length > 0 ? "ready" : "error";
+
   populateTemplateDropdown();
   // スキャン後に初回限定で既定テンプレを自動読込。
   if (!initialAutoloadDone) {
@@ -386,6 +385,7 @@ async function scanTemplates() {
 
 // dropdown をテンプレ群で再構築。現在選択値は可能な限り維持。
 // テンプレが見つからない場合は disabled プレースホルダを表示。
+// group フィールドが複数種類あれば <optgroup> でラベル別にまとめる。
 function populateTemplateDropdown() {
   const sel = $("style-palette-category");
   if (!sel) return;
@@ -402,12 +402,26 @@ function populateTemplateDropdown() {
     return;
   }
   sel.disabled = false;
+
+  // group ごとに optgroup でまとめる（挿入順 = scanTemplates の収集順）。
+  const groupBuckets = new Map();
   for (const t of templateList) {
-    const opt = document.createElement("option");
-    opt.value = `tpl::${t.path}`;
-    opt.textContent = t.displayLabel;
-    sel.appendChild(opt);
+    const g = t.group || "テンプレート";
+    if (!groupBuckets.has(g)) groupBuckets.set(g, []);
+    groupBuckets.get(g).push(t);
   }
+  for (const [groupName, items] of groupBuckets) {
+    const og = document.createElement("optgroup");
+    og.label = groupName;
+    for (const t of items) {
+      const opt = document.createElement("option");
+      opt.value = `tpl::${t.path}`;
+      opt.textContent = t.displayLabel;
+      og.appendChild(opt);
+    }
+    sel.appendChild(og);
+  }
+
   if (prev && Array.from(sel.options).some((o) => o.value === prev)) {
     sel.value = prev;
   }
@@ -445,8 +459,6 @@ export function resetStylePaletteState() {
   activeCategory = null;
   selectedPresetIndex = -1;
   lastLoadedJsonPath = null;
-  const search = $("style-palette-search");
-  if (search) search.value = "";
   updateFilenameDisplay(null);
   void autoLoadDefaultTemplate();
 }
@@ -580,12 +592,6 @@ function renderBrowserNav() {
 
 // ---------- 配線 ----------
 export function bindStylePalette() {
-  // 検索 input
-  const search = $("style-palette-search");
-  if (search) {
-    search.addEventListener("input", handleSearch);
-  }
-
   // テンプレ切替 (旧: 単一 JSON 内の category 切替 → 新: テンプレ JSON 切替)
   const catSelect = $("style-palette-category");
   if (catSelect) {

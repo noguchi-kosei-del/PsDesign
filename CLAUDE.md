@@ -3056,4 +3056,88 @@ F6. **ドロップダウン change から `__default__` 分岐撤去**: `tpl::` 
 > - 旧: ▾ トグルは入力欄値で絞り込んで開く → 新: 入力欄値を無視してインストール済み全フォントを展開（タイプ開始で input イベント経由の絞り込みに自然遷移）
 > - 旧: スタイルパレット = 起動時にハードコード 4 件 (DEFAULT_PRESETS_SEED) を表示、dropdown に「デフォルト」option あり → 新: スキャン完了後に「汎用統一表記テンプレ」を自動読込、dropdown はテンプレ JSON 群のみ、フォールバックとしてハードコード defaults は内部温存
 
+---
+
+## v1.19.0: スタイルパレット UI 整理 + レーベルテンプレ取込 + ウェイトボタン常時表示 + レイヤードロワー再配置
+
+### A. スタイルパレットのフォント検索撤廃 + テンプレ dropdown をツールバーへ統合
+
+A1. **検索 input を撤廃** ([src/style-palette.js](src/style-palette.js) + [index.html](index.html) + [src/styles.css](src/styles.css)): v1.18.0 で残っていたスタイルパレット内の `#style-palette-search` を完全削除。ファイル名 / カテゴリの両方で絞り込めていたが、テンプレ自動読込中心の運用に移行したため重複機能と判断。
+- `searchTimer` モジュール変数 / `handleSearch` 関数 / `renderList(filterText)` の filter 引数とロジックを削除（`renderList()` は引数なしで全件 flat 表示）
+- 4 箇所の `search.value = ""` リセット (`loadJsonFromPath` / `loadDefaults` / `resetStylePaletteState` / `bindStylePalette`) を全撤去
+- `.style-palette-search` / `.style-palette-search:focus` の CSS ルール削除
+
+A2. **テンプレ dropdown (`#style-palette-category`) をツールバー内に再配置** ([index.html](index.html)): 旧 `.style-palette-toolbar > load-btn` のみ → `.style-palette-toolbar > category-select + load-btn` の 2 要素 flex 行に。dropdown が残余幅を伸縮、JSON 読込ボタンが右端 28px 固定。
+- `.style-palette-toolbar` に `justify-content: flex-end` を追加（v1.19.0 当初の検索撤去後の暫定設定を維持）
+- `.style-palette-category` を `width: 100%` → `flex: 1 1 auto; min-width: 0` に変更
+- 旧 `.style-palette-filename:not([hidden]) + .style-palette-category` 隣接セレクタは構造変更で無効化のため削除
+
+### B. レーベルテンプレ JSON の自動取り込み（optgroup でグループ表示）
+
+B1. **新規取込先 `_レーベルテンプレ` フォルダ** ([src/style-palette.js](src/style-palette.js)): メインフォルダ (`STYLE_PALETTE_ROOT_PATH = G:\共有ドライブ\...\JSONフォルダ`) の直下に `_レーベルテンプレ` サブフォルダを追加スキャン対象に組み込み。
+- 新規定数 `STYLE_PALETTE_LABEL_TEMPLATE_PATH = ROOT + "\\_レーベルテンプレ"` 定義
+- `scanTemplates` を 2 段スキャン構造に変更:
+  - メインフォルダ: ファイル名に「テンプレ」を含む `.json` のみ採用 (group: `"テンプレート"`)
+  - レーベルテンプレフォルダ: 直下の全 `.json` を採用 (group: `"レーベルテンプレ"`)
+  - どちらかが失敗 (`list_directory_entries` 例外) してももう一方を表示、両方失敗で error state
+- `templateList` のエントリに `group` フィールド追加
+
+B2. **`<optgroup>` でグループ表示** ([src/style-palette.js](src/style-palette.js) `populateTemplateDropdown`): dropdown 描画時に `groupBuckets: Map<groupName, items[]>` で集約 → 各グループに `<optgroup label="...">` を生成して内側に `<option>` を配置。挿入順は scanTemplates の収集順 (テンプレート → レーベルテンプレ)。`autoLoadDefaultTemplate` の「汎用統一表記テンプレ」優先選択ロジックは無変更。
+
+### C. フォント太さ (W) ボタンの常時表示
+
+C1. **背景**: v1.18.0 C で導入した `font-weight-selector` は variants ≥ 2 のときだけ display 可、それ以外は `el.hidden = true` で完全非表示だった。フォントによって UI 要素の有無が変わるため、操作位置の予測がしにくい問題があった。
+
+C2. **常時表示 + 該当無しはグレーアウト** ([src/text-editor.js](src/text-editor.js) `rebuildWeightSelector`):
+- 常に `el.hidden = false` を設定（`el.hidden = true` 分岐を撤去）
+- 新規定数 `FONT_WEIGHT_PLACEHOLDERS = [3, 6]`（regular / bold 相当の代表ウェイト）
+- variants ≥ 2: 従来どおり実バリアント（クリック可能）を表示
+- variants < 2 / W 番号なし / フォント未選択: `W3` `W6` プレースホルダを `disabled` 属性付きで描画
+- tooltip 文言を 2 種類で出し分け（「フォント未選択 → 選択するとウェイトを切替できます」/「W バリエーション無し → このフォントには W ウェイトのバリエーションがありません」）
+
+C3. **CSS** ([src/styles.css](src/styles.css)):
+- [index.html:593](index.html#L593) `<div id="font-weight-selector">` から初期 `hidden` 属性を撤去
+- `.font-weight-btn:hover:not(.active)` を `:not(:disabled)` 付きに変更し、disabled ボタンに hover 強調が出ないように
+- `.font-weight-btn:disabled { opacity: 0.4; cursor: not-allowed; background: var(--bg); color: var(--text-muted); border-color: var(--border); }` を追加（グローバル `button:disabled { opacity: 0.5 }` を上書きして専用配色を強制）
+
+### D. style-palette-list をサイドバー下端まで伸ばす
+
+D1. **問題**: `.style-palette-list { max-height: 260px }` で固定上限があり、サイドバー残余高が広くてもリスト下に空き領域が残っていた。
+
+D2. **flex-grow チェーンを編集セクション全体に通す** ([src/styles.css](src/styles.css)): 以下の 4 箇所を flex-grow に再構成:
+- **`.editor`**: `flex-shrink: 0` → `flex: 1 1 auto; min-height: 0`。layer-list はドロワー化済み (v1.17.0) で別所属のため、editor が section の残余高を占有してよい
+- **`.font-source-panel[data-source-panel="palette"]:not([hidden])`** 新規: スタイルパレット tab がアクティブなときのみ `display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0`。combobox tab は default の `display: block` のまま content 高据え置き
+- **`.style-palette`**: `flex: 1 1 auto; min-height: 0` を追加
+- **`.style-palette-list`**: `max-height: 260px` → `flex: 1 1 auto; min-height: 0`
+
+D3. **flex-grow チェーン** (上から下): `panel-section[data-section="editor"]` (既設 `flex: 1 1 auto`) → `.editor` → `.font-source-panel[palette]` → `.style-palette` → `.style-palette-list`。途中で `min-height: 0` を入れないと flex 子の `min-content` size に引きずられて overflow が機能しない。
+
+### E. レイヤートグルボタンをパンツールの直下に配置
+
+E1. **`.layers-toggle-btn` の `margin-top: auto` 撤去** ([src/styles.css](src/styles.css)): v1.17.0 ではレイヤーボタン自身がツールバー底辺アンカー役（`margin-top: auto`）だったが、ボタンの位置がツール群から離れて操作位置が分かりづらくなっていた。
+
+E2. **ボトムアンカー役を `.side-page-zoom` に移譲**: `.side-page-zoom` に新規 `margin-top: auto` を追加。ズーム / ページ移動 / 文字色スウォッチがツールバー底辺に集まるように。
+- 新配置: `panel-header → new-text-dir-switch → V → 定規 → パン → レイヤー → (空き) → ズーム → ページ移動 → 文字色`
+
+### F. レイヤードロワーをボタンの高さに合わせて展開
+
+F1. **問題**: ドロワーの anchor は `.side-toolbar` 直下で `bottom: 0`（ツールバー底辺基準）。レイヤーボタンがツール群直下に移動 (E 節) した後でもドロワーは画面下端から展開し続けて、視覚的にボタンと連結していなかった。
+
+F2. **wrap 構造で anchor をボタン位置に移動** ([index.html](index.html)): `#layers-toggle-btn` と `#layers-drawer` を新規 `<div class="layers-toggle-wrap">` で囲み、共通の relative ancestor を作る。
+- 旧: side-toolbar 直下に layers-toggle-btn と layers-drawer が別々の sibling、ドロワーは fill-color-picker の後に配置
+- 新: side-toolbar > `.layers-toggle-wrap` > [`#layers-toggle-btn`, `#layers-drawer`] のネスト構造、ドロワー DOM が tool-pan の直下に集約
+
+F3. **CSS** ([src/styles.css](src/styles.css)):
+- `.layers-toggle-wrap { position: relative; display: flex; flex-direction: column; align-items: center; justify-content: center; }` 新設。flex 子としてはボタンと同じ content サイズで並び、ドロワーの絶対配置基準として動作
+- `.layers-drawer` の anchor を `bottom: 0` → **`top: 0`** に変更。ドロワー上端がレイヤーボタン上端に揃い、ボタンの高さから真横に展開
+- `.side-toolbar` の `position: relative` コメントを fallback 用に更新（主 anchor は `.layers-toggle-wrap` に移譲）
+- ワークスペース反転時の鏡映ルール (`.workspace.flipped .layers-drawer { right: auto; left: 100% }`) は `top` を触っていないため無修正で動作
+
+> **このセッションの構造変更まとめ**:
+> - 旧: スタイルパレットに検索 input + 単独 dropdown 段（filename の上）→ 新: 検索撤廃、dropdown は load-btn の左隣に統合（toolbar 1 段にスリム化）
+> - 旧: テンプレは `JSONフォルダ` 直下のテンプレ含む JSON のみ → 新: `_レーベルテンプレ` サブフォルダの全 JSON も追加、`<optgroup>` で 2 グループに分類表示
+> - 旧: フォント太さ (W) ボタンは variants ≥ 2 のときだけ表示、それ以外は完全非表示 → 新: 常時表示、該当バリエーション無いときは W3/W6 プレースホルダを disabled でグレーアウト
+> - 旧: `.style-palette-list` は `max-height: 260px` で頭打ち、サイドバー下に空き領域 → 新: `editor → font-source-panel[palette] → style-palette → style-palette-list` の flex-grow チェーンでサイドバー下端までフィット
+> - 旧: レイヤートグルボタンは `margin-top: auto` でツールバー底辺、ドロワーも `bottom: 0` で画面下端基準 → 新: レイヤーボタンはパンツール直下に並び、`.layers-toggle-wrap` を anchor にドロワーが `top: 0` でボタンの高さから展開（ボトムアンカー役は `.side-page-zoom` に移譲）
+
 

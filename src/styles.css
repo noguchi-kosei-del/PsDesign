@@ -813,8 +813,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* overflow: visible にして、レイヤードロワーが左方向へ展開できるようにする。
      折り畳み時は子要素が display: none になるため、はみ出しは発生しない。 */
   overflow: visible;
-  /* レイヤードロワー (.layers-drawer) の anchor。bottom: 0 でドロワー下端を
-     サイドツールバー底辺（= viewport 下端付近）に揃える。 */
+  /* レイヤードロワーは .layers-toggle-wrap (closer relative ancestor) を主 anchor
+     として使うが、他の絶対要素の fallback 用に position: relative を残す。 */
   position: relative;
 }
 
@@ -979,17 +979,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
    自身以下の zoom / page-nav / fill-color-picker もボトムアンカー位置に収まる。
    ドロワー本体は .side-toolbar 直下に配置されており、サイドツールバーの
    下端を anchor として展開する。 */
-.layers-toggle-btn {
-  margin-top: auto;
-}
 .layers-toggle-btn[aria-expanded="true"] {
   background: var(--accent);
   color: #fff;
 }
 
-/* ズーム群：レイヤーボタンの直下に配置。ボトムアンカーは layers-toggle-btn が担うため
-   ここでは margin-top: auto を持たない（持つと sibling 同士で空きを取り合う）。 */
+/* レイヤーボタンとドロワーを束ねるラッパ。ドロワーの絶対配置基準（top: 0）を
+   ボタンの位置に合わせるための anchor 役。flex 子としてはボタンと同じ content
+   サイズで並ぶ（ドロワーは absolute なので寸法に影響しない）。 */
+.layers-toggle-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ズーム群はサイドツールバー底辺にアンカーする（ボトムアンカー役を担う）。
+   layers-toggle-btn は #tool-pan の直下に content 高で並ぶ。 */
 .side-page-zoom {
+  margin-top: auto;
   padding: 8px 0;
   border-top: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
@@ -3019,8 +3028,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 0;
-  /* flex 子としては content 高さで固定し、layer-list と残余高を取り合わない */
-  flex-shrink: 0;
+  /* layer-list はドロワー化 (v1.17.0) で別所属になったので、editor は section の
+     残余高を全部使ってよい。スタイルパレットの list がサイドバー下端まで伸びるための
+     親フレックスチェーンの起点となる。 */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 /* `.editor { display: flex }` が UA 既定の `[hidden] { display: none }` を
    上書きしてしまう。選択 0 件のときに padding/border ぶんの空き高が残って
@@ -3109,6 +3121,15 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .font-source-panel { display: block; }
 .font-source-panel[hidden] { display: none; }
+/* スタイルパレット tab がアクティブなときは、style-palette-list がサイドバー下端まで
+   伸びるよう flex column container として残余高を占有する。combobox tab は content 高で
+   据え置き（フォント検索欄 + ウェイトボタンのみで足りる）。 */
+.font-source-panel[data-source-panel="palette"]:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+}
 
 .editor textarea, .editor input, .editor select,
 .font-combobox-label input, .font-combobox-label select, .font-combobox-label textarea {
@@ -3185,9 +3206,16 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
-.font-weight-btn:hover:not(.active) {
+.font-weight-btn:hover:not(.active):not(:disabled) {
   color: var(--text);
   border-color: var(--accent);
+}
+.font-weight-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  background: var(--bg);
+  color: var(--text-muted);
+  border-color: var(--border);
 }
 .font-weight-btn.active {
   background: var(--accent);
@@ -3242,26 +3270,16 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* 親 .font-source-panel[palette] が flex column で残余高を渡してくるので、
+     style-palette もそれを受けて子 list に伝搬させる。 */
+  flex: 1 1 auto;
+  min-height: 0;
 }
 .style-palette-toolbar {
   display: flex;
   gap: 4px;
   align-items: stretch;
-}
-.style-palette-search {
-  flex: 1 1 auto;
-  min-width: 0;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--bg);
-  color: var(--text);
-  font-size: 12px;
-  font-family: inherit;
-}
-.style-palette-search:focus {
-  outline: none;
-  border-color: var(--accent);
+  justify-content: flex-end;
 }
 .style-palette-load-btn {
   flex: 0 0 auto;
@@ -3296,18 +3314,14 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   margin-bottom: -6px;
   border-radius: 4px 4px 0 0;
 }
-.style-palette-filename:not([hidden]) + .style-palette-category:not([hidden]) {
-  border-radius: 0;
-  border-top-width: 0;
-  margin-bottom: -6px;
-}
 .style-palette-filename:not([hidden]) ~ .style-palette-list {
   border-top-left-radius: 0;
   border-top-right-radius: 0;
   border-top-width: 0;
 }
 .style-palette-category {
-  width: 100%;
+  flex: 1 1 auto;
+  min-width: 0;
   padding: 4px 6px;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -3318,7 +3332,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
 }
 .style-palette-list {
-  max-height: 260px;
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   border: 1px solid var(--border);
   border-radius: 4px;
@@ -5716,11 +5731,10 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
    背景オーバーレイは置かず、PSD キャンバスや他のサイドパネルとの並行操作を許可する。 */
 .layers-drawer {
   position: absolute;
-  /* anchor は .side-toolbar (position: relative)。
-     bottom: 0 でドロワー下端をサイドツールバー content 底辺（= viewport 下端 - padding 10px）
-     に揃え、削除ボタンが画面下にぴったり並ぶようにする。
-     right: 100% でサイドツールバー左端の真隣（= レイヤーボタンの真左相当）に展開。 */
-  bottom: 0;
+  /* anchor は .layers-toggle-wrap (position: relative)。
+     top: 0 でドロワー上端をレイヤーボタン上端に揃え、ボタンの高さから真横に展開する。
+     right: 100% でラッパ左端の真隣（= レイヤーボタンの真左相当）に出現。 */
+  top: 0;
   right: 100%;
   margin-right: 8px; /* サイドツールバーとパネルの間に 8px の隙間 */
   width: 280px;
