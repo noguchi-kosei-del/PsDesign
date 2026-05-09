@@ -116,6 +116,122 @@ export function refreshAllOverlays() {
   for (const m of mounts.values()) renderOverlay(m);
 }
 
+// 【v1.21.0】編集中レイヤーの inner で、char index 範囲 [start, end) を <span> でラップして
+// CSS スタイルを直接適用する。サイドバーから per-char サイズ・フォントを変更したときに
+// 編集中の DOM へリアルタイムに視覚反映するために使う。
+//
+// 引数:
+//   start, end : char 位置（state.contents 上の絶対 index、innerText 順）
+//   styleProps : { fontFamily, fontSize, ... } の CSS プロパティオブジェクト
+//
+// 戻り値: 適用に成功したら true、編集中レイヤーが無い / 範囲解決失敗で false。
+//
+// 注意: ネストした span が同じ styleProp を持つと em 系単位は乗算されるため、size 系は
+// 「em 比 = sigSize / layerDefaultSizePt」で指定しつつ、ネスト時は親 span の em を打ち消す
+// よう既存 fontSize span を range 内から事前に剥がす（unwrapStyleSpansInRange）。
+export function applyEditModeStyleToRange(start, end, styleProps) {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return false;
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return false;
+  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  if (!inner) return false;
+
+  const startPos = charIndexToNodeOffset(inner, start);
+  const endPos = charIndexToNodeOffset(inner, end);
+  if (!startPos || !endPos) return false;
+
+  const range = document.createRange();
+  try {
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+  } catch { return false; }
+
+  // ネスト span による em 乗算事故を避けるため、上書きされる styleProp を持つ span を
+  // 範囲内から剥がす（unwrap）。子の text node はそのまま残る。
+  for (const prop of Object.keys(styleProps)) {
+    unwrapStyleSpansInRange(inner, range, prop);
+  }
+  // 範囲は unwrap 後に invalid になることがあるので char index から再計算。
+  const startPos2 = charIndexToNodeOffset(inner, start);
+  const endPos2 = charIndexToNodeOffset(inner, end);
+  if (!startPos2 || !endPos2) return false;
+  const range2 = document.createRange();
+  try {
+    range2.setStart(startPos2.node, startPos2.offset);
+    range2.setEnd(endPos2.node, endPos2.offset);
+  } catch { return false; }
+
+  // 新規 span でラップ
+  const span = document.createElement("span");
+  for (const [k, v] of Object.entries(styleProps)) {
+    if (v != null && v !== "") span.style[k] = v;
+  }
+  try {
+    range2.surroundContents(span);
+  } catch (e) {
+    // surroundContents は range が要素境界を跨ぐと NotSupportedError。
+    // extractContents + insertNode で fallback。
+    try {
+      const contents = range2.extractContents();
+      span.appendChild(contents);
+      range2.insertNode(span);
+    } catch {
+      return false;
+    }
+  }
+
+  // 選択を span 全体に再設定（連続して別 styleProp を当てたいときの利便性）
+  const sel = window.getSelection();
+  sel.removeAllRanges();
+  const newRange = document.createRange();
+  newRange.selectNodeContents(span);
+  sel.addRange(newRange);
+  return true;
+}
+
+// inner 内の text node を順に走査し、char index に対応する (text node, offset) を返す。
+function charIndexToNodeOffset(rootEl, charIndex) {
+  let remaining = Math.max(0, charIndex);
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
+  let lastNode = null;
+  let node = walker.nextNode();
+  while (node) {
+    const len = node.nodeValue.length;
+    if (remaining <= len) return { node, offset: remaining };
+    remaining -= len;
+    lastNode = node;
+    node = walker.nextNode();
+  }
+  if (lastNode) return { node: lastNode, offset: lastNode.nodeValue.length };
+  return { node: rootEl, offset: 0 };
+}
+
+// 範囲内の span で指定 styleProp を持つものを unwrap（中身の child を親に展開して span を削除）。
+// ネスト span による em 乗算を防ぐ目的。fully-inside の span のみが対象（partial overlap は
+// 触らない）。range は unwrap 後に invalid になり得るので、呼び出し側で再構築する想定。
+function unwrapStyleSpansInRange(rootEl, range, styleProp) {
+  const targets = [];
+  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_ELEMENT);
+  let node = walker.nextNode();
+  while (node) {
+    if (node.tagName === "SPAN" && node.style[styleProp]) {
+      const elRange = document.createRange();
+      elRange.selectNode(node);
+      // span 全体が range に内包されているなら unwrap 対象。
+      const startsAfterRange = range.compareBoundaryPoints(Range.START_TO_START, elRange) <= 0;
+      const endsBeforeRange = range.compareBoundaryPoints(Range.END_TO_END, elRange) >= 0;
+      if (startsAfterRange && endsBeforeRange) targets.push(node);
+    }
+    node = walker.nextNode();
+  }
+  for (const span of targets) {
+    const parent = span.parentNode;
+    if (!parent) continue;
+    while (span.firstChild) parent.insertBefore(span.firstChild, span);
+    parent.removeChild(span);
+  }
+}
+
 // 環境設定（フォント名表示 / サイズ表示の切替など）が変わったらオーバーレイを再描画して
 // 選択中のバッジに即時反映する。
 let settingsListenerBound = false;
@@ -457,16 +573,30 @@ function applyStrokePreview(inner, strokeColor, strokeWidthPx, pxPerPsd) {
 
 function renderOverlay(ctx) {
   const { overlay, page, pageIndex } = ctx;
+  // 【v1.21.0】編集中 (.editing) のレイヤーは contenteditable のキャレット・選択範囲を
+  // 持っているので破壊しない（再構築するとキャレット消失 + selectionchange が走って
+  // editingContext が壊れる）。マーキー矩形は marqueeState の復元コードが drawMarquee() で再描画する。
   // 【v1.16.0】innerHTML = "" を撤廃し layer-box / marquee-rect だけ削除する。
-  // これにより in-place 編集の textarea (.text-input-floater) が overlay 内に残り、
-  // フォントロード完了 → onFontsRegistered → refreshAllOverlays の連鎖で
-  // 編集中 textarea が消失する事故を防ぐ。マーキー矩形は marqueeState の復元コードが
-  // drawMarquee() で再描画する。
-  for (const el of overlay.querySelectorAll(".layer-box, .marquee-rect")) el.remove();
+  for (const el of overlay.querySelectorAll(".layer-box, .marquee-rect")) {
+    if (el.classList.contains("editing")) continue;
+    el.remove();
+  }
+
+  // 編集中レイヤーがあればその layerKey を控えておき、下のループで二重生成を回避する。
+  const editingExistingId = (() => {
+    const el = overlay.querySelector(".layer-box-existing.editing");
+    return el ? Number(el.dataset.layerId) : null;
+  })();
+  const editingNewTempId = (() => {
+    const el = overlay.querySelector(".layer-box-new.editing");
+    return el ? el.dataset.tempId : null;
+  })();
 
   const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
 
   for (const layer of page.textLayers) {
+    // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
+    if (editingExistingId !== null && layer.id === editingExistingId) continue;
     const edit = getEdit(page.path, layer.id) ?? {};
     const rect = layerRectForExisting(page, layer, edit);
     const rotation = edit.rotation ?? 0;
@@ -522,6 +652,8 @@ function renderOverlay(ctx) {
   }
 
   for (const nl of getNewLayersForPsd(page.path)) {
+    // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
+    if (editingNewTempId !== null && nl.tempId === editingNewTempId) continue;
     const rect = layerRectForNew(page, nl);
     const rotation = nl.rotation ?? 0;
     const box = createBox(page, rect.left, rect.top, rect.width, rect.height, "new");
@@ -621,7 +753,7 @@ function quoteFontFamily(name) {
   return `"${escaped}"`;
 }
 
-function cssFontFamily(psName) {
+export function cssFontFamily(psName) {
   if (!psName) return null;
   const display = getFontDisplayName(psName);
   const parts = [];
@@ -1000,8 +1132,12 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
       inner.appendChild(lineEl);
     }
   } else {
+    // 【v1.21.0】<br> ではなく \n text node でセパレートする。WebView2 (Chromium) の
+    // writing-mode: vertical-rl + text-orientation: mixed で <br> の column break が
+    // 期待通り発火しないケース（行が前の column に続いてしまう）があるため、
+    // white-space: pre-wrap が必ず尊重する \n text node に統一する。
     for (let i = 0; i < lines.length; i++) {
-      if (i > 0) inner.appendChild(document.createElement("br"));
+      if (i > 0) inner.appendChild(document.createTextNode("\n"));
       appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts);
     }
   }
@@ -1079,6 +1215,32 @@ function beginRotateDrag(e, ctx, layerId) {
   document.body.style.userSelect = "none";
   document.body.style.cursor = "grabbing";
 
+  // 【v1.21.0】回転中の度数表示インジケータ。マウスカーソルの近くにフロート表示し、
+  // ドラッグ中の現在角度（normalized: -180..180）を更新。Shift スナップ中は 15° 単位。
+  const indicator = document.createElement("div");
+  indicator.className = "rotate-degree-indicator";
+  document.body.appendChild(indicator);
+  const formatDeg = (deg) => {
+    const normalized = ((deg + 180) % 360 + 360) % 360 - 180;
+    return `${Math.round(normalized)}°`;
+  };
+  const updateIndicator = (deg, mouseX, mouseY) => {
+    indicator.textContent = formatDeg(deg);
+    // マウスカーソルの右下 16px オフセットに表示。画面端でクリッピングしないよう
+    // 右端 / 下端近くは左側 / 上側に切替。
+    const padding = 16;
+    const rect = indicator.getBoundingClientRect();
+    const w = rect.width || 60;
+    const h = rect.height || 24;
+    let x = mouseX + padding;
+    let y = mouseY + padding;
+    if (x + w > window.innerWidth) x = mouseX - w - padding;
+    if (y + h > window.innerHeight) y = mouseY - h - padding;
+    indicator.style.left = `${x}px`;
+    indicator.style.top = `${y}px`;
+  };
+  updateIndicator(startRotation, e.clientX, e.clientY);
+
   let moved = false;
   beginHistoryTransient();
   const onMove = (ev) => {
@@ -1089,12 +1251,14 @@ function beginRotateDrag(e, ctx, layerId) {
     if (next !== startRotation) moved = true;
     setLayerRotation(ctx, layerId, next);
     refreshAllOverlays();
+    updateIndicator(next, ev.clientX, ev.clientY);
   };
   const onUp = () => {
     window.removeEventListener("mousemove", onMove);
     window.removeEventListener("mouseup", onUp);
     document.body.style.userSelect = prevUserSelect;
     document.body.style.cursor = prevCursor;
+    indicator.remove();
     if (moved) commitHistoryTransient(); else abortHistoryTransient();
     rebuildLayerList();
   };
@@ -1167,14 +1331,20 @@ function onCanvasMouseDown(e, ctx) {
   }
   if (e.button !== 0) return;
   if (tool === "move") {
-    e.preventDefault();
-    // 1) アクティブな text-input floater があれば finalize して終了。
-    const openFloater = document.querySelector(".text-input-floater");
-    if (openFloater) {
-      if (typeof openFloater.__finalize === "function") openFloater.__finalize(true);
-      else openFloater.remove();
+    // 1) アクティブな contenteditable 編集中レイヤーがあれば、外側クリックなら finalize。
+    //    内側 (.editing 内) のクリックは contenteditable の caret 移動に委ねる
+    //    （preventDefault しない／finalize しない）。
+    const openEdit = document.querySelector(".layer-box.editing");
+    if (openEdit) {
+      // クリック対象が編集中レイヤー自身またはその子孫なら caret 移動に委ねる。
+      if (openEdit === e.target || openEdit.contains(e.target)) return;
+      // 外側クリック → 編集確定
+      e.preventDefault();
+      if (typeof openEdit.__finalize === "function") openEdit.__finalize(true);
+      else openEdit.classList.remove("editing");
       return;
     }
+    e.preventDefault();
     // 2) 原稿テキストブロックが選択中ならクリック点に配置（既存挙動維持）。
     const { x, y } = canvasCoordsFromEvent(e, ctx);
     const txtSel = getActiveTxtSelection();
@@ -1324,6 +1494,10 @@ function enterInPlaceEditFromMove(ctx, target) {
 function onExistingLayerMouseDown(e, ctx, layer) {
   const tool = getTool();
   if (tool !== "move") return;
+  // 【v1.21.0】編集中レイヤー (.editing) のクリックは contenteditable のキャレット移動に
+  // 委ねる。preventDefault しないことで「全選択中に文字の途中をクリック → キャレット移動」
+  // という Photoshop / 通常 textarea と同じ挙動を取り戻す。
+  if (e.currentTarget && e.currentTarget.classList.contains("editing")) return;
   e.stopPropagation();
   e.preventDefault();
   if (isLayerDoubleClick(ctx.pageIndex, layer.id)) {
@@ -1347,6 +1521,8 @@ function onExistingLayerMouseDown(e, ctx, layer) {
 function onNewLayerMouseDown(e, ctx, nl) {
   const tool = getTool();
   if (tool !== "move") return;
+  // 編集中レイヤーのクリックは contenteditable に委ねる（上記 onExistingLayerMouseDown と同パターン）。
+  if (e.currentTarget && e.currentTarget.classList.contains("editing")) return;
   e.stopPropagation();
   e.preventDefault();
   if (isLayerDoubleClick(ctx.pageIndex, nl.tempId)) {
@@ -1817,252 +1993,583 @@ function performSwap(ctx, dragged, aStartRect, target) {
   commitHistoryTransient();
 }
 
-// テキスト入力 textarea の共通生成ヘルパ。
-// DOM 生成・配置・keydown/focus/blur 配線・`__finalize` 付与を集約し、
-// commit 時のアクションだけ `onCommit(value)` で呼び出し元に委ねる。
-function createTextFloater(ctx, {
-  x, y, direction,
-  width = null,
-  height = null,
-  fontSizePsd = null,
-  initialText = "",
-  selectAll = false,
-  guardBlurUntilFocused = false,
-  anchor = "top-left",
-  onCommit,
-  onClose,
-  onCursorChange,
-  // 【v1.16.0】per-char 編集対象を識別するためのレイヤー情報。
-  // { psdPath, layerId | tempId }。これがあれば textarea 上の文字選択を
-  // _lastInplaceSelection キャッシュに保存し、サイドバーの commitFont /
-  // applyTextSize から参照できるようにする（focus 移動の影響を回避）。
-  layerMeta = null,
-}) {
+// 【v1.21.0】contenteditable ベースの in-place 編集ヘルパ。
+// 旧 createTextFloater (textarea) を置換し、レイヤーの text element 自身を直接編集対象にする。
+// Photoshop ポイントテキスト同様に「テキスト本体にカーソルが入って打ち換える」UX を実現。
+//
+// 戦略:
+//   1. text element に contenteditable=true + .editing class を付ける
+//   2. per-char span 構造を解除して plain text 化（IME / 削除挿入による DOM 破壊リスクを排除）
+//   3. Enter は <br>/<div> 自動挿入を抑止して \n text node を手動挿入
+//   4. paste は plain text 限定
+//   5. input イベントで文字列差分を計算し charSizes/charFonts/lineLeadings の index を re-map
+//   6. 確定時に既存の renderInnerText で per-char span を再構築
+//
+// target = { kind: "existing"|"new", layer? | nl? } は startInPlaceEdit と同形式。
+// options:
+//   selectAll: 開始時に全選択（既存編集打ち換え向け）
+//   onCommit(newContents): 確定時のフック（center-fix 補正等を行う）
+//   onCancel(): Esc / blur で finalize されたが commit しないときのフック（新規空レイヤー削除等）
+//   afterCommit(newContents): commit 後に呼ばれる外部同期フック（原稿テキスト書換等）
+function startContentEditableEdit(ctx, target, options = {}) {
   const { page } = ctx;
-  const isVertical = direction !== "horizontal";
-  const input = document.createElement("textarea");
-  input.className = "text-input-floater";
-  input.dataset.direction = isVertical ? "vertical" : "horizontal";
-  input.placeholder = isVertical
-    ? "テキスト（縦書き）：Ctrl+Enterで確定 / Escで破棄"
-    : "テキスト（横書き）：Ctrl+Enterで確定 / Escで破棄";
-  input.style.left = `${(x / page.width) * 100}%`;
-  input.style.top = `${(y / page.height) * 100}%`;
-  // 既存テキストフレームの打ち換え（startInPlaceEdit）では rect の中央から
-  // 展開するよう transform で自身を中心合わせ。新規テキスト配置（startTextInput）は
-  // クリック点を左上に固定したいので既定の "top-left" のまま。
-  if (anchor === "center") {
-    input.style.transform = "translate(-50%, -50%)";
-  }
-  // 打ち換え時は frame サイズに合わせて textarea を縮める（CSS の min-height: 160px を上書き）。
-  // PSD 座標を page 寸法比の % に変換して反映、CSS の min-* を 0 に倒して content にぴったり寄せる。
-  if (width != null && height != null) {
-    input.style.width = `${(width / page.width) * 100}%`;
-    input.style.height = `${(height / page.height) * 100}%`;
-    input.style.minWidth = "0";
-    input.style.minHeight = "0";
-    input.style.boxSizing = "border-box";
-  }
-  // textarea 内の文字を frame と同じ pt サイズで表示する。CSS 既定の 16px のままだと
-  // frame に対して文字が小さすぎ「textarea が小さく見える」原因になる。
-  // PSD px → screen px の換算は canvas.clientWidth / page.width で取得。
-  if (fontSizePsd != null && fontSizePsd > 0) {
-    const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
-    if (pxPerPsd > 0) {
-      input.style.fontSize = `${fontSizePsd * pxPerPsd}px`;
-      input.style.lineHeight = "1.25";
-      input.style.padding = "0";
-    }
-  }
-  if (initialText) input.value = initialText;
-  else input.rows = 1;
-  ctx.overlay.appendChild(input);
-  input.focus();
-  if (selectAll && initialText) input.select();
+  const isExisting = target.kind === "existing";
 
+  // 1. レイヤー DOM (.layer-box-existing[data-layer-id] / .layer-box-new[data-temp-id]) を解決
+  const layerKey = isExisting ? String(target.layer.id) : String(target.nl.tempId);
+  const escapedKey = (typeof CSS !== "undefined" && CSS.escape) ? CSS.escape(layerKey) : layerKey;
+  const boxSelector = isExisting
+    ? `.layer-box-existing[data-layer-id="${escapedKey}"]`
+    : `.layer-box-new[data-temp-id="${escapedKey}"]`;
+  const box = ctx.overlay.querySelector(boxSelector);
+  if (!box) return null;
+  const inner = box.querySelector(".existing-layer-text, .new-layer-text");
+  if (!inner) return null;
+
+  // 2. 開始時点のスナップショット（cancel 時の復元用）
+  const startEdit = isExisting ? (getEdit(page.path, target.layer.id) ?? {}) : null;
+  const startContents = isExisting
+    ? (startEdit.contents ?? target.layer.text ?? "")
+    : (target.nl.contents ?? "");
+  const startLineLeadings = isExisting
+    ? { ...(startEdit.lineLeadings ?? {}) }
+    : { ...(target.nl.lineLeadings ?? {}) };
+  const startCharSizes = isExisting
+    ? { ...(startEdit.charSizes ?? {}) }
+    : { ...(target.nl.charSizes ?? {}) };
+  const startCharFonts = isExisting
+    ? { ...(startEdit.charFonts ?? {}) }
+    : { ...(target.nl.charFonts ?? {}) };
+  // 位置（x,y / dx,dy）も snapshot。recenterBox が edit 中に書き換えるので、
+  // cancel 時に元の位置に戻すために必要。
+  const startDx = isExisting ? (startEdit.dx ?? 0) : null;
+  const startDy = isExisting ? (startEdit.dy ?? 0) : null;
+  const startX = isExisting ? null : (target.nl.x ?? 0);
+  const startY = isExisting ? null : (target.nl.y ?? 0);
+
+  // 3. per-char span 構造を解除し plain text 化
+  if (startContents) {
+    inner.textContent = startContents;
+  } else {
+    inner.innerHTML = "";
+  }
+
+  // 【v1.21.0】編集前の bbox 中心を握っておく。文字数変化（特に改行追加）で bbox の
+  // 幅・高さが伸びると、左上 anchor 固定の box は右下方向にだけ伸びるため
+  // vertical-rl では「既存テキストが右にずれた」ように見える。これを防ぐため、
+  // edit 中は毎 input イベントで box の left/top/width/height を中心固定で再計算する。
+  const oldRect = isExisting
+    ? layerRectForExisting(page, target.layer, getEdit(page.path, target.layer.id) ?? {})
+    : layerRectForNew(page, target.nl);
+  const oldCenterX = oldRect.left + oldRect.width / 2;
+  const oldCenterY = oldRect.top + oldRect.height / 2;
+
+  // 4. 編集モード ON
+  box.classList.add("editing");
+  inner.contentEditable = "true";
+  inner.spellcheck = false;
+
+  // 【v1.21.0】edit セッション全体を 1 つの history snapshot に集約する。
+  // これがないと keystroke ごとに setEdit/updateNewLayer → pushHistorySnapshot →
+  // onHistoryChange リスナーが refreshAllOverlays + rebuildLayerList を発火し、
+  // sidebar 再描画が頻繁に起きてキャレットが破壊される（特に縦書きで顕著）。
+  beginHistoryTransient();
+
+  // 5. フォーカス + 全選択 / 末尾カーソル
+  inner.focus();
+  const sel0 = window.getSelection();
+  if (sel0) {
+    sel0.removeAllRanges();
+    const r0 = document.createRange();
+    if (options.selectAll && startContents) {
+      r0.selectNodeContents(inner);
+    } else {
+      r0.selectNodeContents(inner);
+      r0.collapse(false); // 末尾
+    }
+    sel0.addRange(r0);
+  }
+
+  const layerMeta = isExisting
+    ? { psdPath: page.path, layerId: target.layer.id }
+    : { psdPath: page.path, tempId: target.nl.tempId };
+
+  // === 内部 state ===
+  let lastContents = startContents;
+  let imeComposing = false;
   let finished = false;
-  let hasFocused = !guardBlurUntilFocused;
-  const finalize = (commit) => {
-    if (finished) return;
-    finished = true;
-    const value = input.value.replace(/\s+$/, "");
-    input.remove();
-    // 【v1.16.0】floater が消えるタイミングで選択キャッシュもクリア。
-    setLastInplaceSelection(null);
-    if (commit) onCommit(value);
-    if (onClose) onClose(commit);
+
+  // 現在のレイヤー state から最新の per-char/line override を取り出す
+  const readCurrentMaps = () => {
+    if (isExisting) {
+      const e = getEdit(page.path, target.layer.id) ?? {};
+      return {
+        charSizes: e.charSizes ?? {},
+        charFonts: e.charFonts ?? {},
+        lineLeadings: e.lineLeadings ?? {},
+      };
+    }
+    const list = getNewLayersForPsd(page.path);
+    const nl = list.find((l) => l.tempId === target.nl.tempId) ?? target.nl;
+    return {
+      charSizes: nl.charSizes ?? {},
+      charFonts: nl.charFonts ?? {},
+      lineLeadings: nl.lineLeadings ?? {},
+    };
   };
-  input.__finalize = finalize;
-  // カーソル位置から現在行を算出して通知。selectionStart までの \n の数 = 0-based 行番号。
-  // selectionStart === selectionEnd の場合は単純カーソル、異なれば文字選択中。
-  const reportCursor = () => {
-    const start = input.selectionStart ?? 0;
-    const end = input.selectionEnd ?? start;
-    // 【v1.16.0】module-level の選択範囲キャッシュも同時に更新。サイドバー側の
-    // commitFont / applyTextSize はこちらから読むので focus 移動の影響を受けない。
-    if (layerMeta) {
-      if (end > start) {
-        setLastInplaceSelection({
-          start, end,
-          psdPath: layerMeta.psdPath,
-          layerId: layerMeta.layerId ?? null,
-          tempId: layerMeta.tempId ?? null,
-        });
+
+  // contenteditable 上の selection を root 内の char index range に変換。
+  // selectNodeContents + setEnd の Range を作って toString().length で全長カウント。
+  const getSelRange = () => {
+    const s = window.getSelection();
+    if (!s || s.rangeCount === 0) return null;
+    const r = s.getRangeAt(0);
+    if (!inner.contains(r.startContainer) && r.startContainer !== inner) return null;
+    try {
+      const a = document.createRange();
+      a.selectNodeContents(inner);
+      a.setEnd(r.startContainer, r.startOffset);
+      const startIdx = a.toString().length;
+      const b = document.createRange();
+      b.selectNodeContents(inner);
+      b.setEnd(r.endContainer, r.endOffset);
+      const endIdx = b.toString().length;
+      return { start: Math.min(startIdx, endIdx), end: Math.max(startIdx, endIdx) };
+    } catch (e) {
+      return null;
+    }
+  };
+
+  // contenteditable の現在テキスト読み取り。
+  // innerText を使うと <br> 要素や <div> 境界も自動的に \n に変換してくれる。
+  // これにより keydown.preventDefault が WebView2 で完全に効かず browser 既定の
+  // <br> 挿入が走ってしまったケースでも、contents に改行が反映される（textContent
+  // だと <br> は無視されて改行が消える事故が発生する）。
+  // 縦書き contenteditable で innerText が rendered 順を返す心配は無く、
+  // storage 順を返すことを実機で確認済み。
+  // ​ (zero-width space) は insertTextAtCursor が caret anchor として
+  // 末尾に追加する不可視文字。state.contents には残さないよう strip する。
+  const readContents = () =>
+    inner.innerText.replace(/\r\n?/g, "\n").replace(/​/g, "");
+
+  // 単純差分: 共通接頭辞・接尾辞の外側を 1 つの編集領域とみなす（input 1 回 = 1 操作前提）
+  const computeStringDiff = (a, b) => {
+    let prefix = 0;
+    const minLen = Math.min(a.length, b.length);
+    while (prefix < minLen && a[prefix] === b[prefix]) prefix++;
+    let suffix = 0;
+    while (suffix < a.length - prefix && suffix < b.length - prefix
+           && a[a.length - 1 - suffix] === b[b.length - 1 - suffix]) suffix++;
+    return { pos: prefix, deleted: a.length - prefix - suffix, inserted: b.length - prefix - suffix };
+  };
+
+  // per-char index map のシフト（{ "10": 18 } 形式の charSizes / charFonts）
+  const shiftCharMap = (map, pos, deleted, inserted) => {
+    if (!map || typeof map !== "object") return {};
+    const result = {};
+    const delta = inserted - deleted;
+    for (const k of Object.keys(map)) {
+      const idx = Number(k);
+      if (!Number.isFinite(idx)) continue;
+      if (idx < pos) result[idx] = map[k];
+      else if (idx >= pos + deleted) result[idx + delta] = map[k];
+      // pos <= idx < pos+deleted は削除文字なので drop
+    }
+    return result;
+  };
+
+  const countNewlinesBefore = (str, idx) => {
+    let n = 0;
+    const limit = Math.min(idx, str.length);
+    for (let i = 0; i < limit; i++) if (str[i] === "\n") n++;
+    return n;
+  };
+
+  // per-line leading map のシフト（{ "2": 130 } 形式、行番号は 0-based）
+  const shiftLineMap = (map, oldContents, newContents, pos, deleted, inserted) => {
+    if (!map || typeof map !== "object") return {};
+    const oldDeletedSegment = oldContents.slice(pos, pos + deleted);
+    const newInsertedSegment = newContents.slice(pos, pos + inserted);
+    const oldNL = (oldDeletedSegment.match(/\n/g) ?? []).length;
+    const newNL = (newInsertedSegment.match(/\n/g) ?? []).length;
+    const delta = newNL - oldNL;
+    if (delta === 0) {
+      const out = {};
+      for (const k of Object.keys(map)) out[k] = map[k];
+      return out;
+    }
+    const linesBeforeEdit = countNewlinesBefore(oldContents, pos);
+    const result = {};
+    for (const k of Object.keys(map)) {
+      const idx = Number(k);
+      if (!Number.isFinite(idx)) continue;
+      if (idx <= linesBeforeEdit) {
+        result[idx] = map[k];
       } else {
-        setLastInplaceSelection(null);
+        const newIdx = idx + delta;
+        if (newIdx >= 0) result[newIdx] = map[k];
       }
     }
-    if (!onCursorChange) return;
-    const before = input.value.slice(0, start);
-    const lineIndex = (before.match(/\n/g) ?? []).length;
-    const totalLines = (input.value.match(/\n/g) ?? []).length + 1;
-    onCursorChange({
-      lineIndex,
+    return result;
+  };
+
+  // カーソル位置と選択範囲を _lastInplaceSelection / editingContext に反映
+  const reportCursor = () => {
+    const range = getSelRange();
+    if (!range) return;
+    const { start, end } = range;
+    if (end > start) {
+      setLastInplaceSelection({
+        start, end,
+        psdPath: layerMeta.psdPath,
+        layerId: layerMeta.layerId ?? null,
+        tempId: layerMeta.tempId ?? null,
+      });
+    } else {
+      setLastInplaceSelection(null);
+    }
+    const lineIndex = countNewlinesBefore(lastContents, start);
+    const totalLines = (lastContents.match(/\n/g) ?? []).length + 1;
+    setEditingContext({
+      ...layerMeta,
+      currentLineIndex: lineIndex,
       totalLines,
-      contents: input.value,
+      contents: lastContents,
       selectionStart: start,
       selectionEnd: end,
     });
   };
-  input.addEventListener("focus", () => { hasFocused = true; reportCursor(); });
-  input.addEventListener("keyup", reportCursor);
-  input.addEventListener("click", reportCursor);
-  input.addEventListener("input", reportCursor);
-  input.addEventListener("select", reportCursor);
-  input.addEventListener("keydown", (e) => {
+
+  // selectionchange は document スコープでしか発火しないので、edit セッション中だけ register。
+  const onSelChange = () => {
+    if (!inner.isConnected) return;
+    const a = document.activeElement;
+    if (a !== inner && !inner.contains(a)) return;
+    reportCursor();
+  };
+  document.addEventListener("selectionchange", onSelChange);
+
+  // IME 中は input イベントを無視（中間文字を contents に書き込まない）
+  const onCompStart = () => { imeComposing = true; };
+  const onCompEnd = () => { imeComposing = false; onInput(); };
+  inner.addEventListener("compositionstart", onCompStart);
+  inner.addEventListener("compositionend", onCompEnd);
+
+  // text をカーソル位置に挿入する共通ヘルパ。
+  // Enter / paste / 他経路で再利用するため切り出し。
+  //
+  // 重要 (Chromium / WebView2 既知挙動への対処):
+  //   末尾 \n だけだと caret が「新行の先頭」を anchor として持てず、
+  //   視覚的に前の行末に残ったままになる現象がある（特に縦書き contenteditable）。
+  //   結果として「Enter 1 回押下で box は 1 行広がるが cursor は移動しない」
+  //   「Enter 2 回押下で初めて caret が新行へ移る」というズレが発生。
+  //
+  //   fix: 挿入後、tn の直後に内容物 (text や element) が無いとき
+  //   zero-width space (U+200B) の text node を anchor として追加し、
+  //   その offset 0 にカーソルを置く。これにより caret が確実に新行先頭にレンダリングされる。
+  //   読み取り側 (readContents) は ​ を strip するので state.contents には残らない。
+  const insertTextAtCursor = (text) => {
+    const s = window.getSelection();
+    if (!s || !s.rangeCount) return false;
+    const r = s.getRangeAt(0);
+    let tn;
+    if (!inner.contains(r.startContainer) && r.startContainer !== inner) {
+      // selection が inner 外に逃げているケース（フォーカス移動直後など）。末尾に挿入。
+      const fallback = document.createRange();
+      fallback.selectNodeContents(inner);
+      fallback.collapse(false);
+      tn = document.createTextNode(text);
+      fallback.insertNode(tn);
+    } else {
+      r.deleteContents();
+      tn = document.createTextNode(text);
+      r.insertNode(tn);
+    }
+
+    // 挿入した tn の後ろに caret を置きたいが、tn が \n 末尾のときは anchor が必要。
+    // 後続に visible 内容があれば不要、なければ zero-width space を追加する。
+    const hasFollowingContent = (() => {
+      let n = tn.nextSibling;
+      while (n) {
+        if (n.nodeType === Node.TEXT_NODE && n.textContent.length > 0) return true;
+        if (n.nodeType === Node.ELEMENT_NODE) return true;
+        n = n.nextSibling;
+      }
+      return false;
+    })();
+
+    s.removeAllRanges();
+    const newR = document.createRange();
+    if (text.endsWith("\n") && !hasFollowingContent) {
+      // \n の後ろに anchor 用の zwsp を追加し、その先頭に caret を置く。
+      // 視覚的には新行の先頭に caret がレンダリングされる（zwsp は不可視）。
+      const anchor = document.createTextNode("​");
+      tn.parentNode.insertBefore(anchor, tn.nextSibling);
+      newR.setStart(anchor, 0);
+    } else {
+      // 通常: text node 末尾内部にカーソルを置く。
+      newR.setStart(tn, tn.length);
+    }
+    newR.collapse(true);
+    s.addRange(newR);
+    return true;
+  };
+
+  // Enter は <br>/<div> 自動挿入を抑止して \n text node を手動挿入。
+  // beforeinput は WebView2 で inputType が一致しないケースがあるため keydown を主経路とし、
+  // beforeinput は補助（virtual keyboard / 音声入力 / IME 挿入経由）として残す。
+  // 二重挿入を防ぐため keydown ハンドラ側で _enterHandled フラグを立て、
+  // beforeinput でフラグ true なら no-op にする。
+  let _enterHandled = false;
+  const onBeforeInput = (e) => {
+    if (_enterHandled) { _enterHandled = false; return; }
+    if (e.inputType === "insertParagraph" || e.inputType === "insertLineBreak") {
+      e.preventDefault();
+      if (insertTextAtCursor("\n")) onInput();
+    }
+  };
+  inner.addEventListener("beforeinput", onBeforeInput);
+
+  // paste は plain text のみ受け付け（HTML 構造を持ち込ませない）
+  const onPaste = (e) => {
+    e.preventDefault();
+    const text = (e.clipboardData || window.clipboardData)?.getData("text/plain") ?? "";
+    if (!text) return;
+    if (insertTextAtCursor(text)) onInput();
+  };
+  inner.addEventListener("paste", onPaste);
+
+  // 【v1.21.0】中心固定: state と DOM box の位置・サイズを oldCenter 起点で再計算。
+  // 改行追加で bbox が伸びても、視覚的には edit 開始時の中心位置から左右上下に均等に広がる。
+  // state も同時に更新するので commit 時の補正は不要（startInPlaceEdit / startTextInput の
+  // onCommit ロジックは no-op になる）。
+  //
+  // virtualContents が指定されたとき (= IME 候補表示中) は state を書き換えず、
+  // 視覚的な box サイズだけを virtualContents の bbox に合わせて更新する。
+  // これにより IME 入力中でも box が visible text に追従して広がる。
+  const recenterBox = (virtualContents = null) => {
+    const useVirtual = typeof virtualContents === "string";
+    let newRect;
+    if (isExisting) {
+      const editObj = getEdit(page.path, target.layer.id) ?? {};
+      const merged = useVirtual ? { ...editObj, contents: virtualContents } : editObj;
+      newRect = layerRectForExisting(page, target.layer, merged);
+    } else {
+      const list = getNewLayersForPsd(page.path);
+      const nl = list.find((l) => l.tempId === target.nl.tempId) ?? target.nl;
+      const merged = useVirtual ? { ...nl, contents: virtualContents } : nl;
+      newRect = layerRectForNew(page, merged);
+    }
+    // 中心を oldCenter に固定する新 top-left
+    const newLeft = oldCenterX - newRect.width / 2;
+    const newTop = oldCenterY - newRect.height / 2;
+    // state を新位置に書き込む（transient 内なので push されない）。
+    // ただし virtualContents 経由（IME 中）は state を触らず DOM だけ更新する。
+    if (!useVirtual) {
+      if (isExisting) {
+        const dx = newLeft - target.layer.left;
+        const dy = newTop - target.layer.top;
+        setEdit(page.path, target.layer.id, { dx, dy });
+      } else {
+        updateNewLayer(target.nl.tempId, { x: newLeft, y: newTop });
+      }
+    }
+    // box CSS を直接更新（renderOverlay は editing layer をスキップするため自前更新）
+    if (page.width > 0 && page.height > 0) {
+      box.style.left = `${(newLeft / page.width) * 100}%`;
+      box.style.top = `${(newTop / page.height) * 100}%`;
+      box.style.width = `${(newRect.width / page.width) * 100}%`;
+      box.style.height = `${(newRect.height / page.height) * 100}%`;
+    }
+  };
+
+  // input ハンドラ: 差分を計算 → state に反映 + per-char index re-mapping
+  const onInput = () => {
+    if (imeComposing) {
+      // IME 候補表示中は state.contents を書き換えない（preedit が確定値として残ってしまうため）。
+      // ただし visible text を使って bbox は visual update する。これにより IME で長文を
+      // 入力してもテキストボックスが表示中の text に追従して広がる。
+      const visibleText = readContents();
+      recenterBox(visibleText);
+      return;
+    }
+    const newContents = readContents();
+    if (newContents === lastContents) {
+      reportCursor();
+      return;
+    }
+    const diff = computeStringDiff(lastContents, newContents);
+    const { charSizes, charFonts, lineLeadings } = readCurrentMaps();
+    const newCharSizes = shiftCharMap(charSizes, diff.pos, diff.deleted, diff.inserted);
+    const newCharFonts = shiftCharMap(charFonts, diff.pos, diff.deleted, diff.inserted);
+    const newLineLeadings = shiftLineMap(
+      lineLeadings, lastContents, newContents,
+      diff.pos, diff.deleted, diff.inserted,
+    );
+
+    if (isExisting) {
+      setEdit(page.path, target.layer.id, {
+        contents: newContents,
+        charSizes: newCharSizes,
+        charFonts: newCharFonts,
+        lineLeadings: newLineLeadings,
+      });
+    } else {
+      updateNewLayer(target.nl.tempId, {
+        contents: newContents,
+        charSizes: newCharSizes,
+        charFonts: newCharFonts,
+        lineLeadings: newLineLeadings,
+      });
+    }
+    lastContents = newContents;
+    // 中心固定で box の位置・サイズを更新（state.x/y or edit.dx/dy も同期）
+    recenterBox();
+    reportCursor();
+  };
+  inner.addEventListener("input", onInput);
+
+  // Esc / Ctrl+Enter / 通常 Enter
+  const onKeydown = (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      finalize(false);
+      return;
+    }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
+      e.stopPropagation();
       finalize(true);
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      finalize(false);
+      return;
     }
-  });
-  input.addEventListener("blur", (e) => {
-    if (!hasFocused) return;
-    // 行間 input / +/- / ルビボタンなど editor パネル内に focus が移ったときは
-    // commit せずに textarea を残す（per-line leading 変更後にカーソル行を維持するため）。
+    // 通常 Enter / Shift+Enter: WebView2 / Chromium の既定 (<div><br></div> 挿入) を抑止して
+    // \n text node を直接挿入。beforeinput のフォールバック・確実経路として keydown を使う。
+    // beforeinput がうまく発火しないケース（縦書き contenteditable 等）でも改行が入る。
+    // stopImmediatePropagation で他の listener（window グローバルのショートカット dispatch 等）
+    // を確実にブロックする。
+    if (e.key === "Enter" && !e.altKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      _enterHandled = true; // beforeinput 側で二重挿入しないようにフラグを立てる
+      if (insertTextAtCursor("\n")) onInput();
+      return;
+    }
+  };
+  inner.addEventListener("keydown", onKeydown);
+
+  // blur: editor パネル内クリックなら維持、それ以外なら commit
+  const onBlur = (e) => {
     const next = e.relatedTarget;
-    if (next && typeof next.closest === "function" && next.closest(".editor, .side-panel .editor")) {
+    if (next && typeof next.closest === "function"
+        && next.closest(".editor, .side-panel .editor")) {
       return;
     }
     finalize(true);
-  });
-  return input;
+  };
+  inner.addEventListener("blur", onBlur);
+
+  // ===== finalize =====
+  function finalize(commit) {
+    if (finished) return;
+    finished = true;
+
+    document.removeEventListener("selectionchange", onSelChange);
+    inner.removeEventListener("compositionstart", onCompStart);
+    inner.removeEventListener("compositionend", onCompEnd);
+    inner.removeEventListener("beforeinput", onBeforeInput);
+    inner.removeEventListener("paste", onPaste);
+    inner.removeEventListener("input", onInput);
+    inner.removeEventListener("keydown", onKeydown);
+    inner.removeEventListener("blur", onBlur);
+
+    box.classList.remove("editing");
+    inner.removeAttribute("contenteditable");
+    inner.removeAttribute("spellcheck");
+    box.__finalize = null;
+
+    setEditingContext(null);
+    setLastInplaceSelection(null);
+
+    const finalContents = readContents();
+
+    if (commit) {
+      let abortRequested = false;
+      if (typeof options.onCommit === "function") {
+        try {
+          // onCommit が false を返すと「履歴に残さず abort」として扱う。
+          // 用途: 新規入力で何も打たずに Ctrl+Enter したケース（空レイヤー作成 → 削除）。
+          const r = options.onCommit(finalContents);
+          if (r === false) abortRequested = true;
+        } catch (err) { console.error("onCommit error", err); }
+      }
+      if (typeof options.afterCommit === "function") {
+        try { options.afterCommit(finalContents); } catch (err) { console.error("afterCommit error", err); }
+      }
+      if (abortRequested) abortHistoryTransient();
+      else commitHistoryTransient(); // edit セッション全体を 1 history snapshot にまとめる
+    } else {
+      // Esc キャンセル: 編集前の state に巻き戻し → transient abort（履歴に何も残さない）。
+      // 復元書込・onCancel 内の操作（新規入力時の removeNewLayer 等）はすべて transient 内
+      // （depth > 0）で行うので push されず、最後に abort で depth-- して終了。
+      // これにより Esc 後は history に編集セッションの痕跡なし。
+      // contents だけでなく、recenterBox が書き換えた x/y / dx/dy も元の値に戻す。
+      if (isExisting) {
+        setEdit(page.path, target.layer.id, {
+          contents: startContents,
+          lineLeadings: startLineLeadings,
+          charSizes: startCharSizes,
+          charFonts: startCharFonts,
+          dx: startDx,
+          dy: startDy,
+        });
+      } else {
+        updateNewLayer(target.nl.tempId, {
+          contents: startContents,
+          lineLeadings: startLineLeadings,
+          charSizes: startCharSizes,
+          charFonts: startCharFonts,
+          x: startX,
+          y: startY,
+        });
+      }
+      if (typeof options.onCancel === "function") {
+        try { options.onCancel(); } catch (err) { console.error("onCancel error", err); }
+      }
+      abortHistoryTransient();
+    }
+
+    refreshAllOverlays();
+    rebuildLayerList();
+  }
+
+  box.__finalize = finalize;
+
+  reportCursor();
+  return { finalize, box, inner };
 }
 
+// 【v1.21.0】既存・新規レイヤーの打ち換え in-place 編集。
+// レイヤー DOM の text element を直接 contenteditable 化し、Photoshop 風 UX を実現。
+// レイヤーの DOM が overlay に存在することを前提とするので、呼び出し側は
+// 必要なら refreshAllOverlays() を先に走らせて DOM を確保しておく。
 function startInPlaceEdit(ctx, target, options = {}) {
   const { page } = ctx;
-  let initialText = "";
-  let x = 0;
-  let y = 0;
-  let direction = "vertical";
-  let width = 0;
-  let height = 0;
-  let fontSizePsd = 0;
 
-  // 打ち換え時は textarea を rect の中央から展開し、サイズも frame に合わせる。
-  // layerRectFor* で frame の中心と寸法、内部 pt サイズを算出し createTextFloater に渡す。
-  // 入力欄と文字を視認しやすくするため、frame の 2 倍に拡大して表示する（中心固定）。
-  const EDIT_SCALE = 2;
-  if (target.kind === "existing") {
-    const layer = target.layer;
-    const edit = getEdit(page.path, layer.id) ?? {};
-    initialText = edit.contents ?? layer.text ?? "";
-    direction = edit.direction ?? layer.direction ?? "horizontal";
-    const rect = layerRectForExisting(page, layer, edit);
-    x = rect.left + rect.width / 2;
-    y = rect.top + rect.height / 2;
-    width = rect.width * EDIT_SCALE;
-    height = rect.height * EDIT_SCALE;
-    fontSizePsd = rect.ptInPsdPx * EDIT_SCALE;
-  } else {
-    const nl = target.nl;
-    initialText = nl.contents ?? "";
-    direction = nl.direction ?? "vertical";
-    const rect = layerRectForNew(page, nl);
-    x = rect.left + rect.width / 2;
-    y = rect.top + rect.height / 2;
-    width = rect.width * EDIT_SCALE;
-    height = rect.height * EDIT_SCALE;
-    fontSizePsd = rect.ptInPsdPx * EDIT_SCALE;
+  // 既に編集中レイヤーがあれば finalize（多重編集を抑止）
+  const existing = ctx.overlay.querySelector(".layer-box.editing");
+  if (existing && typeof existing.__finalize === "function") {
+    existing.__finalize(true);
   }
 
-  const existing = ctx.overlay.querySelector(".text-input-floater");
-  if (existing) {
-    if (typeof existing.__finalize === "function") existing.__finalize(true);
-    else existing.remove();
-  }
-
-  // editingContext を立てて、サイドパネルの行間コントロールが per-line override に
-  // 書き込めるようにする。target に応じて layerId / tempId を埋める。
-  const editTargetMeta = target.kind === "existing"
-    ? { psdPath: page.path, layerId: target.layer.id }
-    : { psdPath: page.path, tempId: target.nl.tempId };
-
-  createTextFloater(ctx, {
-    x, y, direction,
-    width, height,
-    fontSizePsd,
-    initialText,
+  // contents / x,y / dx,dy は startContentEditableEdit の input 経路で edit 中に
+  // 中心固定 (recenterBox) で連続更新されているので、ここでの commit-time 補正は不要。
+  // 原稿テキスト dblclick 経由の afterCommit (TXT 同期) もそのまま startContentEditableEdit
+  // 側の afterCommit に委ねる（同 transient 内で実行されるので 1 history snapshot に収まる）。
+  startContentEditableEdit(ctx, target, {
     selectAll: true,
-    anchor: "center",
-    // 【v1.16.0】in-place 編集中の textarea 上の文字選択を _lastInplaceSelection に
-    // キャッシュさせる。サイドバーの commitFont / applyTextSize はそちらを参照する。
-    layerMeta: editTargetMeta,
-    onCursorChange: ({ lineIndex, totalLines, contents, selectionStart, selectionEnd }) => {
-      setEditingContext({
-        ...editTargetMeta,
-        currentLineIndex: lineIndex,
-        totalLines,
-        contents,
-        selectionStart,
-        selectionEnd,
-      });
-    },
-    onCommit: (value) => {
-      // afterCommit 付き（原稿テキスト dblclick 経由など）はレイヤー編集と
-      // afterCommit 内の状態変更（setTxtSource など）を 1 つの history snapshot に
-      // 束ねる。これがないと Ctrl+Z で片方だけ巻き戻り原稿表示と乖離する。
-      const hasAfter = typeof options.afterCommit === "function";
-      const writeLayer = () => {
-        // 文字数変化で bbox サイズが変わると、top-left 固定では中心がずれて
-        // ユーザーには「frame が動いた」ように見える。`resizeSelectedLayers` と同じ
-        // パターンで old/new rect の差分を取り、中心固定になるよう位置を補正する。
-        if (target.kind === "existing") {
-          const layer = target.layer;
-          const edit = getEdit(page.path, layer.id) ?? {};
-          const oldRect = layerRectForExisting(page, layer, edit);
-          const newRect = layerRectForExisting(page, layer, { ...edit, contents: value });
-          const ddx = (oldRect.width - newRect.width) / 2;
-          const ddy = (oldRect.height - newRect.height) / 2;
-          setEdit(page.path, layer.id, {
-            contents: value,
-            dx: (edit.dx ?? 0) + ddx,
-            dy: (edit.dy ?? 0) + ddy,
-          });
-        } else {
-          const nl = target.nl;
-          const oldRect = layerRectForNew(page, nl);
-          const newRect = layerRectForNew(page, { ...nl, contents: value });
-          const dx = (oldRect.width - newRect.width) / 2;
-          const dy = (oldRect.height - newRect.height) / 2;
-          updateNewLayer(nl.tempId, {
-            contents: value,
-            x: nl.x + dx,
-            y: nl.y + dy,
-          });
-        }
-        if (hasAfter) {
-          try { options.afterCommit(value); } catch (e) { console.error("afterCommit error", e); }
-        }
-      };
-      if (hasAfter) withHistoryTransient(writeLayer);
-      else writeLayer();
-      refreshAllOverlays();
-      rebuildLayerList();
-    },
-    onClose: () => setEditingContext(null),
+    afterCommit: options.afterCommit,
   });
 }
 
@@ -2127,36 +2634,53 @@ function waitForMountedCtx(pageIndex, maxFrames = 10) {
   });
 }
 
+// 【v1.21.0】V ツール空所 dblclick の新規入力。Photoshop 流: 先にレイヤーを作成して
+// クリック点に置き、その text element を直接 contenteditable 化。
+// 何も打たずに Esc または空のまま blur したらレイヤーを削除（Photoshop と同じ）。
 function startTextInput(ctx, x, y, direction = "vertical") {
   const { page } = ctx;
-  createTextFloater(ctx, {
-    x, y, direction,
-    // クリック点を frame の中心として扱う。floater も中央 anchor で展開するので
-    // 「入力欄の中心 = 確定後のレイヤー中心 = クリックした位置」が一貫する。
-    // (旧仕様では floater は top-left anchor、layer は中心配置で視覚と最終位置がずれていた)
-    anchor: "center",
-    guardBlurUntilFocused: true,
+  // 既に編集中があればまずそれを finalize
+  const existing = ctx.overlay.querySelector(".layer-box.editing");
+  if (existing && typeof existing.__finalize === "function") {
+    existing.__finalize(true);
+  }
+
+  const sizePt = getTextSize();
+  const layerDir = direction === "horizontal" ? "horizontal" : "vertical";
+  // 空 contents での bbox 中心 = クリック点になるよう top-left を計算
+  const { x: nx, y: ny } = centerTopLeft(page, { contents: "", sizePt, direction: layerDir }, x, y);
+  const created = addNewLayer({
+    psdPath: page.path,
+    x: nx,
+    y: ny,
+    contents: "",
+    fontPostScriptName: getCurrentFont(),
+    sizePt,
+    direction: layerDir,
+    strokeColor: getStrokeColor(),
+    strokeWidthPx: getStrokeWidthPx(),
+    fillColor: getFillColor(),
+    leadingPct: getLeadingPct(),
+  });
+  setSelectedLayer(ctx.pageIndex, created.tempId);
+  // レイヤー DOM を overlay に同期生成（startContentEditableEdit が DOM を要求するため）
+  refreshAllOverlays();
+  rebuildLayerList();
+
+  startContentEditableEdit(ctx, { kind: "new", nl: created }, {
+    selectAll: false,
     onCommit: (value) => {
-      if (!value) return;
-      const sizePt = getTextSize();
-      const layerDir = direction === "horizontal" ? "horizontal" : "vertical";
-      const { x: nx, y: ny } = centerTopLeft(page, { contents: value, sizePt, direction: layerDir }, x, y);
-      const created = addNewLayer({
-        psdPath: page.path,
-        x: nx,
-        y: ny,
-        contents: value,
-        fontPostScriptName: getCurrentFont(),
-        sizePt,
-        direction: layerDir,
-        strokeColor: getStrokeColor(),
-        strokeWidthPx: getStrokeWidthPx(),
-        fillColor: getFillColor(),
-        leadingPct: getLeadingPct(),
-      });
-      setSelectedLayer(ctx.pageIndex, created.tempId);
-      refreshAllOverlays();
-      rebuildLayerList();
+      // 中心固定 (recenterBox) は startContentEditableEdit の input 経路で連続適用済み。
+      // commit-time にはここで「空コミットならレイヤー削除 + 履歴に残さない」判定だけ行う。
+      if (!value) {
+        removeNewLayer(created.tempId);
+        return false; // abort: 履歴に残さない
+      }
+    },
+    onCancel: () => {
+      // Esc: 編集前の startContents (空) に巻き戻った後の onCancel。
+      // 元々この edit セッションでレイヤーが作られた経緯なので破棄して終了。
+      removeNewLayer(created.tempId);
     },
   });
 }

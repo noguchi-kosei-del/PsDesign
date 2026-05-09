@@ -22,6 +22,7 @@ import { loadTxtFromContent } from "./txt-source.js";
 import { loadReferenceFiles } from "./pdf-loader.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
 import { checkAiModelsStatus } from "./ai-install.js";
+import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -224,6 +225,17 @@ async function runAiOcr(files, {
   }
 
   // 自動配置 (ai-place.js) が後から参照できるよう MokuroDocument 全体をストア。
+  // mokuro の blocks 配列は検出順 (読み順未保証) なので、ここで読み順に正規化する。
+  // これにより mokuroDocToText が出力する TXT の段落順と、buildPlacementPlan の
+  // sortBlocksMangaOrder 結果が必ず一致し、自動配置のテレコ (順序逆転) が解消される。
+  // doc は invoke 直後の使い捨てオブジェクトで他から参照されないため mutate で安全。
+  if (doc && Array.isArray(doc.pages)) {
+    for (const page of doc.pages) {
+      if (Array.isArray(page?.blocks)) {
+        page.blocks = sortBlocksMangaOrder(page.blocks);
+      }
+    }
+  }
   setAiOcrDoc(doc, files[0] || null);
 
   const settings = loadNormalizeSettings();

@@ -34,6 +34,10 @@ pub struct LayerEdit {
     pub leading_pct: Option<f64>,
     #[serde(rename = "lineLeadings", default)]
     pub line_leadings: Option<HashMap<String, f64>>,
+    #[serde(rename = "charSizes", default)]
+    pub char_sizes: Option<HashMap<String, f64>>,
+    #[serde(rename = "charFonts", default)]
+    pub char_fonts: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -59,6 +63,10 @@ pub struct NewLayer {
     pub leading_pct: Option<f64>,
     #[serde(rename = "lineLeadings", default)]
     pub line_leadings: Option<HashMap<String, f64>>,
+    #[serde(rename = "charSizes", default)]
+    pub char_sizes: Option<HashMap<String, f64>>,
+    #[serde(rename = "charFonts", default)]
+    pub char_fonts: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

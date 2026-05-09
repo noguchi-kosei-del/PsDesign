@@ -39,6 +39,9 @@ import {
   // 【v1.16.0】in-place 編集 textarea 上の文字選択キャッシュ
   getLastInplaceSelection,
   onInplaceSelectionChange,
+  // 【v1.21.0】per-char フォント変更時の編集中 DOM リアルタイム反映
+  applyEditModeStyleToRange,
+  cssFontFamily,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { confirmDialog } from "./ui-feedback.js";
@@ -552,6 +555,9 @@ function commitFont(font) {
   if (sel && sel.end > sel.start) {
     const targetId = sel.tempId ?? sel.layerId;
     setCharFontsRange(sel.psdPath, targetId, sel.start, sel.end, font.postScriptName);
+    // 【v1.21.0】編集中の DOM にも即時反映: span でラップして fontFamily を当てる。
+    const fam = cssFontFamily(font.postScriptName);
+    if (fam) applyEditModeStyleToRange(sel.start, sel.end, { fontFamily: fam });
     refreshAllOverlays();
     rebuildLayerList();
   } else {

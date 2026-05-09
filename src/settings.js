@@ -43,7 +43,6 @@ export const DEFAULT_SETTINGS = {
     sizeUp:     { key: "]",          modifiers: [],                description: "文字サイズを大きく" },
     sizeDown:   { key: "[",          modifiers: [],                description: "文字サイズを小さく" },
     toggleRulers: { key: "r",        modifiers: ["ctrl"],          description: "定規の表示切替" },
-    toggleFrames: { key: "h",        modifiers: ["ctrl"],          description: "テキストフレームの表示切替" },
     viewerMode:   { key: "F1",       modifiers: [],                description: "閲覧モード" },
   },
 };

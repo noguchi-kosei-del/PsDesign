@@ -105,6 +105,18 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
                     emit_line_leadings(&mut out, ll);
                 }
             }
+            if let Some(ref cs) = layer.char_sizes {
+                if !cs.is_empty() {
+                    out.push_str(", charSizes: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cf) = layer.char_fonts {
+                if !cf.is_empty() {
+                    out.push_str(", charFonts: ");
+                    emit_char_fonts(&mut out, cf);
+                }
+            }
             out.push_str("},\n");
         }
         out.push_str("], [\n");
@@ -140,6 +152,18 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
                 if !ll.is_empty() {
                     out.push_str(", lineLeadings: ");
                     emit_line_leadings(&mut out, ll);
+                }
+            }
+            if let Some(ref cs) = nl.char_sizes {
+                if !cs.is_empty() {
+                    out.push_str(", charSizes: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cf) = nl.char_fonts {
+                if !cf.is_empty() {
+                    out.push_str(", charFonts: ");
+                    emit_char_fonts(&mut out, cf);
                 }
             }
             out.push_str("},\n");
@@ -187,6 +211,41 @@ fn emit_line_leadings(out: &mut String, m: &std::collections::HashMap<String, f6
         if !first { out.push_str(", "); }
         first = false;
         out.push_str(&format!("\"{}\": {}", k, m[k]));
+    }
+    out.push('}');
+}
+
+// 【v1.21.0】per-char サイズ map を JSX のオブジェクトリテラルとして emit。
+// key は char index（数値）。出力順を char index 順に安定化（diff レビューや
+// JSX 側のループの予測可能性のため）。
+fn emit_char_sizes(out: &mut String, m: &std::collections::HashMap<String, f64>) {
+    out.push('{');
+    let mut first = true;
+    let mut keys: Vec<&String> = m.keys().collect();
+    keys.sort_by(|a, b| {
+        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
+    });
+    for k in keys {
+        if !first { out.push_str(", "); }
+        first = false;
+        out.push_str(&format!("\"{}\": {}", k, m[k]));
+    }
+    out.push('}');
+}
+
+// 【v1.21.0】per-char フォント map を JSX のオブジェクトリテラルとして emit。
+// value は PostScript 名（string）なので js_string でエスケープ。
+fn emit_char_fonts(out: &mut String, m: &std::collections::HashMap<String, String>) {
+    out.push('{');
+    let mut first = true;
+    let mut keys: Vec<&String> = m.keys().collect();
+    keys.sort_by(|a, b| {
+        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
+    });
+    for k in keys {
+        if !first { out.push_str(", "); }
+        first = false;
+        out.push_str(&format!("\"{}\": {}", k, js_string(m[k].as_str())));
     }
     out.push('}');
 }
@@ -519,6 +578,103 @@ function applyLineLeadings(layer, lineLeadings, contents, fontSizePt) {
   var setDesc = new ActionDescriptor();
   setDesc.putReference(sID("null"), layerRef);
   setDesc.putObject(sID("to"), sID("textKey"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
+// ===== 文字ごとの サイズ・フォント (per-char) =====
+// charSizes: { "0": 18, "5": 24, ... }   絶対 char index → pt 値
+// charFonts: { "0": "PostScriptName", ... } 絶対 char index → PostScript 名
+//
+// 既存の textStyleRange を baseStyle として clone-and-replace。各 char の所属 range を
+// 記録して (srcRangeIndex, sizePt, fontPs) が同じ連続文字を 1 セグメントに圧縮。
+// applyLineLeadings 後に呼ぶことで、行間設定と per-char 設定が共存できる
+// （baseStyle は前段で再構築された textStyleRange から clone される）。
+//
+// set の class には sID("textLayer") を使う。"textKey" だと Photoshop が
+// 渡された textStyleRange を破棄して既存値を保持するケースがあるため、
+// per-character スタイル変更は applyRepeatedDashTracking と同様 "textLayer" で set する。
+function applyPerCharSizesAndFonts(layer, contents, charSizes, charFonts) {
+  var hasSizes = charSizes && !isObjEmpty(charSizes);
+  var hasFonts = charFonts && !isObjEmpty(charFonts);
+  if (!hasSizes && !hasFonts) return;
+  app.activeDocument.activeLayer = layer;
+
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  // 各 char の所属 range index を事前構築。
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  function readSize(idx) {
+    var v = charSizes ? charSizes[String(idx)] : undefined;
+    return (typeof v === "number") ? v : null;
+  }
+  function readFont(idx) {
+    var v = charFonts ? charFonts[String(idx)] : undefined;
+    return (typeof v === "string" && v.length > 0) ? v : null;
+  }
+
+  // 連続する同 (srcRange, size, font) 文字を 1 セグメントに圧縮。
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curSize = readSize(0);
+  var curFont = readFont(0);
+
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextSize, nextFont, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc; nextSize = curSize; nextFont = curFont;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextSize = readSize(p);
+      nextFont = readFont(p);
+      boundary = (nextSrc !== curSrc) || (nextSize !== curSize) || (nextFont !== curFont);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      if (curSize !== null) {
+        try { styleClone.putUnitDouble(sID("size"), sID("pointsUnit"), curSize); } catch (eSz) {}
+      }
+      if (curFont !== null) {
+        try { styleClone.putString(sID("fontPostScriptName"), curFont); } catch (eFn) {}
+      }
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), p);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curSize = nextSize;
+      curFont = nextFont;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
@@ -860,6 +1016,16 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           addWarning("行ごとの行間の適用に失敗 (layer " + e.id + "): " + eLineLead);
         }
       }
+      // 【v1.21.0】per-char サイズ・フォント。applyLineLeadings の後に呼ぶことで
+      // 行間と per-char 設定が共存できる（baseStyle は前段で再構築された
+      // textStyleRange から clone される）。
+      if ((e.charSizes && !isObjEmpty(e.charSizes)) || (e.charFonts && !isObjEmpty(e.charFonts))) {
+        try {
+          applyPerCharSizesAndFonts(layer, ti.contents, e.charSizes, e.charFonts);
+        } catch (ePerChar) {
+          addWarning("文字ごとのサイズ・フォント適用に失敗 (layer " + e.id + "): " + ePerChar);
+        }
+      }
       if (typeof e.rotation === "number" && e.rotation !== 0) {
         try {
           layer.rotate(e.rotation, AnchorPosition.MIDDLECENTER);
@@ -967,6 +1133,16 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             applyLineLeadings(layerRef, nl.lineLeadings, nti.contents, __szNew);
           } catch (eLineLeadNew) {
             addWarning("新規レイヤーの行ごとの行間適用に失敗: " + eLineLeadNew);
+          }
+        }
+        // 【v1.21.0】per-char サイズ・フォント。applyLineLeadings の後 / dash-tracking と
+        // tcy の前に呼ぶ。各関数は前段の textStyleRange を baseStyle として clone するので、
+        // 順番に上書きする属性は保持される。
+        if ((nl.charSizes && !isObjEmpty(nl.charSizes)) || (nl.charFonts && !isObjEmpty(nl.charFonts))) {
+          try {
+            applyPerCharSizesAndFonts(layerRef, nti.contents, nl.charSizes, nl.charFonts);
+          } catch (ePerCharNew) {
+            addWarning("新規レイヤーの文字ごとのサイズ・フォント適用に失敗: " + ePerCharNew);
           }
         }
         // 連続記号のツメ（環境設定の global 値）。新規レイヤーのみ。

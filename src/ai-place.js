@@ -33,6 +33,7 @@ import { runAiOcrForFiles, PLACE_ICON_SVG } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
+import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -53,38 +54,6 @@ function planFingerprint(plan) {
     for (const layer of row.layers) seq.push(layer.contents ?? "");
   }
   return JSON.stringify(seq);
-}
-
-// ============================================================
-// 吹き出し読み順ソート (縦書き漫画: 右上 → 左下)
-// ============================================================
-// y-中心が近いブロックを行クラスタに束ねる。バンドは平均ブロック高 × 0.5。
-// 行は上から下、行内は右から左 (縦書き混在時の読み順は同じ)。
-function sortBlocksMangaOrder(blocks) {
-  if (!Array.isArray(blocks) || blocks.length === 0) return [];
-  const items = blocks.map((b) => ({
-    block: b,
-    cx: (b.box[0] + b.box[2]) / 2,
-    cy: (b.box[1] + b.box[3]) / 2,
-    h: b.box[3] - b.box[1],
-  }));
-  // y 順に処理して行を組み立てる
-  items.sort((a, b) => a.cy - b.cy);
-  const avgH = items.reduce((s, it) => s + it.h, 0) / items.length;
-  const band = Math.max(avgH * 0.5, 1);
-  const rows = [];
-  for (const it of items) {
-    const row = rows.find((r) => Math.abs(r.cy - it.cy) <= band);
-    if (row) {
-      row.items.push(it);
-      row.cy = (row.cy * (row.items.length - 1) + it.cy) / row.items.length;
-    } else {
-      rows.push({ cy: it.cy, items: [it] });
-    }
-  }
-  rows.sort((a, b) => a.cy - b.cy);
-  for (const row of rows) row.items.sort((a, b) => b.cx - a.cx); // 右 → 左
-  return rows.flatMap((r) => r.items.map((i) => i.block));
 }
 
 // ============================================================

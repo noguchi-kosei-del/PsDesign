@@ -3271,3 +3271,210 @@ D7. **`quoteFontFamily` 常に引用** ([src/canvas-tools.js](src/canvas-tools.j
 > - 旧: `renderOverlay` で `innerHTML = ""` → in-place 編集 textarea が drag 中 / フォントロード完了時に消失 → 新: layer-box / marquee-rect だけ選択削除、textarea は保持
 > - 旧: 既存 `appendLineWithTracking` (5 引数) は TCY + DASH/TILDE のみ → 新: 9 引数に拡張して per-char-size + per-char-font も統合（関数名は維持）
 
+---
+
+## v1.21.0: 自動配置テレコ修正 + テキスト編集 contenteditable 化 + per-char PSD 保存反映
+
+このバージョンは 3 本柱:
+1. **自動配置の「セリフ位置テレコ」修正**（OCR 順 vs 読み順の index 整合）
+2. **テキスト編集を textarea から contenteditable へ全面移行**（Photoshop ポイントテキスト風 UX）
+3. **per-char サイズ・フォント override の PSD 保存反映**（v1.20.0 の片手落ち解消）
+
+加えて回転ハンドルの度数表示・編集中装飾の整理など細かな UX 改善を含む。
+
+### A. 自動配置のセリフ「テレコ（順序逆転）」修正
+
+A1. **根本原因** — OCR から自動配置までの index 系不整合:
+- [src/ai-ocr.js mokuroDocToText](src/ai-ocr.js) は `doc.pages[i].blocks` を mokuro の **検出順** (= 読み順未保証) のまま TXT に展開
+- [src/ai-place.js buildPlacementPlan](src/ai-place.js) は `sortBlocksMangaOrder` で **読み順ソート後** の blocks と TXT の paragraphs[0..N] を 1:1 対応
+- 結果、「TXT[k] が指す吹き出し」と「sorted[k] の吹き出し」が異なるため逆転。複雑なコマ割りページで顕在化
+
+A2. **修正アプローチ** — OCR 完了直後に `doc.pages[].blocks` を読み順正規化:
+- 共有ユーティリティ [src/utils/manga-order.js](src/utils/manga-order.js) を新設し、`sortBlocksMangaOrder` を切り出し（ai-ocr.js / ai-place.js 両方から使えるよう循環参照を回避: 既に ai-place.js → ai-ocr.js の依存があるため utils 経由が必須）
+- [src/ai-ocr.js runAiOcr](src/ai-ocr.js) の `setAiOcrDoc` 呼出**直前**に `doc.pages[].blocks = sortBlocksMangaOrder(blocks)` を挿入
+- これで TXT の段落順 = `sortBlocksMangaOrder` の出力順 が必ず一致
+- `buildPlacementPlan` 内の `sortBlocksMangaOrder` 呼出は冪等性のため温存（防御的、setAiOcrDoc 経路を将来変えても再発しない保険）
+
+A3. **副次的 UX 改善**: TXT パネルの段落表示順も読み順（右→左→次行）になり、ユーザーが TXT を読み流したとき自然な並びに。
+
+### B. テキストフレームを Photoshop ポイントテキスト風の見た目に
+
+B1. **概要**: 旧 `.layer-box` は `border: 1px dashed` + `background: rgba(120,180,255,0.08)` を常時描画していた。改行や文字数追加で枠が右下に拡大していくのが視覚的にうるさく、「テキストそのものがオブジェクト」という Photoshop の point text 体験と乖離していた。
+
+B2. **CSS 装飾撤去** ([src/styles.css](src/styles.css)):
+- `.layer-box` から border / background を撤去
+- `.layer-box:hover` を削除
+- `.layer-box.selected` を `box-shadow: 0 0 0 2px var(--accent)` のみに簡素化（border solid と背景塗り撤去）
+- `.layer-box-new` / `.layer-box-new.selected` も同様（オレンジ accent ring のみ）
+- swap-target の緑リングは温存
+
+B3. **`framesVisible` state と Ctrl+H 撤廃** ([src/state.js](src/state.js) + [src/main.js](src/main.js) + [src/settings.js](src/settings.js)):
+- `$framesVisible` observable / `getFramesVisible` / `setFramesVisible` / `onFramesVisibleChange` / `toggleFramesVisible` を撤去
+- `bindFramesToggle()` 関数定義と `init()` 内呼出を撤去
+- `runShortcut` の `case "toggleFrames"` を撤去
+- `DEFAULT_SETTINGS.shortcuts.toggleFrames` を撤去（migrate のホワイトリスト方式で旧設定値は自動破棄）
+- `body.frames-hidden` CSS rule 群（19 行）を削除
+- 旧 frames-hidden 機構は「枠を一時的に隠す」機能だったが、デフォルトで枠なしになったため不要
+
+### C. テキスト入力を「textarea 浮き」から contenteditable へ全面移行
+
+#### C1. 目的と戦略
+
+旧実装は [src/canvas-tools.js](src/canvas-tools.js) `createTextFloater` がレイヤーフレーム上に floating な `<textarea>` を絶対配置し、ユーザーがそこに入力する方式。textarea の青背景がフレームに重なり、見た目と入力位置が分離していて Photoshop の「テキストをクリック → そのまま打ち換え」という直感的な UX と乖離していた。
+
+新実装は **レイヤーの text element (`.new-layer-text` / `.existing-layer-text`) を直接 contenteditable 化** し、テキスト本体に caret が入る方式に統一。打ち換え（既存・新規レイヤー dblclick）と空所 dblclick の新規入力の両方を移行。
+
+#### C2. 中核ヘルパー `startContentEditableEdit(ctx, target, opts)` ([src/canvas-tools.js](src/canvas-tools.js))
+
+- 編集開始時に **per-char span 構造を解除** (`inner.textContent = startContents`) して plain text 化 → IME / 削除挿入による DOM 破壊リスクを回避
+- `inner.contentEditable = "true"` + `box.classList.add("editing")` で編集モード ON
+- `selectionchange` (document スコープ、edit セッション中のみ register) で `Selection.getRangeAt(0).toString().length` を使った char index 算出 → `_lastInplaceSelection` / `editingContext` を更新
+- IME `compositionstart/end` で `imeComposing` フラグ切替、IME 中は state 書込みを抑止しつつ bbox は visible text に追従させる
+- **Enter は keydown を主経路** (capture 系 listener と衝突しないよう `e.preventDefault() + stopPropagation() + stopImmediatePropagation()`) で `\n` text node を手動挿入。`beforeinput` の `insertParagraph` / `insertLineBreak` も補助フックとして残す（virtual keyboard / 音声入力対策、二重挿入は `_enterHandled` フラグで防止）
+- paste は `text/plain` のみ受け付けて HTML 構造を持ち込ませない
+- input イベントで文字列差分（`computeStringDiff`: 共通接頭辞・接尾辞 + 中間の deleted/inserted）を計算し、`charSizes` / `charFonts` / `lineLeadings` の index を re-map（`shiftCharMap` / `shiftLineMap`）
+- 確定 (`commit`): edit セッション全体を `beginHistoryTransient` / `commitHistoryTransient` で 1 history snapshot に集約。Esc は `abortHistoryTransient` で履歴に痕跡を残さず復元
+
+#### C3. 中心固定 `recenterBox(virtualContents = null)`
+
+文字数変化で bbox サイズが変わると、top-left 固定では中心がズレて「frame が動いた」ように見える。改行・削除・per-char 変更どれでも、edit 中は **毎 input イベントで box の位置・サイズを oldCenter 起点で再計算**:
+- edit 開始時に `oldRect = layerRectFor*(page, target)` でスナップ → `oldCenterX/Y` を保持
+- 入力後 `newRect = layerRectFor*(page, ...)` で新サイズを計算
+- `newLeft = oldCenterX - newRect.width / 2` / `newTop = oldCenterY - newRect.height / 2` で state.x/y / edit.dx/dy を更新（transient 内なので push なし）
+- box CSS の `left / top / width / height` を直接書換（renderOverlay は editing layer をスキップするので自前更新）
+- IME 中 (virtualContents 引数あり) は state を触らず box CSS だけ更新
+
+これにより **改行追加で bbox が伸びても視覚的には edit 開始時の中心位置から左右上下に均等に広がる**。startInPlaceEdit / startTextInput の commit-time 補正は撤去（recenterBox が中心固定で state を更新済み）。
+
+#### C4. 改行レンダリング系の不具合連続修正
+
+contenteditable + `writing-mode: vertical-rl` の WebView2 (Chromium) 挙動で複数の罠を踏んだので、それぞれ別経路で対処した:
+
+**C4-1. 履歴連鎖でキャレットが破壊される** (縦書きで「typed 順と表示順が逆転」する症状):
+- 旧: keystroke ごとに `setEdit/updateNewLayer` → `pushHistorySnapshot` → `onHistoryChange` listener が `refreshAllOverlays + rebuildLayerList` を発火 → sidebar の `populateEditor` が `setTextSize/setCurrentFont` を発火 → 連鎖再描画でキャレットが消失
+- 新: `startContentEditableEdit` の冒頭で `beginHistoryTransient()`、finalize で `commit/abortHistoryTransient` → 履歴 push が edit 中はゼロ → cascade なし → キャレット保持
+
+**C4-2. `<br>` が縦書き column break として確実に動かない** (旧 renderInnerText の slow path で行間に `<br>` を挿入していたが commit 後に行が前の column に続く症状):
+- 修正: [renderInnerText](src/canvas-tools.js) の slow path を `inner.appendChild(document.createElement("br"))` から `inner.appendChild(document.createTextNode("\n"))` に変更
+- `white-space: pre-wrap` は `\n` を必ず forced line break として扱うので、WebView2 の `<br>` 挙動に依存しない
+
+**C4-3. `Range.setStartAfter(tn)` で caret が新行に移動しない** (Enter 1 回押下で box は伸びるが cursor が前行末に残る症状):
+- 修正: `setStartAfter` (boundary 形式) を `setStart(tn, tn.length)` (text node 内部オフセット形式) に変更
+
+**C4-4. 末尾 `\n` だけだと caret に anchor が無く視覚的に新行に移動しない** (Enter 2 回押下で初めて caret が新行へ移る症状、box と cursor の行が 1 ずれる):
+- 修正: `\n` text node の直後に **zero-width space (U+200B)** を anchor として追加し、その offset 0 に caret を置く
+- 後続の Enter は既存 zwsp が anchor 役を継続するので新規 zwsp 追加は不要（hasFollowingContent チェック）
+- `readContents` で innerText から U+200B を strip して state.contents には残さない
+
+**C4-5. 入力中の textContent が `<br>` を `\n` に変換しない** (browser default が `<br>` を挿入してしまったケースで textContent では \n が消える):
+- 修正: `readContents` を `inner.textContent` から `inner.innerText` に切替 → `<br>` も `<div>` 境界も自動 \n 化
+
+#### C5. 既存機能との衝突対応
+
+- **renderOverlay**: 編集中レイヤー (.editing) は cleanup ループでも rebuild ループでもスキップして DOM 温存（フォントロード完了 → onFontsRegistered → refreshAllOverlays でキャレットが消失する事故を防止）
+- **onCanvasMouseDown**: 編集中レイヤー外側クリック → finalize、内側クリック → contenteditable の caret 移動に委ねる（preventDefault しない）
+- **onExistingLayerMouseDown / onNewLayerMouseDown**: 冒頭で `e.currentTarget.classList.contains("editing")` チェックして早期 return → 全選択中のテキスト途中クリックで caret 移動が機能
+- **bindGlobalBlurOnOutsideClick**: 安全ゾーンに `.layer-box.editing` を追加 → サイドパネル editor 内クリックでも contenteditable が finalize しない
+- **矢印キーナッジ・Delete・[ / ] サイズ**: 既存の `t.isContentEditable` チェックで自動的にスキップされる（変更不要）
+- **swap drag / マーキー**: 編集中は無効化（layer-box mousedown が早期 return）
+- **per-char ブラシモード** (`maybeApplyStickyFont`): `_lastInplaceSelection` を経由する API は同じなので変更なし
+
+#### C6. 視覚装飾の整理（編集中）
+
+- `.layer-box.editing` は `box-shadow: none !important` で選択リング・swap ハイライトを完全に消し、caret だけが操作の手がかりに
+- `.layer-box.editing .layer-rotate-handle` / `.layer-size-badge` を `display: none !important` で非表示（テキスト編集に集中、誤操作を防止）
+- `.layer-box-existing.editing` には `background: rgba(255,255,255,0.95)` で白背景を被せて canvas-baked テキストを隠す（既存レイヤー編集で旧テキストとの二重表示を防止）
+- inner には `caret-color: var(--accent)` で caret をアクセント色に強調
+
+#### C7. 新規入力 `startTextInput` のフロー再設計
+
+旧: 空所 dblclick → textarea 表示 → ユーザー入力 → 確定 → addNewLayer
+新: 空所 dblclick → **空 contents で addNewLayer 即時実行** → refreshAllOverlays で DOM 出現 → startContentEditableEdit
+- 確定: 中身ありなら center-fix で位置を整える、空文字なら removeNewLayer + onCommit が `false` を返して abort（履歴に残さない）
+- Esc キャンセル: 編集前 (空) state に巻き戻し → onCancel が removeNewLayer → abortHistoryTransient
+- これにより Photoshop の「テキストツールでクリックすると即座にテキストレイヤーが作られて入力モード」という挙動と一致
+
+### D. 編集中の per-char 変更をリアルタイム視覚反映
+
+D1. **`applyEditModeStyleToRange(start, end, styleProps)` ヘルパー新設** ([src/canvas-tools.js](src/canvas-tools.js)):
+- 編集中レイヤー (.layer-box.editing) の inner で char index 範囲 [start, end) を `<span>` でラップして CSS スタイルを適用
+- `charIndexToNodeOffset` で char index を text node + offset に変換（DOM TreeWalker で text node を順に走査）
+- `surroundContents` で範囲を span 化、要素境界を跨ぐケースは `extractContents` + `appendChild` でフォールバック
+- ネスト span による em 乗算事故を避けるため、上書き対象の styleProp を持つ既存 span を範囲内から事前に unwrap (`unwrapStyleSpansInRange`)
+
+D2. **呼出経路**:
+- [main.js applyTextSize](src/main.js): per-char サイズ変更後、`applyEditModeStyleToRange(start, end, { fontSize: \`${ratio}em\` })` を呼ぶ。ratio は `sizePt / defaultSizePt`
+- [text-editor.js commitFont](src/text-editor.js): per-char フォント変更後、`applyEditModeStyleToRange(start, end, { fontFamily })` を呼ぶ
+- main.js に新ヘルパー `resolveLayerDefaultSizePt(sel)` を追加し、対象レイヤーの defaultSizePt を解決して em 比換算
+
+D3. **export 化**: 内部関数だった `cssFontFamily` を `export function` に変更（text-editor.js から利用）。`getExistingLayerEffectiveSizePt` も既に export 済み。
+
+### E. 文字サイズ・フォントの per-char override を PSD 保存に反映
+
+v1.20.0 でフロントの per-char override は実装済みだったが、PSD 保存（Photoshop 書き戻し）には反映されていなかった片手落ちを解消。
+
+E1. **Rust struct 拡張** ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)):
+- `LayerEdit` / `NewLayer` の両 struct に `char_sizes: Option<HashMap<String, f64>>` と `char_fonts: Option<HashMap<String, String>>` を追加
+- serde rename: `charSizes` / `charFonts` (フロントの payload キーと一致)
+
+E2. **Rust → JSX emit** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)):
+- `emit_char_sizes` / `emit_char_fonts` ヘルパー新設（既存 `emit_line_leadings` と同パターン）
+- key を char index 数値順でソートして diff 安定化
+- 既存 layer / 新規 layer の emit ループで `charSizes` / `charFonts` を JSX オブジェクトリテラルとして出力
+
+E3. **JSX ヘルパー `applyPerCharSizesAndFonts(layer, contents, charSizes, charFonts)`** ([jsx_gen.rs HEADER](src-tauri/src/jsx_gen.rs)):
+- 既存の `applyRepeatedDashTracking` と同じ "char index 単位で textStyleRange を clone-and-replace するパターン"
+- `executeActionGet` で textKey を取得 → `oldRanges` を走査して各 char の所属 range を `srcRangeIndex[]` に記録
+- `(srcRangeIndex[c], charSizes[c], charFonts[c])` が同じ連続文字を 1 セグメントに圧縮
+- 各セグメントで `srcStyle` を clone → `putUnitDouble("size", "pointsUnit", pt)` / `putString("fontPostScriptName", ps)` で上書き
+- 値が無い文字は clone のまま（前段で当てた leading / tracking / tcy が保持される）
+- `set` の class は `sID("textLayer")` を使用（`textKey` だと Photoshop が新 textStyleRange を破棄して既存値を保持する事故が既知、`applyRepeatedDashTracking` 行 638-641 のコメント参照）
+
+E4. **applyToPsd の呼出順序**:
+```
+existing layer / new layer 共通:
+  applyLineLeadings        (per-line leading, 既存)
+  applyPerCharSizesAndFonts (per-char size/font, NEW)
+new layer のみ:
+  applyRepeatedDashTracking  (連続記号ツメ, 既存)
+  applyTateChuYoko           (縦中横, 既存)
+```
+各関数は前段の textStyleRange を baseStyle として clone するので、属性は順次重ねて保持される。失敗時は `addWarning` に積んで保存自体は継続（per-PSD failure isolation の v1.0 系 try/catch パターン踏襲）。
+
+### F. 回転ハンドルの度数表示
+
+F1. **ドラッグ中の角度インジケータ** ([src/canvas-tools.js](src/canvas-tools.js) `beginRotateDrag`):
+- マウスカーソル右下 16px に `.rotate-degree-indicator` フロート DOM を生成
+- onMove で現在角度（-180°〜+180° に正規化、整数で四捨五入）をリアルタイム表示
+- Shift スナップ中は 15° 単位で離散表示
+- マウスが画面端近くなら左側 / 上側に切替えてクリッピング回避
+- mouseup でインジケータ削除
+
+F2. **CSS** ([src/styles.css](src/styles.css)):
+- `.rotate-degree-indicator { position: fixed; z-index: 1000; pointer-events: none; ... }` をアクセント色背景 + 白文字 + tabular-nums で定義
+
+### G. その他の細かな改善
+
+- **テレコ修正のための関数切出し**: `sortBlocksMangaOrder` を [src/utils/manga-order.js](src/utils/manga-order.js) に新規切り出し（純粋関数 1 個）。ai-place.js の元定義は import 文に置換、本体振る舞いは完全同一
+- **createTextFloater 撤廃**: 旧 textarea 経路の関数定義 / `.text-input-floater` CSS / 関連 import / `bindGlobalBlurOnOutsideClick` の安全ゾーンセレクタ等、textarea ベース実装の痕跡を全削除
+
+### マイグレーション影響
+
+- **既存 v1.20.0 までの per-char override データは保持される**: フロント state は変わらず、payload が Rust struct で受け取られるようになっただけ。古いデータを読込んでも問題なし
+- **保存される PSD の互換性**: per-char override が無いレイヤーは旧来通りのスタイル設定のみ。override があるレイヤーのみ追加で textStyleRange が再構築される。Photoshop で開いて Character パネルで確認可能
+- **Ctrl+H ショートカットを撤去**: 旧 framesVisible 機能を使っていたユーザーは設定が消えるが、デフォルトで枠なしになったので機能自体は不要
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.21.0`** に揃え。Cargo.lock も自動追従。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: 自動配置で OCR 順と読み順の index 系不整合により複雑コマ割りで「セリフテレコ」発生 → 新: OCR 完了直後に doc.pages[].blocks を sortBlocksMangaOrder で正規化、TXT 出力順 = sorted 順 を保証
+> - 旧: テキスト入力は floating textarea でフレーム上に浮く → 新: レイヤーの text element 自身を contenteditable 化、Photoshop ポイントテキスト風に caret が直接入る
+> - 旧: テキストフレームに常時 dashed border + 薄青背景 → 新: 装飾なしでテキスト本体だけ可視、選択時のみアクセントリング
+> - 旧: per-char サイズ・フォント override は UI のみで PSD 保存に反映されない → 新: Rust struct + JSX `applyPerCharSizesAndFonts` で textStyleRange に clone-and-replace
+> - 旧: per-char サイズ・フォント変更は edit 中の DOM に反映されず commit 後に初めて表示 → 新: `applyEditModeStyleToRange` で span ラップ即時反映、unwrap で nest em 乗算事故を回避
+> - 旧: 回転ハンドルドラッグ中は角度が分からない → 新: マウス追従の度数インジケータでリアルタイム表示
+> - 旧: framesVisible / Ctrl+H で枠の表示切替が可能 → 新: framesVisible state / shortcut / CSS rule をすべて撤去（デフォルトで枠なし）
+> - 旧: 編集中レイヤーに枠線・回転ハンドル・サイズバッジ・swap-target ハイライトが表示される → 新: 全て非表示、caret だけが操作の手がかり
+

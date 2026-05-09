@@ -7,6 +7,9 @@ import {
   snapNextSize,
   // 【v1.16.0】in-place 編集 textarea 上の文字選択キャッシュ
   getLastInplaceSelection,
+  // 【v1.21.0】per-char サイズ・フォント変更時の編集中 DOM リアルタイム反映
+  applyEditModeStyleToRange,
+  getExistingLayerEffectiveSizePt,
 } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
@@ -139,9 +142,6 @@ import {
   setCharSizesRange,
   getEdit,
   getSelectedLayers,
-  toggleFramesVisible,
-  onFramesVisibleChange,
-  getFramesVisible,
   getNewTextDirection,
   setNewTextDirection,
   onNewTextDirectionChange,
@@ -400,7 +400,6 @@ function runShortcut(id) {
     case "sizeUp":     stepTextSize(+1, Math.max(1, Math.round(2 / getSizeStep()))); break;
     case "sizeDown":   stepTextSize(-1, Math.max(1, Math.round(2 / getSizeStep()))); break;
     case "toggleRulers": toggleRulersVisible(); break;
-    case "toggleFrames": toggleFramesVisible(); break;
     case "viewerMode":   toggleViewerMode(); break;
   }
 }
@@ -1202,6 +1201,13 @@ function applyTextSize(n) {
     const v = clampSize(n);
     const targetId = sel.tempId ?? sel.layerId;
     setCharSizesRange(sel.psdPath, targetId, sel.start, sel.end, v);
+    // 【v1.21.0】編集中の DOM にも即時反映: span でラップして fontSize を em 比で当てる。
+    // layer の defaultSizePt を取得して em 比 = v / defaultSizePt を求める。
+    const defaultSizePt = resolveLayerDefaultSizePt(sel);
+    if (defaultSizePt > 0) {
+      const ratio = v / defaultSizePt;
+      applyEditModeStyleToRange(sel.start, sel.end, { fontSize: `${ratio}em` });
+    }
     refreshAllOverlays();
     rebuildLayerList();
     setTextSize(v); // サイドバー入力欄の値も同期
@@ -1210,6 +1216,32 @@ function applyTextSize(n) {
   setTextSize(n);
   // 選択中の全レイヤーに同じサイズを適用（複数選択でも一括反映）。
   commitSizeToSelections(getTextSize());
+}
+
+// per-char サイズ変更で em 比換算に使う「対象レイヤーの defaultSizePt」を解決。
+function resolveLayerDefaultSizePt(sel) {
+  if (!sel) return 0;
+  const pages = getPages();
+  for (let pi = 0; pi < pages.length; pi++) {
+    const page = pages[pi];
+    if (page.path !== sel.psdPath) continue;
+    if (typeof sel.layerId === "number") {
+      const layer = page.textLayers.find((l) => l.id === sel.layerId);
+      if (!layer) return 0;
+      const edit = getEdit(page.path, layer.id) ?? {};
+      // ↓ getExistingLayerEffectiveSizePt は canvas-tools.js から既に import 済み
+      return getExistingLayerEffectiveSizePt(page, layer, edit) || 0;
+    }
+    if (typeof sel.tempId === "string") {
+      const nl = page.textLayers; // 不要、newLayers から探す
+      // newLayers は state から
+      // import 経由で getNewLayersForPsd を使う必要があるが既に import 済み
+      const list = (typeof getNewLayersForPsd === "function") ? getNewLayersForPsd(page.path) : [];
+      const item = list.find((l) => l.tempId === sel.tempId);
+      return item?.sizePt ?? 0;
+    }
+  }
+  return 0;
 }
 
 function clampSize(n) {
@@ -1685,28 +1717,6 @@ function bindRulerToggle() {
   );
 }
 
-// Ctrl+H はブラウザ既定で履歴を開くため、capture フェーズで preventDefault してから
-// テキストフレーム表示をトグル。InDesign 風に「枠装飾だけ消してテキストは残す」ため、
-// DOM は再描画せず body のクラスを toggle して CSS で見た目だけ切替える。
-function bindFramesToggle() {
-  const applyClass = () => {
-    document.body.classList.toggle("frames-hidden", !getFramesVisible());
-  };
-  applyClass();
-  onFramesVisibleChange(applyClass);
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (matchShortcut(e, "toggleFrames")) {
-        toggleFramesVisible();
-        e.preventDefault();
-        e.stopPropagation();
-      }
-    },
-    { capture: true },
-  );
-}
-
 // V ツール直下の「新規テキスト方向」スイッチ (縦型トグル)。
 // 1 つのスイッチをクリックすると縦↔横が切替わる。
 // localStorage 永続化 + aria-checked 同期 (CSS が thumb 位置 / icon 色を担当)。
@@ -1953,7 +1963,6 @@ function init() {
   bindGlobalBlurOnOutsideClick();
   initRulers();
   bindRulerToggle();
-  bindFramesToggle();
   bindNewTextDirectionToggle();
   bindViewerMode();
   // services/psd-load.js から読込フェーズの節目で投げられるイベントを購読し、
@@ -1989,7 +1998,7 @@ function bindGlobalBlurOnOutsideClick() {
     if (target === active || active.contains(target)) return;
     // editor パネル内のクリックも安全ゾーンに含める。in-place 編集 textarea が active な
     // ときに行間 input / +/- / ルビボタンを触っても勝手に textarea が blur しないようにする。
-    const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .text-input-floater, .editor");
+    const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .layer-box.editing, .editor");
     if (near) return;
     active.blur();
   }, true);

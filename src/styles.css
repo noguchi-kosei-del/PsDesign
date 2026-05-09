@@ -1698,30 +1698,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: none;
 }
 
+/* Photoshop ポイントテキスト風: 未選択時はテキストのみ可視で、枠装飾は出さない。
+   bbox は寸法を持ったまま絶対配置され、クリック判定 / マーキー / wheel サイズ /
+   回転ハンドル / サイズバッジの配置基準として機能継続する。 */
 .layer-box {
   position: absolute;
-  border: 1px dashed rgba(120, 180, 255, 0.7);
-  background: rgba(120, 180, 255, 0.08);
   pointer-events: auto;
   cursor: move;
   box-sizing: border-box;
 }
 
-.layer-box:hover { background: rgba(120, 180, 255, 0.18); }
-
+/* 選択時はアクセントリング 1 本のみ。背景塗り・border solid は出さない。 */
 .layer-box.selected {
-  border: 1px solid var(--accent);
   box-shadow: 0 0 0 2px var(--accent);
-  background: rgba(0, 120, 212, 0.18);
-}
-
-.layer-box-new {
-  border: 1px dashed rgba(255, 200, 120, 0.8);
-  background: rgba(255, 200, 120, 0.1);
 }
 
 .layer-box-new.selected {
-  border: 1px solid #e89a3c;
   box-shadow: 0 0 0 2px #e89a3c;
 }
 
@@ -1861,6 +1853,24 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: auto;
   z-index: 4;
 }
+
+/* 【v1.21.0】回転ドラッグ中の角度表示インジケータ。マウスカーソル右下に追従し、
+   現在の回転角（normalized: -180..180、Shift スナップ中は 15° 単位）を表示。 */
+.rotate-degree-indicator {
+  position: fixed;
+  z-index: 1000;
+  pointer-events: none;
+  user-select: none;
+  background: var(--accent);
+  color: #fff;
+  font: 700 12px/1.25 system-ui, -apple-system, "Segoe UI", sans-serif;
+  padding: 4px 8px;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
+}
 .layer-rotate-handle:active { cursor: grabbing; }
 .layer-rotate-handle::before {
   content: "";
@@ -1872,26 +1882,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--accent);
   transform: translateX(-50%);
   pointer-events: none;
-}
-
-/* Ctrl+H: テキストフレーム非表示モード（InDesign 風）。
- * - 通常時はレイヤーボックスの破線・背景を透明化。
- * - ただし選択中（.selected）のレイヤーは枠・サイズバッジ・回転ハンドルを残す。
- * - テキスト本体は影響なし。クリック判定（pointer-events）も維持。 */
-body.frames-hidden .layer-box:not(.selected),
-body.frames-hidden .layer-box-new:not(.selected),
-body.frames-hidden .layer-box-existing:not(.selected) {
-  border-color: transparent !important;
-  background: transparent !important;
-  box-shadow: none !important;
-}
-
-/* frames-hidden 中も swap 対象 B の緑強調は残す（操作意図フィードバックを優先）。 */
-body.frames-hidden .layer-box.swap-target,
-body.frames-hidden .layer-box-new.swap-target {
-  border-color: #10b981 !important;
-  background: rgba(16, 185, 129, 0.28) !important;
-  box-shadow: 0 0 0 3px #10b981, 0 0 0 5px rgba(255, 255, 255, 0.6) !important;
 }
 
 .page-overlay[data-tool="pan"] .layer-box {
@@ -1908,25 +1898,45 @@ body.frames-hidden .layer-box-new.swap-target {
   z-index: 5;
 }
 
-.text-input-floater {
-  position: absolute;
+/* 【v1.21.0】contenteditable in-place 編集中のレイヤー：枠線・回転ハンドル・選択リングは
+   表示せず、テキスト本体に caret だけが入る Photoshop 風の見た目にする。
+   floating textarea は廃止し、レイヤー DOM の text element を直接編集する方式へ移行。 */
+.layer-box.editing {
+  /* 編集中は selection ring (.selected) も swap-target もすべて隠す。
+     box-shadow を none で打ち消し、選択フィードバックは caret のみに統一。 */
+  box-shadow: none !important;
   pointer-events: auto;
-  min-width: 28px;
-  min-height: 160px;
-  padding: 4px 6px;
-  background: rgba(255, 255, 255, 0.95);
-  color: #111;
-  border: 1.5px solid var(--accent);
-  border-radius: 2px;
-  font-family: inherit;
-  font-size: 16px;
-  resize: both;
-  z-index: 5;
+  z-index: 4;
 }
 
-.text-input-floater[data-direction="vertical"] {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
+/* 編集中レイヤーの回転ハンドル・サイズバッジ（フォント名・pt 表示）は非表示。
+   テキスト本体への入力に集中できるよう装飾を排除する。 */
+.layer-box.editing .layer-rotate-handle,
+.layer-box.editing .layer-size-badge {
+  display: none !important;
+}
+
+.layer-box.editing .new-layer-text,
+.layer-box.editing .existing-layer-text {
+  pointer-events: auto;
+  cursor: text;
+  outline: none;
+  user-select: text;
+  -webkit-user-select: text;
+  /* contenteditable 中は文字が枠を超えても見えるようにする（後置 auto-fit で枠も伸びる） */
+  overflow: visible;
+  caret-color: var(--accent);
+}
+
+/* 既存レイヤーは通常 opacity 0.35 で canvas-baked 上の薄い重ね。
+   編集中だけ opacity 1.0 に上げて、編集テキストが見やすくする。
+   さらに白背景を被せて canvas に焼き込まれた旧テキストを隠す
+   （contents 編集中の二重表示混乱を防止）。 */
+.layer-box-existing.editing {
+  background: rgba(255, 255, 255, 0.95);
+}
+.layer-box-existing.editing .existing-layer-text {
+  opacity: 1;
 }
 
 /* 旧 .page-label（.page 要素直下に absolute 配置していたフロートラベル）は廃止。

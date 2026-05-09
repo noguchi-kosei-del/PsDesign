@@ -2,7 +2,7 @@ import { getDefault, getDefaults } from "./settings.js";
 
 // 単純な observable スロット (tool, textSize, leadingPct, currentFont, stroke/fill,
 // zoom, rotation, pdfPageIndex, pdfSplitMode, pdfSkipFirstBlank, parallelSyncMode,
-// activePane, parallelViewMode, framesVisible) は createObservable ファクトリで管理し、
+// activePane, parallelViewMode) は createObservable ファクトリで管理し、
 // 下に並ぶ $tool / $textSize ... 経由で get/set/on を提供する。
 // state object には:
 //   - 配列 / Map / 複合状態（pages, edits, newLayers, selectedLayers, fonts, txtSource, ...）
@@ -142,7 +142,6 @@ const $pdfSkipFirstBlank = createObservable(false, _normBool);
 const $parallelSyncMode = createObservable(true, _normBool);
 const $activePane = createObservable("psd", _normActivePane);
 const $parallelViewMode = createObservable("parallel", _normParallelViewMode);
-const $framesVisible = createObservable(true, _normBool);
 // V ツールで空所をダブルクリックして新規テキスト入力を開くときの方向。
 // サイドツールバーの V ボタン直下にあるトグルで切替・localStorage に永続化。
 const $newTextDirection = createObservable("vertical", _normNewTextDir);
@@ -364,12 +363,6 @@ export function onActiveLeadingLineChange(fn) {
   state.activeLeadingLineListeners.add(fn);
   return () => state.activeLeadingLineListeners.delete(fn);
 }
-
-// テキストフレーム（layer-box overlay）表示。Ctrl+H から切り替え。
-export const getFramesVisible = $framesVisible.get;
-export const setFramesVisible = $framesVisible.set;
-export const onFramesVisibleChange = $framesVisible.on;
-export function toggleFramesVisible() { setFramesVisible(!getFramesVisible()); }
 
 // V ツールの「新規テキスト方向」(vertical / horizontal)
 export const getNewTextDirection = $newTextDirection.get;
