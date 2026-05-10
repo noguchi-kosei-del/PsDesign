@@ -1264,6 +1264,28 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--danger);
 }
 
+/* editor-toolbar-row2 の右側に寄せるページ移動グループ。
+   margin-left: auto で左の編集ボタン群と分離する。 */
+.editor-page-nav {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+.editor-page-nav-btn {
+  padding: 3px 6px;
+}
+.editor-page-nav-btn svg { display: block; }
+.editor-page-label {
+  min-width: 72px;
+  padding: 0 6px;
+  text-align: center;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  user-select: none;
+}
+
 .editor-filename-row {
   display: flex;
   align-items: center;
@@ -1297,30 +1319,82 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .editor-dirty-dot[hidden] { display: none; }
 
-/* textarea + empty placeholder を重ねるラッパー。empty は absolute overlay で
-   pointer-events:none → 下の textarea が常にクリックを受ける（クリックで自然に
-   フォーカス → ユーザーが入力開始 → empty は content 空判定で自動非表示）。 */
-.editor-textarea-wrap {
+/* ページ別 viewer + empty placeholder を重ねるラッパー。empty は absolute overlay で
+   pointer-events:none → 下の viewer が常にクリック/スクロールを受ける。 */
+.editor-pages-viewer-wrap {
   position: relative;
-  flex: 1;
+  flex: 1 1 auto;
   min-height: 0;
   display: flex;
   flex-direction: column;
-}
-.editor-textarea {
-  flex: 1;
-  min-height: 0;
-  resize: none;
-  padding: 8px 10px;
-  font-family: "Consolas", "Cascadia Code", "Courier New", monospace;
-  font-size: 12px;
-  line-height: 1.6;
-  white-space: pre;
   background: var(--bg);
+}
+.editor-pages-viewer {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.editor-page-section {
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-body);
+  overflow: hidden;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.editor-page-section.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.editor-page-section-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  letter-spacing: 0.04em;
+}
+.editor-page-section.active .editor-page-section-header {
+  color: var(--accent);
+}
+.editor-page-section-empty-hint {
+  padding: 8px 12px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-style: italic;
+}
+.editor-page-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+}
+.editor-page-paragraph {
+  white-space: pre-wrap;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: text;
+  min-height: 1.4em;
+  line-height: 1.6;
+  font-size: 13px;
   color: var(--text);
-  border: 0;
-  outline: 0;
-  overflow: auto;
+  outline: none;
+  border: 1px solid transparent;
+}
+.editor-page-paragraph:hover {
+  background: var(--panel-hover);
+}
+.editor-page-paragraph:focus,
+.editor-page-paragraph.editing {
+  background: var(--bg);
+  border-color: var(--accent);
 }
 .editor-empty {
   position: absolute;
@@ -1330,6 +1404,26 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--bg);
 }
 .editor-empty[hidden] { display: none; }
+
+/* エディタ下部の新規テキスト入力欄。サイドパネルの .txt-source-new-input と同じ
+   レイアウト原則だが、エディタは横幅が広いので padding を強めに取る。 */
+.editor-new-input-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border);
+  background: var(--panel);
+  flex-shrink: 0;
+  align-items: stretch;
+}
+.editor-new-input-row .txt-new-input {
+  flex: 1 1 auto;
+  min-height: 32px;
+}
+.editor-new-input-row .txt-new-input-btn {
+  flex-shrink: 0;
+  min-width: 64px;
+}
 
 .editor-footer {
   display: flex;

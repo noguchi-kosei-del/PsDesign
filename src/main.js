@@ -889,7 +889,7 @@ function canAdvancePageNow() {
 // 「現在ページ」のソースを判定して { source, total, current } を返す。
 // 優先順: PSD pages → PDF 仮想ページ → TXT マーカーページ。null = どれも無し。
 // TXT 単体運用時は pdfPageIndex を「閲覧中ページ index」として流用する設計。
-function activePageSource() {
+export function activePageSource() {
   const psd = getPages().length;
   if (psd > 0) return { source: "psd", total: psd, current: getCurrentPageIndex() };
   const pdf = getPdfVirtualPageCount();
@@ -908,7 +908,7 @@ function setActivePageIndex(source, idx) {
 // 同期中でも PSD 未読込の場合は PDF を直接駆動する（空の PSD index 経由だと
 // setCurrentPageIndex が「pages 0 件 → index 0 固定」で何も起こらないため）。
 // PDF も無ければ TXT マーカーページ数にフォールバック（pdfPageIndex を流用）。
-function advancePage(delta) {
+export function advancePage(delta) {
   if (getParallelSyncMode()) {
     const info = activePageSource();
     if (!info) return;

@@ -3632,3 +3632,119 @@ Photoshop textStyleRange (clone-and-replace)
 > - 旧: 太字ボタンなし → 新: サイズ panel `.size-row` 右側に「太字」トグルボタン、in-place 編集の文字選択時は per-char (`charBolds`) / 通常は per-layer (`syntheticBold`) のハイブリッド適用、Photoshop 保存で `syntheticBold` textStyle 属性として書き戻し
 > - 旧: 自動配置完了で notifyDialog → 新: 緑チェックマーク進捗終了のみ（エラー時のみダイアログ）
 
+---
+
+## v1.23.0: テキストエディタモード再設計（ページ別 section + 中央配置入力欄 + ページナビ）
+
+### 概要
+
+エディタモード ([src/bind/editor-pane.js](src/bind/editor-pane.js)) を「全文 textarea 一括表示」から「原稿テキスト風のページ別 section + 下部の中央配置入力欄」に全面再設計。サイドパネルの原稿テキスト機能（contenteditable 編集 / 中央配置 / 双方向同期）を大画面で展開する形。さらにページ移動ボタンと Ctrl+左右キーショートカットを追加し、エディタモード単体でも PSD/PDF/TXT のページ送りが完結する。
+
+### A. ページ別 section 表示（現在ページのみ）
+
+A1. **DOM 再構成** ([index.html](index.html)): `.spreads-editor-area` 内、旧 `<textarea id="editor-textarea">` を撤去し以下に置換:
+- `#editor-pages-viewer-wrap` (flex: 1, position: relative) — 空状態オーバーレイのアンカー
+  - `#editor-pages-viewer` — ページ別 section の入れ物
+  - `#editor-empty` — 既存の空表示 overlay
+- `.editor-new-input-row` — `#editor-new-input` (1 行 textarea) + `#editor-new-input-btn` (配置ボタン)
+
+A2. **`renderViewer()` の挙動** ([src/bind/editor-pane.js](src/bind/editor-pane.js)): `parsePages(content)` の出力から **現在ページ (`getActivePageNumber()`) に対応する 1 つの section だけ**を描画:
+- マーカー有り原稿: 現在ページの段落のみを `.editor-page-section[data-page-number="N"]`（active class 付）として表示。該当ページに段落がない場合は「（このページには段落がありません）」プレースホルダを section 内に配置
+- マーカー無し原稿: 1 つの section に全段落を入れて常時 active 表示
+- ページ送り (`onPageIndexChange` / `onPdfPageIndexChange` / `onPdfChange`) のたびに `renderViewer` を再実行 → 表示中の section が次/前ページのものに置き換わる
+- ヘッダーは `P02` 形式（2 桁ゼロ埋め）+ active 時 accent border + box-shadow
+
+A3. **段落の常時 contenteditable 編集** (`bindParagraphEdit`):
+- 各段落 `<div class="editor-page-paragraph" contenteditable="true">` で常時編集可能（パネル側の dblclick 起動とは異なり、エディタモードは「編集に集中するモード」のためクリックで即 caret 入る）
+- 編集確定: blur or Ctrl+Enter / Cmd+Enter → innerText を LF 正規化 → originalText との差分があれば `updateTxtSourceBlock(pageNumber, originalText, newText)` で原稿全体を書換 → `setTxtSource` → `onTxtSourceChange` listener が `renderViewer` 再実行 → サイドパネルの原稿テキストパネルも自動同期
+- Esc 取消: aborted フラグ → blur → `el.textContent = originalText` で復元、`setTxtSource` 不発火
+- IME 中は `compositionstart/end` で `composing` フラグを立てて finalize を抑止
+
+A4. **`focusEditor()` の更新**: エディタモード入場時に最初の段落 contenteditable へフォーカスを移すよう実装を差し替え（公開 API は据え置き）。
+
+### B. 下部の中央配置入力欄
+
+B1. **`commitNewTxtInput` の引数化** ([src/txt-source.js](src/txt-source.js)): 旧 `commitNewTxtInput()` が内部で `$("txt-new-input")` を直接参照していたため、エディタ側 `#editor-new-input` から再利用できなかった。`commitNewTxtInput({ inputEl } = {})` に引数化し、サイドパネル側の呼出も `commitNewTxtInput({ inputEl: newInputEl })` に揃える。
+
+B2. **エディタ側の配線** ([src/bind/editor-pane.js](src/bind/editor-pane.js) `bindNewInput`):
+- `#editor-new-input` の input イベントで `syncNewInputAvailabilityFor(els.newInput)` を呼んでボタン disabled を更新
+- Ctrl+Enter / Cmd+Enter で commit、Esc で値クリア / blur
+- 配置ボタンクリックで `commitNewTxtInput({ inputEl: els.newInput })` を呼ぶ
+- 配置完了後は input.value をクリア + フォーカス維持で連続入力可能
+
+B3. **PSD 中央配置ロジックは完全共有**: txt-source.js の `commitNewTxtInput` 本体（pageGeometry / centerTopLeft / addNewLayer / sourceTxtRef / appendBlockToCurrentPageContent / withHistoryTransient / refreshAllOverlays / rebuildLayerList）が両 UI から呼ばれるため、配置位置・縦横・全角数字変換・履歴 1 件集約・自動配置済みレイヤー追従などの挙動が完全に一致する。
+
+### C. ページ移動ボタン + Ctrl+左右キーショートカット
+
+C1. **ナビボタン UI** ([index.html](index.html) + [src/styles.css](src/styles.css)): `editor-toolbar-row2` の右端、保存ボタンの右に `.editor-page-nav` グループを追加:
+- `#editor-page-prev-btn`（lucide chevron-left、aria-label="前のページ"、tooltip "前のページ (Ctrl+←)"）
+- `#editor-page-label`（`P02 / 24` 表記、`min-width: 72px`、`tabular-nums`、`aria-live="polite"`）
+- `#editor-page-next-btn`（lucide chevron-right、tooltip "次のページ (Ctrl+→)"）
+- `.editor-page-nav { margin-left: auto }` で右寄せ、編集系ボタン群と視覚分離
+
+C2. **local 実装で循環 import を回避** ([src/bind/editor-pane.js](src/bind/editor-pane.js)):
+- 当初は main.js の `activePageSource` / `advancePage` を export 化して import したが、editor-pane.js → main.js → editor-pane.js の **静的循環 import** が発生し、ESM 評価タイミングで関数が undefined のままバインドされる事故が出た（症状: ページラベルが「— / —」のまま、ボタン disabled 永続）
+- `localActivePageSource()` / `localAdvancePage(delta)` を editor-pane.js 内で再実装し、`getCurrentPageIndex` / `getPdfPageIndex` ([src/state.js](src/state.js)) / `getPdfVirtualPageCount` ([src/pdf-pages.js](src/pdf-pages.js)) / `getTxtPageCount` ([src/txt-source.js](src/txt-source.js)) から直接読む
+- `localAdvancePage` は同期モード固定で実装（エディタモードでは PDF/PSD ペインが視覚的に隠れているため activePane の概念は意味を持たない、両ペイン同時更新の sync mode で OK）
+- 優先順: PSD pages → PDF 仮想ページ → TXT マーカーページ。PSD ロード時は `setCurrentPageIndex`、それ以外は `setPdfPageIndex` を駆動
+
+C3. **`syncPageNav()` でラベル + disabled 更新**: `localActivePageSource()` から `{source, total, current}` を取得し:
+- ソース無しなら `— / —` 表記 + 両ボタン disabled
+- 有りなら `P${padStart(2, "0")} / ${total}` 表記、先頭ページなら前 disabled、末尾なら次 disabled
+- 全 page index 変化系 listener (`onPageIndexChange` / `onPdfPageIndexChange` / `onPdfChange` / `onTxtSourceChange` / `psdesign:psd-loaded`) で `syncPageNav` を呼び出し、PSD・PDF・TXT 単体運用すべてでラベルが追従
+
+C4. **Ctrl+← / Ctrl+→ ショートカット** (`onEditorPageNavShortcut`):
+- `document` の **capture フェーズ**で keydown listener を登録
+- 修飾キーが Ctrl/Meta のみ + `getParallelViewMode() === "editor"` のときだけ `preventDefault + stopImmediatePropagation` で先取りし `localAdvancePage(±1)` を呼ぶ
+- 他モード（parallel / proofread）では capture 段で素通しするため、既存の `pageFirst` / `pageLast`（Ctrl+←/→）ショートカットは無傷
+- contenteditable 内でフォーカス中でも capture phase で先取りするので、ブラウザ既定のキャレット移動 + 既存 dispatcher を両方とも上書き
+
+### D. 配置ボタンが押せないバグの修正（PSD 未読込時）
+
+D1. **症状**: エディタモードに入ったとき、配置ボタンと textarea の両方が disabled になり、ユーザーが文字すら打てず「機能していない」と感じる状態だった。
+
+D2. **原因** ([src/txt-source.js](src/txt-source.js) `syncNewInputAvailabilityFor`): `inputEl.disabled = !psdLoaded` で **textarea 自体まで disabled** にしていた。サイドパネルは PSD ありが前提運用なので顕在化しなかったが、エディタモードでは TXT 単体や PSD 未読込状態で開くケースもあり問題が表面化。
+
+D3. **修正**: `inputEl.disabled = false` に統一（常時入力可能、PSD 未読込でも下書き入力可）。ボタンは「入力内容あり」のときに enabled（PSD 有無は問わない）。PSD 未読込時の配置押下は既存の `commitNewTxtInput` 内 `getPages().length === 0` ガードが「PSD が読み込まれていません」toast で弾く形に統一。
+
+### E. 純粋関数群の export 化
+
+E1. **[src/txt-source.js](src/txt-source.js)**: エディタモードから再利用するため以下の内部関数を export 化（実体は無修正）:
+- `splitBlocksRaw` / `replaceBlockInContent` / `deleteBlockFromContent` / `appendBlockToCurrentPageContent` / `convertDigitsForVertical` — 段落操作系
+- `updateTxtSourceBlock` — 段落書換 + setTxtSource
+- `getActivePageNumber`（既存 `activePageNumber()` をリネーム + export）— 「PSD ロード中は currentPageIndex+1、未ロードなら pdfPageIndex+1」のページ番号導出
+- `commitNewTxtInput({ inputEl })` — 中央配置メイン関数、引数化
+- `syncNewInputAvailabilityFor(inputEl)` — input + 関連ボタン (`<id>-btn`) の disabled 更新
+
+E2. **[src/main.js](src/main.js)**: `activePageSource` / `advancePage` を export 化（C2 の循環 import 回避により最終的に editor-pane.js では使わなくなったが、他の経路から再利用したいケースもあるため export は残す）。
+
+### F. CSS スタイル追加 ([src/styles.css](src/styles.css))
+
+- `.editor-pages-viewer-wrap` (flex: 1 1 auto, min-height: 0, position: relative)
+- `.editor-pages-viewer` (overflow-y: auto, padding 12px 16px, gap 12px)
+- `.editor-page-section` (border + radius 4px, panel-body 背景, transition で active border 切替)
+- `.editor-page-section.active` (accent border + box-shadow)
+- `.editor-page-section-header` (`P01` バッジ風、letter-spacing 0.04em、active 時アクセント色)
+- `.editor-page-section-empty-hint`（プレースホルダ用）
+- `.editor-page-section-body` (gap 6px の paragraph 列)
+- `.editor-page-paragraph` (`white-space: pre-wrap`, `min-height: 1.4em`, focus / editing で accent 枠 + bg)
+- `.editor-empty` (absolute overlay, `pointer-events: none`)
+- `.editor-new-input-row` (flex 横並び, padding 8px 12px, panel 背景)
+- `.editor-page-nav` (`margin-left: auto` で右寄せ)
+- `.editor-page-label` (`min-width: 72px`, `tabular-nums`, muted 色)
+- `.editor-page-nav-btn` (compact padding)
+
+旧 `.editor-textarea-wrap` / `.editor-textarea` ルールは撤去。
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.23.0`** に揃え。Cargo.lock も自動追従。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: エディタモード = textarea 1 つに全文 + マーカー込み一括表示、ページ送りと独立 → 新: 現在ページの section のみを `parsePages` 結果から描画、ページ送りで section が入れ替わる
+> - 旧: 各段落の編集はサイドパネルでのみ可能（dblclick 起動の contenteditable）→ 新: エディタモードでも各段落が常時 contenteditable、blur or Ctrl+Enter で commit、双方向同期
+> - 旧: PSD 中央配置はサイドパネル `#txt-new-input` 専用 → 新: `commitNewTxtInput({ inputEl })` 引数化で `#editor-new-input` からも同一ロジックを再利用
+> - 旧: エディタモード内にページ送り UI なし、Ctrl+←/→ は他モードと同じく pageFirst/pageLast → 新: `editor-toolbar-row2` 右端に ◀ `P02 / 24` ▶ ナビ、Ctrl+←/→ をエディタモード時のみ「次/前ページ」に上書き（capture phase で既存ショートカットを抑止）
+> - 旧: PSD 未読込時は textarea も配置ボタンも disabled → 新: textarea は常時 enabled、ボタンは入力あり enabled、PSD 未読込時の配置は toast で明確エラー通知
+> - 旧: 段落操作系・中央配置の中核関数は txt-source.js 内部限定 → 新: `splitBlocksRaw` / `replaceBlockInContent` / `deleteBlockFromContent` / `appendBlockToCurrentPageContent` / `convertDigitsForVertical` / `updateTxtSourceBlock` / `getActivePageNumber` / `commitNewTxtInput` / `syncNewInputAvailabilityFor` を export 化してエディタペインから再利用
+

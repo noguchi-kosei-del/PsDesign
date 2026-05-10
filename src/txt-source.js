@@ -54,7 +54,7 @@ function decodeBytes(bytes) {
 
 const PAGE_MARKER_RE = /<<\s*([0-9０-９]+)\s*Page\s*>>/gi;
 
-function splitBlocksRaw(s) {
+export function splitBlocksRaw(s) {
   return s
     .split(/\n\s*\n/)
     .map((p) => p.replace(/^\n+|\n+$/g, ""))
@@ -103,7 +103,7 @@ export function parsePages(content) {
 // PSD が読み込まれていれば PSD の currentPageIndex を使い、
 // それ以外（見本のみ／TXT 単体）は pdfPageIndex を流用する。
 // PDF も TXT 単体も同じ pdfPageIndex を「閲覧中ページ」として共有する設計。
-function activePageNumber() {
+export function getActivePageNumber() {
   if (getPages().length > 0) return getCurrentPageIndex() + 1;
   return getPdfPageIndex() + 1;
 }
@@ -130,7 +130,7 @@ function getVisibleBlocks() {
   if (!parsed.hasMarkers) {
     return { blocks: parsed.all, hasMarkers: false, pageNumber: null };
   }
-  const pageNumber = activePageNumber();
+  const pageNumber = getActivePageNumber();
   return {
     blocks: parsed.byPage.get(pageNumber) ?? [],
     hasMarkers: true,
@@ -261,7 +261,7 @@ function startInlineEdit(el, originalText, pageNumber) {
 // pageNumber（マーカー有り：1-based / 無し：null）の範囲内で oldParagraph を
 // newParagraph に置換し、setTxtSource → renderViewer で UI も更新する。
 // 同一テキスト or 一致なしのときは no-op で false。
-function updateTxtSourceBlock(pageNumber, oldParagraph, newParagraph) {
+export function updateTxtSourceBlock(pageNumber, oldParagraph, newParagraph) {
   if (oldParagraph === newParagraph) return false;
   const source = getTxtSource();
   if (!source) return false;
@@ -276,7 +276,7 @@ function updateTxtSourceBlock(pageNumber, oldParagraph, newParagraph) {
 
 // pageNumber 範囲内の idx 番目（visible blocks 上の通し番号）のパラグラフを削除した
 // 新しい content を返す。一致しなければ null。
-function deleteBlockFromContent(content, pageNumber, idx) {
+export function deleteBlockFromContent(content, pageNumber, idx) {
   const norm = (content ?? "").replace(/\r\n?/g, "\n");
   if (idx == null || idx < 0) return null;
 
@@ -435,7 +435,7 @@ export function cascadeRemoveTxtForLayers(deletedLayers, excludeTempIds = new Se
 // oldText の最初の出現を newText に置換した結果を返す。一致しなければ null。
 // pageNumber == null（マーカー無し原稿）のときは content 全体を対象にする。
 // 改行は内部で LF 統一して比較・置換し、結果も LF で返す。
-function replaceBlockInContent(content, pageNumber, oldText, newText) {
+export function replaceBlockInContent(content, pageNumber, oldText, newText) {
   const norm = (content ?? "").replace(/\r\n?/g, "\n");
   const oldLF = (oldText ?? "").replace(/\r\n?/g, "\n");
   if (!oldLF) return null;
@@ -472,7 +472,7 @@ function replaceBlockInContent(content, pageNumber, oldText, newText) {
 // 半角数字 (U+0030 - U+0039) を全角数字 (U+FF10 - U+FF19) に変換する。
 // 縦書きの写植では半角数字を縦に並べるとレイアウトが崩れるため、
 // direction === "vertical" のときだけ変換する (横書きは半角のままにする)。
-function convertDigitsForVertical(text, direction) {
+export function convertDigitsForVertical(text, direction) {
   if (direction !== "vertical") return String(text ?? "");
   return String(text ?? "").replace(/[0-9]/g, (c) =>
     String.fromCharCode(c.charCodeAt(0) - 0x30 + 0xff10),
@@ -489,7 +489,7 @@ function convertDigitsForVertical(text, direction) {
 //      paragraphIndex = そのページの既存ブロック数
 //   3) マーカー有り + 対象ページのマーカー無し: 末尾に新しい <<NPage>> セクションを生成。
 //      paragraphIndex = 0
-function appendBlockToCurrentPageContent(content, pageNumber, newText) {
+export function appendBlockToCurrentPageContent(content, pageNumber, newText) {
   const norm = (content ?? "").replace(/\r\n?/g, "\n");
   const trimmedText = String(newText ?? "").trim();
   if (!trimmedText) return { content: norm, paragraphIndex: -1 };
@@ -540,8 +540,11 @@ function appendBlockToCurrentPageContent(content, pageNumber, newText) {
 // 「新規テキストを入力欄から確定」ハンドラ。
 // PSD ページの幾何中心にテキストフレーム (newLayer) を生成し、原稿本文にも追記して
 // sourceTxtRef でリンクする。原稿編集 → 配置済みフレームの追従は ai-place.js が担当。
-function commitNewTxtInput() {
-  const inputEl = $("txt-new-input");
+//
+// inputEl: 入力ソースの textarea/input element。サイドパネルの #txt-new-input でも、
+//          エディタモードの #editor-new-input でも、同じ commit ロジックで処理する。
+export function commitNewTxtInput({ inputEl } = {}) {
+  if (!inputEl) inputEl = $("txt-new-input");
   if (!inputEl) return;
   const text = (inputEl.value ?? "").trim();
   if (!text) return;
@@ -594,22 +597,41 @@ function commitNewTxtInput() {
   });
 
   inputEl.value = "";
+  // サイドパネル / エディタの両方で disabled 状態を更新する。
+  // syncNewInputAvailability は #txt-new-input 専用なので、自身の inputEl が
+  // それと一致しなくても呼び捨てで OK（自身は手動でクリア後の availability を反映）。
   syncNewInputAvailability();
+  syncNewInputAvailabilityFor(inputEl);
   refreshAllOverlays();
   rebuildLayerList();
   // 連続入力できるよう textarea にフォーカスを残す
   inputEl.focus();
 }
 
+// 任意の input/textarea + 関連ボタン (id 規約: <inputId>-btn) の disabled 状態を更新。
+//   - input 自体は常に enabled（PSD 未読込でも下書きできるようにする）
+//   - ボタンは入力内容が無いときだけ disabled
+//   - PSD 未読込時の配置押下は commitNewTxtInput 内で toast による弾き
+//
+// 旧仕様は input まで disabled にしていたが、PSD 未読込状態で「ボタンが押せない」
+// のと「文字が打てない」のがユーザーには区別できず「機能していない」と感じる原因
+// だった。エディタモードでは PSD なしで TXT を編集することもあり得るので、入力
+// 自体は受け付けてからエラー通知する設計に統一する。
+export function syncNewInputAvailabilityFor(inputEl) {
+  if (!inputEl) return;
+  inputEl.disabled = false;
+  const hasText = (inputEl.value ?? "").trim().length > 0;
+  const btnId = `${inputEl.id}-btn`;
+  const btn = document.getElementById(btnId);
+  if (btn) btn.disabled = !hasText;
+}
+
 // PSD 読込状態 + 入力内容に応じて textarea / button の disabled を切替。
+// サイドパネルの #txt-new-input + #txt-new-input-btn を更新する従来 API。
 function syncNewInputAvailability() {
   const inputEl = $("txt-new-input");
-  const btn = $("txt-new-input-btn");
-  if (!inputEl || !btn) return;
-  const psdLoaded = getPages().length > 0;
-  inputEl.disabled = !psdLoaded;
-  const hasText = (inputEl.value ?? "").trim().length > 0;
-  btn.disabled = !psdLoaded || !hasText;
+  if (!inputEl) return;
+  syncNewInputAvailabilityFor(inputEl);
 }
 
 function selectBlock(idx, text) {
@@ -843,7 +865,7 @@ export function initTxtSource() {
     newInputEl.addEventListener("keydown", (e) => {
       if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
         e.preventDefault();
-        commitNewTxtInput();
+        commitNewTxtInput({ inputEl: newInputEl });
       } else if (e.key === "Escape") {
         e.preventDefault();
         if ((newInputEl.value ?? "").length > 0) {
@@ -856,7 +878,7 @@ export function initTxtSource() {
     });
   }
   if (newInputBtn) {
-    newInputBtn.addEventListener("click", commitNewTxtInput);
+    newInputBtn.addEventListener("click", () => commitNewTxtInput({ inputEl: newInputEl }));
   }
   // PSD 読込状態 + 入力内容で disabled を更新する listener 群。
   // PSD ロード/クリアは psdesign:psd-loaded CustomEvent (main.js が dispatch) と

@@ -300,8 +300,21 @@
                   </svg>
                   <span>テキスト保存</span>
                 </button>
+                <div class="editor-page-nav" role="group" aria-label="ページ移動">
+                  <button id="editor-page-prev-btn" class="editor-toolbar-btn editor-page-nav-btn" type="button" title="前のページ (Ctrl+←)" aria-label="前のページ" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="15 18 9 12 15 6"/>
+                    </svg>
+                  </button>
+                  <span id="editor-page-label" class="editor-page-label" aria-live="polite">— / —</span>
+                  <button id="editor-page-next-btn" class="editor-toolbar-btn editor-page-nav-btn" type="button" title="次のページ (Ctrl+→)" aria-label="次のページ" disabled>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <polyline points="9 18 15 12 9 6"/>
+                    </svg>
+                  </button>
+                </div>
               </div>
-              <div class="editor-textarea-wrap">
+              <div id="editor-pages-viewer-wrap" class="editor-pages-viewer-wrap">
                 <div id="editor-empty" class="editor-empty txt-source-empty" hidden>
                   <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
@@ -310,7 +323,21 @@
                   </svg>
                   <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
                 </div>
-                <textarea id="editor-textarea" class="editor-textarea" spellcheck="false" placeholder=""></textarea>
+                <div id="editor-pages-viewer" class="editor-pages-viewer" role="region" aria-label="ページ別原稿"></div>
+              </div>
+              <div class="editor-new-input-row">
+                <textarea
+                  id="editor-new-input"
+                  class="txt-new-input"
+                  placeholder="新しいテキストを入力 (Ctrl+Enter で配置)"
+                  rows="1"
+                  disabled></textarea>
+                <button
+                  id="editor-new-input-btn"
+                  class="txt-new-input-btn"
+                  type="button"
+                  title="入力したテキストを画像中央に配置 (Ctrl+Enter)"
+                  disabled>配置</button>
               </div>
               <div class="editor-footer">
                 <span id="editor-footer-stats" class="editor-footer-stats">0 文字 / 0 行</span>

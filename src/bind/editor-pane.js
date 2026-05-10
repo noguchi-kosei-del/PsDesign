@@ -1,28 +1,42 @@
 // テキストエディタペイン (view-mode "editor" 時に表示)。
-// Comic-Bridge DEMO の TextEditorDropPanel.tsx の MVP 部分を Vanilla JS に移植。
-//   - txtSource をサイドパネルと共有して双方向同期
-//   - 開く / 保存 / 別名 / コピー / クリア
-//   - // 削除マーク トグル / ルビ付け
-//   - 文字数 / 行数フッター + ダーティドット
-// 並べ替えモードと COMIC-POT 構文ハイライトは scope 外（後日）。
+// 原稿テキストパネル風のページ別 section + 中央配置入力欄を提供する。
+//   - parsePages で `<<NPage>>` ごとに section 化、各段落は contenteditable で常時編集可能
+//   - 編集確定 (blur / Ctrl+Enter) → updateTxtSourceBlock で原稿全体を書換 → state 同期
+//   - 下部の #editor-new-input + #editor-new-input-btn で PSD ページ中央へ新規配置
+//     (commitNewTxtInput を txt-source.js と共有)
+//   - ページ送り (←/→) で対応する section を active 化 + scrollIntoView
 
 import {
-  clearTxtSource,
+  getCurrentPageIndex,
+  getPages,
+  getParallelViewMode,
+  getPdfPageIndex,
   getTxtDirty,
   getTxtFilePath,
   getTxtSource,
+  onPageIndexChange,
+  onPdfChange,
+  onPdfPageIndexChange,
   onTxtDirtyChange,
   onTxtFilePathChange,
   onTxtSourceChange,
+  setCurrentPageIndex,
+  setPdfPageIndex,
   setTxtDirty,
   setTxtFilePath,
-  setTxtSource,
 } from "../state.js";
+import { getPdfVirtualPageCount } from "../pdf-pages.js";
 import {
+  commitNewTxtInput,
   ensureTxtExtension,
+  getActivePageNumber,
+  getTxtPageCount,
   loadTxtFromPath,
+  parsePages,
   pickTxtPath,
   pickTxtSavePath,
+  syncNewInputAvailabilityFor,
+  updateTxtSourceBlock,
 } from "../txt-source.js";
 import {
   confirmDialog,
@@ -32,26 +46,22 @@ import {
 
 const $ = (id) => document.getElementById(id);
 
-let textareaEl = null;
-// `setTxtSource` 経由で外から流入した値を textarea へ反映するときに、自身の input
-// イベントで生じた `setTxtSource` 呼び出しと再帰しないようにフラグでガードする。
-let suppressInput = false;
-
 function getEls() {
   return {
-    textarea: $("editor-textarea"),
+    viewerWrap: $("editor-pages-viewer-wrap"),
+    viewer: $("editor-pages-viewer"),
     empty: $("editor-empty"),
-    open: $("editor-open-btn"),
+    newInput: $("editor-new-input"),
+    newInputBtn: $("editor-new-input-btn"),
     save: $("editor-save-btn"),
-    saveAs: $("editor-saveas-btn"),
-    copy: $("editor-copy-btn"),
-    clear: $("editor-clear-btn"),
-    markDelete: $("editor-mark-delete-btn"),
     ruby: $("editor-ruby-btn"),
     filename: $("editor-filename"),
     dirtyDot: $("editor-dirty-dot"),
     footerStats: $("editor-footer-stats"),
     footerDirty: $("editor-footer-dirty"),
+    pagePrev: $("editor-page-prev-btn"),
+    pageNext: $("editor-page-next-btn"),
+    pageLabel: $("editor-page-label"),
   };
 }
 
@@ -61,83 +71,173 @@ function baseName(p) {
   return m ? m[1] : p;
 }
 
-// 状態（content / filename / dirty）を DOM に反映する。
+function pageNumLabel(n) {
+  return String(n).padStart(2, "0");
+}
+
+// 現在ページ番号（PSD or PDF/TXT 単体）。renderViewer の active 判定に使う。
+function getCurrentActivePageNumber() {
+  return getActivePageNumber();
+}
+
+// 現在ページの section のみを再描画する。
+// ページ送り (onPageIndexChange / onPdfPageIndexChange) のたびに呼ばれ、
+// 表示中の section が現在ページ用のものに置き換わる。
+function renderViewer() {
+  const els = getEls();
+  if (!els.viewer) return;
+  const source = getTxtSource();
+  els.viewer.innerHTML = "";
+  if (!source) {
+    if (els.empty) els.empty.hidden = false;
+    return;
+  }
+  const content = source.content ?? "";
+  if (els.empty) els.empty.hidden = content.length !== 0;
+  if (content.length === 0) return;
+
+  const parsed = parsePages(content);
+  const activeNum = getCurrentActivePageNumber();
+
+  if (!parsed.hasMarkers) {
+    // ページマーカー無し原稿: 1 つの section にすべての段落を入れる。
+    const sec = buildSection(null, parsed.all, activeNum, true);
+    els.viewer.appendChild(sec);
+    return;
+  }
+
+  // 現在ページに対応する段落のみ抽出して 1 つの section として描画。
+  // 該当ページにマーカーが無い / 段落が無い場合も section 自体は出して
+  // 「（このページには段落がありません）」プレースホルダで明示する。
+  const blocks = parsed.byPage.get(activeNum) ?? [];
+  const sec = buildSection(activeNum, blocks, activeNum, false);
+  els.viewer.appendChild(sec);
+}
+
+// pageNumber: マーカー有り → number, 無し → null
+// blocks: 段落配列
+// activeNum: 現在の active page number（active class 付与判定用）
+// isMarkerless: true ならヘッダーを「ページ区切りなし」表記に
+function buildSection(pageNumber, blocks, activeNum, isMarkerless) {
+  const sec = document.createElement("section");
+  sec.className = "editor-page-section";
+  sec.dataset.pageNumber = String(pageNumber ?? 0);
+  if (!isMarkerless && pageNumber === activeNum) sec.classList.add("active");
+  if (isMarkerless) sec.classList.add("active"); // マーカー無しは常時 active 表示
+
+  const header = document.createElement("header");
+  header.className = "editor-page-section-header";
+  header.textContent = isMarkerless
+    ? "ページ区切りなし"
+    : `P${pageNumLabel(pageNumber)}`;
+  sec.appendChild(header);
+
+  const body = document.createElement("div");
+  body.className = "editor-page-section-body";
+  if (blocks.length === 0) {
+    const hint = document.createElement("div");
+    hint.className = "editor-page-section-empty-hint";
+    hint.textContent = "（このページには段落がありません）";
+    body.appendChild(hint);
+  } else {
+    blocks.forEach((paragraph, idx) => {
+      const el = document.createElement("div");
+      el.className = "editor-page-paragraph";
+      el.contentEditable = "true";
+      el.spellcheck = false;
+      el.dataset.paragraphIndex = String(idx);
+      el.textContent = paragraph;
+      bindParagraphEdit(el, paragraph, pageNumber);
+      body.appendChild(el);
+    });
+  }
+  sec.appendChild(body);
+  return sec;
+}
+
+// 1 つの contenteditable 段落に編集 listener を張る。
+//   - 編集開始時の originalText を closure で保持
+//   - blur で innerText を取得し LF 正規化、originalText と異なれば updateTxtSourceBlock
+//   - Ctrl+Enter / Cmd+Enter で blur → commit
+//   - Escape で aborted=true → blur → revert
+//   - IME 中は finalize しない
+function bindParagraphEdit(el, originalText, pageNumber) {
+  let aborted = false;
+  let composing = false;
+
+  el.addEventListener("compositionstart", () => { composing = true; });
+  el.addEventListener("compositionend", () => { composing = false; });
+  el.addEventListener("focus", () => { aborted = false; });
+
+  el.addEventListener("keydown", (e) => {
+    if (composing) return;
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      el.blur(); // → onBlur で commit
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      aborted = true;
+      el.blur(); // → onBlur で revert
+    }
+  });
+
+  el.addEventListener("blur", () => {
+    if (aborted) {
+      // 元テキストに戻して終了。setTxtSource は呼ばないので listener も発火せず、
+      // 他の編集状態は保持される。
+      el.textContent = originalText;
+      aborted = false;
+      return;
+    }
+    // contenteditable の改行は browser によって <br> / <div> になり得るため、
+    // textContent ではなく innerText で取得して LF 正規化する。
+    const newText = (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n");
+    if (newText === originalText) return;
+    // 空文字に変更されてもここでは段落削除はしない（過剰スコープ回避、UI で空段落として表示）。
+    const changed = updateTxtSourceBlock(pageNumber, originalText, newText);
+    if (changed) {
+      // setTxtSource → onTxtSourceChange listener で renderViewer が走るので
+      // この el への以降の操作は不要（DOM 自体が再構築される）。
+      // 見た目のフラッシュ抑止のため、ここで el.contentEditable を一時的に false にしない。
+    }
+  });
+}
+
+// content / filename / dirty を DOM に反映（viewer 自体は別経路で再描画）。
 function syncFromState() {
   const els = getEls();
-  if (!els.textarea) return;
+  if (!els.viewer) return;
   const source = getTxtSource();
   const path = getTxtFilePath();
   const dirty = getTxtDirty();
   const content = source?.content ?? "";
 
-  // textarea に外部由来の content を流し込む。フォーカス中はカーソル位置を保つ。
-  if (els.textarea.value !== content) {
-    const wasFocused = document.activeElement === els.textarea;
-    const start = wasFocused ? els.textarea.selectionStart : null;
-    const end = wasFocused ? els.textarea.selectionEnd : null;
-    const scroll = els.textarea.scrollTop;
-    suppressInput = true;
-    els.textarea.value = content;
-    suppressInput = false;
-    if (wasFocused && start != null && end != null) {
-      const cap = els.textarea.value.length;
-      els.textarea.selectionStart = Math.min(start, cap);
-      els.textarea.selectionEnd = Math.min(end, cap);
-    }
-    els.textarea.scrollTop = scroll;
+  // ファイル名表示
+  const display = path ? baseName(path) : (source?.name || "テキスト未読込");
+  if (els.filename) {
+    els.filename.textContent = display;
+    els.filename.title = path || (source ? source.name : "");
   }
 
-  // ファイル名表示: 元パスがあれば basename、無ければ source.name、それも無ければ "テキスト未読込"。
-  const display = path ? baseName(path) : (source?.name || "テキスト未読込");
-  els.filename.textContent = display;
-  els.filename.title = path || (source ? source.name : "");
-
-  // ダーティドット表示。source 無しなら出さない。
+  // ダーティドット表示
   const showDirty = !!source && dirty;
-  els.dirtyDot.hidden = !showDirty;
-  els.footerDirty.hidden = !showDirty;
+  if (els.dirtyDot) els.dirtyDot.hidden = !showDirty;
+  if (els.footerDirty) els.footerDirty.hidden = !showDirty;
 
-  // フッター文字数 / 行数。
-  const charCount = content.length;
-  const lineCount = content === "" ? 0 : content.split("\n").length;
-  els.footerStats.textContent = `${charCount.toLocaleString()} 文字 / ${lineCount.toLocaleString()} 行`;
+  // フッター文字数 / 行数
+  if (els.footerStats) {
+    const charCount = content.length;
+    const lineCount = content === "" ? 0 : content.split("\n").length;
+    els.footerStats.textContent = `${charCount.toLocaleString()} 文字 / ${lineCount.toLocaleString()} 行`;
+  }
 
-  // textarea が空のときは txt-source-empty と同じデザインの空表示を overlay する。
-  // empty は pointer-events:none なので、ユーザーのクリックは下の textarea に届き、
-  // フォーカス → 入力で content が変わり、自動的に empty が消える。
-  if (els.empty) els.empty.hidden = content.length !== 0;
-
-  // ボタンの enabled 制御。row1 のファイル操作ボタン群は UI から削除済みでも JS 側は
-  // null チェックで no-op にして共存させる。row2 の「テキスト保存」ボタン (#editor-save-btn)
-  // は path 有無を問わず source があれば有効（path 無しのときは別名保存に分岐する）。
+  // ボタン enabled
   const hasContent = !!source;
   if (els.save) els.save.disabled = !hasContent;
-  if (els.saveAs) els.saveAs.disabled = !hasContent;
-  if (els.copy) els.copy.disabled = !hasContent;
-  if (els.clear) els.clear.disabled = !hasContent;
-  if (els.markDelete) els.markDelete.disabled = !hasContent;
   if (els.ruby) els.ruby.disabled = !hasContent;
-}
 
-function onTextareaInput() {
-  if (suppressInput) return;
-  const els = getEls();
-  const content = els.textarea.value;
-  // setTxtSource は txtSelection をリセットするが name は保持して上書き。
-  const source = getTxtSource();
-  setTxtSource({ name: source?.name || "untitled.txt", content });
-  setTxtDirty(true);
-}
-
-async function handleOpen() {
-  try {
-    const path = await pickTxtPath();
-    if (!path) return;
-    await loadTxtFromPath(path);
-  } catch (e) {
-    console.error(e);
-    toast(`テキスト読込失敗: ${e?.message ?? e}`, { kind: "error" });
-  }
+  // 新規入力欄の disabled は PSD ロード状態 + 入力内容で更新
+  if (els.newInput) syncNewInputAvailabilityFor(els.newInput);
 }
 
 async function writeTxtFile(outputPath, content) {
@@ -157,16 +257,6 @@ async function handleSave() {
     console.error(e);
     toast(`保存失敗: ${e?.message ?? e}`, { kind: "error" });
   }
-}
-
-// editor-toolbar-row2 の「テキスト保存」ボタン用エントリ。
-// 元ファイルパスがあれば上書き、無ければ別名で保存（OCR 結果や browser D&D 由来など
-// pathなし経路でも初回保存できるようにする）。
-async function handleSaveAuto() {
-  const source = getTxtSource();
-  if (!source) return;
-  if (getTxtFilePath()) await handleSave();
-  else await handleSaveAs();
 }
 
 async function handleSaveAs() {
@@ -193,137 +283,213 @@ async function handleSaveAs() {
   }
 }
 
-async function handleCopy() {
+// 元ファイルパスがあれば上書き、無ければ別名で保存（OCR 結果や browser D&D 由来など
+// pathなし経路でも初回保存できるようにする）。
+async function handleSaveAuto() {
   const source = getTxtSource();
   if (!source) return;
-  try {
-    await navigator.clipboard.writeText(source.content);
-    toast("クリップボードにコピーしました", { kind: "success", duration: 1500 });
-  } catch (e) {
-    console.error(e);
-    toast(`コピー失敗: ${e?.message ?? e}`, { kind: "error" });
-  }
+  if (getTxtFilePath()) await handleSave();
+  else await handleSaveAs();
 }
 
-async function handleClear() {
-  if (!getTxtSource()) return;
-  const ok = await confirmDialog({
-    title: "テキストのクリア",
-    message: "本文を空にして読込状態を解除します。よろしいですか？",
-    confirmLabel: "クリア",
-    kind: "danger",
-  });
-  if (!ok) return;
-  clearTxtSource();
-}
-
-// textarea の現在カーソル / 選択がカバーしている「行範囲」を返す。
-// returns: { startLineStart: number, endLineEnd: number, lines: string[], lineStartIndices: number[] }
-function getLineRange(textarea) {
-  const value = textarea.value;
-  const selStart = textarea.selectionStart;
-  const selEnd = textarea.selectionEnd;
-  // 選択範囲を含む最初の行頭と最後の行末を求める。
-  let startLineStart = value.lastIndexOf("\n", selStart - 1) + 1;
-  let endLineEnd = value.indexOf("\n", selEnd);
-  if (endLineEnd === -1) endLineEnd = value.length;
-  // 選択末尾がちょうど行頭にあるとき（次行を巻き込まない）の補正。
-  if (selEnd > selStart && selEnd === startLineStart) {
-    // 選択 0 文字相当で 1 行のみ対象なら現状のまま。
-  }
-  const slice = value.slice(startLineStart, endLineEnd);
-  const lines = slice.split("\n");
-  return { startLineStart, endLineEnd, lines };
-}
-
-// // 削除マークの行頭トグル。全行に // が付いていれば外し、そうでなければ全行に付ける。
-function handleToggleDeleteMark() {
-  const els = getEls();
-  const ta = els.textarea;
-  if (!ta) return;
-  const { startLineStart, endLineEnd, lines } = getLineRange(ta);
-  if (lines.length === 0) return;
-  const allMarked = lines.every((l) => /^\s*\/\//.test(l));
-  const newLines = lines.map((l) => {
-    if (allMarked) {
-      // 既存の // を 1 つだけ外す。先頭スペースは保持。
-      return l.replace(/^(\s*)\/\/\s?/, "$1");
-    }
-    if (/^\s*$/.test(l)) return l; // 空行はマークしない
-    return `// ${l.replace(/^\s+/, "")}`;
-  });
-  const replacement = newLines.join("\n");
-  // setRangeText でカーソル位置・スクロール位置を保ったまま置換。
-  const scroll = ta.scrollTop;
-  const selStart = ta.selectionStart;
-  const selEnd = ta.selectionEnd;
-  ta.setSelectionRange(startLineStart, endLineEnd);
-  ta.setRangeText(replacement, startLineStart, endLineEnd, "preserve");
-  // 選択範囲は新しい block 全体を再選択（ユーザーが連続でトグルできるよう）。
-  ta.selectionStart = startLineStart;
-  ta.selectionEnd = startLineStart + replacement.length;
-  ta.scrollTop = scroll;
-  // 入力イベントを発火 → setTxtSource + setTxtDirty が走る。
-  ta.dispatchEvent(new Event("input", { bubbles: true }));
-}
-
-// 選択文字列を「親（ふりがな）」に置換。選択無し or キャンセルで no-op。
+// ルビ付け: 現在フォーカス中の contenteditable 内で文字選択中なら、
+// その範囲を「親（ふりがな）」に置換する。
 async function handleAddRuby() {
-  const els = getEls();
-  const ta = els.textarea;
-  if (!ta) return;
-  const selStart = ta.selectionStart;
-  const selEnd = ta.selectionEnd;
-  if (selEnd <= selStart) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
     toast("ルビを付けたい文字列を選択してください", { kind: "info", duration: 2000 });
     return;
   }
-  const parent = ta.value.slice(selStart, selEnd);
+  const range = sel.getRangeAt(0);
+  // 選択範囲が contenteditable 段落内に収まっているか確認。
+  const parent = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
+    ? range.commonAncestorContainer.parentElement
+    : range.commonAncestorContainer;
+  const paragraph = parent && parent.closest && parent.closest(".editor-page-paragraph");
+  if (!paragraph) {
+    toast("段落内のテキストを選択してください", { kind: "info", duration: 2000 });
+    return;
+  }
+  const parentText = sel.toString();
+  if (!parentText) return;
   const ruby = await promptDialog({
     title: "ルビ付け",
-    message: `「${parent}」のふりがなを入力`,
+    message: `「${parentText}」のふりがなを入力`,
     placeholder: "ふりがな",
   });
   if (ruby == null || ruby === "") return;
-  const replacement = `${parent}（${ruby}）`;
-  const scroll = ta.scrollTop;
-  ta.setSelectionRange(selStart, selEnd);
-  ta.setRangeText(replacement, selStart, selEnd, "end");
-  ta.scrollTop = scroll;
-  ta.dispatchEvent(new Event("input", { bubbles: true }));
+  const replacement = `${parentText}（${ruby}）`;
+  // contenteditable の選択範囲を直接置換 → blur で updateTxtSourceBlock が走る。
+  range.deleteContents();
+  range.insertNode(document.createTextNode(replacement));
+  // 選択を解除して caret を末尾に。
+  sel.removeAllRanges();
+  paragraph.focus();
+  // 見た目を即時反映してから blur で commit を発火させる（focus → blur で
+  // bindParagraphEdit の onBlur が走る）。
+  paragraph.blur();
+}
+
+// 新規入力欄から中央配置をコミット。txt-source.js の commitNewTxtInput を共有。
+function handleCommitNewInput() {
+  const els = getEls();
+  if (!els.newInput) return;
+  commitNewTxtInput({ inputEl: els.newInput });
+}
+
+// 現在のページソース判定（main.js の activePageSource と同じロジックを local 実装）。
+// main.js から import すると静的循環 import が発生し、評価順序によっては
+// activePageSource が undefined のままバインドされる事故が起きる。state / pdf-pages /
+// txt-source からは循環なく取れるので、ここで再実装する。
+function localActivePageSource() {
+  const psd = getPages().length;
+  if (psd > 0) return { source: "psd", total: psd, current: getCurrentPageIndex() };
+  const pdf = getPdfVirtualPageCount();
+  if (pdf > 0) return { source: "pdf", total: pdf, current: getPdfPageIndex() };
+  const txt = getTxtPageCount();
+  if (txt > 0) return { source: "txt", total: txt, current: getPdfPageIndex() };
+  return null;
+}
+
+// エディタモードのページ送り。同期モード固定で実装する（PDF/PSD ペインが
+// 隠されているのでアクティブペインの概念が無いため、両ペイン共通の同期動作で OK）。
+function localAdvancePage(delta) {
+  const info = localActivePageSource();
+  if (!info) return;
+  const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
+  if (info.source === "psd") setCurrentPageIndex(next);
+  else setPdfPageIndex(next); // pdf / txt はどちらも pdfPageIndex 駆動
+}
+
+// ページナビボタンのラベル / disabled を現在ページソースから更新する。
+// 「P02 / 24」のような ゼロ埋め 2 桁表記。ソースが無いときは「— / —」。
+function syncPageNav() {
+  const els = getEls();
+  if (!els.pageLabel) return;
+  const info = localActivePageSource();
+  if (!info || info.total <= 0) {
+    els.pageLabel.textContent = "— / —";
+    if (els.pagePrev) els.pagePrev.disabled = true;
+    if (els.pageNext) els.pageNext.disabled = true;
+    return;
+  }
+  const cur = info.current + 1; // 1-based 表示
+  const padCur = String(cur).padStart(2, "0");
+  els.pageLabel.textContent = `P${padCur} / ${info.total}`;
+  if (els.pagePrev) els.pagePrev.disabled = info.current <= 0;
+  if (els.pageNext) els.pageNext.disabled = info.current >= info.total - 1;
+}
+
+// Ctrl+← / Ctrl+→ でページ送り。
+// エディタモード (view-mode === "editor") のときだけ動作させ、他モードでは
+// 既存ショートカット (pageFirst / pageLast) を尊重する。
+// capture フェーズで先取りして preventDefault + stopImmediatePropagation することで、
+// settings.js の findShortcutMatch 経由の dispatcher より先に処理を奪う。
+function onEditorPageNavShortcut(e) {
+  if (!(e.ctrlKey || e.metaKey)) return;
+  if (e.altKey || e.shiftKey) return;
+  if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+  if (getParallelViewMode() !== "editor") return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  localAdvancePage(e.key === "ArrowLeft" ? -1 : 1);
+}
+
+function bindNewInput() {
+  const els = getEls();
+  if (!els.newInput) return;
+  els.newInput.addEventListener("input", () => syncNewInputAvailabilityFor(els.newInput));
+  els.newInput.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      handleCommitNewInput();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      if ((els.newInput.value ?? "").length > 0) {
+        els.newInput.value = "";
+        syncNewInputAvailabilityFor(els.newInput);
+      } else {
+        els.newInput.blur();
+      }
+    }
+  });
+  if (els.newInputBtn) {
+    els.newInputBtn.addEventListener("click", handleCommitNewInput);
+  }
 }
 
 export function bindEditorPane() {
   const els = getEls();
-  if (!els.textarea) return;
-  textareaEl = els.textarea;
+  if (!els.viewer) return;
 
-  // textarea 入力 → state へ反映。
-  els.textarea.addEventListener("input", onTextareaInput);
-
-  // ツールバー配線。
-  els.open?.addEventListener("click", handleOpen);
-  // row2 の「テキスト保存」ボタンは「ある元ファイル → 上書き / 無ければ別名」を自動分岐。
+  // ツールバー (row2) 配線。row1 系のボタン (#editor-open-btn / #editor-saveas-btn /
+  // #editor-copy-btn / #editor-clear-btn / #editor-mark-delete-btn) は HTML 上既に
+  // 撤去されている。null チェックで安全に扱う。
   els.save?.addEventListener("click", handleSaveAuto);
-  els.saveAs?.addEventListener("click", handleSaveAs);
-  els.copy?.addEventListener("click", handleCopy);
-  els.clear?.addEventListener("click", handleClear);
-  els.markDelete?.addEventListener("click", handleToggleDeleteMark);
   els.ruby?.addEventListener("click", handleAddRuby);
 
-  // 状態変化を購読して DOM に反映。サイドパネル側 (txt-source-viewer) からの編集や
-  // OCR 完了による setTxtSource もこのリスナー経由で textarea に流れる。
-  onTxtSourceChange(syncFromState);
+  // ページ移動ボタン
+  els.pagePrev?.addEventListener("click", () => localAdvancePage(-1));
+  els.pageNext?.addEventListener("click", () => localAdvancePage(+1));
+
+  // 新規テキスト入力欄
+  bindNewInput();
+
+  // Ctrl+← / Ctrl+→ ショートカット（エディタモード時のみ active）
+  document.addEventListener("keydown", onEditorPageNavShortcut, true);
+
+  // txtSource 変化で全 viewer 再描画 + filename / dirty / footer 同期。
+  // TXT 単体運用時は activePageSource の total が変わるためページラベルも更新。
+  onTxtSourceChange(() => {
+    renderViewer();
+    syncFromState();
+    syncPageNav();
+  });
   onTxtFilePathChange(syncFromState);
   onTxtDirtyChange(syncFromState);
 
+  // ページ送り連動: PSD or PDF の page index が変化 → 現在ページ用 section に再描画。
+  // 旧仕様の「active class だけ動かす」ではなく、表示する section 自体を入れ替える。
+  onPageIndexChange(() => {
+    renderViewer();
+    syncPageNav();
+  });
+  onPdfPageIndexChange(() => {
+    // PSD 読込中は onPageIndexChange が同期ブリッジ経由で発火するためスキップ。
+    if (getPages().length > 0) return;
+    renderViewer();
+    syncPageNav();
+  });
+  onPdfChange(() => {
+    if (getPages().length > 0) return;
+    renderViewer();
+    syncPageNav();
+  });
+
+  // PSD ロード/クリアで新規入力欄の disabled を更新（getActivePageNumber も
+  // 判定先が変わるため、現在ページ用 section に再描画する）。
+  window.addEventListener("psdesign:psd-loaded", () => {
+    if (els.newInput) syncNewInputAvailabilityFor(els.newInput);
+    renderViewer();
+    syncPageNav();
+  });
+
   // 初期化反映。
+  renderViewer();
   syncFromState();
+  syncPageNav();
 }
 
-// view-mode が "editor" に切り替わったときの textarea フォーカス制御。
+// view-mode が "editor" に切り替わったときのフォーカス制御。
 // main.js bindParallelViewMode が呼ぶ。
+// active section の最初の段落へフォーカスを移すと自然な編集開始位置になる。
 export function focusEditor() {
-  if (!textareaEl) textareaEl = $("editor-textarea");
-  if (textareaEl) requestAnimationFrame(() => textareaEl.focus());
+  const viewer = $("editor-pages-viewer");
+  if (!viewer) return;
+  requestAnimationFrame(() => {
+    const active = viewer.querySelector(".editor-page-section.active");
+    const first = (active || viewer).querySelector(".editor-page-paragraph");
+    if (first) first.focus();
+  });
 }
