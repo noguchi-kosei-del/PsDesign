@@ -3478,3 +3478,157 @@ F2. **CSS** ([src/styles.css](src/styles.css)):
 > - 旧: framesVisible / Ctrl+H で枠の表示切替が可能 → 新: framesVisible state / shortcut / CSS rule をすべて撤去（デフォルトで枠なし）
 > - 旧: 編集中レイヤーに枠線・回転ハンドル・サイズバッジ・swap-target ハイライトが表示される → 新: 全て非表示、caret だけが操作の手がかり
 
+---
+
+## v1.22.0: 記号フォント置換 + 句読点ツメ + 写植設定タブ + 編集パネル整理 + 合成太字
+
+### 概要
+
+このバージョンは 8 つの柱で構成される:
+1. **記号フォント自動置換** — ♡♥★☆♪♫♬♩♯♭→←↑↓〇○●◎△▲▽▼□■◇◆♠♣♦ を `KozGoPr6N-Regular` (小塚ゴシック Pr6N R) で表示・保存
+2. **句読点ツメ 50%** — 「、」「。」を Photoshop の `mojiZume` 属性 50% で詰めて保存
+3. **環境設定の「写植設定」タブ刷新** — タブ名「サイドバー」→「写植設定」、句読点ツメは適用 / 適用しない の select に
+4. **編集パネルのタブ撤去** — サイズ / 行間 / フチ を縦並びで全表示、各 panel に小見出し追加
+5. **編集 panel の高さ圧縮** — vertical padding と separator を絞って約半分の高さに
+6. **スタイルパレット UX** — プリセット名をそのフォント自身で表示、テンプレ select 選択直後に blur
+7. **合成太字（faux bold）** — Photoshop の Character パネル「B」相当の機能とボタン、サイズ panel `.size-row` 右側に配置
+8. **自動配置完了ダイアログ撤去** — 成功時はダイアログを出さず緑チェックマーク進捗の終了のみ
+
+### A. 記号フォント自動置換（♡♥★☆♪ 等）
+
+A1. **新規定数 `SYMBOL_CHAR_CODES`** ([src/canvas-tools.js](src/canvas-tools.js)): プレビュー側の判定 Set。char code を 27 種類ハードコード（ハート / 星 / 音符 / シャープ・フラット / 矢印 / 丸 / 三角 / 四角 / 菱形 / トランプ）。`isSymbolReplaceChar(ch)` / `lineHasSymbolChar(s)` ヘルパー。
+
+A2. **プレビュー側の per-char 自動置換** ([src/canvas-tools.js](src/canvas-tools.js) `appendStyledSegment`): `effectiveFontAt(absIdx, ch)` で「ユーザー手動指定 (`charFonts[idx]`) > 記号置換 (`symbolFontPS`) > undefined (layer 既定)」の優先順で解決。`renderInnerText` / `appendLineWithTracking` シグネチャに `symbolFontPS` 引数を追加。
+
+A3. **Photoshop 書き戻し** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applySymbolFont`): `applyPerCharSizesAndFonts` を template にコピー。各 char の effective font が「symbol char かつ `charFonts[i]` 未設定」のとき `putString(sID("fontPostScriptName"), symbolFontPS)` を当てる。set の class は `sID("textLayer")` (per-character スタイル変更が破棄されない既知パターン)。新規 + 既存両方のレイヤーが対象。
+
+A4. **設定**: [src/settings.js](src/settings.js) の `DEFAULT_SETTINGS.defaults` に `symbolFontReplaceEnabled: true` / `symbolFontPostScriptName: "KozGoPr6N-Regular"` 追加。設定モーダル「写植設定」タブに ON/OFF select を追加。
+
+### B. 句読点ツメ 50%
+
+B1. **JSX 関数 `applyPunctuationTsume`** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)): 「、」(U+3001) / 「。」(U+3002) のみを対象に Photoshop の **mojiZume** (sID 名 = `mojiZume`、字面どおり「文字詰め」) を per-char で当てる。clone-and-replace パターンで各句読点 char に `putUnitDouble(sID("mojiZume"), sID("percentUnit"), pct / 100)` を適用。値スケールは **0〜1 fraction**（50% = 0.5）— 50 を直接渡すと PS が 5000% と解釈して bbox が崩壊し text invisible になる症状から逆算判明。
+
+B2. **TypeID 解決の罠**: 旧来の `tsume` / charID `PrTs` は現代 Photoshop (CC 2018+) で登録されておらず、`stringIDToTypeID("tsume")` が「未登録名 → 新規 TypeID 生成」を返して silently ignore される。実機 textStyle key ダンプで `mojiZume` が標準キーであることを特定。
+
+B3. **Phase B safety net**: `applyDefaultTextSettingsToAllLayers` の `textItem.autoKerning = MANUAL` DOM access が一部の per-char 属性を flatten する保険として、保存直前に `reapplyPunctuationTsumeForAllLayers(doc, pct)` / `reapplySymbolFontForAllLayers(doc, ps)` で全テキストレイヤーへ再適用（冪等動作）。
+
+B4. **設定**: `punctuationTsumePercent: 50` (デフォルト) / 設定モーダル「写植設定」タブで「適用 / 適用しない」select、内部値は ON=50 / OFF=0。`tateChuYokoEnabled` と完全に同じ UI パターン。
+
+B5. **Rust struct + JSX 引数**: [src-tauri/src/lib.rs](src-tauri/src/lib.rs) `EditPayload` に `symbol_font_replace_enabled: bool` / `symbol_font_post_script_name: Option<String>` / `punctuation_tsume_percent: f64` を追加。`generate_apply_script` で各 `applyToPsd` 呼び出しに 6 引数追加（既存の dash/tilde/tcy パターンと同形）。
+
+B6. **`cID` ヘルパー追加** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)): `var cID = function (s) { return charIDToTypeID(s); }`。`mojiZume` が動作するため最終的に `applyPunctuationTsume` では sID のみで足りるが、`stringIDToTypeID` で取れない属性があれば `cID` 経由でレガシー charID から確実に解決できる退路として保持。
+
+### C. 環境設定タブ刷新
+
+C1. **タブ名変更**: 設定モーダルの 3 タブのうち最後を「サイドバー」→ **「写植設定」** に変更 ([index.html](index.html))。`data-tab="defaults"` の内部 ID は据え置きで JS 配線・localStorage 保存値は無変更。
+
+C2. **句読点ツメを number input → select 化** ([index.html](index.html) + [src/settings-ui.js](src/settings-ui.js)): 旧 `min=0 max=100 step=5` の number input から、`tateChuYokoEnabled` と同じ「適用 / 適用しない」の select に変更。内部 `punctuationTsumePercent` は `tateChuYokoEnabled` のような bool ではなく数値のまま (ON=50 / OFF=0) に保つことで、JSX 側の `> 0` 判定ロジックを変えずに済ます。`syncDefaultsUi` は `> 0 ? "on" : "off"` のマッピングで状態復元。
+
+### D. 編集パネルのタブ撤去（サイズ / 行間 / フチを縦並び全表示）
+
+D1. **背景**: v1.4.0 で 3 タブ化されたが、複数選択での一括編集や写植作業で 3 つすべてを行き来する場面が多く、タブ切替が摩擦になっていた。
+
+D2. **DOM 変更** ([index.html](index.html) `.editor-tabs-section`): `<div class="editor-tabs">` 全体（3 つの `<button class="editor-tab">`）を撤去、各 `.editor-tab-panel` から `hidden` 属性 / `role="tabpanel"` も撤去。`.editor-tabs-section` ラッパーは保持して 3 panel を flex column 縦並びに。
+
+D3. **CSS 変更** ([src/styles.css](src/styles.css)): `.editor-tabs` / `.editor-tab` / `.editor-tab.active` / `.editor-tab[hidden]` / `.editor-tab-panel[hidden]` の rule を全削除。`.editor-tabs-section > .editor-tab-panel + .editor-tab-panel` に `margin-top: 4px; padding-top: 4px; border-top: 1px solid var(--border)` で panel 間 separator を追加。
+
+D4. **JS 撤去** ([src/text-editor.js](src/text-editor.js)): `setEditorTab` / `bindEditorTabs` / `editorTabsSectionEl` を削除（約 27 行）。`bindEditorEvents` 内の `bindEditorTabs()` 呼出も撤去。font-source タブ（combobox / palette）は別系統なので無関係に保持。
+
+D5. **panel 見出し追加** ([index.html](index.html) + [src/styles.css](src/styles.css)): 各 panel 先頭に `<div class="editor-panel-label">サイズ / 行間 / フチ</div>` を配置。スタイルは `.font-combobox-label` と統一感のある `font-size: 11px; color: var(--text-muted); margin-bottom: 0; line-height: 1.2`。
+
+### E. 編集 panel の高さ圧縮（約半分）
+
+E1. **vertical padding と separator を絞る** ([src/styles.css](src/styles.css)): `.editor-tab-panel` 配下に scope を切って各 panel の縦寸法を圧縮。
+- `.editor-panel-label`: margin-bottom 4px → 0
+- panel 間 separator: 10+10 → 4+4 = 8px (削減 24px)
+- `.size-btn` / `.ruby-toggle-btn` vertical padding: 4×2 → 0、line-height: 1.2 で文字潰れ防止
+- `.size-input` vertical padding: 4×2 → 1×2
+- `.stroke-dot`: 20×20 → 16×16
+
+合計約 80px の高さ削減。スコープは `.editor-tab-panel` 配下に限定したので将来 `size-btn` / `size-input` を別 UI で流用しても影響しない。
+
+### F. スタイルパレット UX 改善
+
+F1. **プリセット名をそのフォントで表示** ([src/style-palette.js](src/style-palette.js) `createPresetItem`): `style-palette-item-name` (preset.subName / preset.name) に `cssFontFamily(preset.fontName)` で取得した CSS font-family を直接適用、`ensureFontLoaded(preset.fontName)` で FontFace API 経由のフォント登録も発火。Chromium は CSS font-family を動的解決するため、フォント未ロード時は fallback で表示し、ロード完了後に自動的に再描画される（明示的 re-render 不要）。
+
+F2. **テンプレ select 選択直後に blur** ([src/style-palette.js](src/style-palette.js) `bindStylePalette`): `#style-palette-category` の change ハンドラ末尾に `catSelect.blur()` を追加。残ったままだと spacebar / 矢印キー等でドロップダウンが意図せず開閉して、サイドバーや canvas のキーボード操作と衝突する事故を防止。
+
+### G. 合成太字（faux bold / syntheticBold）
+
+G1. **データモデル**: ハイブリッド per-char + per-layer。
+- `addNewLayer` 引数 / 戻り値スキーマ ([src/state.js](src/state.js)) に `syntheticBold: boolean` (layer 全体の bold flag) と `charBolds: { [charIndex]: boolean }` (per-char override) を追加。`charBolds[i]` が定義されていれば layer の `syntheticBold` より優先。
+- `setCharBoldsRange(psdPath, layerIdOrTempId, from, to, valueOrNull)` / `getCharBold(psdPath, layerIdOrTempId, charIndex)` API を `setCharFontsRange` / `getCharFont` と同型で新設。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) の `LayerEdit` / `NewLayer` 両 struct に `synthetic_bold: Option<bool>` と `char_bolds: Option<HashMap<String, bool>>` を serde rename 付きで追加。
+
+G2. **JSX 関数 `applyPerCharBolds(layer, contents, charBolds, layerBold)`** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)): `applyPerCharSizesAndFonts` を template にコピー。各 char の effective bold を「`charBolds[i]` 優先 → なければ `layerBold` フォールバック」で解決し、`putBoolean(sID("syntheticBold"), curBold)` で適用。set の class は `sID("textLayer")`。`applyToPsd` の既存・新規両ループで `applyPerCharSizesAndFonts` の直後に呼出（warning 付き try/catch）。`emit_char_bolds()` ヘルパーで JSX オブジェクトリテラル emit。
+
+G3. **プレビュー** ([src/canvas-tools.js](src/canvas-tools.js)):
+- 各 layer の `inner.style.fontWeight = "700"` を layer 全体の `syntheticBold` で適用 (renderOverlay の existing / new 両ループ)
+- `appendStyledSegment` の per-char signature 計算に `charBolds[absIdx]` を加え、span に `font-weight: 700/400` を当てる（CSS specificity で per-char が優先）
+- `renderInnerText` / `appendLineWithTracking` のシグネチャに `charBolds` 引数を追加
+- 高速パス判定にも `hasCharBolds` を加算
+
+G4. **コミット系** ([src/text-editor.js](src/text-editor.js)):
+- `commitBoldToSelections(value)`: 選択中の全レイヤーに `syntheticBold` を適用、`charBolds` は明示的にクリア（layer 値が確実に効くように）
+- `computeCommonBold(selections)`: 混在検出 (null) パターン (`computeCommonStroke` / `computeCommonFill` と同型)
+- `syncBoldToggle(value)`: B ボタンの `aria-pressed` と `disabled` を更新（`undefined` = 未選択 disabled、`null` = 混在 inactive、`true/false` = 反映）
+- `populateEditor` の選択 0 件・1 件以上両分岐に sync 呼出を埋め込み
+
+G5. **UI 配線** ([src/main.js](src/main.js) `bindBoldToggle`): クリック時 `getLastInplaceSelection()` で per-char / per-layer をハイブリッド分岐。
+- per-char 時: `setCharBoldsRange` + `applyEditModeStyleToRange({fontWeight: "700"|"400"})` で編集中 DOM 即時反映
+- per-layer 時: `commitBoldToSelections(newValue)` 経由
+- `mousedown.preventDefault` で contenteditable のフォーカス移動を抑止し、in-place 編集中の文字選択を保ったまま B クリック可能
+
+G6. **DOM / CSS** ([index.html](index.html) + [src/styles.css](src/styles.css)): サイズ panel `.size-row` 右側に `<button id="bold-toggle-btn">太字</button>` を追加。`.bold-toggle-btn` スタイルは `min-width: 36px; padding: 0 8px; font-weight: 700; font-size: 11px` で `ruby-toggle-btn` と視覚的に揃え、`aria-pressed="true"` で accent 塗り、`:disabled` で 0.4 opacity。
+
+### H. 自動配置完了ダイアログ撤去
+
+H1. [src/ai-place.js](src/ai-place.js) `applyPlan` 成功パスの `notifyDialog` 呼出を撤去。進捗モーダルだけ緑チェックマークアニメで閉じる (`hideProgress({ success: true })`)。エラー時のみ catch ブロックで `notifyDialog` 表示は維持。確認モーダル（PSD / OCR ページ数の不一致警告）はユーザー判断が必要なので保持。
+
+### I. データフロー全体図（v1.22.0 まで）
+
+```
+state (settings + per-layer + per-char)
+  ↓ exportEdits()
+JS payload {
+  edits: [{ syntheticBold, charBolds, charSizes, charFonts, ... }],
+  newLayers: [{ syntheticBold, charBolds, ... }],
+  symbolFontReplaceEnabled, symbolFontPostScriptName, punctuationTsumePercent,
+  dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled,
+}
+  ↓ invoke
+Rust EditPayload struct (serde rename)
+  ↓ generate_apply_script
+JSX literal: applyToPsd(path, [edits], [newLayers], save_path,
+  dash, tilde, tcy, symFontPs, tsumePct)
+  ↓ executeAction(set, ...) for each per-char attr
+Photoshop textStyleRange (clone-and-replace)
+  ↓ doc.saveAs()
+保存される PSD
+```
+
+各 apply 関数の呼出順（既存・新規両レイヤー共通、`applyToPsd` 内）:
+1. `applyLineLeadings` (per-line leading)
+2. `applyPerCharSizesAndFonts` (per-char size + font)
+3. `applyPerCharBolds` (per-char + layer-wide bold) ← v1.22.0
+4. `applySymbolFont` (記号 → KozGoPr6N) ← v1.22.0
+5. `applyPunctuationTsume` (、 / 。 → mojiZume 50%) ← v1.22.0
+6. `applyRepeatedDashTracking` (— ― 〜 ～ 連続詰め、新規のみ)
+7. `applyTateChuYoko` (!! / !? の縦中横、新規縦書きのみ)
+8. `applyDefaultTextSettingsToAllLayers` (kerning + antialias 統一)
+9. **Phase B**: `reapplyPunctuationTsumeForAllLayers` + `reapplySymbolFontForAllLayers` (DOM autoKerning 後の per-char 属性復活、v1.22.0 safety net)
+10. `doc.saveAs(...)`
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.22.0`** に揃え。Cargo.lock も自動追従。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: 記号類は写植本体フォントで表示 / 保存 → 新: ♡♥★☆♪ 等の固定 27 種を `KozGoPr6N-Regular` (小塚ゴシック Pr6N R) で自動置換、ユーザーが per-char で手動指定したフォントは尊重
+> - 旧: 句読点「、」「。」のツメは Photoshop 手動 → 新: 保存時に `mojiZume = 0.5` (50%) を per-char で自動適用、Phase B safety net で flatten 影響にも対応
+> - 旧: 設定モーダル 3 タブ「ショートカット / ページ送り / サイドバー」、句読点ツメは number input → 新: 「ショートカット / ページ送り / 写植設定」、句読点ツメは「適用 / 適用しない」select
+> - 旧: 編集パネルは「サイズ / 行間 / フチ」の 3 タブ切替 → 新: 3 panel を縦並びで全表示、各 panel に小見出し、高さは旧の約半分に圧縮
+> - 旧: スタイルパレット項目はサイドバーフォントで表示 → 新: 各プリセット名をそのフォント自身で描画、テンプレ select はキー操作衝突を防ぐため選択直後に blur
+> - 旧: 太字ボタンなし → 新: サイズ panel `.size-row` 右側に「太字」トグルボタン、in-place 編集の文字選択時は per-char (`charBolds`) / 通常は per-layer (`syntheticBold`) のハイブリッド適用、Photoshop 保存で `syntheticBold` textStyle 属性として書き戻し
+> - 旧: 自動配置完了で notifyDialog → 新: 緑チェックマーク進捗終了のみ（エラー時のみダイアログ）
+

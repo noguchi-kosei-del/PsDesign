@@ -38,6 +38,12 @@ pub struct LayerEdit {
     pub char_sizes: Option<HashMap<String, f64>>,
     #[serde(rename = "charFonts", default)]
     pub char_fonts: Option<HashMap<String, String>>,
+    // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
+    #[serde(rename = "syntheticBold", default)]
+    pub synthetic_bold: Option<bool>,
+    // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
+    #[serde(rename = "charBolds", default)]
+    pub char_bolds: Option<HashMap<String, bool>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -67,6 +73,12 @@ pub struct NewLayer {
     pub char_sizes: Option<HashMap<String, f64>>,
     #[serde(rename = "charFonts", default)]
     pub char_fonts: Option<HashMap<String, String>>,
+    // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
+    #[serde(rename = "syntheticBold", default)]
+    pub synthetic_bold: Option<bool>,
+    // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
+    #[serde(rename = "charBolds", default)]
+    pub char_bolds: Option<HashMap<String, bool>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -95,6 +107,17 @@ pub struct EditPayload {
     // するか。新規レイヤーのみ JSX で適用、既存レイヤーは触らない。
     #[serde(rename = "tateChuYokoEnabled", default)]
     pub tate_chu_yoko_enabled: bool,
+    // 【v1.22.0】記号フォント置換（♡♥★☆♪♫♬♩♯♭→←↑↓ など）。新規 + 既存レイヤー両方に
+    // JSX 側で適用する。ユーザーが per-char で手動指定したフォントは尊重（自動置換 skip）。
+    // false / 空文字 のとき機能 OFF。
+    #[serde(rename = "symbolFontReplaceEnabled", default)]
+    pub symbol_font_replace_enabled: bool,
+    #[serde(rename = "symbolFontPostScriptName", default)]
+    pub symbol_font_post_script_name: Option<String>,
+    // 【v1.22.0】句読点ツメ（、 U+3001 / 。 U+3002 を Photoshop の tsume 属性で詰める）。
+    // 新規 + 既存レイヤー両方に JSX 側で適用する。0 のとき機能 OFF。0-100 の percent 値。
+    #[serde(rename = "punctuationTsumePercent", default)]
+    pub punctuation_tsume_percent: f64,
 }
 
 // 【v1.16.0】使用フォントの拡張 — TTC face_index を保持して全 face を個別管理。

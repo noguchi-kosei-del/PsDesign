@@ -27,6 +27,14 @@ export const DEFAULT_SETTINGS = {
     // 縦書きの新規レイヤーで半角 !! / !? を自動的に「縦中横」(text-combine-upright) に
     // するか。Photoshop 書き戻しでも textStyleRange の tcy 属性を立てる。
     tateChuYokoEnabled: true,
+    // 記号類（♡♥★☆♪♫♬♩♯♭→←↑↓〇○●△▲▽▼□■◇◆♠♣♦◎ など）を別フォントで自動置換するか。
+    // ON のときプレビュー / Photoshop 書き戻し両方で symbolFontPostScriptName に置換される。
+    // ユーザーが per-char で手動指定したフォントは尊重（自動置換 skip）。
+    symbolFontReplaceEnabled: true,
+    symbolFontPostScriptName: "KozGoPr6N-Regular", // 小塚ゴシック Pr6N R
+    // 句読点「、」(U+3001) と「。」(U+3002) を Photoshop 保存時にツメ N% で組む。
+    // 0 で OFF。プレビュー（CSS）には反映しない（Photoshop 専用機能）。
+    punctuationTsumePercent: 50,
   },
   shortcuts: {
     save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
@@ -104,6 +112,16 @@ function migrate(old) {
     }
     if (typeof d.tateChuYokoEnabled === "boolean") {
       out.defaults.tateChuYokoEnabled = d.tateChuYokoEnabled;
+    }
+    if (typeof d.symbolFontReplaceEnabled === "boolean") {
+      out.defaults.symbolFontReplaceEnabled = d.symbolFontReplaceEnabled;
+    }
+    if (typeof d.symbolFontPostScriptName === "string") {
+      out.defaults.symbolFontPostScriptName = d.symbolFontPostScriptName;
+    }
+    if (typeof d.punctuationTsumePercent === "number" && Number.isFinite(d.punctuationTsumePercent)) {
+      // 0-100 にクランプ
+      out.defaults.punctuationTsumePercent = Math.max(0, Math.min(100, d.punctuationTsumePercent));
     }
   }
   if (old.shortcuts && typeof old.shortcuts === "object") {

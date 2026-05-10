@@ -534,12 +534,8 @@
           <section class="panel-section" data-section="editor" hidden>
           <div id="editor" class="editor">
             <div class="editor-tabs-section">
-              <div class="editor-tabs" role="tablist">
-                <button id="editor-tab-size" class="editor-tab active" data-tab="size" type="button" role="tab" aria-selected="true">サイズ</button>
-                <button id="editor-tab-leading" class="editor-tab" data-tab="leading" type="button" role="tab" aria-selected="false">行間</button>
-                <button id="editor-tab-stroke" class="editor-tab" data-tab="stroke" type="button" role="tab" aria-selected="false">フチ</button>
-              </div>
-              <div class="editor-tab-panel" data-tab-panel="size" role="tabpanel">
+              <div class="editor-tab-panel" data-tab-panel="size">
+                <div class="editor-panel-label">サイズ</div>
                 <div class="size-row">
                   <div class="size-group" role="group" aria-label="文字サイズ">
                     <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
@@ -547,9 +543,11 @@
                     <span class="size-unit">pt</span>
                     <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
                   </div>
+                  <button id="bold-toggle-btn" class="bold-toggle-btn" type="button" title="太字（合成太字）" aria-label="太字" aria-pressed="false" disabled>太字</button>
                 </div>
               </div>
-              <div class="editor-tab-panel" data-tab-panel="leading" role="tabpanel" hidden>
+              <div class="editor-tab-panel" data-tab-panel="leading">
+                <div class="editor-panel-label">行間</div>
                 <div class="size-row">
                   <div class="size-group" role="group" aria-label="行間">
                     <button id="leading-inc-btn" class="size-btn" type="button" title="広く">＋</button>
@@ -566,7 +564,8 @@
                 <div id="leading-row-selector" class="leading-row-selector" role="group" aria-label="対象行" hidden></div>
                 <span id="leading-target-label" class="leading-target-label" hidden></span>
               </div>
-              <div class="editor-tab-panel" data-tab-panel="stroke" role="tabpanel" hidden>
+              <div class="editor-tab-panel" data-tab-panel="stroke">
+                <div class="editor-panel-label">フチ</div>
                 <div class="size-row">
                   <div class="stroke-width-group" role="group" aria-label="フチ太さ">
                     <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
@@ -751,7 +750,7 @@
         <div class="settings-tabs" role="tablist">
           <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
           <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">ページ送り</button>
-          <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">サイドバー</button>
+          <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">写植設定</button>
         </div>
         <div class="settings-tab-panel active" id="settings-tab-shortcuts" role="tabpanel">
           <div class="settings-section-header">
@@ -831,6 +830,20 @@
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-tcy-enabled">「!!」「!?」を縦中横に</label>
               <select id="default-tcy-enabled" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
+              </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-symbol-font-enabled">記号フォント置換 (♡★♪ など)</label>
+              <select id="default-symbol-font-enabled" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
+              </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-punct-tsume">句読点 (、。) のツメ 50%</label>
+              <select id="default-punct-tsume" class="settings-default-input">
                 <option value="on">適用</option>
                 <option value="off">適用しない</option>
               </select>

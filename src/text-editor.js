@@ -340,6 +340,8 @@ function populateEditor() {
     syncStrokeToggle(getStrokeColor());
     syncStrokeWidthInput(getStrokeWidthPx());
     syncFillToggle(getFillColor());
+    // 【v1.22.0】B トグルは選択 0 件で disabled。
+    syncBoldToggle(undefined);
     return;
   }
 
@@ -384,10 +386,30 @@ function populateEditor() {
   if (fillColor != null) setFillColor(fillColor);
   syncFillToggle(fillColor);
 
+  // 【v1.22.0】合成太字（faux bold）ボタンの aria-pressed を共通値に同期。
+  // 混在 (null) のときはニュートラル表示（aria-pressed="false"）。
+  const commonBold = computeCommonBold(selections);
+  syncBoldToggle(commonBold);
+
   // 【v1.16.0】サイドバー側の派生 UI（行間タブの行セレクタ等）に「選択が変わった /
   // 内容が変わった」通知。main.js の syncLeadingRowSelector がこのイベントを listen する。
   window.dispatchEvent(new CustomEvent("psdesign:editor-populated"));
 }
+
+// 【v1.22.0】B トグルボタンの aria-pressed と disabled を更新。
+// value === undefined → 未選択 (disabled)、null → 混在 (inactive)、true/false → 反映。
+function syncBoldToggle(value) {
+  const btn = document.getElementById("bold-toggle-btn");
+  if (!btn) return;
+  if (value === undefined) {
+    btn.disabled = true;
+    btn.setAttribute("aria-pressed", "false");
+  } else {
+    btn.disabled = false;
+    btn.setAttribute("aria-pressed", value === true ? "true" : "false");
+  }
+}
+export { syncBoldToggle };
 
 // ========== フォント検索コンボボックス ==========
 // editor-tabs-section の上に配置されたインストール済み全フォント検索 UI。
@@ -732,34 +754,8 @@ function updateCharSelectionIndicator(sel) {
   }
 }
 
-// editor タブ：サイズ / 行間 / フチ の表示切替。
-// editor-tabs-section はテキスト編集セクション内 (#editor) に配置。
-function editorTabsSectionEl() {
-  return document.querySelector(".editor-tabs-section");
-}
-function setEditorTab(tab) {
-  const section = editorTabsSectionEl();
-  if (!section) return;
-  for (const btn of section.querySelectorAll(".editor-tab")) {
-    const isActive = btn.dataset.tab === tab;
-    btn.classList.toggle("active", isActive);
-    btn.setAttribute("aria-selected", isActive ? "true" : "false");
-  }
-  for (const panel of section.querySelectorAll(".editor-tab-panel")) {
-    panel.hidden = panel.dataset.tabPanel !== tab;
-  }
-}
-
-function bindEditorTabs() {
-  const section = editorTabsSectionEl();
-  if (!section) return;
-  for (const btn of section.querySelectorAll(".editor-tab")) {
-    // mousedown.preventDefault でフォーカス移動を抑止。in-place 編集 textarea に
-    // フォーカスが残るので、行間タブで per-line 編集を続行できる。
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => setEditorTab(btn.dataset.tab));
-  }
-}
+// 【v1.22.0】editor タブ（サイズ / 行間 / フチ）は撤去し、3 panel を縦並びで全表示する
+// 仕様に変更。タブ切替の bindEditorTabs / setEditorTab / editorTabsSectionEl は不要に。
 
 // font-source タブ：edit-font-combobox（フォント検索）と style-palette（プリセット）を
 // 排他切替する。ユーザーの選択は localStorage に永続化。
@@ -795,7 +791,6 @@ function bindFontSourceTabs() {
 }
 
 export function bindEditorEvents() {
-  bindEditorTabs();
   bindFontSourceTabs();
 
   // フォント検索コンボボックスの配線。
@@ -1089,6 +1084,68 @@ export function commitLeadingToSelections(leadingPct) {
   if (!Number.isFinite(leadingPct)) return false;
   return commitSingleFieldToSelections("leadingPct", leadingPct);
 }
+
+// 【v1.22.0】合成太字（faux bold）を選択中の全レイヤーに書き込む。
+// layer 全体に bold flag を当てる per-layer 適用。per-char (charBolds) で残っている
+// オーバーライドはクリアして、layer 値が確実に効くようにする（ユーザーが Photoshop の
+// B ボタン感覚で trigger したとき、選択範囲全体が均一に bold になることを期待するため）。
+export function commitBoldToSelections(value) {
+  const v = !!value;
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  const mutated = withHistoryTransient(() => {
+    let any = false;
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      let cur, hadCharBolds;
+      if (ref.kind === "existing") {
+        const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+        cur = edit.syntheticBold === true;
+        hadCharBolds = edit.charBolds && Object.keys(edit.charBolds).length > 0;
+      } else {
+        cur = ref.newLayer.syntheticBold === true;
+        hadCharBolds = ref.newLayer.charBolds && Object.keys(ref.newLayer.charBolds).length > 0;
+      }
+      if (cur === v && !hadCharBolds) continue;
+      const changes = { syntheticBold: v, charBolds: {} };
+      if (ref.kind === "existing") {
+        setEdit(ref.page.path, ref.layer.id, changes);
+      } else {
+        updateNewLayer(ref.newLayer.tempId, changes);
+      }
+      any = true;
+    }
+    return any || false;
+  });
+  if (mutated) {
+    rebuildLayerList();
+    refreshAllOverlays();
+  }
+  return !!mutated;
+}
+
+// 【v1.22.0】複数選択レイヤーの bold 共通値を計算（混在は null）。
+// 既存 computeCommonStroke / computeCommonFill と同型。
+function computeCommonBold(selections) {
+  let common;
+  for (const sel of selections) {
+    const ref = resolveLayerRef(sel);
+    if (!ref) continue;
+    let v;
+    if (ref.kind === "existing") {
+      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+      v = edit.syntheticBold === true;
+    } else {
+      v = ref.newLayer.syntheticBold === true;
+    }
+    if (common === undefined) common = v;
+    else if (common !== v) return null;
+  }
+  return common ?? null;
+}
+
+export { computeCommonBold };
 
 // 文字色を選択中の全レイヤーに書き込む。
 function commitFillField(color) {

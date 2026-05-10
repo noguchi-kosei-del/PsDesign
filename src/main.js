@@ -15,11 +15,14 @@ import { onFontsRegistered } from "./font-loader.js";
 import { renderAllSpreads } from "./spread-view.js";
 import {
   bindEditorEvents,
+  commitBoldToSelections,
   commitLeadingToSelections,
   commitSelectedLayerField,
   commitSizeToSelections,
+  computeCommonBold,
   hasSelection,
   rebuildLayerList,
+  syncBoldToggle,
 } from "./text-editor.js";
 import { deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { bindAiInstallMenu } from "./ai-install.js";
@@ -140,6 +143,8 @@ import {
   onActiveLeadingLineChange,
   // 【v1.16.0】per-char サイズ
   setCharSizesRange,
+  // 【v1.22.0】per-char 合成太字
+  setCharBoldsRange,
   getEdit,
   getSelectedLayers,
   getNewTextDirection,
@@ -1264,6 +1269,39 @@ function stepTextSize(sign, multiplier = 1) {
   applyTextSize(next);
 }
 
+// 【v1.22.0】合成太字（faux bold）トグルボタン。Photoshop の Character パネル B ボタン相当。
+// in-place 編集中で文字選択あり → per-char (charBolds)、無ければ layer 全体 (syntheticBold)。
+// クリック時の現在 aria-pressed 値を反転させ、新値を適用する。populateEditor が
+// computeCommonBold で aria-pressed を同期するので、選択切替・複数選択時も正しく追従。
+function bindBoldToggle() {
+  const btn = document.getElementById("bold-toggle-btn");
+  if (!btn) return;
+  // mousedown.preventDefault で contenteditable のフォーカス移動を抑止し、in-place 編集中の
+  // 文字選択を保ったまま B をクリックできるようにする（commitFontToSelections の bind パターンと同じ）。
+  btn.addEventListener("mousedown", (e) => e.preventDefault());
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    const newValue = btn.getAttribute("aria-pressed") !== "true";
+    // 1. in-place 編集中の文字選択 → per-char 適用
+    const sel = getLastInplaceSelection();
+    if (sel && sel.end > sel.start) {
+      const targetId = sel.tempId ?? sel.layerId;
+      setCharBoldsRange(sel.psdPath, targetId, sel.start, sel.end, newValue);
+      // 編集中の DOM にも即時反映: span ラップで font-weight を当てる。
+      applyEditModeStyleToRange(sel.start, sel.end, { fontWeight: newValue ? "700" : "400" });
+      refreshAllOverlays();
+      rebuildLayerList();
+      // ボタン表示: 範囲の bold 値を即座に反映（commit 後の populateEditor 経由でも同じだが visual lag を避ける）。
+      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+      return;
+    }
+    // 2. layer 選択 → per-layer 適用（既存の commitFontToSelections と同じ流れ）
+    if (commitBoldToSelections(newValue)) {
+      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+    }
+  });
+}
+
 function bindSizeTool() {
   const input = document.getElementById("size-input");
   const dec = document.getElementById("size-dec-btn");
@@ -1916,6 +1954,7 @@ function init() {
   bindTools();
   bindSizeTool();
   bindLeadingTool();
+  bindBoldToggle();
   bindZoomTool();
   bindPageChange();
   bindStylePalette();

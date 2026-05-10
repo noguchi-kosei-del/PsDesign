@@ -117,6 +117,15 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
                     emit_char_fonts(&mut out, cf);
                 }
             }
+            if let Some(b) = layer.synthetic_bold {
+                out.push_str(&format!(", syntheticBold: {}", if b { "true" } else { "false" }));
+            }
+            if let Some(ref cb) = layer.char_bolds {
+                if !cb.is_empty() {
+                    out.push_str(", charBolds: ");
+                    emit_char_bolds(&mut out, cb);
+                }
+            }
             out.push_str("},\n");
         }
         out.push_str("], [\n");
@@ -166,14 +175,35 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
                     emit_char_fonts(&mut out, cf);
                 }
             }
+            if let Some(b) = nl.synthetic_bold {
+                out.push_str(&format!(", syntheticBold: {}", if b { "true" } else { "false" }));
+            }
+            if let Some(ref cb) = nl.char_bolds {
+                if !cb.is_empty() {
+                    out.push_str(", charBolds: ");
+                    emit_char_bolds(&mut out, cb);
+                }
+            }
             out.push_str("},\n");
         }
+        // 【v1.22.0】記号フォント置換 PostScript 名 / 句読点ツメ % を追加引数として埋め込む。
+        let symbol_font_ps_str = payload
+            .symbol_font_post_script_name
+            .as_deref()
+            .unwrap_or("");
+        let symbol_font_ps_js = if payload.symbol_font_replace_enabled && !symbol_font_ps_str.is_empty() {
+            js_string(symbol_font_ps_str)
+        } else {
+            String::from("\"\"")
+        };
         out.push_str(&format!(
-            "], {}, {}, {}, {});\n",
+            "], {}, {}, {}, {}, {}, {});\n",
             js_string(&save_path),
             payload.dash_tracking_mille,
             payload.tilde_tracking_mille,
-            if payload.tate_chu_yoko_enabled { "true" } else { "false" }
+            if payload.tate_chu_yoko_enabled { "true" } else { "false" },
+            symbol_font_ps_js,
+            payload.punctuation_tsume_percent
         ));
         out.push_str("    __saveOk++;\n");
         out.push_str("  } catch (eFile) {\n");
@@ -246,6 +276,23 @@ fn emit_char_fonts(out: &mut String, m: &std::collections::HashMap<String, Strin
         if !first { out.push_str(", "); }
         first = false;
         out.push_str(&format!("\"{}\": {}", k, js_string(m[k].as_str())));
+    }
+    out.push('}');
+}
+
+// 【v1.22.0】per-char 合成太字（faux bold）map を JSX のオブジェクトリテラルとして emit。
+// value は boolean。
+fn emit_char_bolds(out: &mut String, m: &std::collections::HashMap<String, bool>) {
+    out.push('{');
+    let mut first = true;
+    let mut keys: Vec<&String> = m.keys().collect();
+    keys.sort_by(|a, b| {
+        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
+    });
+    for k in keys {
+        if !first { out.push_str(", "); }
+        first = false;
+        out.push_str(&format!("\"{}\": {}", k, if m[k] { "true" } else { "false" }));
     }
     out.push('}');
 }
@@ -431,6 +478,11 @@ function createNewTextGroupAtTop(doc) {
 // 互換レイヤーで将来削除の可能性あり。ここで string ID ベースに統一して
 // アップデート耐性を高める。
 var sID = function (s) { return stringIDToTypeID(s); };
+// 一部の日本語タイポグラフィ属性（tsume 等）は Photoshop の内部レジストリで
+// stringID 名が安定して登録されていないバージョンがあり、stringIDToTypeID() が
+// charID 経由の TypeID と異なる値を返して silently ignore されることがある。
+// その場合は charID 経由の方が確実。検証済み: tsume = "PrTs", percentUnit = "#Prc"。
+var cID = function (s) { return charIDToTypeID(s); };
 
 function applyStrokeEffect(layerRef, opts) {
   if (!opts) return;
@@ -667,6 +719,313 @@ function applyPerCharSizesAndFonts(layer, contents, charSizes, charFonts) {
       curSrc = nextSrc;
       curSize = nextSize;
       curFont = nextFont;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
+// 【v1.22.0】===== 文字ごとの合成太字（faux bold / syntheticBold） =====
+// charBolds: { "0": true, "5": false, ... } 絶対 char index → bool 値
+// layerBold: layer 全体の bold flag (boolean)。char 個別指定が無い文字に適用。
+//
+// applyPerCharSizesAndFonts と同型の clone-and-replace。layerBold が true で
+// charBolds が空の場合でも全 char に true をセットしたいので、layerBold あり
+// または charBolds あり のどちらかで処理を起動する。
+function applyPerCharBolds(layer, contents, charBolds, layerBold) {
+  var hasChar = charBolds && !isObjEmpty(charBolds);
+  var lb = layerBold === true;
+  if (!hasChar && !lb) return;
+  app.activeDocument.activeLayer = layer;
+
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  // 各 char の effective bold を解決: charBolds[i] があれば優先、無ければ layerBold。
+  function readBold(idx) {
+    if (charBolds) {
+      var v = charBolds[String(idx)];
+      if (typeof v === "boolean") return v;
+    }
+    return lb;
+  }
+
+  // 連続する同 (srcRange, bold) 文字を 1 セグメントに圧縮。
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curBold = readBold(0);
+
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextBold, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc; nextBold = curBold;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextBold = readBold(p);
+      boundary = (nextSrc !== curSrc) || (nextBold !== curBold);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      try { styleClone.putBoolean(sID("syntheticBold"), curBold === true); } catch (eSB) {}
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), p);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curBold = nextBold;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  // 他の per-char 関数と同じく "textLayer" class で set。
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
+// 【v1.22.0】===== 記号フォント自動置換（♡♥★☆♪♫♬♩♯♭→←↑↓〇○●◎△▲▽▼□■◇◆♠♣♦） =====
+// 写植本体フォントが対応していない記号類を別フォント（小塚ゴシック Pr6N R 等）で組む。
+// 既存・新規両方のレイヤーに適用。プレビュー側（canvas-tools.js の SYMBOL_CHAR_CODES）と
+// 同じ char code 集合を使う。ユーザーが per-char で手動指定したフォント (charFonts[i]) が
+// ある char は skip（手動意図を尊重）。
+//
+// 実装: applyPerCharSizesAndFonts と同型の clone-and-replace パターン。各 char の
+// 「effective font」を「手動指定 (charFonts[i]) > 記号置換 > レンジ既存スタイル」の優先順で
+// 解決し、置換が必要な char だけ font を上書きする。
+function applySymbolFont(layer, contents, symbolFontPS, charFonts) {
+  if (typeof symbolFontPS !== "string" || symbolFontPS.length === 0) return;
+
+  // プレビュー側 SYMBOL_CHAR_CODES と完全一致。char code 直接判定（regex 回避）。
+  function isSymbolChar(s) {
+    var c = s.charCodeAt(0);
+    return (
+      c === 0x2661 || c === 0x2665 ||                                       // hearts
+      c === 0x2605 || c === 0x2606 ||                                       // stars
+      c === 0x266A || c === 0x266B || c === 0x266C || c === 0x2669 ||       // music notes
+      c === 0x266F || c === 0x266D ||                                       // sharp / flat
+      c === 0x2192 || c === 0x2190 || c === 0x2191 || c === 0x2193 ||       // arrows
+      c === 0x25CB || c === 0x25CF || c === 0x3007 || c === 0x25CE ||       // circles
+      c === 0x25B3 || c === 0x25B2 || c === 0x25BD || c === 0x25BC ||       // triangles
+      c === 0x25A1 || c === 0x25A0 ||                                       // squares
+      c === 0x25C7 || c === 0x25C6 ||                                       // diamonds
+      c === 0x2660 || c === 0x2663 || c === 0x2666                          // suits
+    );
+  }
+  function readManualFont(idx) {
+    var v = charFonts ? charFonts[String(idx)] : undefined;
+    return (typeof v === "string" && v.length > 0) ? v : null;
+  }
+
+  var fullText = String(contents);
+  if (fullText.length === 0) return;
+
+  // 各 char に当てる置換フォント（null = 触らない、文字列 = 上書き）。
+  var fontPerChar = [];
+  var anyReplace = false;
+  for (var i = 0; i < fullText.length; i++) {
+    if (readManualFont(i) === null && isSymbolChar(fullText.charAt(i))) {
+      fontPerChar[i] = symbolFontPS;
+      anyReplace = true;
+    } else {
+      fontPerChar[i] = null;
+    }
+  }
+  if (!anyReplace) return;
+
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  // (srcRangeIndex, fontPerChar) 境界で textStyleRange を再構築。
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curFont = fontPerChar[0] || null;
+
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextFont, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc; nextFont = curFont;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextFont = fontPerChar[p] || null;
+      boundary = (nextSrc !== curSrc) || (nextFont !== curFont);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      if (curFont !== null) {
+        try { styleClone.putString(sID("fontPostScriptName"), curFont); } catch (eFn) {}
+      }
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), p);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curFont = nextFont;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  // applyRepeatedDashTracking と同じ理由で "textLayer" class を使う（textKey class だと
+  // per-character スタイル変更が破棄されるケースがある既知問題）。
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
+// 【v1.22.0】===== 句読点ツメ（、 / 。 を mojiZume N% で詰める） =====
+// 漫画写植慣例の「読点・句点後の不自然な空白を詰める」処理。Photoshop の Character パネルの
+// 「ツメ」属性を Action Manager 経由で per-character に当てる。プレビュー（CSS）には
+// 反映しない（Photoshop 専用機能）。
+//
+// ★重要 (1)★ 現代 Photoshop (CC 2018+) における tsume の正式 string ID 名は **`mojiZume`**
+// （日本語「文字詰め」の音読み）。旧来 `tsume` / charID `PrTs` は登録されていない TypeID と
+// 一致しないため put が silently ignore される（実機ダンプで判明：textStyle の key 一覧に
+// `mojiZume` が出現、`tsume` は出現しない）。
+//
+// ★重要 (2)★ `mojiZume` の値スケールは **0〜1 の fraction**（percentUnit 経由でも内部的には
+// 0〜1）。50 をそのまま渡すと PS が 5000% と解釈して bbox が異常崩壊し、text が見えなくなる。
+// 50% を表現するには 0.5 を渡す。実機検証で text invisible 症状から逆算判明。
+//
+// 既存・新規両方のレイヤーに適用。
+function applyPunctuationTsume(layer, contents, tsumePct) {
+  var pct = Number(tsumePct) || 0;
+  if (pct <= 0) return;
+  // 0-100 にクランプ
+  if (pct > 100) pct = 100;
+
+  // 対象は「、」(U+3001) と「。」(U+3002) のみ。
+  function isPunctChar(s) {
+    var c = s.charCodeAt(0);
+    return c === 0x3001 || c === 0x3002;
+  }
+
+  var fullText = String(contents);
+  if (fullText.length === 0) return;
+
+  // 各 char にツメを当てるか。1 文字でも該当があれば処理続行。
+  var hasAny = false;
+  var punctFlag = [];
+  for (var i = 0; i < fullText.length; i++) {
+    var hit = isPunctChar(fullText.charAt(i));
+    punctFlag[i] = hit;
+    if (hit) hasAny = true;
+  }
+  if (!hasAny) return;
+
+  // 現代 Photoshop の正式 key 名は "mojiZume"。レガシー "tsume" / "PrTs" はこの PS では効かない。
+  var keyTsume = sID("mojiZume");
+  var keyPctUnit = sID("percentUnit");
+
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  // (srcRangeIndex, punctFlag) 境界で textStyleRange を再構築。
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curPunct = !!punctFlag[0];
+
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextPunct, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc; nextPunct = curPunct;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextPunct = !!punctFlag[p];
+      boundary = (nextSrc !== curSrc) || (nextPunct !== curPunct);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      if (curPunct) {
+        // mojiZume は 0〜1 の fraction を期待（50% → 0.5）。pct は 0-100 で受け取るので
+        // 100 で割って fraction 化してから putUnitDouble へ渡す。
+        try { styleClone.putUnitDouble(keyTsume, keyPctUnit, pct / 100); } catch (eTs) {}
+      }
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), p);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curPunct = nextPunct;
     }
   }
 
@@ -951,7 +1310,53 @@ function applyDefaultTextSettingsToAllLayers(doc) {
   visit(doc);
 }
 
-function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled) {
+// 【v1.22.0】applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定後に、句読点ツメを
+// 全テキストレイヤーに再適用する safety net。DOM access が一部の per-char 属性を flatten で
+// 落とすケースに対応。冪等（既に正しい値が入っていれば動作変化なし）。
+function reapplyPunctuationTsumeForAllLayers(doc, tsumePct) {
+  if (!tsumePct || tsumePct <= 0) return;
+  function visit(parent) {
+    for (var i = 0; i < parent.layers.length; i++) {
+      var l = parent.layers[i];
+      if (l.typename === "LayerSet") {
+        visit(l);
+      } else if (l.kind === LayerKind.TEXT) {
+        try {
+          var ct = l.textItem.contents;
+          if (typeof ct === "string" && ct.length > 0) {
+            applyPunctuationTsume(l, ct, tsumePct);
+          }
+        } catch (eR) {}
+      }
+    }
+  }
+  visit(doc);
+}
+
+// 【v1.22.0】記号フォント置換の Phase B safety net。新規・既存・未編集を問わず全テキスト
+// レイヤーに再適用。charFonts は null（未編集レイヤーには manual override 情報が無いため、
+// 全シンボル char を置換対象とする）。
+function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
+  if (typeof symbolFontPS !== "string" || symbolFontPS.length === 0) return;
+  function visit(parent) {
+    for (var i = 0; i < parent.layers.length; i++) {
+      var l = parent.layers[i];
+      if (l.typename === "LayerSet") {
+        visit(l);
+      } else if (l.kind === LayerKind.TEXT) {
+        try {
+          var ct = l.textItem.contents;
+          if (typeof ct === "string" && ct.length > 0) {
+            applySymbolFont(l, ct, symbolFontPS, null);
+          }
+        } catch (eR) {}
+      }
+    }
+  }
+  visit(doc);
+}
+
+function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[PsDesign] skip missing: " + psdPath); return; }
   var prevUnits = app.preferences.rulerUnits;
@@ -1024,6 +1429,34 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           applyPerCharSizesAndFonts(layer, ti.contents, e.charSizes, e.charFonts);
         } catch (ePerChar) {
           addWarning("文字ごとのサイズ・フォント適用に失敗 (layer " + e.id + "): " + ePerChar);
+        }
+      }
+      // 【v1.22.0】合成太字（faux bold）。layer 全体 (e.syntheticBold) と per-char
+      // (e.charBolds) のハイブリッド。どちらかに値があれば適用。
+      if (e.syntheticBold === true || e.syntheticBold === false ||
+          (e.charBolds && !isObjEmpty(e.charBolds))) {
+        try {
+          applyPerCharBolds(layer, ti.contents, e.charBolds, e.syntheticBold === true);
+        } catch (eBold) {
+          addWarning("合成太字の適用に失敗 (layer " + e.id + "): " + eBold);
+        }
+      }
+      // 【v1.22.0】記号フォント置換（♡♥★☆♪♫♬♩♯♭ など → symbolFontPostScriptName）。
+      // 既存レイヤーにも適用（保存される PSD 内の全テキストを統一する方針）。
+      // ユーザーが per-char で手動指定したフォント (e.charFonts[i]) がある char は skip。
+      if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
+        try {
+          applySymbolFont(layer, ti.contents, symbolFontPostScriptName, e.charFonts);
+        } catch (eSymF) {
+          addWarning("記号フォント置換に失敗 (layer " + e.id + "): " + eSymF);
+        }
+      }
+      // 【v1.22.0】句読点ツメ（、 U+3001 / 。 U+3002 を tsume N% で詰める）。既存レイヤーにも適用。
+      if (typeof punctuationTsumePercent === "number" && punctuationTsumePercent > 0) {
+        try {
+          applyPunctuationTsume(layer, ti.contents, punctuationTsumePercent);
+        } catch (eTsume) {
+          addWarning("句読点ツメの適用に失敗 (layer " + e.id + "): " + eTsume);
         }
       }
       if (typeof e.rotation === "number" && e.rotation !== 0) {
@@ -1145,6 +1578,32 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             addWarning("新規レイヤーの文字ごとのサイズ・フォント適用に失敗: " + ePerCharNew);
           }
         }
+        // 【v1.22.0】合成太字（faux bold）。layer 全体 / per-char ハイブリッド。
+        if (nl.syntheticBold === true || nl.syntheticBold === false ||
+            (nl.charBolds && !isObjEmpty(nl.charBolds))) {
+          try {
+            applyPerCharBolds(layerRef, nti.contents, nl.charBolds, nl.syntheticBold === true);
+          } catch (eBoldNew) {
+            addWarning("新規レイヤーの合成太字適用に失敗: " + eBoldNew);
+          }
+        }
+        // 【v1.22.0】記号フォント置換（♡♥★☆♪♫♬♩♯♭ など → symbolFontPostScriptName）。
+        // 新規レイヤーにも適用。ユーザーが per-char で手動指定したフォントは尊重。
+        if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
+          try {
+            applySymbolFont(layerRef, nti.contents, symbolFontPostScriptName, nl.charFonts);
+          } catch (eSymFNew) {
+            addWarning("新規レイヤーの記号フォント置換に失敗: " + eSymFNew);
+          }
+        }
+        // 【v1.22.0】句読点ツメ（、 U+3001 / 。 U+3002 を tsume N% で詰める）。新規レイヤーにも適用。
+        if (typeof punctuationTsumePercent === "number" && punctuationTsumePercent > 0) {
+          try {
+            applyPunctuationTsume(layerRef, nti.contents, punctuationTsumePercent);
+          } catch (eTsumeNew) {
+            addWarning("新規レイヤーの句読点ツメ適用に失敗: " + eTsumeNew);
+          }
+        }
         // 連続記号のツメ（環境設定の global 値）。新規レイヤーのみ。
         // 負値・正値どちらでも「絶対値ぶん詰める」セマンティクスに統一（ユーザー混乱を吸収）。
         // dash 系と tilde 系で別々の値を per-char に当てる。
@@ -1202,6 +1661,19 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     // シャープに揃える。新規 / 既存問わず、書き出される PSD のテキスト設定を統一する。
     try { applyDefaultTextSettingsToAllLayers(doc); } catch (eDefSet) {
       addWarning("テキスト共通設定 (kerning/antialias) の適用に失敗: " + eDefSet);
+    }
+    // 【v1.22.0】Phase B: applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定が
+    // textStyleRange を flatten してマイナーな per-char 属性（tsume / 記号フォント）を
+    // 落とすことがあるため、保存直前に全テキストレイヤーへ再適用する safety net。
+    // 既存・新規・PsDesign が触っていないレイヤーすべてが対象。再適用は冪等（既に正しい
+    // 値が入っていれば動作変化なし）。
+    if (typeof punctuationTsumePercent === "number" && punctuationTsumePercent > 0) {
+      try { reapplyPunctuationTsumeForAllLayers(doc, punctuationTsumePercent); }
+      catch (eRTs) { addWarning("句読点ツメ再適用に失敗: " + eRTs); }
+    }
+    if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
+      try { reapplySymbolFontForAllLayers(doc, symbolFontPostScriptName); }
+      catch (eRSym) { addWarning("記号フォント置換再適用に失敗: " + eRSym); }
     }
     if (typeof savePath === "string" && savePath.length > 0) {
       var outFile = new File(savePath);

@@ -449,18 +449,10 @@ async function runAutoPlace() {
     // 6. 適用
     applyPlan(plan);
     lastPlacedFingerprint = fingerprint;
-    // 直前の OCR / PSD 読込で出した進捗モーダルが close アニメ中のことがある
-    // （hideProgress は 500ms かけて bg 帯をスライドアウト）。await せずに
-    // notifyDialog を開くと #confirm-modal (z-index 300) が #progress-modal
-    // (z-index 100) を覆ってアニメが視覚的にスキップされて見える事故が起きるため、
-    // 完了を必ず待ってから success モーダルを出す。
-    // success: true でアイコン領域に緑のチェックマークアニメを再生してから閉じる。
+    // 進捗モーダルだけ緑のチェックマークアニメで閉じる。完了 notifyDialog は
+    // ユーザー要望で出さない（写植作業の流れを止めないため）。エラー時のみ下の
+    // catch で notifyDialog を表示する。
     await hideProgress({ success: true });
-    await notifyDialog({
-      title: "自動配置完了",
-      message: "テキストの自動配置が完了しました。",
-      kind: "success",
-    });
   } catch (e) {
     console.error(e);
     await hideProgress();

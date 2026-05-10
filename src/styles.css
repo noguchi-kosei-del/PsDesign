@@ -3069,38 +3069,63 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   letter-spacing: 0.5px;
 }
 
-/* タブ：サイズ / 行間 / フチ を切替表示。フォントの下、editor の中で 1 ブロック扱い。 */
+/* サイズ / 行間 / フチ を縦に全表示。フォントの下、editor の中で 1 ブロック扱い。
+   v1.4.0 でタブ化 → v1.22.0 でタブ撤去（縦並び全表示）。3 panel 間は border-top で
+   .editor 内の他項目と同じ separator スタイルに揃える。 */
 .editor-tabs-section {
   display: flex;
   flex-direction: column;
 }
-.editor-tabs {
-  display: flex;
-  border-bottom: 1px solid var(--border);
-  margin-bottom: 8px;
-}
-.editor-tab {
-  flex: 1;
-  padding: 6px 4px;
-  font: inherit;
-  font-size: 11px;
-  font-weight: 600;
-  background: transparent;
-  border: none;
-  color: var(--text-muted);
-  cursor: pointer;
-  border-bottom: 2px solid transparent;
-  margin-bottom: -1px;
-  transition: color 0.1s, border-color 0.1s;
-}
-.editor-tab:hover:not(.active) { color: var(--text); }
-.editor-tab.active {
-  color: var(--text);
-  border-bottom-color: var(--accent);
-}
-.editor-tab[hidden] { display: none; }
 .editor-tab-panel { display: block; }
-.editor-tab-panel[hidden] { display: none; }
+.editor-tabs-section > .editor-tab-panel + .editor-tab-panel {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--border);
+}
+/* 各 panel 先頭の見出し（サイズ / 行間 / フチ）。font-combobox-label と同じ
+   muted 色 + 11px で視覚的に揃える。 */
+.editor-panel-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 0;
+  line-height: 1.2;
+}
+/* 編集 panel コンパクト化（v1.22.0 でタブ撤去 → 縦並び全表示に伴う省スペース化）。
+   panel 内ボタン・入力の vertical padding を絞り、各 panel の高さを約半分に圧縮する。
+   size-btn / size-input / ruby-toggle-btn は editor-tab-panel 内のみで使われるが、
+   将来の流用に備えてセレクタはスコープを切る。 */
+.editor-tab-panel .size-btn,
+.editor-tab-panel .ruby-toggle-btn { padding-top: 0; padding-bottom: 0; line-height: 1.2; }
+.editor-tab-panel .size-input { padding-top: 1px; padding-bottom: 1px; }
+.editor-tab-panel .stroke-dot { width: 16px; height: 16px; min-width: 16px; }
+
+/* 【v1.22.0】合成太字（faux bold）トグルボタン。size-row 右側に配置。
+   ラベル「太字」(2 文字) と他のトグルボタン（ruby-toggle-btn 等）と視覚的に揃えるため
+   font-size は 11px、min-width は 36px。aria-pressed で active 表示を切替。 */
+.bold-toggle-btn {
+  min-width: 36px;
+  padding: 0 8px;
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-weight: 700;
+  font-size: 11px;
+  line-height: 1.2;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.bold-toggle-btn:hover:not(:disabled) {
+  background: var(--panel-hover);
+}
+.bold-toggle-btn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.bold-toggle-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
 
 /* ========== フォントソース切替タブ ==========
    edit-font-combobox（インストール済み全フォント検索）と style-palette（社内プリセット）を

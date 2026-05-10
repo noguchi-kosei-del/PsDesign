@@ -111,6 +111,8 @@ function syncDefaultsUi() {
   const dt = $("default-dash-tracking");
   const tt = $("default-tilde-tracking");
   const tcy = $("default-tcy-enabled");
+  const sym = $("default-symbol-font-enabled");
+  const pt = $("default-punct-tsume");
   if (ts) ts.value = String(d.textSize ?? "");
   if (tss) tss.value = String(d.textSizeStep ?? 0.1);
   if (lp) lp.value = String(d.leadingPct ?? "");
@@ -120,6 +122,9 @@ function syncDefaultsUi() {
   if (dt) dt.value = String(d.dashTrackingMille ?? 0);
   if (tt) tt.value = String(d.tildeTrackingMille ?? 0);
   if (tcy) tcy.value = d.tateChuYokoEnabled === false ? "off" : "on";
+  if (sym) sym.value = d.symbolFontReplaceEnabled === false ? "off" : "on";
+  // 句読点ツメは内部 0-100 だが UI は 適用/適用しない の 2 値。> 0 を ON とみなす。
+  if (pt) pt.value = (Number(d.punctuationTsumePercent) > 0) ? "on" : "off";
   populateFontDatalist();
 }
 
@@ -381,6 +386,22 @@ function bindDefaultsInputs() {
   if (tcy) {
     tcy.addEventListener("change", () => {
       setDefault("tateChuYokoEnabled", tcy.value !== "off");
+    });
+  }
+
+  const sym = $("default-symbol-font-enabled");
+  if (sym) {
+    sym.addEventListener("change", () => {
+      setDefault("symbolFontReplaceEnabled", sym.value !== "off");
+    });
+  }
+
+  const pt = $("default-punct-tsume");
+  if (pt) {
+    pt.addEventListener("change", () => {
+      // ON = 50%（標準的な漫画写植のツメ量）/ OFF = 0（機能無効）。
+      // 値スケールは内部 0-100 のまま。JSX 側は > 0 で発火するので 0 が OFF 相当。
+      setDefault("punctuationTsumePercent", pt.value === "off" ? 0 : 50);
     });
   }
 

@@ -337,6 +337,42 @@ export function getCharFont(psdPath, layerIdOrTempId, charIndex) {
   return e?.charFonts?.[charIndex];
 }
 
+// ===== 文字ごとの合成太字（faux bold / syntheticBold）オーバーライド =====
+// 【v1.22.0】Photoshop の Character パネル「B」ボタン相当。in-place 編集中に textarea で
+// 文字選択 → 太字トグルで選択範囲の文字だけ syntheticBold が切替わる。layer 全体の
+// syntheticBold とは別管理（per-char 値があれば layer 値より優先）。値スキーマは
+// charSizes / charFonts と同じ {[charIndex]: boolean}。null で当該文字のオーバーライド除去。
+export function setCharBoldsRange(psdPath, layerIdOrTempId, from, to, valueOrNull) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].charBolds ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (valueOrNull == null) delete cur[i]; else cur[i] = !!valueOrNull;
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], charBolds: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.charBolds ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (valueOrNull == null) delete cur[i]; else cur[i] = !!valueOrNull;
+    }
+    setEdit(psdPath, layerIdOrTempId, { charBolds: cur });
+  }
+}
+
+export function getCharBold(psdPath, layerIdOrTempId, charIndex) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.charBolds?.[charIndex];
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  return e?.charBolds?.[charIndex];
+}
+
 export function getEditingContext() { return state.editingContext; }
 export function setEditingContext(ctx) {
   state.editingContext = ctx ?? null;
@@ -582,11 +618,20 @@ export function exportEdits() {
   const tildeTrackingMille = Number(getDefault("tildeTrackingMille")) || 0;
   // 縦中横（!! / !? の自動 tcy）も新規・縦書きレイヤーにだけ JSX 側で適用する。
   const tateChuYokoEnabled = getDefault("tateChuYokoEnabled") !== false;
+  // 記号フォント置換（♡♥★☆♪ 等を別フォントで自動置換）。新規 + 既存両方に JSX 側で適用する。
+  // ユーザーが per-char で手動指定したフォントは尊重（自動置換 skip）。
+  const symbolFontReplaceEnabled = getDefault("symbolFontReplaceEnabled") !== false;
+  const symbolFontPostScriptName = String(getDefault("symbolFontPostScriptName") || "");
+  // 句読点ツメ（、。を Photoshop 保存時にツメ N% で組む）。新規 + 既存両方に適用。0 で OFF。
+  const punctuationTsumePercent = Number(getDefault("punctuationTsumePercent")) || 0;
 
   return {
     dashTrackingMille,
     tildeTrackingMille,
     tateChuYokoEnabled,
+    symbolFontReplaceEnabled,
+    symbolFontPostScriptName,
+    punctuationTsumePercent,
     edits: Array.from(byPsd.entries()).map(([psdPath, { layers, newLayers }]) => ({
       psdPath,
       layers,
@@ -659,6 +704,7 @@ export function addNewLayer({
   fillColor,
   rotation,
   leadingPct,
+  syntheticBold,
   sourceTxtRef,
 }) {
   const tempId = `new-${state.nextTempId++}`;
@@ -676,6 +722,9 @@ export function addNewLayer({
     fillColor: fillColor === "white" || fillColor === "black" ? fillColor : "default",
     rotation: Number.isFinite(rotation) ? rotation : 0,
     leadingPct: Number.isFinite(leadingPct) ? leadingPct : 125,
+    // 【v1.22.0】合成太字（faux bold）。layer 全体に適用、per-char (charBolds) があれば
+    // それが優先される。
+    syntheticBold: syntheticBold === true,
     // 行ごとの行間オーバーライド。キーは 0-based の行番号、値は %。
     // 未指定の行は層の leadingPct（autoLeading）を使う。
     lineLeadings: {},
@@ -684,6 +733,9 @@ export function addNewLayer({
     // UI プレビューのみ反映、Photoshop には書き戻されない（layer 全体の sizePt/font が使われる）。
     charSizes: {},
     charFonts: {},
+    // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
+    // 値あり → layer の syntheticBold より優先。値なし → layer 値にフォールバック。
+    charBolds: {},
     // 自動配置 (ai-place.js) で生成されたレイヤーは元 TXT 段落への参照を持つ。
     // { pageNumber, paragraphIndex } を保持し、後から TXT が編集されたときに
     // syncPlacedFromTxt が contents を追従させる。手動配置レイヤーは null。

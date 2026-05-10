@@ -25,7 +25,8 @@ import {
 } from "./state.js";
 import { commitFontToSelections } from "./text-editor.js";
 import { showModalAnimated, hideModalAnimated } from "./ui-feedback.js";
-import { onFontsRegistered } from "./font-loader.js";
+import { onFontsRegistered, ensureFontLoaded } from "./font-loader.js";
+import { cssFontFamily } from "./canvas-tools.js";
 
 // 校正パネルと同じ共有ドライブベース。stylepallet オリジナルの ROOT_PATH を踏襲。
 const STYLE_PALETTE_ROOT_PATH =
@@ -233,6 +234,14 @@ function createPresetItem(preset) {
   const main = document.createElement("div");
   main.className = "style-palette-item-name";
   main.textContent = preset.subName || preset.name;
+  // 【v1.22.0】プリセット名をそのフォント自身で表示。フォントが未ロードなら
+  // ensureFontLoaded で非同期登録し、登録完了後に再描画される（onFontsRegistered 経由）。
+  // 解決失敗（未インストール）時は通常フォントで表示。
+  if (preset.fontName) {
+    const fam = cssFontFamily(preset.fontName);
+    if (fam) main.style.fontFamily = fam;
+    ensureFontLoaded(preset.fontName);
+  }
   item.appendChild(main);
 
   if (preset.subName) {
@@ -601,6 +610,10 @@ export function bindStylePalette() {
         const path = v.slice(5);
         void loadJsonFromPath(path, { source: "template" });
       }
+      // 選択直後に select からフォーカスを外す。残ったままだと spacebar / 矢印キー
+      // 等でドロップダウンが意図せず開閉して、サイドバーや canvas のキーボード操作と
+      // 衝突する。blur で WebView2 のフォーカスを body に戻す。
+      catSelect.blur();
     });
   }
 
