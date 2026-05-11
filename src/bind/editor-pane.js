@@ -57,8 +57,6 @@ function getEls() {
     ruby: $("editor-ruby-btn"),
     filename: $("editor-filename"),
     dirtyDot: $("editor-dirty-dot"),
-    footerStats: $("editor-footer-stats"),
-    footerDirty: $("editor-footer-dirty"),
     pagePrev: $("editor-page-prev-btn"),
     pageNext: $("editor-page-next-btn"),
     pageLabel: $("editor-page-label"),
@@ -222,14 +220,6 @@ function syncFromState() {
   // ダーティドット表示
   const showDirty = !!source && dirty;
   if (els.dirtyDot) els.dirtyDot.hidden = !showDirty;
-  if (els.footerDirty) els.footerDirty.hidden = !showDirty;
-
-  // フッター文字数 / 行数
-  if (els.footerStats) {
-    const charCount = content.length;
-    const lineCount = content === "" ? 0 : content.split("\n").length;
-    els.footerStats.textContent = `${charCount.toLocaleString()} 文字 / ${lineCount.toLocaleString()} 行`;
-  }
 
   // ボタン enabled
   const hasContent = !!source;

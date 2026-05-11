@@ -3748,3 +3748,210 @@ E2. **[src/main.js](src/main.js)**: `activePageSource` / `advancePage` を expor
 > - 旧: PSD 未読込時は textarea も配置ボタンも disabled → 新: textarea は常時 enabled、ボタンは入力あり enabled、PSD 未読込時の配置は toast で明確エラー通知
 > - 旧: 段落操作系・中央配置の中核関数は txt-source.js 内部限定 → 新: `splitBlocksRaw` / `replaceBlockInContent` / `deleteBlockFromContent` / `appendBlockToCurrentPageContent` / `convertDigitsForVertical` / `updateTxtSourceBlock` / `getActivePageNumber` / `commitNewTxtInput` / `syncNewInputAvailabilityFor` を export 化してエディタペインから再利用
 
+---
+
+## v1.24.0: 別名保存連番化・エディタモード見本切替・選択 UX 刷新・矢印キー操作再設計
+
+### 概要
+
+本バージョンの 7 つの柱:
+1. **別名で保存の固定化と連番化** — 親フォルダ選択廃止、常に `Desktop/Script_Output/写植完了/`、既存時は `写植完了(1)`/`写植完了(2)` で衝突回避
+2. **テキストエディタモードで校正パネル ↔ 見本画像 (spreads-pdf-area) を切替** — 動的幅算出付き
+3. **入力欄の上部配置 + editor-footer 撤去** — テキスト入力経路を一貫して上部に
+4. **句読点ツメ 50% をプレビュー / bbox / 自動配置に反映** — Photoshop 保存と同じ視覚効果を全経路に
+5. **選択 UX 全面刷新** — 単一/複数選択で枠色・線種・バッジ統一、バッジ overlap 自動振り分け
+6. **矢印キー操作再設計** — ↑/↓ レイヤー選択サイクル + 選択中ナッジ、Alt+↑/↓ で原稿テキスト選択切替
+7. **行セレクタ UI 大幅整理** — 「全行/2/3 ボタン」「N 行目バッジ」を撤去し in-place 編集中のカーソル行のみが per-line override 対象に
+
+加えてフォントウェイトボタンの segmented toggle 化、サイドツールバー全選択ボタン追加、画像スキャン/自動配置ボタンの低 pill 型化、各種バグ修正を含む。
+
+### A. 別名で保存の自動化・連番化
+
+A1. **親フォルダ選択ダイアログを廃止** ([src/bind/save.js](src/bind/save.js)): 旧 `pickSaveParentDir` を撤去し、保存先を **常に `<Desktop>/Script_Output/写植完了/`** に固定。Tachimi 互換のパターン。`desktop_dir` Tauri コマンド (v1.13 で既に実装済み) を経由してデスクトップパスを取得し、中間 `Script_Output/` も `apply_edits_via_photoshop` 内の `create_dir_all` で再帰的に作成。
+
+A2. **写植 → 写植完了 にリネーム + 衝突時の連番化**: 既存「写植完了」フォルダがあれば上書きせず、`写植完了(1)`, `写植完了(2)`, ... `(9999)` まで空き番号を順に取って新規フォルダを作成。
+- `BASE_SAVE_FOLDER_NAME = "写植完了"`, `indexedSaveFolderName(i)`, `MAX_FOLDER_INDEX = 9999`
+- `listEntriesIn(parent)` + `pickNextSaveFolderName(parent)` で親フォルダ直下を 1 階層走査して空き番号を確定
+- Tachimi の `jpg(1)` 命名規約（空白なし括弧連番）に合わせる
+- 9999 個埋まった極端ケースは基本名にフォールバック（jsx_gen.rs v1.14.0 A4 の事前削除フェイルセーフで壊れない）
+
+A3. **保存ドロップダウン廃止** ([index.html](index.html) + [src/bind/save.js](src/bind/save.js)):
+- 旧「上書き保存 / 別名で保存」の 2 項目ドロップダウンを撤去、`#save-menu` DOM を削除
+- `#save-btn` 単独クリックで `handleSave` を直接呼び出すシンプル構造に
+- `handleOverwriteSave` / `handleSaveAs` は `handleSave` への alias として温存（main.js の `runShortcut("save"|"saveAs")` 互換のため）
+- Ctrl+S と Ctrl+Shift+S はどちらも新しい連番保存を発動
+- 旧「上書き確認」ダイアログ撤去（連番化で衝突しないため不要）
+
+### B. テキストエディタモードでの校正 ↔ 見本切替
+
+B1. **state 追加** ([src/state.js](src/state.js)): `$editorLeftPaneMode` observable (`"proofread" | "pdf"`, 既定 `"proofread"`)。`_normEditorLeftPaneMode(v)` で normalizing。
+
+B2. **proofread-panel-header にセグメントトグル** ([index.html](index.html)): `proofread-tabs` の前に `#editor-left-pane-segment` を配置（校正 / 見本 の 2 ボタン）。editor モード時のみ表示 (`.workspace.editor-mode .editor-left-pane-segment { display: inline-flex }`)。
+
+B3. **CSS 切替ロジック** ([src/styles.css](src/styles.css)): `.workspace.editor-mode.left-pdf` 配下で proofread-panel のボディ系（tabs / actions / browser-nav / meta / body）を `display: none`、`spreads-pdf-area` を `position: absolute; top: 34px; height: calc(100% - 34px); z-index: 12; width: var(--left-pdf-width, 50%)` で proofread-area の上にオーバーレイ。proofread-area の header だけ残してトグルを操作可能に。
+
+B4. **動的幅計算** ([src/main.js](src/main.js) `recomputeLeftPdfWidth`):
+- 見本ページのアスペクト比 × `stage.height - 34px - padding` で目標 panel 幅を算出
+- `[240px, stage.width × 85%]` でクランプ → `--left-pdf-width` CSS 変数に書き込み
+- editor モード中は **left-pdf サブ状態でなくても先行計算** しておき、「見本」トグルの瞬間に 50% フラッシュが起きないように
+- 競合排除: `seq` トークンで async `getPage()` の追い越し制御、`rAF` で coalesce
+- トリガー: `onPdfChange` / `onPdfPageIndexChange` / `onPdfRotationChange` / `onParallelViewModeChange` / `onEditorLeftPaneModeChange` / `ResizeObserver(stage)`
+
+B5. **proofread-area / editor-area も同じ var に連動**: `.workspace.editor-mode.left-pdf` 配下で proofread-area `width: var(--left-pdf-width, 50%)` で「校正/見本」トグルが pdf 上に正確に被るように。editor-area は `left: var(--left-pdf-width, 50%); right: 0; width: auto` で残余幅を全部使う。`.flipped` (ワークスペース反転) も対応。
+
+B6. **TDZ バグ修正**: 当初 `syncEditorLeftPane` 初回呼出が `requestRecomputeLeftPdfWidth` (const) の宣言前で TDZ エラーを起こし、`renderAllSpreads()` が走らず PSD 空状態が描画されなかった事故 → recompute 関連の定義を `syncEditorLeftPane` の前に再配置して修正。
+
+B7. **localStorage 永続化**: `psdesign_editor_left_pane_mode` (`"proofread"|"pdf"`) で次回起動時も状態復元。
+
+### C. 入力欄の上部配置 + editor-footer 撤去
+
+C1. **`txt-source-new-input` / `editor-new-input-row` をパネル上部に移動** ([index.html](index.html)):
+- サイドパネル `txt-source-dropzone` 内: viewer/empty より前に配置
+- editor モード `spreads-editor-area` 内: `editor-toolbar-row2` の直下、`editor-pages-viewer-wrap` より前に配置
+- 両方の CSS で `border-top` → `border-bottom` に変更（下のビューアと区切るため）
+
+C2. **`editor-footer` 撤去** ([index.html](index.html) + [src/bind/editor-pane.js](src/bind/editor-pane.js) + [src/styles.css](src/styles.css)):
+- 旧 `<div class="editor-footer">` (文字数 / 行数 + 未保存表示) を完全削除
+- `getEls()` の `footerStats` / `footerDirty` 参照、`syncFromState` のフッター更新ロジック撤去
+- `.editor-footer` / `.editor-footer-stats` / `.editor-footer-dirty` CSS ルール削除
+- 未保存表示はファイル名の右の dirty ドット (`#editor-dirty-dot`) で引き続き表現
+
+### D. 句読点ツメ 50% の全経路反映
+
+v1.22.0 で Photoshop 保存時の `mojiZume` 50% は実装済みだったが、プレビューと自動配置に反映されていなかった片手落ちを解消。
+
+D1. **新規定数 `PUNCT_TSUME_CHAR_CODES`** ([src/canvas-tools.js](src/canvas-tools.js)): U+3001「、」/ U+3002「。」の char code セット。Photoshop 側 `applyPunctuationTsume` と同一定義。`isPunctTsumeChar(ch)` / `lineHasPunctTsumeChar(s)` ヘルパー。
+
+D2. **プレビュー側 per-char 適用** ([src/canvas-tools.js](src/canvas-tools.js) `appendStyledSegment` / `appendLineWithTracking` / `renderInnerText`):
+- 各関数のシグネチャに `punctTsumeMag` / `punctTsumePct` を追加
+- 句読点 char の signature に `sigTsume` を加えて span を分離、`letter-spacing: -(tsume/100)em` を当てて直後の空白を縮める
+- 連続記号ツメ (`sigTrack`) と句読点ツメは対象文字が重複しないので、両者の値を合算して 1 つの `letterSpacing` に集約
+- 高速パス判定（fast-path）にも `punctActive` を加算
+- 既存・新規レイヤーの `renderInnerText` 呼び出し 2 箇所で `getDefault("punctuationTsumePercent")` を渡す
+
+D3. **bbox 自動調整への反映** ([src/canvas-tools.js](src/canvas-tools.js) `measureLineExtentEmWithOverrides` / `measureMaxLineExtentEm`):
+- 各 char の per-char size を考慮しつつ、句読点ごとに `(tsume/100) × (charSize/layerSize)` em を最終的な totalEm から減算
+- `layerRectForExisting` / `layerRectForNew` 経由でテキストフレームの実寸も追従
+
+D4. **自動配置への反映** ([src/ai-place.js](src/ai-place.js) `estimateLayerSize`):
+- 旧 `chars = longestLine(contents)` を、句読点ツメぶんを差し引いた `effective = ln.length - punct × (tsume/100)` の最大値で再計算
+- `mapBlockToNewLayer` の位置決めも短縮された long 軸で計算
+
+### E. 選択 UX 全面刷新
+
+E1. **単一選択時** ([src/styles.css](src/styles.css) `.layer-box.selected` / `.layer-box-new.selected`):
+- 旧 box-shadow ring (青 / オレンジ別) → **青の実線 outline** (`2px solid var(--accent)`) で統一
+- 既存・新規どちらも同じ青で統一（旧オレンジ枠は廃止）
+- outline は layout に影響しないので layer-box のサイズを変えず安全に枠線を引ける
+
+E2. **複数選択時 (`.multi-selected`)** ([src/canvas-tools.js](src/canvas-tools.js) `renderOverlay`):
+- `getSelectedLayers().length > 1` のときに `.multi-selected` クラスを各 layer-box に追加
+- CSS で **水色 (`#4fc3f7`) の点線 outline** に切替
+- 回転ハンドルを `display: none` で非表示（複数同時回転は無効化）
+- Ctrl+A / マーキー / Shift+クリック いずれでも適用
+
+E3. **バッジを常時青背景・白文字** ([src/styles.css](src/styles.css) `.layer-size-badge`):
+- 旧 `background: #000` → `var(--accent)` に統一
+- 単一・複数選択どちらも同じバッジ配色
+
+E4. **バッジ重なり自動解決** ([src/canvas-tools.js](src/canvas-tools.js) `scheduleBadgeOverlapResolution` + `rectsOverlapPlaced`):
+- `renderOverlay` 末尾で `requestAnimationFrame` 経由に登録
+- DOM レイアウト確定後、全 `.layer-size-badge` を上から順にソート → 各バッジが既存バッジと交差したら `.layer-size-badge--above` を付与してフレーム上側に反転
+- 反転後も重なる極端ケース（3 個以上密集）は元位置に戻して妥協（破綻させない）
+- CSS `.layer-size-badge--above`: `top: auto; bottom: 100%; margin-bottom: 10px`
+
+### F. 矢印キー操作の再設計
+
+F1. **基本ナビゲーション (V ツール)** ([src/main.js](src/main.js)):
+- **レイヤー選択あり**: 全 4 方向で位置を 1px ナッジ（Shift で 10px）
+- **レイヤー選択なし + ↑/↓**: 現ページ内のレイヤー選択を順送り / 逆送り (`cycleLayerSelection`)
+- **レイヤー選択なし + ←/→**: ページ送り (pagePrev/pageNext)
+
+F2. **`cycleLayerSelection(delta)`** ([src/canvas-tools.js](src/canvas-tools.js)):
+- 現ページのレイヤー ID リスト（既存 → 新規の順、text-editor.js rebuildLayerList と同じ）を構築
+- 現在選択の index を見つけて `(curIdx + delta + n) % n` で wrap-around
+- 選択なし → 方向に応じて先頭 (↓) / 末尾 (↑) を選択
+- `syncTxtSelectionToLayer(pageIdx, layerId)` を末尾で呼び、`sourceTxtRef` を持つレイヤーなら原稿テキストパネルの該当ブロックも自動選択 + `scrollIntoView`
+
+F3. **`syncTxtSelectionToLayer(pageIndex, layerId)`** ([src/txt-source.js](src/txt-source.js)):
+- 新規レイヤー (`sourceTxtRef` 持ち) を選んだとき、対応する `.txt-block` を `.selected` ハイライト + scrollIntoView
+- 紐付け無し（既存 PSD レイヤー / 手動配置）を選んだ場合は viewer 側の選択を解除
+- マーカー付き原稿の場合: `sourceTxtRef.pageNumber` が viewer の現在ページと一致するときだけ追従
+
+F4. **Alt+↑/↓ で原稿テキスト選択切替** ([src/main.js](src/main.js) + [src/txt-source.js](src/txt-source.js)):
+- 既存の Alt 抑制 (`suppressAltMenuActivation`) は単独押下のみ対象なので Alt+矢印は素通し
+- V ツール + 入力欄外で Alt+↑/↓ → `cycleTxtBlockSelection(delta)`
+- 現在ページの可視ブロック内をループ（wrap-around）、選択 → `selectBlock` + `scrollIntoView`
+
+F5. **原稿テキスト ブロック選択中のクリック配置を廃止** ([src/canvas-tools.js](src/canvas-tools.js)):
+- 旧 `onCanvasMouseDown` の `txtSel` 配置分岐を削除
+- `placeTxtSelectionAt` 関数 + `advanceTxtSelection` / `getActiveTxtSelection` import を撤去
+- txt-source.js の `getActiveTxtSelection` / `advanceTxtSelection` export 関数も削除（unused）
+- 配置経路は **サイドバー / エディタモードの新規入力欄** または **自動配置** のみに統一
+
+### G. 行セレクタ UI と「N 行目」バッジの撤去
+
+G1. **「全行 / 2 / 3 / …」セグメント廃止** ([index.html](index.html) + [src/main.js](src/main.js) + [src/state.js](src/state.js) + [src/styles.css](src/styles.css)):
+- `<div id="leading-row-selector">` を削除
+- `state.activeLeadingLine` フィールド + 3 つの export (`get/set/onActiveLeadingLineChange`) + `clearPages` 内リセット処理を撤去
+- `resolveSingleSelectedLayer` / `syncLeadingRowSelector` / `syncLeadingInputForActiveRow` 関数を完全削除
+- `applyLeading` / `adjustLeading` / `input.blur` / `onEditingContextChange` 内の activeLeadingLine 分岐を撤去
+- CSS `.leading-row-selector` / `.leading-row-btn` 関連スタイル削除
+- `text-editor.js populateEditor` 末尾の `psdesign:editor-populated` dispatch も撤去（リスナー消失で不要に）
+
+G2. **「N 行目」バッジ撤去** ([index.html](index.html) + [src/main.js](src/main.js) + [src/styles.css](src/styles.css)):
+- `<span id="leading-target-label">` を削除
+- `syncLeadingInputForEditingContext` 末尾のラベル更新ロジック削除
+- `clearLeadingTargetLabel` 関数削除
+- `.leading-target-label` CSS 削除
+
+G3. **残った行間機能**:
+- 通常モード: 行間入力欄 / ±ボタン / ルビトグル → 選択中レイヤー全体の `leadingPct` を一括更新
+- in-place 編集中（textarea カーソル）: カーソル行の `lineLeadings[currentLine]` per-line override（既存挙動を維持、ラベル表示は無くなったが動作は透過的）
+
+### H. フォントウェイトボタン segmented toggle 化
+
+H1. **連結 pill 型 segmented control** ([src/styles.css](src/styles.css) `.font-weight-selector` / `.font-weight-btn`):
+- 旧 `gap: 3px` + 各ボタン独立 `border-radius: 3px` → **container 側で `border-radius: 999px` + `overflow: hidden`** で外側ピル型
+- 各ボタンは `border: none; border-left: 1px solid` で隣接ボタンと共有する仕切り線、`:first-child { border-left: none }` で先頭は親枠で代用
+- container に `inset box-shadow` で Photoshop Character パネル風の sunken な見た目
+- active: `var(--accent)` 塗り + 白文字 + `inset box-shadow` で「押し込まれた」感
+
+H2. **aria-pressed 属性付与** ([src/text-editor.js](src/text-editor.js) `rebuildWeightSelector`):
+- 各ボタン生成時に `aria-pressed="true"|"false"` を明示
+- 排他的トグル (radio-like) の semantics を明確化
+- `.active` クラスも後方互換のため温存（CSS で両方同時マッチ）
+
+### I. その他の UI 改善
+
+I1. **画像スキャン / 自動配置ボタンを低くピル型に** ([src/styles.css](src/styles.css)):
+- `.ai-ocr-btn` / `.ai-place-btn` の縦 padding を 10px/6px → **4px** に圧縮（高さ約 1/2）
+- `border-radius: 4px` → **`999px`（pill 型）** で側面を完全な円弧に
+- 両ボタンのサイズ・形状を揃え、`.ai-actions-row` の `flex: 1 1 0` で等幅に並ぶ
+
+I2. **スタイルパレット optgroup 見出しの背景** ([src/styles.css](src/styles.css)):
+- `#style-palette-category optgroup` の `background-color` を `var(--panel-hover)` に変更し、テンプレート/レーベルテンプレ の見出し背景を薄く
+- 配下の option は `var(--bg)` で通常背景を維持（optgroup の bg を継承させない）
+
+I3. **サイドツールバーに「全選択」ボタン追加** ([index.html](index.html) + [src/main.js](src/main.js)):
+- `#tool-pan` と `.layers-toggle-wrap` の **間** に `#select-all-btn` を配置
+- アイコン: 4 隅マーカー + 内側点線矩形（lucide ベース）
+- クリック → `selectAllTextFramesOnCurrentPage()`（Ctrl+A と同じロジックを共有）
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.24.0`** に揃え。Cargo.lock も自動追従。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: 別名で保存は親フォルダピッカー → 写植フォルダ → 既存時は上書き確認 → 新: 完全自動で `Desktop/Script_Output/写植完了(N)/` に連番化、Ctrl+S/Ctrl+Shift+S 統一、ドロップダウン廃止
+> - 旧: エディタモード = 校正パネル固定 → 新: ヘッダー左端「校正/見本」トグルで `spreads-pdf-area` を左半分にオーバーレイ。見本ページの実 AR から `--left-pdf-width` 動的算出
+> - 旧: editor-footer = 文字数 / 行数 表示 → 新: 撤去。dirty ドットのみで未保存表現
+> - 旧: 句読点ツメ 50% は Photoshop 保存のみに反映 → 新: プレビュー (letter-spacing) + bbox (em 減算) + 自動配置 (effective chars) の全経路に
+> - 旧: 単一選択 = 青ring / 新規はオレンジring、複数選択も同じ表示 → 新: 単一 = 青実線 outline / 複数 = 水色点線 outline、バッジ常時青背景白文字 + overlap 自動振分け、複数選択時は回転ハンドル非表示
+> - 旧: ↑/↓ ナッジ専用 / ←/→ ナッジ＋page nav → 新: 選択あり=4 方向ナッジ / 選択なし=↑↓ レイヤーサイクル＋←→ page nav、Alt+↑/↓ で原稿テキスト ブロック切替
+> - 旧: txt-block 選択中の V ツールクリックで配置 → 新: 廃止。入力欄 / 自動配置のみに統一
+> - 旧: 行間 = 「全行/2/3 ボタン」+ 「N 行目」バッジ → 新: 撤去。in-place 編集中のカーソル行のみが per-line override 対象
+> - 旧: フォントウェイト = 独立角丸ボタン群 → 新: 連結 pill 型 segmented control、aria-pressed semantics
+> - 旧: 画像スキャン/自動配置 = 矩形ボタン高さ普通 → 新: 低 pill 型で省スペース
+> - 旧: 全選択は Ctrl+A のみ → 新: サイドツールバーにもボタン追加 (パン と レイヤー の間)
+

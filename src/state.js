@@ -39,10 +39,6 @@ const state = {
   // 行間コントロールはこれが set のとき per-line override に書き込み、unset のとき global に書く。
   editingContext: null,
   editingContextListeners: new Set(),
-  // 【v1.16.0】サイドバー「行間」タブで行選択中の対象行 index（null = 全行）。
-  // editingContext が立っているときはそちらを優先（in-place 編集中のカーソル行が勝つ）。
-  activeLeadingLine: null,
-  activeLeadingLineListeners: new Set(),
   // AI 画像スキャン (run_ai_ocr) の最新結果。自動配置 (ai-place.js) で参照する。
   // { doc: MokuroDocument, sourcePath: string } | null
   aiOcrDoc: null,
@@ -121,6 +117,9 @@ const _normActivePane = (v) => (v === "pdf" ? "pdf" : "psd");
 // それ以外（旧 "psdOnly" 等）は "parallel" にフォールバックする。
 const _normParallelViewMode = (v) =>
   v === "editor" ? "editor" : v === "proofread" ? "proofread" : "parallel";
+// editor モード時の左側ペイン表示。"proofread" = 校正パネル / "pdf" = 見本画像（spreads-pdf-area）。
+// 校正パネルのヘッダー左端のセグメントトグルで切替、editor モード以外では参照されない。
+const _normEditorLeftPaneMode = (v) => (v === "pdf" ? "pdf" : "proofread");
 
 // === Observable スロット定義 ===
 // state object の同名フィールド + 同名 Listeners Set のペアを置き換える。
@@ -142,6 +141,7 @@ const $pdfSkipFirstBlank = createObservable(false, _normBool);
 const $parallelSyncMode = createObservable(true, _normBool);
 const $activePane = createObservable("psd", _normActivePane);
 const $parallelViewMode = createObservable("parallel", _normParallelViewMode);
+const $editorLeftPaneMode = createObservable("proofread", _normEditorLeftPaneMode);
 // V ツールで空所をダブルクリックして新規テキスト入力を開くときの方向。
 // サイドツールバーの V ボタン直下にあるトグルで切替・localStorage に永続化。
 const $newTextDirection = createObservable("vertical", _normNewTextDir);
@@ -170,11 +170,6 @@ export function clearPages() {
   state.currentPageIndex = 0;
   if (prev !== 0) {
     for (const fn of state.pageIndexListeners) fn(0);
-  }
-  // 【v1.16.0】PSD 切替で行セレクタの古い state を残さない。
-  if (state.activeLeadingLine !== null) {
-    state.activeLeadingLine = null;
-    for (const fn of state.activeLeadingLineListeners) fn(null);
   }
   setStrokeColor("none");
   setFillColor("default");
@@ -381,23 +376,6 @@ export function setEditingContext(ctx) {
 export function onEditingContextChange(fn) {
   state.editingContextListeners.add(fn);
   return () => state.editingContextListeners.delete(fn);
-}
-
-// サイドバー「行間」タブで行選択中の対象行 index。
-// 【v1.16.0】行間の一部変更 — in-place 編集を開かなくても、サイドバーの「行間」タブで
-// 「全行 / 2 / 3 / …」のセグメントから対象行を選択して per-line override 可能。
-// null = 全行（layer 全体に書く）、整数 = その行 index に per-line override で書く。
-// 優先順位は applyLeading 内で editingContext > activeLeadingLine > 全行。
-export function getActiveLeadingLine() { return state.activeLeadingLine; }
-export function setActiveLeadingLine(idxOrNull) {
-  const next = Number.isInteger(idxOrNull) && idxOrNull >= 0 ? idxOrNull : null;
-  if (state.activeLeadingLine === next) return;
-  state.activeLeadingLine = next;
-  for (const fn of state.activeLeadingLineListeners) fn(state.activeLeadingLine);
-}
-export function onActiveLeadingLineChange(fn) {
-  state.activeLeadingLineListeners.add(fn);
-  return () => state.activeLeadingLineListeners.delete(fn);
 }
 
 // V ツールの「新規テキスト方向」(vertical / horizontal)
@@ -899,6 +877,10 @@ export const onActivePaneChange = $activePane.on;
 export const getParallelViewMode = $parallelViewMode.get;
 export const setParallelViewMode = $parallelViewMode.set;
 export const onParallelViewModeChange = $parallelViewMode.on;
+
+export const getEditorLeftPaneMode = $editorLeftPaneMode.get;
+export const setEditorLeftPaneMode = $editorLeftPaneMode.set;
+export const onEditorLeftPaneModeChange = $editorLeftPaneMode.on;
 
 export const getCurrentFont = $currentFont.get;
 export const setCurrentFont = $currentFont.set;

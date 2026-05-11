@@ -1,6 +1,7 @@
 import { loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
 import {
+  cycleLayerSelection,
   deleteSelectedLayers,
   nudgeSelectedLayers,
   refreshAllOverlays,
@@ -24,7 +25,7 @@ import {
   rebuildLayerList,
   syncBoldToggle,
 } from "./text-editor.js";
-import { deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath } from "./txt-source.js";
+import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { bindAiInstallMenu } from "./ai-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
@@ -91,6 +92,7 @@ import {
   getPages,
   getParallelSyncMode,
   getParallelViewMode,
+  getPdfDoc,
   getPdfPageIndex,
   getPdfRotation,
   getPdfSkipFirstBlank,
@@ -100,6 +102,9 @@ import {
   getTextSize,
   getTool,
   hasEdits,
+  getEditorLeftPaneMode,
+  setEditorLeftPaneMode,
+  onEditorLeftPaneModeChange,
   onActivePaneChange,
   onHistoryChange,
   onPageIndexChange,
@@ -107,6 +112,7 @@ import {
   onParallelViewModeChange,
   onPdfChange,
   onPdfPageIndexChange,
+  onPdfRotationChange,
   onPdfSkipFirstBlankChange,
   onPdfSplitModeChange,
   onPdfZoomChange,
@@ -137,10 +143,6 @@ import {
   onEditingContextChange,
   setLineLeading,
   getLineLeading,
-  // 【v1.16.0】行間の一部変更（サイドバー行セレクタ）
-  getActiveLeadingLine,
-  setActiveLeadingLine,
-  onActiveLeadingLineChange,
   // 【v1.16.0】per-char サイズ
   setCharSizesRange,
   // 【v1.22.0】per-char 合成太字
@@ -518,6 +520,16 @@ function bindTools() {
     refreshAllOverlays();
   };
 
+  // サイドツールバーの「全選択」ボタン (パンツールとレイヤーボタンの間)。
+  // Ctrl+A と同じく現在ページの全テキストフレーム (既存 + 新規) を選択する。
+  const selectAllBtn = document.getElementById("select-all-btn");
+  if (selectAllBtn) {
+    selectAllBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      selectAllTextFramesOnCurrentPage();
+    });
+  }
+
   // Alt 単独押下/離上で Windows のシステムメニューが活性化し、次の Space で開いてしまう
   // 事故を防ぐ。Alt+wheel でズームした直後に Space を押すと左上にメニューが出る現象の対策。
   const suppressAltMenuActivation = (e) => {
@@ -551,27 +563,53 @@ function bindTools() {
       return;
     }
 
-    // 矢印キーは「move ツール + レイヤー選択中」のときレイヤーナッジを最優先。
-    // ナッジが効かない場合は下のショートカット dispatch に流して pagePrev/pageNext に当てる。
+    // 矢印キー (V ツール):
+    //   - Alt+↑/↓ : 原稿テキスト (txt-source-viewer) の選択ブロックを順送り / 逆送り
+    //   - レイヤー選択あり: 全 4 方向で位置をナッジ (1px / Shift で 10px)
+    //   - レイヤー選択なし + ↑/↓: 現ページ内のレイヤー選択を順送り / 逆送り (cycleLayerSelection)
+    //   - レイヤー選択なし + ←/→: 下のショートカット dispatch に流して pagePrev/pageNext (ページ移動)
     const isArrowKey =
       e.key === "ArrowLeft" || e.key === "ArrowRight" ||
       e.key === "ArrowUp" || e.key === "ArrowDown";
+
+    // Alt+↑/↓ で原稿テキストブロック選択を切替 (V ツール限定 + 入力欄外)。
+    // Alt+←/→ は無効 (将来何かにバインドする可能性のため未使用にしておく)。
+    if (isArrowKey && e.altKey && !e.ctrlKey && !e.metaKey) {
+      const t = e.target;
+      const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
+      if (!isInput && getTool() === "move" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+        const delta = e.key === "ArrowDown" ? +1 : -1;
+        cycleTxtBlockSelection(delta);
+        e.preventDefault();
+        return;
+      }
+    }
+
     if (isArrowKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
-      const tool = getTool();
-      const nudgeTool = tool === "move";
-      if (!isInput && nudgeTool) {
-        const step = e.shiftKey ? 10 : 1;
-        let dx = 0, dy = 0;
-        if (e.key === "ArrowLeft") dx = -step;
-        else if (e.key === "ArrowRight") dx = +step;
-        else if (e.key === "ArrowUp") dy = -step;
-        else if (e.key === "ArrowDown") dy = +step;
-        if (nudgeSelectedLayers(dx, dy)) {
+      if (!isInput && getTool() === "move") {
+        const hasSel = getSelectedLayers().length > 0;
+        if (hasSel) {
+          // 選択あり: 位置ナッジ (Shift で 10px)
+          const step = e.shiftKey ? 10 : 1;
+          let dx = 0, dy = 0;
+          if (e.key === "ArrowLeft") dx = -step;
+          else if (e.key === "ArrowRight") dx = +step;
+          else if (e.key === "ArrowUp") dy = -step;
+          else if (e.key === "ArrowDown") dy = +step;
+          if (nudgeSelectedLayers(dx, dy)) {
+            e.preventDefault();
+            return;
+          }
+        } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+          // 選択なし + ↑/↓: レイヤー選択サイクル (先頭 / 末尾を選ぶ)
+          const delta = e.key === "ArrowDown" ? +1 : -1;
+          cycleLayerSelection(delta);
           e.preventDefault();
           return;
         }
+        // 選択なし + ←/→: nudge せず page nav (pagePrev/pageNext) へ素通し。
       }
     }
 
@@ -1131,6 +1169,7 @@ function bindViewModeControls() {
 }
 
 const VIEW_MODE_LS_KEY = "psdesign_parallel_view_mode";
+const EDITOR_LEFT_PANE_LS_KEY = "psdesign_editor_left_pane_mode";
 
 function bindParallelViewMode() {
   const parallelBtn = document.getElementById("view-parallel-btn");
@@ -1140,6 +1179,10 @@ function bindParallelViewMode() {
   const proofreadArea = document.getElementById("spreads-proofread-area");
   const editorArea = document.getElementById("spreads-editor-area");
   const proofreadPanel = document.getElementById("proofread-panel");
+  // editor モード時のみ表示される「校正 / 見本」セグメントトグル。
+  // proofread-panel-header 内に配置されている。
+  const leftProofreadBtn = document.getElementById("editor-left-proofread-btn");
+  const leftPdfBtn = document.getElementById("editor-left-pdf-btn");
   if (!parallelBtn || !proofreadBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
 
   try {
@@ -1149,9 +1192,24 @@ function bindParallelViewMode() {
     }
   } catch {}
 
+  // editor モード左ペイン (校正 / 見本) の選択を localStorage から復元。
+  // editor モードに入ったときだけ実効化される（CSS 側で .workspace.editor-mode が前提）。
+  try {
+    const savedLeft = localStorage.getItem(EDITOR_LEFT_PANE_LS_KEY);
+    if (savedLeft === "proofread" || savedLeft === "pdf") {
+      setEditorLeftPaneMode(savedLeft);
+    }
+  } catch {}
+
   parallelBtn.addEventListener("click", () => setParallelViewMode("parallel"));
   proofreadBtn.addEventListener("click", () => setParallelViewMode("proofread"));
   editorBtn.addEventListener("click", () => setParallelViewMode("editor"));
+  if (leftProofreadBtn) {
+    leftProofreadBtn.addEventListener("click", () => setEditorLeftPaneMode("proofread"));
+  }
+  if (leftPdfBtn) {
+    leftPdfBtn.addEventListener("click", () => setEditorLeftPaneMode("pdf"));
+  }
 
   // 3 モード構成:
   //   parallel:  PDF + PSD のみ（proofread / editor ドロワーはどちらも左へ格納）
@@ -1164,6 +1222,13 @@ function bindParallelViewMode() {
   // .spreads-stage に付ける `proofread-visible` / `editor-visible` クラスで制御する。
   const workspace = document.querySelector(".workspace");
   const stage = document.getElementById("spreads-stage");
+  const applyEditorLeftPaneClass = () => {
+    if (!workspace) return;
+    // editor モード時のみ left-pdf class が意味を持つ。それ以外では常に外す。
+    const inEditor = getParallelViewMode() === "editor";
+    const leftPdf = inEditor && getEditorLeftPaneMode() === "pdf";
+    workspace.classList.toggle("left-pdf", leftPdf);
+  };
   const sync = () => {
     const mode = getParallelViewMode();
     const showEditor = mode === "editor";
@@ -1184,6 +1249,8 @@ function bindParallelViewMode() {
     proofreadBtn.setAttribute("aria-pressed", mode === "proofread" ? "true" : "false");
     editorBtn.setAttribute("aria-pressed", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
+    // editor モード ON/OFF に応じて left-pdf class も更新（editor モード以外では常に外す）。
+    applyEditorLeftPaneClass();
 
     // 校正パネルの内部状態（panel 表示）を確保。parent (.spreads-proofread-area) の
     // opacity / transform で実際の表示制御を行うため、panel 自体は閉じない（閉じると
@@ -1194,6 +1261,128 @@ function bindParallelViewMode() {
     if (showEditor) focusEditor();
   };
   onParallelViewModeChange(sync);
+
+  // 「見本」モード時に pdf-area の幅を現在の見本ページの実アスペクト比に同期する。
+  // 50% 固定だと縦長ページで letter-box / 横長ページで切れる「ぎこちない表示」になる。
+  // - stage 高さ - ヘッダー (34px) を基準に width = (height - padding) * AR + padding
+  // - 結果を CSS 変数 `--left-pdf-width` に書き込み、pdf-area / editor-area の両方が参照
+  // - rAF で coalesce、async getPage() の競合は seq token で抑止
+  // - syncEditorLeftPane より前に定義する必要あり (sync 初回呼出で requestRecompute を参照するため、
+  //   後置すると const TDZ エラーで init が止まり renderAllSpreads が走らない事故あり)
+  const PANEL_PADDING = 32; // pdf-area の左右 padding 16+16
+  const HEADER_OFFSET = 34; // proofread-panel-header 高さ
+  const MIN_PANEL_WIDTH = 240;
+  const MAX_PANEL_RATIO = 0.85; // stage 幅の最大 85%
+  let leftPdfRecomputeRaf = 0;
+  let leftPdfRecomputeSeq = 0;
+
+  const clearLeftPdfWidth = () => {
+    if (workspace) workspace.style.removeProperty("--left-pdf-width");
+  };
+
+  const recomputeLeftPdfWidth = async () => {
+    if (!workspace) return;
+    // editor モード以外では使わない（var を消して通常 50% に戻す）。
+    // editor モード中は left-pdf サブ状態でなくても先行計算しておくと、
+    // 「見本」トグルした瞬間に CSS var が既に正しい値になっていて 50% フラッシュが起きない。
+    const inEditor = getParallelViewMode() === "editor";
+    if (!inEditor) {
+      clearLeftPdfWidth();
+      return;
+    }
+    if (!stage) {
+      clearLeftPdfWidth();
+      return;
+    }
+    const stageRect = stage.getBoundingClientRect();
+    if (stageRect.height <= 0 || stageRect.width <= 0) return;
+
+    const doc = getPdfDoc();
+    const vp = getPdfVirtualPageAt(getPdfPageIndex());
+    if (!doc || !vp) {
+      // 見本未読込 / 範囲外: 50% フォールバック（CSS デフォルト）。
+      clearLeftPdfWidth();
+      return;
+    }
+
+    const seq = ++leftPdfRecomputeSeq;
+    let page;
+    try {
+      page = await doc.getPage(vp.pageNum);
+    } catch {
+      return;
+    }
+    // 競合 (新しい recompute が来た) なら破棄。
+    if (seq !== leftPdfRecomputeSeq) return;
+    // editor モードを抜けていたら破棄して var クリア。
+    if (getParallelViewMode() !== "editor") {
+      clearLeftPdfWidth();
+      return;
+    }
+
+    const baseRot = typeof page.rotate === "number" ? page.rotate : 0;
+    const totalRot = (((baseRot + getPdfRotation()) % 360) + 360) % 360;
+    const viewport0 = page.getViewport({ scale: 1, rotation: totalRot });
+    const isLandscape = viewport0.width > viewport0.height;
+    const wantsSplit = vp.side === "left" || vp.side === "right";
+    const side = wantsSplit && isLandscape ? vp.side : "full";
+    const fullAR = viewport0.width / viewport0.height;
+    const ar = side === "full" ? fullAR : fullAR / 2;
+
+    const availH = Math.max(0, stageRect.height - HEADER_OFFSET - PANEL_PADDING);
+    const targetCanvasW = availH * ar;
+    const targetPanelW = targetCanvasW + PANEL_PADDING;
+    const maxW = stageRect.width * MAX_PANEL_RATIO;
+    const finalW = Math.max(MIN_PANEL_WIDTH, Math.min(maxW, targetPanelW));
+
+    workspace.style.setProperty("--left-pdf-width", `${Math.round(finalW)}px`);
+  };
+
+  const requestRecomputeLeftPdfWidth = () => {
+    if (leftPdfRecomputeRaf) cancelAnimationFrame(leftPdfRecomputeRaf);
+    leftPdfRecomputeRaf = requestAnimationFrame(() => {
+      leftPdfRecomputeRaf = 0;
+      recomputeLeftPdfWidth();
+    });
+  };
+
+  // recompute トリガー一覧:
+  // - PDF (見本) ロード変化、ページ切替、回転 → アスペクト比が変わる
+  // - parallel view mode 変化 → editor モード入退出
+  // - 既に editor.left-pdf に居る状態でも初回 sync で呼ぶ必要があるので↑の sync 経路でも発火
+  // - stage の resize → 高さ依存なのでウィンドウサイズに追従
+  onPdfChange(requestRecomputeLeftPdfWidth);
+  onPdfPageIndexChange(requestRecomputeLeftPdfWidth);
+  onPdfRotationChange(requestRecomputeLeftPdfWidth);
+  onParallelViewModeChange(requestRecomputeLeftPdfWidth);
+  if (typeof ResizeObserver !== "undefined" && stage) {
+    const ro = new ResizeObserver(requestRecomputeLeftPdfWidth);
+    ro.observe(stage);
+  }
+  // 初期同期。
+  requestRecomputeLeftPdfWidth();
+
+  // editor モードの左ペイン (校正 / 見本) 切替の同期。
+  // - workspace.classList の left-pdf を更新（CSS で表示切替）
+  // - セグメントボタンの active / aria-pressed を更新
+  // - localStorage に永続化
+  // - requestRecomputeLeftPdfWidth を呼ぶので、必ずそれが定義された後に書く。
+  const syncEditorLeftPane = () => {
+    const m = getEditorLeftPaneMode();
+    applyEditorLeftPaneClass();
+    if (leftProofreadBtn) {
+      leftProofreadBtn.classList.toggle("active", m === "proofread");
+      leftProofreadBtn.setAttribute("aria-pressed", m === "proofread" ? "true" : "false");
+    }
+    if (leftPdfBtn) {
+      leftPdfBtn.classList.toggle("active", m === "pdf");
+      leftPdfBtn.setAttribute("aria-pressed", m === "pdf" ? "true" : "false");
+    }
+    try { localStorage.setItem(EDITOR_LEFT_PANE_LS_KEY, m); } catch {}
+    requestRecomputeLeftPdfWidth();
+  };
+  onEditorLeftPaneModeChange(syncEditorLeftPane);
+  syncEditorLeftPane();
   sync();
 }
 
@@ -1333,7 +1522,6 @@ function bindSizeTool() {
 
 // 行間を適用。in-place 編集中（editingContext あり）はカーソル行の per-line override に
 // 書き込み、そうでなければ従来どおり layer 全体の leadingPct を更新する。
-// 【v1.16.0】行間の一部変更 — 3 段階優先順位: editingContext > activeLeadingLine > 全行。
 function applyLeading(n) {
   const v = clampLeading(n);
   // 1. in-place 編集中はカーソル行の per-line override（既存挙動）
@@ -1346,26 +1534,9 @@ function applyLeading(n) {
     syncLeadingInputForEditingContext();
     return;
   }
-  // 2. サイドバーで対象行が選ばれている → 単独選択中レイヤーのその行に per-line override。
-  //    行 N の override は「行 N と行 N-1 の間隔」を意味するので 1 以上のみ有効。
-  const lineIdx = getActiveLeadingLine();
-  if (Number.isInteger(lineIdx) && lineIdx >= 1) {
-    const target = resolveSingleSelectedLayer();
-    if (target) {
-      setLineLeading(target.psdPath, target.layerKey, lineIdx, v);
-      refreshAllOverlays();
-      rebuildLayerList();
-      syncLeadingRowSelector();
-      // 入力欄と ルビ ボタンを「いま書き込んだ値」に揃える。
-      // global leadingPct が変わっていないので onLeadingPctChange 経由の同期は走らないため、
-      // ここで明示的に呼ばないと「ルビを押したのに UI が変わらない」ように見える。
-      syncLeadingInputForActiveRow(v);
-      return;
-    }
-    // 単独選択でない / 解決できないときは全行モードへフォールバック
-    setActiveLeadingLine(null);
-  }
-  // 3. 全行：選択中レイヤー全体に一括適用（既存挙動）
+  // 2. 通常モード（in-place 編集なし）: 選択中レイヤー全体に一括適用 + global leadingPct 更新。
+  //    旧サイドバー行セレクタ（「全行 / 2 / 3 / …」ボタン）による per-line override は廃止。
+  //    in-place 編集中のカーソル行のみが per-line 対象。
   setLeadingPct(v);
   commitLeadingToSelections(getLeadingPct());
 }
@@ -1375,120 +1546,6 @@ function clampLeading(n) {
   return Math.max(50, Math.min(500, Math.round(v)));
 }
 
-// 【v1.16.0】サイドバー行選択用に「現在単独選択中のレイヤー」を解決する。
-// 戻り値: { psdPath, layerKey, contents, lineCount, lineLeadings } | null
-function resolveSingleSelectedLayer() {
-  const sels = getSelectedLayers();
-  if (sels.length !== 1) return null;
-  const pages = getPages();
-  const sel = sels[0];
-  const page = pages[sel.pageIndex];
-  if (!page) return null;
-  if (typeof sel.layerId === "string") {
-    // 新規レイヤー
-    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
-    if (!nl) return null;
-    const contents = nl.contents ?? "";
-    return {
-      psdPath: page.path,
-      layerKey: nl.tempId,
-      contents,
-      lineCount: contents.split(/\r?\n/).length,
-      lineLeadings: nl.lineLeadings ?? {},
-    };
-  }
-  // 既存レイヤー
-  const layer = page.textLayers.find((l) => l.id === sel.layerId);
-  if (!layer) return null;
-  const edit = getEdit(page.path, layer.id) ?? {};
-  const contents = edit.contents ?? layer.text ?? "";
-  return {
-    psdPath: page.path,
-    layerKey: layer.id,
-    contents,
-    lineCount: contents.split(/\r?\n/).length,
-    lineLeadings: edit.lineLeadings ?? {},
-  };
-}
-
-// 【v1.16.0】行間の一部変更 — 行間タブ内の「全行 / 2 / 3 / …」セグメント描画。
-// 行間タブの「対象行セレクタ」を再描画。レイヤー単独選択時のみ表示し、行数 1 のときも非表示。
-// in-place 編集中（editingContext）はサイドバー行選択を使わないので非表示にする。
-function syncLeadingRowSelector() {
-  const sel = document.getElementById("leading-row-selector");
-  if (!sel) return;
-  if (getEditingContext()) {
-    sel.hidden = true;
-    sel.innerHTML = "";
-    return;
-  }
-  const target = resolveSingleSelectedLayer();
-  if (!target || target.lineCount < 2) {
-    sel.hidden = true;
-    sel.innerHTML = "";
-    if (target == null) setActiveLeadingLine(null);
-    return;
-  }
-  // 行数を超える activeLeadingLine は無効化（contents が短くなった等）。
-  // 行 0 も「前の行」が無いため override 対象外 → 全行モードへ寄せる。
-  const active = getActiveLeadingLine();
-  if (active === 0 || (Number.isInteger(active) && active >= target.lineCount)) {
-    setActiveLeadingLine(null);
-    return; // setActiveLeadingLine の listener でこの関数が再実行される
-  }
-  sel.hidden = false;
-  // 行 N のボタン = 「行 N と行 N-1 の間隔」を調整する意味なので、行 0（先頭）は除外。
-  // 「全行」ボタンが層全体を一括変更する経路として行 0 のフォールバックを兼ねる。
-  const buttons = [`<button type="button" class="leading-row-btn${active == null ? " active" : ""}" data-row="all" title="全行に適用（layer 全体の行間）">全行</button>`];
-  for (let i = 1; i < target.lineCount; i++) {
-    const isActive = active === i;
-    const hasOverride = Number.isFinite(target.lineLeadings?.[i]);
-    const cls = "leading-row-btn"
-      + (isActive ? " active" : "")
-      + (hasOverride ? " has-override" : "");
-    const title = hasOverride
-      ? `${i + 1}行目の前の間隔（${target.lineLeadings[i]}% に変更済）`
-      : `${i + 1}行目の前の間隔`;
-    buttons.push(`<button type="button" class="${cls}" data-row="${i}" title="${title}">${i + 1}</button>`);
-  }
-  sel.innerHTML = buttons.join("");
-  // クリック → activeLeadingLine 切替（listener 経由で再描画 + leading-input に値同期）
-  for (const btn of sel.querySelectorAll(".leading-row-btn")) {
-    btn.addEventListener("mousedown", (e) => e.preventDefault()); // フォーカス移動を抑止
-    btn.addEventListener("click", () => {
-      const r = btn.dataset.row;
-      if (r === "all") setActiveLeadingLine(null);
-      else setActiveLeadingLine(parseInt(r, 10));
-    });
-  }
-}
-
-// 【v1.16.0】activeLeadingLine が立っている / 切替えられたとき、leading-input にその行の値を表示する。
-// forcedValue を渡すと state 読み取りをスキップして直接その値を反映する（applyLeading 直後に
-// 押した瞬間「ルビ active が変わらない」事故を防ぐ）。input が focus 中でも上書きする。
-function syncLeadingInputForActiveRow(forcedValue) {
-  const input = document.getElementById("leading-input");
-  if (!input) return;
-  if (getEditingContext()) return; // in-place 編集中は別ハンドラが担う
-  const lineIdx = getActiveLeadingLine();
-  if (!Number.isInteger(lineIdx) || lineIdx < 1) return;
-  let v;
-  if (Number.isFinite(forcedValue)) {
-    v = forcedValue;
-    input.value = String(v); // 強制同期（focus 中でも上書き）
-  } else {
-    const target = resolveSingleSelectedLayer();
-    if (!target) return;
-    v = getLineLeading(target.psdPath, target.layerKey, lineIdx) ?? getLeadingPct();
-    if (document.activeElement !== input) input.value = String(v);
-  }
-  // ルビトグルも追従
-  const onActive = v >= 150;
-  const off = document.getElementById("ruby-off-btn");
-  const on = document.getElementById("ruby-on-btn");
-  if (off) off.classList.toggle("active", !onActive);
-  if (on) on.classList.toggle("active", onActive);
-}
 function adjustLeading(delta) {
   const ec = getEditingContext();
   if (ec) {
@@ -1496,16 +1553,6 @@ function adjustLeading(delta) {
     const cur = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
     applyLeading(cur + delta);
     return;
-  }
-  // 【v1.16.0】サイドバー行選択中はその行の値を起点に増減
-  const lineIdx = getActiveLeadingLine();
-  if (Number.isInteger(lineIdx) && lineIdx >= 1) {
-    const target = resolveSingleSelectedLayer();
-    if (target) {
-      const cur = getLineLeading(target.psdPath, target.layerKey, lineIdx) ?? getLeadingPct();
-      applyLeading(cur + delta);
-      return;
-    }
   }
   applyLeading(getLeadingPct() + delta);
 }
@@ -1526,19 +1573,6 @@ function syncLeadingInputForEditingContext() {
   const on = document.getElementById("ruby-on-btn");
   if (off) off.classList.toggle("active", !onActive);
   if (on) on.classList.toggle("active", onActive);
-  // ターゲット行のラベル更新
-  const label = document.getElementById("leading-target-label");
-  if (label) {
-    label.textContent = `${ec.currentLineIndex + 1}行目`;
-    label.hidden = false;
-  }
-}
-
-function clearLeadingTargetLabel() {
-  const label = document.getElementById("leading-target-label");
-  if (label) {
-    label.hidden = true;
-  }
 }
 
 function bindLeadingTool() {
@@ -1570,22 +1604,13 @@ function bindLeadingTool() {
     applyLeading(v);
   });
   input.addEventListener("blur", () => {
-    // 【v1.16.0】editingContext > activeLeadingLine > 全行 の優先順で表示値を決める。
+    // editingContext (in-place 編集中) ならカーソル行の per-line 値、それ以外は global。
     const ec = getEditingContext();
     if (ec) {
       const targetId = ec.tempId ?? ec.layerId;
       const v = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
       input.value = String(v);
       return;
-    }
-    const lineIdx = getActiveLeadingLine();
-    if (Number.isInteger(lineIdx) && lineIdx >= 1) {
-      const target = resolveSingleSelectedLayer();
-      if (target) {
-        const v = getLineLeading(target.psdPath, target.layerKey, lineIdx) ?? getLeadingPct();
-        input.value = String(v);
-        return;
-      }
     }
     input.value = String(getLeadingPct());
   });
@@ -1600,50 +1625,15 @@ function bindLeadingTool() {
 
   // in-place 編集の context 変化に追従して input/ボタンの表示を更新。
   // context が立つ → カーソル行の per-line 値（無ければ global）を表示し対象行ラベル ON。
-  // context が消える → global 値に戻し、ラベル OFF。サイドバー行セレクタも再描画
-  // （editingContext が立っている間は隠す、消えたら復活させる）。
+  // context が消える → global 値に戻す。
   onEditingContextChange((ec) => {
     if (ec) {
       syncLeadingInputForEditingContext();
     } else {
-      clearLeadingTargetLabel();
-      // 【v1.16.0】editingContext を抜けた直後は activeLeadingLine は維持。
-      // サイドバー行が選ばれていればその値を、なければ global を表示。
-      const lineIdx = getActiveLeadingLine();
-      if (Number.isInteger(lineIdx) && lineIdx >= 1) {
-        syncLeadingInputForActiveRow();
-      } else {
-        input.value = String(getLeadingPct());
-        syncRuby(getLeadingPct());
-      }
-    }
-    syncLeadingRowSelector();
-  });
-
-  // 【v1.16.0】サイドバー行選択の変化 → 入力欄に該当行の値を表示し、行セレクタの active 表示を更新。
-  onActiveLeadingLineChange(() => {
-    syncLeadingRowSelector();
-    const a = getActiveLeadingLine();
-    if (Number.isInteger(a) && a >= 1) {
-      syncLeadingInputForActiveRow();
-    } else {
-      // 全行に戻った → global を表示
       input.value = String(getLeadingPct());
       syncRuby(getLeadingPct());
     }
   });
-
-  // 【v1.16.0】populateEditor（選択変化）後に行セレクタを再描画。レイヤー数 / contents が変わったときも追従。
-  // populateEditor 自身が `psdesign:editor-populated` を dispatch する（text-editor.js 側で実装）。
-  window.addEventListener("psdesign:editor-populated", () => {
-    syncLeadingRowSelector();
-  });
-  // 【v1.16.0】履歴変化（mutate）でも contents 行数が変わり得るので再描画。
-  onHistoryChange(() => {
-    syncLeadingRowSelector();
-  });
-
-  syncLeadingRowSelector();
 }
 
 async function handleDroppedPaths(paths) {

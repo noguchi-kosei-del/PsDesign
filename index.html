@@ -119,36 +119,13 @@
             </svg>
           </button>
           <div class="save-container" id="save-container">
-            <button id="save-btn" class="icon-btn file-open-btn" disabled title="Photoshop で保存" aria-label="Photoshop で保存" aria-haspopup="menu" aria-expanded="false">
+            <button id="save-btn" class="icon-btn file-open-btn" disabled title="Photoshop で保存 (Ctrl+S)" aria-label="Photoshop で保存">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
                 <polyline points="17 21 17 13 7 13 7 21"/>
                 <polyline points="7 3 7 8 15 8"/>
               </svg>
             </button>
-            <div class="save-menu" id="save-menu" role="menu" hidden>
-              <div class="save-menu-header">保存</div>
-              <button class="save-menu-item" id="save-overwrite-btn" type="button" role="menuitem">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                  <polyline points="17 21 17 13 7 13 7 21"/>
-                  <polyline points="7 3 7 8 15 8"/>
-                </svg>
-                <span class="save-menu-label">上書き保存</span>
-                <span class="save-menu-shortcut">Ctrl+S</span>
-              </button>
-              <button class="save-menu-item" id="save-as-btn" type="button" role="menuitem">
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
-                  <polyline points="17 21 17 13 7 13 7 21"/>
-                  <polyline points="7 3 7 8 15 8"/>
-                  <line x1="12" y1="18" x2="12" y2="11"/>
-                  <polyline points="9 14 12 11 15 14"/>
-                </svg>
-                <span class="save-menu-label">別名で保存</span>
-                <span class="save-menu-shortcut">Ctrl+Shift+S</span>
-              </button>
-            </div>
           </div>
           <button id="viewer-mode-btn" class="icon-btn file-open-btn" type="button" disabled title="閲覧モード" aria-label="閲覧モード" aria-pressed="false">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -203,6 +180,11 @@
             <div class="spreads-proofread-area" id="spreads-proofread-area">
               <div id="proofread-panel" class="proofread-panel" hidden>
                 <div class="proofread-panel-header">
+                  <!-- editor モード時のみ表示。校正パネル / 見本画像 (spreads-pdf-area) を排他切替。 -->
+                  <div class="editor-left-pane-segment" id="editor-left-pane-segment" role="group" aria-label="エディタモード 左ペイン">
+                    <button id="editor-left-proofread-btn" class="editor-left-pane-btn active" type="button" aria-pressed="true" title="校正パネルを表示">校正</button>
+                    <button id="editor-left-pdf-btn" class="editor-left-pane-btn" type="button" aria-pressed="false" title="見本画像を表示">見本</button>
+                  </div>
                   <div class="proofread-tabs" id="proofread-tabs" role="tablist">
                     <button class="proofread-tab" data-tab="correctness" type="button" role="tab" aria-selected="false">正誤</button>
                     <button class="proofread-tab" data-tab="proposal" type="button" role="tab" aria-selected="false">提案</button>
@@ -314,17 +296,6 @@
                   </button>
                 </div>
               </div>
-              <div id="editor-pages-viewer-wrap" class="editor-pages-viewer-wrap">
-                <div id="editor-empty" class="editor-empty txt-source-empty" hidden>
-                  <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
-                    <polyline points="14 2 14 8 20 8"/>
-                    <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
-                  </svg>
-                  <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
-                </div>
-                <div id="editor-pages-viewer" class="editor-pages-viewer" role="region" aria-label="ページ別原稿"></div>
-              </div>
               <div class="editor-new-input-row">
                 <textarea
                   id="editor-new-input"
@@ -339,9 +310,16 @@
                   title="入力したテキストを画像中央に配置 (Ctrl+Enter)"
                   disabled>配置</button>
               </div>
-              <div class="editor-footer">
-                <span id="editor-footer-stats" class="editor-footer-stats">0 文字 / 0 行</span>
-                <span id="editor-footer-dirty" class="editor-footer-dirty" hidden>未保存</span>
+              <div id="editor-pages-viewer-wrap" class="editor-pages-viewer-wrap">
+                <div id="editor-empty" class="editor-empty txt-source-empty" hidden>
+                  <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
+                    <polyline points="14 2 14 8 20 8"/>
+                    <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
+                  </svg>
+                  <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
+                </div>
+                <div id="editor-pages-viewer" class="editor-pages-viewer" role="region" aria-label="ページ別原稿"></div>
               </div>
             </div>
           </div>
@@ -394,6 +372,16 @@
               <path d="M14 10V4a2 2 0 0 0-4 0v6"/>
               <path d="M10 10.5V6a2 2 0 0 0-4 0v8"/>
               <path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>
+            </svg>
+          </button>
+          <button id="select-all-btn" class="icon-btn side-tool-btn" type="button" title="現在ページの全テキストを選択 (Ctrl+A)" aria-label="全選択">
+            <!-- 4 隅マーカー + 内側点線で「選択範囲全体」を象徴。lucide ベース。 -->
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
+              <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
+              <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
+              <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
+              <rect x="7" y="7" width="10" height="10" rx="1" stroke-dasharray="2 2"/>
             </svg>
           </button>
           <div class="layers-toggle-wrap">
@@ -533,15 +521,6 @@
               </button>
             </div>
             <div id="txt-source-dropzone" class="txt-source-dropzone">
-              <div id="txt-source-viewer" class="txt-source-viewer" hidden></div>
-              <div id="txt-source-empty" class="txt-source-empty">
-                <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
-                </svg>
-                <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
-              </div>
               <div class="txt-source-new-input" id="txt-source-new-input-area">
                 <textarea
                   id="txt-new-input"
@@ -555,6 +534,15 @@
                   type="button"
                   title="入力したテキストを画像中央に配置 (Ctrl+Enter)"
                   disabled>配置</button>
+              </div>
+              <div id="txt-source-viewer" class="txt-source-viewer" hidden></div>
+              <div id="txt-source-empty" class="txt-source-empty">
+                <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
+                </svg>
+                <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
               </div>
             </div>
           </section>
@@ -587,9 +575,6 @@
                     <button id="ruby-on-btn" class="ruby-toggle-btn" type="button" data-ruby="on" title="ルビあり（行間 150%）">ルビ</button>
                   </div>
                 </div>
-                <!-- 【v1.16.0】行間の一部変更 — レイヤー単独選択時に「全行 / 2 / 3 / …」のセグメントを表示。 -->
-                <div id="leading-row-selector" class="leading-row-selector" role="group" aria-label="対象行" hidden></div>
-                <span id="leading-target-label" class="leading-target-label" hidden></span>
               </div>
               <div class="editor-tab-panel" data-tab-panel="stroke">
                 <div class="editor-panel-label">フチ</div>

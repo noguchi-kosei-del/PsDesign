@@ -1,11 +1,11 @@
-// 保存系: ドロップダウンメニュー、上書き / 別名で保存、保存中の多重実行ガード。
-// 旧 main.js から切り出し。pickSaveParentDir / generateSaveFolderName / runSaveWithMode は
-// このモジュール内部に閉じ、外向きには bindSaveMenu / handleOverwriteSave / handleSaveAs と
-// 「保存可能フラグ」の get/set を export する。
+// 保存系: 保存ボタン、保存中の多重実行ガード。
+// 上書き保存は廃止。保存は常に Tachimi 互換の
+//   <Desktop>/Script_Output/写植完了/  (既存時は 写植完了(1), 写植完了(2)... と連番)
+// に書き出す。フロント側で空きフォルダ名を確定してから Rust に渡す。
+// 外向き API: bindSaveMenu / handleSave / 保存可能フラグの get/set。
 
 import { exportEdits, getFolder, getPages, hasEdits } from "../state.js";
 import {
-  confirmDialog,
   hideProgress,
   notifyDialog,
   showProgress,
@@ -13,14 +13,17 @@ import {
 } from "../ui-feedback.js";
 import { baseName, joinPath } from "../utils/path.js";
 
-// PSD 読込時に false にリセットされ、上書き保存成功で true になる。
-// 初回 Ctrl+S は別名保存にフォールバックさせるため、ロード経路から setHasSavedThisSession(false) を呼ぶ。
+// PSD 読込時に false にリセットされ、保存成功で true になる。
+// 旧: 初回 Ctrl+S を別名保存にフォールバックさせるためのフラグ。
+// 現: 上書き保存廃止により実質的な分岐ロジックは無いが、他モジュール（hasSavedThisSession を
+//     参照する箇所）の互換のため state は維持。
 let hasSavedThisSession = false;
-let saveMenuOpen = false;
 // Photoshop への保存 invoke が走っている間は true。Ctrl+S や保存ボタンの連打で
 // 同じ PSD に対して invoke が並行実行されると Photoshop 側で開くドキュメントが
 // 競合し、片方の編集が失われる / セッションが破壊されるためガードする。
 let saveInflight = false;
+
+// 旧 confirmDialog 経由の「上書き確認」ダイアログは廃止（連番フォルダで衝突しないため）。
 
 export function getHasSavedThisSession() { return hasSavedThisSession; }
 export function setHasSavedThisSession(v) { hasSavedThisSession = !!v; }
@@ -30,19 +33,13 @@ export function updateSaveButton() {
   if (btn) btn.disabled = getPages().length === 0;
 }
 
-async function pickSaveParentDir() {
-  const { openFileDialog } = await import("../file-picker.js");
-  const picked = await openFileDialog({
-    mode: "openFolder",
-    title: "別名で保存：親フォルダを選択（この中に新規フォルダを作成します）",
-    rememberKey: "save-as-parent",
-  });
-  return typeof picked === "string" ? picked : null;
+const BASE_SAVE_FOLDER_NAME = "写植完了";
+// 連番フォーマット: BASE, BASE(1), BASE(2), ...（Tachimi の `jpg(1)` 命名に合わせて空白なし）。
+function indexedSaveFolderName(i) {
+  return i === 0 ? BASE_SAVE_FOLDER_NAME : `${BASE_SAVE_FOLDER_NAME}(${i})`;
 }
-
-function generateSaveFolderName() {
-  return "写植";
-}
+// 安全上限。通常運用で 1000 個もできないが暴走防止。
+const MAX_FOLDER_INDEX = 9999;
 
 async function runSaveWithMode({ saveMode, targetDir }) {
   if (saveInflight) {
@@ -89,113 +86,86 @@ async function runSaveWithMode({ saveMode, targetDir }) {
   }
 }
 
+// 旧 handleOverwriteSave は廃止。Ctrl+S からの呼出経路の互換のため、handleSave への
+// alias を残しておく（main.js の runShortcut("save") / runShortcut("saveAs") 両方が
+// handleSave を呼ぶようになっている）。
 export async function handleOverwriteSave() {
-  if (getPages().length === 0) return;
-  if (!hasSavedThisSession) {
-    await handleSaveAs();
-    return;
-  }
-  await runSaveWithMode({ saveMode: "overwrite" });
+  await handleSave();
 }
 
-async function handleExplicitOverwrite() {
-  if (getPages().length === 0) return;
-  await runSaveWithMode({ saveMode: "overwrite" });
-}
-
-// 親フォルダ直下に指定名のサブフォルダが既に存在するかを返す。
-// list_directory_entries は Vec<DirEntry { name, isDirectory, ... }> を返す。
-// 例外時は false（保存処理はそのまま続行 = create_dir_all で冪等的に成功する）。
-async function folderExistsIn(parent, folderName) {
+// 親フォルダ直下の全 entry を返す。例外時は空配列。
+async function listEntriesIn(parent) {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const entries = await invoke("list_directory_entries", { path: parent });
-    if (!Array.isArray(entries)) return false;
-    const target = folderName.toLowerCase();
-    return entries.some(
-      (e) => e?.isDirectory === true && (e?.name ?? "").toLowerCase() === target,
-    );
+    return Array.isArray(entries) ? entries : [];
   } catch (e) {
-    console.error("[save] folder existence check failed:", e);
-    return false;
+    console.error("[save] list_directory_entries failed:", e);
+    return [];
   }
 }
 
-export async function handleSaveAs() {
-  if (getPages().length === 0) return;
-  const parent = await pickSaveParentDir();
-  if (!parent) return;
-  const folderName = generateSaveFolderName();
-  // 既に「写植」フォルダが存在する場合はユーザーに上書き確認。
-  // OK なら既存フォルダ内へ saveAs（Photoshop の saveAs は同名 PSD を上書きする）。
-  if (await folderExistsIn(parent, folderName)) {
-    const ok = await confirmDialog({
-      title: "フォルダが既に存在します",
-      message: `「${folderName}」フォルダが既に存在します。上書きで保存しますか？`,
-      confirmLabel: "上書き保存",
-      cancelLabel: "キャンセル",
-      kind: "warning",
-    });
-    if (!ok) return;
+// 親フォルダ内で「写植完了」「写植完了(1)」… の中から最小の未使用 index を返す。
+// 例外 / 取得失敗時は 0（= 基本名）を返して create_dir_all に丸投げ（その経路ではぶつかれば上書きになる）。
+async function pickNextSaveFolderName(parent) {
+  const entries = await listEntriesIn(parent);
+  // 既存フォルダ名（小文字化）を Set 化
+  const existing = new Set(
+    entries
+      .filter((e) => e && e.isDirectory === true)
+      .map((e) => (e.name ?? "").toLowerCase()),
+  );
+  for (let i = 0; i <= MAX_FOLDER_INDEX; i++) {
+    const name = indexedSaveFolderName(i);
+    if (!existing.has(name.toLowerCase())) return name;
   }
-  const targetDir = joinPath(parent, folderName);
+  // 9999 個埋まっていれば諦めて基本名を返す（=Photoshop 側で saveAs 時に既存 PSD を
+  // 事前削除する v1.14.0 A4 のフェイルセーフが効くので壊れはしない）。
+  return BASE_SAVE_FOLDER_NAME;
+}
+
+export async function handleSave() {
+  if (getPages().length === 0) return;
+
+  // Tachimi 互換の自動保存先決定: <Desktop>/Script_Output/<写植完了 [連番]>/。
+  // 親フォルダ選択ダイアログは廃止。既に「写植完了」がある場合は上書きせず、
+  // 「写植完了(1)」「写植完了(2)」… と空き番号を順に取って新規フォルダを作成。
+  let desktop;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    desktop = await invoke("desktop_dir");
+  } catch (e) {
+    console.error("[save] desktop_dir failed:", e);
+    toast(`保存先の取得に失敗しました: ${e?.message ?? e}`, { kind: "error", duration: 5000 });
+    return;
+  }
+  if (typeof desktop !== "string" || !desktop) {
+    toast("デスクトップフォルダが見つかりません", { kind: "error", duration: 4000 });
+    return;
+  }
+
+  const scriptOutputDir = joinPath(desktop, "Script_Output");
+  const folderName = await pickNextSaveFolderName(scriptOutputDir);
+  const targetDir = joinPath(scriptOutputDir, folderName);
+
+  // 中間フォルダ Script_Output / 終端 写植完了(N) は apply_edits_via_photoshop の
+  // create_dir_all で再帰的に作られるので、フロント側での明示作成は不要。
   await runSaveWithMode({ saveMode: "saveAs", targetDir });
 }
 
-function openSaveMenu() {
-  const menu = document.getElementById("save-menu");
-  const btn = document.getElementById("save-btn");
-  if (!menu || !btn) return;
-  if (btn.disabled) return;
-  menu.hidden = false;
-  btn.setAttribute("aria-expanded", "true");
-  saveMenuOpen = true;
-}
+// 旧名互換のため alias を残す（main.js が `handleSaveAs` を import している）。
+export const handleSaveAs = handleSave;
 
-function closeSaveMenu() {
-  if (!saveMenuOpen) return;
-  const menu = document.getElementById("save-menu");
-  const btn = document.getElementById("save-btn");
-  if (menu) menu.hidden = true;
-  if (btn) btn.setAttribute("aria-expanded", "false");
-  saveMenuOpen = false;
-}
-
-function toggleSaveMenu() {
-  if (saveMenuOpen) closeSaveMenu();
-  else openSaveMenu();
-}
-
+// 旧バージョンの保存ドロップダウン（上書き保存 / 別名で保存 2 項目）は撤去。
+// save-btn は単独でクリックされ、handleSave を呼ぶだけのシンプルな構造になった。
+// 関数名 bindSaveMenu は main.js 側の import を壊さないため温存。
 export function bindSaveMenu() {
   const btn = document.getElementById("save-btn");
-  const overwrite = document.getElementById("save-overwrite-btn");
-  const saveAs = document.getElementById("save-as-btn");
-  const container = document.getElementById("save-container");
-  if (!btn || !overwrite || !saveAs || !container) return;
-
+  if (!btn) return;
+  btn.setAttribute("aria-haspopup", "false");
+  btn.removeAttribute("aria-expanded");
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    toggleSaveMenu();
-  });
-  overwrite.addEventListener("click", (e) => {
-    e.stopPropagation();
-    closeSaveMenu();
-    handleExplicitOverwrite();
-  });
-  saveAs.addEventListener("click", (e) => {
-    e.stopPropagation();
-    closeSaveMenu();
-    handleSaveAs();
-  });
-  document.addEventListener("mousedown", (e) => {
-    if (!saveMenuOpen) return;
-    if (container.contains(e.target)) return;
-    closeSaveMenu();
-  });
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && saveMenuOpen) {
-      e.preventDefault();
-      closeSaveMenu();
-    }
+    handleSave();
   });
 }

@@ -38,7 +38,7 @@ import {
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
 import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
-import { advanceTxtSelection, cascadeRemoveTxtForLayers, getActiveTxtSelection } from "./txt-source.js";
+import { cascadeRemoveTxtForLayers, syncTxtSelectionToLayer } from "./txt-source.js";
 
 const mounts = new Map();
 const resizeObservers = new Set();
@@ -272,6 +272,44 @@ export function nudgeSelectedLayers(dx, dy) {
   return !!moved;
 }
 
+// 矢印キー ↑/↓ で現在ページ内のテキストレイヤー選択を順送り / 逆送りする。
+// 順序は text-editor.js rebuildLayerList と同じ「既存レイヤー → 新規レイヤー」。
+// 末尾で wrap (last → first / first → last)。delta: +1 次へ / -1 前へ。
+// レイヤーが 0 件のときは false、そうでなければ選択を切替えて true。
+// 現選択が別ページのレイヤーなら無視して現ページの先頭/末尾から開始する。
+export function cycleLayerSelection(delta) {
+  const pages = getPages();
+  const pageIdx = getCurrentPageIndex();
+  if (pageIdx < 0 || pageIdx >= pages.length) return false;
+  const page = pages[pageIdx];
+  if (!page) return false;
+  // ordered ID list: 既存 → 新規
+  const ids = [];
+  for (const layer of page.textLayers) ids.push(layer.id);
+  for (const nl of getNewLayersForPsd(page.path)) ids.push(nl.tempId);
+  if (ids.length === 0) return false;
+  const selections = getSelectedLayers();
+  // 現選択が現ページにあるか確認 (複数選択でも先頭で代表する)
+  const cur = selections.find((s) => s.pageIndex === pageIdx);
+  let nextIdx;
+  if (cur) {
+    const curIdx = ids.findIndex((id) => id === cur.layerId);
+    nextIdx = curIdx < 0
+      ? (delta > 0 ? 0 : ids.length - 1)
+      : (curIdx + delta + ids.length) % ids.length;
+  } else {
+    // 現ページに選択なし → 方向に応じて先頭 / 末尾を選ぶ
+    nextIdx = delta > 0 ? 0 : ids.length - 1;
+  }
+  setSelectedLayer(pageIdx, ids[nextIdx]);
+  refreshAllOverlays();
+  rebuildLayerList();
+  // 自動配置済みレイヤー（sourceTxtRef あり）の場合は txt-source-viewer の選択 / フォーカスも追従。
+  // 紐付け無しのレイヤーが選ばれた場合は viewer 側の選択を解除する（同関数内で処理）。
+  syncTxtSelectionToLayer(pageIdx, ids[nextIdx]);
+  return true;
+}
+
 // 選択中のレイヤーを削除する（Delete / Backspace から呼ばれる想定）。
 // 新規追加レイヤーのみ削除可能。PSD 既存テキストレイヤーは選択から外すだけで残す
 // （PSD バイナリからの削除は edit モデル外のため未対応）。
@@ -449,8 +487,10 @@ function layerRectForExisting(page, layer, edit) {
 
   const sizePt = getExistingLayerEffectiveSizePt(page, layer, edit);
   const ptInPsdPx = sizePt * (dpi / 72);
+  // 【v1.x.0】句読点ツメも bbox 幅に反映（、 / 。 の個数 × tsume% × em ぶん長さが縮む）。
+  const punctTsumePctExisting = Number(getDefault("punctuationTsumePercent")) || 0;
   // 【v1.16.0】measureMaxLineExtentEm はここで sizePt が確定してから呼ぶ（per-char override も反映）。
-  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, edit.charFonts);
+  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, edit.charFonts, punctTsumePctExisting);
   // CJK 縦書きで小書き仮名（ょ・っ・ゃ等）や glyph の line-box overhang、
   // text-stroke の outset 半分（stroke 既定 20 PSD px → ~0.16em）を吸収するため
   // 列方向に 0.4em の安全余白を足す。テキスト本体は CSS で bbox 中央に配置するので
@@ -513,8 +553,10 @@ function layerRectForNew(page, nl) {
   const contents = nl.contents ?? "";
   const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
+  // 【v1.x.0】句読点ツメも bbox 幅に反映（、 / 。 の個数 × tsume% × em ぶん長さが縮む）。
+  const punctTsumePctNew = Number(getDefault("punctuationTsumePercent")) || 0;
   // 【v1.16.0】枠の自動調整 — 実描画幅で long を auto-fit（フォント変更 + per-char サイズ/フォント変更で bbox 自動更新）。
-  const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts);
+  const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts, punctTsumePctNew);
   // 行間 (%) を厚み係数に反映。125 が既定。
   // 小書き仮名 + stroke overhang を吸収する 0.4em の安全余白を THICK 軸に加算。テキスト本体は
   // CSS padding で bbox 中央に配置されるので、bbox が広がっても視覚位置は変わらない。
@@ -593,6 +635,8 @@ function renderOverlay(ctx) {
   })();
 
   const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
+  // 複数選択 (2 件以上) の判定。.multi-selected クラスで CSS 側が水色点線 + 青バッジに切替える。
+  const isMultiSelect = getSelectedLayers().length > 1;
 
   for (const layer of page.textLayers) {
     // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
@@ -620,6 +664,8 @@ function renderOverlay(ctx) {
     const symbolReplaceOn = getDefault("symbolFontReplaceEnabled") !== false;
     const symbolFontPS = symbolReplaceOn ? String(getDefault("symbolFontPostScriptName") || "") : "";
     if (symbolFontPS) ensureFontLoaded(symbolFontPS);
+    // 【v1.x.0】句読点ツメ（、 / 。 を mojiZume N% で詰める）。新規 + 既存両方の preview に反映。
+    const punctTsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
     // 【v1.16.0】per-char サイズ/フォント override + sizePt を渡して per-line bbox / 文字描画を反映。
     const existingSizePt = getExistingLayerEffectiveSizePt(page, layer, edit);
     renderInnerText(
@@ -629,6 +675,7 @@ function renderOverlay(ctx) {
       edit.charSizes, existingSizePt, edit.charFonts,
       symbolFontPS,
       edit.charBolds,
+      punctTsumePct,
     );
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
@@ -648,6 +695,7 @@ function renderOverlay(ctx) {
 
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
+      if (isMultiSelect) box.classList.add("multi-selected");
       box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
@@ -684,6 +732,8 @@ function renderOverlay(ctx) {
     const symbolReplaceOnNew = getDefault("symbolFontReplaceEnabled") !== false;
     const symbolFontPSNew = symbolReplaceOnNew ? String(getDefault("symbolFontPostScriptName") || "") : "";
     if (symbolFontPSNew) ensureFontLoaded(symbolFontPSNew);
+    // 【v1.x.0】句読点ツメ（、 / 。 を mojiZume N% で詰める）。新規 + 既存両方の preview に反映。
+    const punctTsumePctNew = Number(getDefault("punctuationTsumePercent")) || 0;
     // 【v1.16.0】per-char サイズ/フォント override + sizePt を渡して per-line bbox / 文字描画を反映。
     renderInnerText(
       inner, nl.contents, nl.leadingPct ?? 125, nl.lineLeadings, dashMille, tildeMille,
@@ -692,6 +742,7 @@ function renderOverlay(ctx) {
       nl.charSizes, nl.sizePt ?? 24, nl.charFonts,
       symbolFontPSNew,
       nl.charBolds,
+      punctTsumePctNew,
     );
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
@@ -708,6 +759,7 @@ function renderOverlay(ctx) {
     box.appendChild(inner);
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
+      if (isMultiSelect) box.classList.add("multi-selected");
       box.appendChild(createRotateHandle(ctx, nl.tempId));
       const newBadge = createSizeBadge(nl.sizePt ?? 24, page, nl.fontPostScriptName ?? null);
       if (newBadge) box.appendChild(newBadge);
@@ -724,6 +776,69 @@ function renderOverlay(ctx) {
   // もし内容が box を超えているなら box を伸ばす（フォント/per-char サイズ変更で
   // measureText の予測がズレた際の最終フォールバック）。
   scheduleBoxAutoFit(ctx);
+
+  // 【v1.x.0】複数選択時のバッジ重なり解決。近接する選択フレームの青バッジ同士が
+  // 縦に重なるケースがあるため、後で重なりを検出して該当バッジを上向き反転する。
+  scheduleBadgeOverlapResolution(ctx);
+}
+
+// バッジ重なり解決パス。rAF で 1 フレーム遅延させて DOM レイアウトが確定してから走る。
+// 各バッジの getBoundingClientRect を比較し、すでに配置済みのバッジと縦方向で交差する
+// なら .layer-size-badge--above を付けて上向きに反転する。
+function scheduleBadgeOverlapResolution(ctx) {
+  if (typeof requestAnimationFrame !== "function") return;
+  if (ctx._badgeOverlapScheduled) return;
+  ctx._badgeOverlapScheduled = true;
+  requestAnimationFrame(() => {
+    ctx._badgeOverlapScheduled = false;
+    if (!ctx.overlay) return;
+    const badges = Array.from(ctx.overlay.querySelectorAll(".layer-size-badge"));
+    if (badges.length < 2) {
+      // 1 個以下なら重なりが発生しない。クラスをクリアして default 下向きに戻す。
+      for (const b of badges) b.classList.remove("layer-size-badge--above");
+      return;
+    }
+    // 一旦すべて下向きにリセットしてから検出（前回の反転が残留しないよう）。
+    for (const b of badges) b.classList.remove("layer-size-badge--above");
+    // 左上 (top, left) 順にソートしてバッジを 1 つずつ「配置」していく。
+    // 後から配置するバッジが既存バッジと交差したら上向きに反転する。
+    const placed = [];
+    badges.sort((a, b) => {
+      const ra = a.getBoundingClientRect();
+      const rb = b.getBoundingClientRect();
+      if (ra.top !== rb.top) return ra.top - rb.top;
+      return ra.left - rb.left;
+    });
+    for (const badge of badges) {
+      const r = badge.getBoundingClientRect();
+      if (r.width <= 0 || r.height <= 0) continue;
+      if (rectsOverlapPlaced(r, placed)) {
+        badge.classList.add("layer-size-badge--above");
+        const r2 = badge.getBoundingClientRect();
+        // 反転後も重なる場合は諦めて下向きに戻す（多重重なりの極端ケース）。
+        if (rectsOverlapPlaced(r2, placed)) {
+          badge.classList.remove("layer-size-badge--above");
+          placed.push(r);
+        } else {
+          placed.push(r2);
+        }
+      } else {
+        placed.push(r);
+      }
+    }
+  });
+}
+
+function rectsOverlapPlaced(r, placed) {
+  for (const p of placed) {
+    if (
+      r.left < p.right - 1 &&
+      r.right > p.left + 1 &&
+      r.top < p.bottom - 1 &&
+      r.bottom > p.top + 1
+    ) return true;
+  }
+  return false;
 }
 
 // 【v1.16.0】枠の自動調整（後置の保険）— measureText の予測がズレた場合の最終フォールバック。
@@ -826,13 +941,26 @@ function getMeasureContext() {
 // (charSize / layerSize) 倍してから加算する → bbox が大きい文字に応じて伸びる。
 //
 // 戻り値: 0 〜 ∞（layer.sizePt em 単位）。空行は 0。測定不能なら null。
-function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs) {
+function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs, punctTsumePct) {
   if (!line) return 0;
   if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
   let ctx;
   try { ctx = getMeasureContext(); } catch { return null; }
   const refSizePx = 100;
   let totalEm = 0;
+  // 【v1.x.0】句読点ツメ: 、 / 。 の数だけ tsume% × (charSize / layerSize) を差し引く。
+  // measureText 自体は letter-spacing を反映しないので、ここで em 換算した差分を引く。
+  const tsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
+  let tsumeReductionEm = 0;
+  if (tsumeMag > 0) {
+    for (let k = 0; k < line.length; k++) {
+      const cc = line.charCodeAt(k);
+      if (PUNCT_TSUME_CHAR_CODES.has(cc)) {
+        const charSz = Number.isFinite(charSizes?.[lineStartIdx + k]) ? charSizes[lineStartIdx + k] : layerSizePt;
+        tsumeReductionEm += tsumeMag * (charSz / layerSizePt);
+      }
+    }
+  }
   let i = 0;
   while (i < line.length) {
     const sizeStart = Number.isFinite(charSizes?.[lineStartIdx + i]) ? charSizes[lineStartIdx + i] : layerSizePt;
@@ -888,12 +1016,15 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
     totalEm += segWidthAtLayerEm;
     i = j;
   }
-  return totalEm;
+  // 句読点ツメぶんを最後にまとめて差し引き（負にならないようガード）。
+  const adjusted = totalEm - tsumeReductionEm;
+  return adjusted > 0 ? adjusted : 0;
 }
 
 // 全行の最大行幅を「layer.sizePt em 単位」で返す。
 // charSizes / charFonts に override があれば反映、なければ layer フォント単一で測定。
-function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts) {
+// punctTsumePct: 句読点ツメ%。0 のとき無効。各行の measureLineExtentEmWithOverrides に伝搬。
+function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts, punctTsumePct) {
   if (!text) return 0;
   if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
   const fullText = String(text);
@@ -902,7 +1033,7 @@ function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, ch
   let maxEm = 0;
   for (let li = 0; li < linesArr.length; li++) {
     const em = measureLineExtentEmWithOverrides(
-      linesArr[li], lineStarts[li], charSizes, charFonts, layerSizePt, postScriptName,
+      linesArr[li], lineStarts[li], charSizes, charFonts, layerSizePt, postScriptName, punctTsumePct,
     );
     if (em == null) continue;
     if (em > maxEm) maxEm = em;
@@ -949,6 +1080,23 @@ function lineHasSymbolChar(s) {
 // 縦中横（tate-chu-yoko）対象の半角ペア。先頭から 2 文字単位で探索し、3 文字以上連続のとき
 // 余り 1 文字は単独扱い（ユーザー仕様）。Photoshop 側 (jsx_gen.rs) でも同じ判定を行う。
 const TCY_PAIR_REGEX = /!!|!\?/;
+
+// 【v1.x.0】句読点ツメ（mojiZume）の対象。U+3001「、」/ U+3002「。」のみ。
+// Photoshop 側 (jsx_gen.rs applyPunctuationTsume) と同じ char code 集合。
+// 環境設定 `punctuationTsumePercent` (0/50%) に従って、各文字の直後の空白を tsume% ぶん詰める。
+// CSS では `letter-spacing: -(tsume/100)em` を句読点の span に当てて、次の文字との距離を縮める。
+const PUNCT_TSUME_CHAR_CODES = new Set([0x3001, 0x3002]);
+function isPunctTsumeChar(ch) {
+  if (typeof ch !== "string" || ch.length === 0) return false;
+  return PUNCT_TSUME_CHAR_CODES.has(ch.charCodeAt(0));
+}
+function lineHasPunctTsumeChar(s) {
+  if (typeof s !== "string") return false;
+  for (let i = 0; i < s.length; i++) {
+    if (PUNCT_TSUME_CHAR_CODES.has(s.charCodeAt(i))) return true;
+  }
+  return false;
+}
 
 function repeatedTargetGroup(ch) {
   if (DASH_CHARS.has(ch)) return "dash";
@@ -1008,7 +1156,7 @@ function findTcyPairs(line) {
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
 //
 // 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
-function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds) {
+function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag) {
   if (!line.length) {
     // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
     parentEl.appendChild(document.createTextNode("​"));
@@ -1022,8 +1170,11 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
   const trackingActive = (dashMag > 0 || tildeMag > 0) && REPEATED_TARGET_REGEX.test(line);
   const symbolActive = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(line);
+  // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。0..1 の em 量。
+  const tsumeMag = Number.isFinite(punctTsumeMag) && punctTsumeMag > 0 ? punctTsumeMag : 0;
+  const punctActive = tsumeMag > 0 && lineHasPunctTsumeChar(line);
   // 高速パス：何も装飾なし → 単純テキストノード 1 つで終わり
-  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds) {
+  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !punctActive) {
     parentEl.appendChild(document.createTextNode(line));
     return;
   }
@@ -1045,10 +1196,12 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   }
   // tcy ペア境界で分割し、各セグメントを「tcy 内」(text-combine-upright) または
   // 「tcy 外」(per-char signature 統合) として出力する。
+  // 句読点ツメは punctActive のときだけ tsumeMag を append... に渡す（高速パス判定とも整合）。
+  const tsumeArg = punctActive ? tsumeMag : 0;
   let pos = 0;
   for (const pair of tcyPairs) {
     if (pair.start > pos) {
-      appendStyledSegment(parentEl, line.slice(pos, pair.start), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds);
+      appendStyledSegment(parentEl, line.slice(pos, pair.start), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
     }
     const span = document.createElement("span");
     span.className = "tcy-span";
@@ -1057,23 +1210,31 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
     pos = pair.end;
   }
   if (pos < line.length) {
-    appendStyledSegment(parentEl, line.slice(pos), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds);
+    appendStyledSegment(parentEl, line.slice(pos), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
   }
 }
 
 // 【v1.16.0】tcy 外セグメントを per-char signature (size, tracking, font) 統合で append。
 // segStartInLine: このセグメントが line のどの位置から始まるか（trackings 配列の index 算出用）
 // lineStartIdx: line が full contents のどの位置から始まるか（charSizes / charFonts の絶対 index 算出用）
-function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, hasCharBolds) {
+// 【v1.x.0】punctTsumeMag (0..1) で 、/。の直後を縮める。例: 0.5 で letter-spacing -0.5em。
+//   tracking (連続記号ツメ) と同じく letter-spacing で表現するが、対象文字が重複しないため
+//   両者の値を合算して 1 つの letterSpacing にセットする。
+function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, hasCharBolds, punctTsumeMag) {
   if (!segText.length) return;
   // 【v1.22.0】per-char font 解決: ユーザー手動指定 (charFonts[idx]) があれば最優先、
   // 無ければ symbol char に対しては symbolFontPS で自動置換、それでも無ければ undefined（layer 既定）。
   const symbolReplaceActive = typeof symbolFontPS === "string" && symbolFontPS.length > 0;
+  const tsumeActive = Number.isFinite(punctTsumeMag) && punctTsumeMag > 0;
   function effectiveFontAt(absIdx, ch) {
     const explicit = hasCharFonts ? charFonts[absIdx] : undefined;
     if (typeof explicit === "string" && explicit.length > 0) return explicit;
     if (symbolReplaceActive && SYMBOL_CHAR_CODES.has(ch.charCodeAt(0))) return symbolFontPS;
     return undefined;
+  }
+  // 各 char の tsume em 値（負の letter-spacing として後で足す）。句読点で 0 < tsume <= 1。
+  function tsumeAt(ch) {
+    return tsumeActive && PUNCT_TSUME_CHAR_CODES.has(ch.charCodeAt(0)) ? punctTsumeMag : 0;
   }
   let i = 0;
   while (i < segText.length) {
@@ -1083,6 +1244,8 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     const sigFont = effectiveFontAt(absIdx, segText[i]);
     // 【v1.22.0】per-char 合成太字 (charBolds[absIdx])。boolean があれば signature に含める。
     const sigBold = hasCharBolds ? charBolds[absIdx] : undefined;
+    // 【v1.x.0】句読点ツメ（、 / 。）。signature に含めて連続する 、、 を 1 span にまとめる。
+    const sigTsume = tsumeAt(segText[i]);
     let j = i + 1;
     while (j < segText.length) {
       const absJ = lineStartIdx + segStartInLine + j;
@@ -1090,11 +1253,14 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       const t = trackings[segStartInLine + j];
       const f = effectiveFontAt(absJ, segText[j]);
       const b = hasCharBolds ? charBolds[absJ] : undefined;
-      if (s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold) break;
+      const tu = tsumeAt(segText[j]);
+      if (s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || tu !== sigTsume) break;
       j++;
     }
     const text = segText.slice(i, j);
-    const needsSpan = Number.isFinite(sigSize) || sigTrack !== 0
+    // 句読点ツメと連続記号ツメは重複対象文字無し（、。 vs ー―〜 等）なので合算で問題ない。
+    const effectiveLetterSpacingEm = sigTrack + (sigTsume > 0 ? -sigTsume : 0);
+    const needsSpan = Number.isFinite(sigSize) || effectiveLetterSpacingEm !== 0
       || (typeof sigFont === "string" && sigFont.length > 0)
       || typeof sigBold === "boolean";
     if (needsSpan) {
@@ -1104,8 +1270,8 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
         // (sigSize / defaultSizePt) em 表記で相対指定する。
         span.style.fontSize = `${sigSize / defaultSizePt}em`;
       }
-      if (sigTrack !== 0) {
-        span.style.letterSpacing = `${sigTrack}em`;
+      if (effectiveLetterSpacingEm !== 0) {
+        span.style.letterSpacing = `${effectiveLetterSpacingEm}em`;
       }
       if (typeof sigFont === "string" && sigFont.length > 0) {
         // PostScript 名から family-name 解決 → font-family を上書き。
@@ -1138,7 +1304,7 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
 // それ以外は単一テキストノードで描画（最軽量）。
 // isVertical: true なら writing-mode: vertical-rl 想定で per-line の幅 (列幅) を切替える。
 // defaultSizePt: layer 全体の sizePt（charSizes の em 換算に使う）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds) {
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumePct) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
@@ -1152,8 +1318,11 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const tcyHits = !!tcyOn && TCY_PAIR_REGEX.test(fullText);
   // 【v1.22.0】記号フォント置換: symbolFontPS が指定されており、対象記号が contents に含まれるとき適用。
   const symbolHits = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(fullText);
-  // 高速パス：何も装飾なし（charBolds も含めて全部空のときだけ通る）
-  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds) {
+  // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。punctTsumePct (0..100) → em 量に換算。
+  const punctTsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
+  const punctHits = punctTsumeMag > 0 && lineHasPunctTsumeChar(fullText);
+  // 高速パス：何も装飾なし（charBolds / 句読点ツメも含めて全部空のときだけ通る）
+  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !punctHits) {
     inner.textContent = fullText;
     inner.style.lineHeight = fallback;
     return;
@@ -1196,7 +1365,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
           lineEl.style.marginBlockStart = `${extra}em`;
         }
       }
-      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds);
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag);
       inner.appendChild(lineEl);
     }
   } else {
@@ -1206,7 +1375,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // white-space: pre-wrap が必ず尊重する \n text node に統一する。
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createTextNode("\n"));
-      appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag);
     }
   }
 }
@@ -1413,21 +1582,16 @@ function onCanvasMouseDown(e, ctx) {
       return;
     }
     e.preventDefault();
-    // 2) 原稿テキストブロックが選択中ならクリック点に配置（既存挙動維持）。
+    // 2) 原稿テキストブロック選択中のクリック配置は廃止。空所への 350ms 以内の
+    //    2 回目クリック → 新規テキスト入力欄を開く。
     const { x, y } = canvasCoordsFromEvent(e, ctx);
-    const txtSel = getActiveTxtSelection();
-    if (txtSel) {
-      placeTxtSelectionAt(ctx, x, y, txtSel, getNewTextDirection());
-      return;
-    }
-    // 3) 空所への 350ms 以内の 2 回目クリック → 新規テキスト入力欄を開く。
     const now = Date.now();
     if (isCanvasDoubleClick(now, x, y)) {
       lastCanvasClickAt = 0; // 連続トリガを抑止（次の click は単独扱い）
       startTextInput(ctx, x, y, getNewTextDirection());
       return;
     }
-    // 4) シングルクリック: 次回 dblclick 検出のため記録 + マーキー開始。
+    // 3) シングルクリック: 次回 dblclick 検出のため記録 + マーキー開始。
     lastCanvasClickAt = now;
     lastCanvasClickPos = { x, y };
     startMarquee(e, ctx);
@@ -1478,29 +1642,6 @@ function endPan() {
 export function centerTopLeft(page, { contents, sizePt, direction, leadingPct }, clickX, clickY) {
   const r = layerRectForNew(page, { x: 0, y: 0, contents, sizePt, direction, leadingPct });
   return { x: clickX - r.width / 2, y: clickY - r.height / 2 };
-}
-
-function placeTxtSelectionAt(ctx, x, y, text, direction = "vertical") {
-  const { page, pageIndex } = ctx;
-  const sizePt = getTextSize();
-  const { x: nx, y: ny } = centerTopLeft(page, { contents: text, sizePt, direction }, x, y);
-  const created = addNewLayer({
-    psdPath: page.path,
-    x: nx,
-    y: ny,
-    contents: text,
-    fontPostScriptName: getCurrentFont(),
-    sizePt,
-    direction,
-    strokeColor: getStrokeColor(),
-    strokeWidthPx: getStrokeWidthPx(),
-    fillColor: getFillColor(),
-    leadingPct: getLeadingPct(),
-  });
-  setSelectedLayer(pageIndex, created.tempId);
-  refreshAllOverlays();
-  rebuildLayerList();
-  advanceTxtSelection();
 }
 
 function onLayerWheel(e, ctx, layerId) {

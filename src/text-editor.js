@@ -390,10 +390,6 @@ function populateEditor() {
   // 混在 (null) のときはニュートラル表示（aria-pressed="false"）。
   const commonBold = computeCommonBold(selections);
   syncBoldToggle(commonBold);
-
-  // 【v1.16.0】サイドバー側の派生 UI（行間タブの行セレクタ等）に「選択が変わった /
-  // 内容が変わった」通知。main.js の syncLeadingRowSelector がこのイベントを listen する。
-  window.dispatchEvent(new CustomEvent("psdesign:editor-populated"));
 }
 
 // 【v1.22.0】B トグルボタンの aria-pressed と disabled を更新。
@@ -649,7 +645,7 @@ function rebuildWeightSelector() {
   el.hidden = false;
 
   if (variants.length >= 2) {
-    // 複数のバリアントが見つかったケース: クリック可能な実ボタン群を表示
+    // 複数のバリアントが見つかったケース: 連結 pill トグル群として表示
     const currentW = extractWeight(currentFont.name || currentFont.postScriptName);
     for (const { weight, font } of variants) {
       const btn = document.createElement("button");
@@ -657,7 +653,10 @@ function rebuildWeightSelector() {
       btn.className = "font-weight-btn";
       btn.textContent = `W${weight}`;
       btn.title = font.name || font.postScriptName;
-      if (weight === currentW) btn.classList.add("active");
+      const isActive = weight === currentW;
+      if (isActive) btn.classList.add("active");
+      // aria-pressed: 排他的トグル (radio-like) の semantics。"true" / "false" を必ず両方明示する。
+      btn.setAttribute("aria-pressed", isActive ? "true" : "false");
       btn.addEventListener("mousedown", (e) => e.preventDefault());
       btn.addEventListener("click", () => commitFont(font));
       el.appendChild(btn);
@@ -675,6 +674,7 @@ function rebuildWeightSelector() {
     btn.className = "font-weight-btn";
     btn.textContent = `W${w}`;
     btn.disabled = true;
+    btn.setAttribute("aria-pressed", "false");
     btn.title = placeholderTitle;
     el.appendChild(btn);
   }

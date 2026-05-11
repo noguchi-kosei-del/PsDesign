@@ -5,6 +5,7 @@ import {
   getFillColor,
   getLeadingPct,
   getNewLayers,
+  getNewLayersForPsd,
   getPages,
   getPdfPageIndex,
   getStrokeColor,
@@ -646,6 +647,90 @@ function selectBlock(idx, text) {
   if (deleteBtn) deleteBtn.disabled = idx == null;
 }
 
+// 原稿テキスト (txt-source-viewer) の選択ブロックを Alt+↑/↓ で順送り / 逆送りする。
+// 引数: delta (+1 次へ / -1 前へ)
+// - 現在ページの可視ブロック内をループ (末尾 → 先頭の wrap-around)
+// - 選択なし状態で呼ばれた場合は方向に応じて先頭 / 末尾を選択
+// - ブロックが 0 件のときは false、選択を切替えたら true
+// - 選択ブロックを scrollIntoView してビューア内をスクロール
+export function cycleTxtBlockSelection(delta) {
+  const viewer = $("txt-source-viewer");
+  if (!viewer || viewer.hidden) return false;
+  if (!getTxtSource()) return false;
+  const { blocks } = getVisibleBlocks();
+  if (blocks.length === 0) return false;
+
+  const cur = getTxtSelectedBlockIndex();
+  let nextIdx;
+  if (cur == null || cur < 0 || cur >= blocks.length) {
+    nextIdx = delta > 0 ? 0 : blocks.length - 1;
+  } else {
+    nextIdx = (cur + delta + blocks.length) % blocks.length;
+  }
+  selectBlock(nextIdx, blocks[nextIdx]);
+  const targetEl = viewer.querySelector(`.txt-block[data-block-index="${nextIdx}"]`);
+  if (targetEl) targetEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  return true;
+}
+
+// レイヤー選択切替（矢印キー ↑/↓ 等）に追従して txt-source-viewer の選択 / フォーカスを同期する。
+// 引数: pageIndex (PSD ページ index, 0-based), layerId (既存=number / 新規=tempId 文字列)
+// - 対象レイヤーが sourceTxtRef を持ち、その paragraphIndex が現在表示中の visible blocks
+//   範囲内なら、その block を selected + scrollIntoView。
+// - sourceTxtRef が無い / 現ページの可視段落と合わない場合は TXT 選択を解除し
+//   .selected ハイライトを全クリア。
+export function syncTxtSelectionToLayer(pageIndex, layerId) {
+  const viewer = $("txt-source-viewer");
+  if (!viewer || viewer.hidden) return;
+  const pages = getPages();
+  const page = pages[pageIndex];
+  if (!page) return;
+
+  // sourceTxtRef は新規レイヤー (tempId 文字列) のみが持つ。
+  let ref = null;
+  if (typeof layerId === "string") {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === layerId);
+    ref = nl?.sourceTxtRef ?? null;
+  }
+
+  // 現ページに対応する visible blocks を取り出して、paragraphIndex が範囲内か検証。
+  // 範囲外 / ref 無し → TXT 選択クリア。
+  const { blocks, hasMarkers, pageNumber } = getVisibleBlocks();
+  let targetIdx = null;
+  let targetText = null;
+  if (ref && Number.isInteger(ref.paragraphIndex)) {
+    // markers 有りなら ref.pageNumber と viewer の現在ページが一致するときだけ採用。
+    const pageMatch = !hasMarkers || ref.pageNumber === pageNumber;
+    if (pageMatch && ref.paragraphIndex >= 0 && ref.paragraphIndex < blocks.length) {
+      targetIdx = ref.paragraphIndex;
+      targetText = blocks[ref.paragraphIndex];
+    }
+  }
+
+  if (targetIdx == null) {
+    // クリア。selectBlock(null, "") と等価だが scroll は不要。
+    setTxtSelectedBlockIndex(null);
+    setTxtSelection("");
+    for (const el of viewer.querySelectorAll(".txt-block.selected")) {
+      el.classList.remove("selected");
+    }
+    const deleteBtn = $("delete-txt-btn");
+    if (deleteBtn) deleteBtn.disabled = true;
+    return;
+  }
+
+  // 選択 + ハイライト + scrollIntoView
+  setTxtSelectedBlockIndex(targetIdx);
+  setTxtSelection(targetText);
+  for (const el of viewer.querySelectorAll(".txt-block")) {
+    el.classList.toggle("selected", el.dataset.blockIndex === String(targetIdx));
+  }
+  const targetEl = viewer.querySelector(`.txt-block[data-block-index="${targetIdx}"]`);
+  if (targetEl) targetEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  const deleteBtn = $("delete-txt-btn");
+  if (deleteBtn) deleteBtn.disabled = false;
+}
+
 export async function pickTxtPath() {
   const { openFileDialog } = await import("./file-picker.js");
   const picked = await openFileDialog({
@@ -894,38 +979,3 @@ export function initTxtSource() {
   syncNewInputAvailability();
 }
 
-export function getActiveTxtSelection() {
-  if (!getTxtSource()) return "";
-  return getTxtSelection();
-}
-
-export function advanceTxtSelection() {
-  const source = getTxtSource();
-  if (!source) return false;
-  const { blocks } = getVisibleBlocks();
-  const cur = getTxtSelectedBlockIndex();
-  if (cur == null) return false;
-  const next = cur + 1;
-  if (next >= blocks.length) {
-    setTxtSelectedBlockIndex(null);
-    setTxtSelection("");
-    const viewer = $("txt-source-viewer");
-    if (viewer) {
-      for (const el of viewer.querySelectorAll(".txt-block")) {
-        el.classList.remove("selected");
-      }
-    }
-    return false;
-  }
-  setTxtSelectedBlockIndex(next);
-  setTxtSelection(blocks[next]);
-  const viewer = $("txt-source-viewer");
-  if (viewer) {
-    for (const el of viewer.querySelectorAll(".txt-block")) {
-      el.classList.toggle("selected", el.dataset.blockIndex === String(next));
-    }
-    const nextEl = viewer.querySelector(`.txt-block[data-block-index="${next}"]`);
-    if (nextEl) nextEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }
-  return true;
-}

@@ -566,20 +566,6 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
 .ruby-toggle-btn:hover:not(.active) { background: var(--panel-hover); }
 .ruby-toggle-btn.active { background: var(--accent); color: #fff; }
 
-/* in-place 編集中のカーソル行を行間ラベル右に小さく表示。ラベルが立っているときは
-   行間操作が「その行の左側余白だけ」を変えるモードであることを示す。 */
-.leading-target-label {
-  margin-left: 6px;
-  padding: 1px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--accent);
-  border-radius: 8px;
-  letter-spacing: 0;
-}
-.leading-target-label[hidden] { display: none; }
-
 /* フチのサムネ（なし / 白 / 黒）：3 つの丸スウォッチを横並び表示。 */
 .stroke-toggle {
   display: inline-flex;
@@ -1405,13 +1391,14 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .editor-empty[hidden] { display: none; }
 
-/* エディタ下部の新規テキスト入力欄。サイドパネルの .txt-source-new-input と同じ
-   レイアウト原則だが、エディタは横幅が広いので padding を強めに取る。 */
+/* エディタ上部の新規テキスト入力欄。サイドパネルの .txt-source-new-input と同じ
+   レイアウト原則だが、エディタは横幅が広いので padding を強めに取る。
+   入力欄を上部に配置するため、下のビューアと区切る border-bottom を持つ。 */
 .editor-new-input-row {
   display: flex;
   gap: 8px;
   padding: 8px 12px;
-  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
   background: var(--panel);
   flex-shrink: 0;
   align-items: stretch;
@@ -1424,24 +1411,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-shrink: 0;
   min-width: 64px;
 }
-
-.editor-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 10px;
-  border-top: 1px solid var(--border);
-  background: var(--panel);
-  flex-shrink: 0;
-  font-size: 11px;
-  color: var(--text-muted);
-}
-.editor-footer-dirty {
-  color: var(--accent);
-  font-weight: 600;
-}
-.editor-footer-dirty[hidden] { display: none; }
 
 /* promptDialog 用に confirm-modal 内へ動的挿入される `<input>`。 */
 .prompt-modal-input {
@@ -1802,13 +1771,35 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-sizing: border-box;
 }
 
-/* 選択時はアクセントリング 1 本のみ。背景塗り・border solid は出さない。 */
-.layer-box.selected {
-  box-shadow: 0 0 0 2px var(--accent);
+/* 単一選択時: 青の実線 outline (--accent)。既存 / 新規どちらも同じ青で統一。
+   outline はレイアウトに影響しないので layer-box のサイズを変えず安全に枠線を引ける。 */
+.layer-box.selected,
+.layer-box-new.selected {
+  box-shadow: none;
+  outline: 2px solid var(--accent);
+  outline-offset: 0;
 }
 
-.layer-box-new.selected {
-  box-shadow: 0 0 0 2px #e89a3c;
+/* 複数選択 (2 件以上) のとき: 枠を水色 (cyan) の点線に切替。バッジ色は単一選択と同じ青。
+   .layer-box-new / .layer-box-existing 両方に同じスタイルを適用する。 */
+.layer-box.multi-selected,
+.layer-box-new.multi-selected {
+  box-shadow: none;
+  outline: 2px dashed #4fc3f7;
+  outline-offset: 0;
+}
+/* 複数選択時は回転ハンドルを非表示（個別のレイヤー操作が前提のため、複数同時回転は無効化）。 */
+.layer-box.multi-selected .layer-rotate-handle {
+  display: none;
+}
+/* 複数選択時にバッジ同士が重なると読めなくなるので、JS 側の overlap 解決パス
+   (resolveBadgeOverlaps) が `.layer-size-badge--above` クラスを付けて該当バッジを
+   フレーム上側に反転表示する。下記はその上向き配置定義。 */
+.layer-size-badge.layer-size-badge--above {
+  top: auto;
+  bottom: 100%;
+  margin-top: 0;
+  margin-bottom: 10px;
 }
 
 /* V ツール swap 中、入れ替え対象 B（A の元位置に移動するフレーム）を緑で強調。
@@ -1910,7 +1901,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   left: 50%;
   transform: translateX(-50%);
   margin-top: 10px;
-  background: #000;
+  /* 単一選択・複数選択どちらも同じ青背景 (--accent) + 白文字に統一。
+     バッジ自体は選択中にしか生成されないので追加の `.selected` qualifier は不要。 */
+  background: var(--accent);
   color: #fff;
   font: 700 11px/1.25 system-ui, -apple-system, "Segoe UI", sans-serif;
   padding: 4px 6px;
@@ -2294,6 +2287,79 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 6px;
   background: var(--panel);
 }
+/* editor モード時のみ表示。校正パネルと spreads-pdf-area（見本画像）を排他切替するセグメント。
+   .workspace.editor-mode 配下のときだけ inline-flex で出る。proofread-tabs と同じ視覚言語。 */
+.editor-left-pane-segment {
+  display: none;
+  gap: 2px;
+  flex: 0 0 auto;
+  margin-right: 4px;
+  padding-right: 6px;
+  border-right: 1px solid var(--border);
+}
+.workspace.editor-mode .editor-left-pane-segment { display: inline-flex; }
+.editor-left-pane-btn {
+  font-size: 11px;
+  padding: 3px 10px;
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid transparent;
+  border-radius: 3px;
+  cursor: pointer;
+  line-height: 1.4;
+}
+.editor-left-pane-btn:hover { color: var(--text); }
+.editor-left-pane-btn.active {
+  background: rgba(72, 118, 255, 0.15);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+/* editor モード + 「見本」サブ状態（.left-pdf）時の挙動:
+   - 校正パネルのヘッダー（トグル含む）は表示維持
+   - 校正パネルのボディ系（tabs / actions / meta / body / browser-nav）は display:none
+   - spreads-pdf-area を absolute で左半分に重ねる（z-index 12 で proofread-area:11 の上）
+   - top はヘッダー高さ ≈34px ぶんオフセットして、ヘッダー上のクリック (校正/見本トグル等) を
+     pdf-area のレイヤーが食わないようにする（pointer-events 問題の回避）。
+   - 幅は CSS 変数 `--left-pdf-width` で指定（main.js が見本ページのアスペクト比から動的計算）。
+     未設定時は 50% フォールバック。editor-area は同じ変数で left を合わせて残余を全部使う。 */
+.workspace.editor-mode.left-pdf .proofread-panel .proofread-tabs,
+.workspace.editor-mode.left-pdf .proofread-panel .proofread-actions,
+.workspace.editor-mode.left-pdf .proofread-panel .proofread-browser-nav,
+.workspace.editor-mode.left-pdf .proofread-panel .proofread-meta,
+.workspace.editor-mode.left-pdf .proofread-panel .proofread-body { display: none; }
+.workspace.editor-mode.left-pdf .spreads-pdf-area {
+  position: absolute;
+  top: 34px; /* proofread-panel-header (padding 6+6 + button 22 = 34px) */
+  left: 0;
+  width: var(--left-pdf-width, 50%);
+  height: calc(100% - 34px);
+  z-index: 12;
+  /* width のトランジションは shared rule (`width 0.3s`) に乗る。
+     個別 transition 宣言で上書きすると slide-in 用の transform/opacity が消えるので注意。 */
+}
+.workspace.editor-mode.left-pdf .spreads-proofread-area {
+  /* proofread-area もパネル幅に合わせ、ヘッダーの右端を pdf-area 右端と揃える。
+     校正モードに戻ったときは left-pdf class が外れて元の 50% に戻る。 */
+  width: var(--left-pdf-width, 50%);
+}
+.workspace.editor-mode.left-pdf .spreads-editor-area {
+  /* 残りの右側全体を editor-area が使う。left を pdf-area の右端に合わせ、width は auto 計算。
+     left は shared transition の対象外なので class toggle で snap するが、
+     trade-off として slide-in の opacity/transform を維持する方を優先。 */
+  left: var(--left-pdf-width, 50%);
+  width: auto;
+  right: 0;
+}
+.workspace.editor-mode.left-pdf.flipped .spreads-pdf-area {
+  left: auto;
+  right: 0;
+}
+.workspace.editor-mode.left-pdf.flipped .spreads-editor-area {
+  left: 0;
+  right: var(--left-pdf-width, 50%);
+}
+
 .proofread-tabs { display: flex; gap: 2px; flex: 0 0 auto; }
 .proofread-tab {
   font-size: 11px;
@@ -2918,7 +2984,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   gap: 6px;
   padding: 6px 8px;
-  border-top: 1px solid var(--border);
+  /* 入力欄を上部に配置。下の viewer / empty と区切るための border-bottom。 */
+  border-bottom: 1px solid var(--border);
   background: var(--panel-body);
 }
 .txt-new-input {
@@ -3310,46 +3377,59 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .font-combobox-toggle:hover { color: var(--text); }
 
-/* フォント太さ (W) セレクタ。
+/* フォント太さ (W) セレクタ — segmented toggle スタイル。
    現在選択中のフォントが W 番号付き (新ゴ Pro W3 など) のとき、同ファミリーで
-   利用可能な W 番号をボタン化。クリックでその太さに即時切替（ブラシモード化）。 */
+   利用可能な W 番号をボタン化。連結された pill 型トグル群で、現在の選択は accent 塗り + 内側影。
+   各ボタンは連結（gap: 0 + 隣接 border の重複を相殺）し、両端だけ角丸でピル型を成立させる。 */
 .font-weight-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 3px;
+  display: inline-flex;
+  flex-wrap: nowrap;
+  gap: 0;
   margin-top: 4px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  overflow: hidden;
+  background: var(--bg);
+  /* Photoshop の Character パネル風に sunken な container（内側 1px 線で深さを示す）。 */
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.06);
 }
 .font-weight-selector[hidden] { display: none; }
 .font-weight-btn {
   flex: 0 0 auto;
-  min-width: 30px;
-  padding: 3px 6px;
+  min-width: 32px;
+  padding: 3px 8px;
   font: inherit;
   font-size: 11px;
   font-weight: 600;
-  background: var(--bg);
+  background: transparent;
   color: var(--text-muted);
-  border: 1px solid var(--border);
-  border-radius: 3px;
+  border: none;
+  border-left: 1px solid var(--border);
+  border-radius: 0;
   cursor: pointer;
   font-variant-numeric: tabular-nums;
   text-align: center;
+  transition: background 0.12s, color 0.12s;
 }
-.font-weight-btn:hover:not(.active):not(:disabled) {
+/* 先頭ボタンは左の仕切り線を持たない（左端は外側 container 枠で十分）。 */
+.font-weight-btn:first-child { border-left: none; }
+.font-weight-btn:hover:not([aria-pressed="true"]):not(:disabled) {
+  background: var(--panel-hover);
   color: var(--text);
-  border-color: var(--accent);
 }
 .font-weight-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
-  background: var(--bg);
+  background: transparent;
   color: var(--text-muted);
-  border-color: var(--border);
 }
+/* 選択中 (aria-pressed="true"): accent 塗り + 白文字 + 内側影で「押し込まれた」感を強調。
+   .active クラスは互換のため温存（rebuildWeightSelector が両方を切り替える）。 */
+.font-weight-btn[aria-pressed="true"],
 .font-weight-btn.active {
   background: var(--accent);
   color: #fff;
-  border-color: var(--accent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
 }
 .font-combobox-list {
   /* position: fixed で親 (.panel-section の overflow: hidden) のクリップから脱出。
@@ -3514,6 +3594,21 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 /* 「デフォルト」option を太字で強調（OS により効かない場合あり、許容）。 */
 #style-palette-category option[value="__default__"] {
   font-weight: 600;
+}
+
+/* optgroup 見出し（「テンプレート」「レーベルテンプレ」）の背景を薄くして可読性を上げる。
+   Chromium / WebView2 は optgroup label に limited な CSS しか効かないが、
+   background-color と color は追従するので panel-hover 系の柔らかい配色に揃える。 */
+#style-palette-category optgroup {
+  background-color: var(--panel-hover);
+  color: var(--text);
+  font-weight: 600;
+}
+#style-palette-category optgroup option {
+  /* グループ配下の option は通常背景 (--bg) を維持。optgroup の bg を継承させない。 */
+  background-color: var(--bg);
+  color: var(--text);
+  font-weight: normal;
 }
 
 /* PostScript 名が解決できなかった (フォント未インストール) エントリは灰色化 + クリック無反応。
@@ -4654,11 +4749,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   align-items: center;
   gap: 6px;
   margin-top: 6px;
-  padding: 10px 12px;
+  /* 高さを下げ (vertical padding を絞る) + 側面を完全な円弧 (border-radius 999px = pill 型)。
+     .ai-place-btn とサイズ・形状を揃える。 */
+  padding: 4px 12px;
   background: transparent;
   border: 1px solid #64b5f6;
   color: #64b5f6;
-  border-radius: 4px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
@@ -4958,11 +5055,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   align-items: center;
   gap: 6px;
   margin-top: 6px;
-  padding: 6px 12px;
+  /* 高さを下げ (vertical padding を絞る) + 側面を完全な円弧 (border-radius 999px = pill 型)。
+     .ai-ocr-btn とサイズ・形状を揃える。 */
+  padding: 4px 12px;
   background: transparent;
   border: 1px solid #4caf50;
   color: #4caf50;
-  border-radius: 4px;
+  border-radius: 999px;
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
@@ -5953,44 +6052,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 }
 .workspace.flipped .layers-drawer.open {
   transform: translateX(0);
-}
-
-/* ===== 【v1.16.0】行間の一部変更（サイドバー行セレクタ） ===== */
-/* レイヤー単独選択時に行間タブ内に表示される行セレクタ。
-   active なボタン（現在対象になっている行 or 全行）は accent 背景 + 白文字で強調する。
-   has-override クラスは値変更済みの行に小さな青ドットを付与してユーザーに状態を伝える。 */
-.leading-row-selector {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  margin-top: 6px;
-}
-.leading-row-selector[hidden] { display: none; }
-
-.leading-row-btn {
-  min-width: 28px;
-  height: 24px;
-  padding: 0 6px;
-  font-size: 11px;
-  font-weight: 600;
-  background: var(--bg);
-  color: var(--text);
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  cursor: pointer;
-}
-.leading-row-btn:hover:not(:disabled):not(.active) {
-  background: var(--panel-hover);
-}
-.leading-row-btn.active {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-.leading-row-btn.has-override:not(.active)::after {
-  content: "•";
-  margin-left: 2px;
-  color: var(--accent);
 }
 
 /* ===== 【v1.16.0】per-char 編集の文字選択インジケータ ===== */

@@ -59,8 +59,7 @@ function planFingerprint(plan) {
 // ============================================================
 // 1 ブロック → NewLayer 変換
 // ============================================================
-// canvas-tools.js の placeTxtSelectionAt + centerTopLeft + layerRectForNew と
-// 同じ手順:
+// canvas-tools.js の centerTopLeft + layerRectForNew と同じ手順:
 //   (1) クリック位置 = bubble の中心 (PSD 座標)
 //   (2) 文字サイズ・行数・文字数からレイヤー矩形のサイズを推定
 //   (3) クリック位置からレイヤーの中心が一致するよう top-left をオフセット
@@ -75,16 +74,38 @@ function countLines(s) {
   if (!s) return 0;
   return String(s).split(/\r?\n/).length;
 }
+// 【v1.x.0】句読点ツメ対象の文字（、 / 。）— canvas-tools.js の PUNCT_TSUME_CHAR_CODES と同一定義。
+// 自動配置時の bbox 推定にも反映するため、`、` `。` の個数だけ longest 行の effective 長を縮める。
+const PUNCT_TSUME_CHARS_AI = new Set(["、", "。"]);
+function countPunctTsumeCharsAI(line) {
+  if (!line) return 0;
+  let n = 0;
+  for (let i = 0; i < line.length; i++) {
+    if (PUNCT_TSUME_CHARS_AI.has(line[i])) n++;
+  }
+  return n;
+}
 // canvas-tools.js layerRectForNew の幅・高さ計算と同一ロジック (px は PSD 座標)。
 // thick / long の安全余白 (+0.4em) も canvas-tools.js と揃える。
+// 【v1.x.0】句読点ツメ (`punctuationTsumePercent`) を long 軸にも反映:
+//   各行の effective char count = (chars - punctCount × tsume/100)。
+//   最も長い行（実 char で）の effective 長を採用。
 function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const dpi = psdPage.dpi ?? 72;
   const ptInPsdPx = sizePt * (dpi / 72);
-  const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
   const leadingFactor = (leadingPct ?? 125) / 100;
   const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + 0.4));
-  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (1.05 * chars + 0.4));
+  // 句読点ツメぶんを差し引いた最大行幅（em 単位）を計算
+  const tsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
+  const tsumeMag = tsumePct > 0 ? tsumePct / 100 : 0;
+  let maxEffectiveChars = 1;
+  for (const ln of String(contents ?? "").split(/\r?\n/)) {
+    const punct = tsumeMag > 0 ? countPunctTsumeCharsAI(ln) : 0;
+    const effective = ln.length - punct * tsumeMag;
+    if (effective > maxEffectiveChars) maxEffectiveChars = effective;
+  }
+  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (1.05 * maxEffectiveChars + 0.4));
   const isVertical = direction !== "horizontal";
   const maxLong = isVertical ? psdPage.height * 0.95 : psdPage.width * 0.95;
   const long = Math.min(longRaw, maxLong);
