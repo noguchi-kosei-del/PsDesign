@@ -289,7 +289,8 @@ function applyPreset(preset) {
 //   "template" = #style-palette-category dropdown 経由
 //   "browser"  = 任意 JSON 読込ボタン (#style-palette-load-btn) 経由
 //   localStorage への永続化はしない（起動時は必ずデフォルト）。
-export async function loadJsonFromPath(path, { source = "browser" } = {}) {
+// 同名の別関数が proofread.js にも存在するが用途が異なる（混同しないこと）。
+async function loadJsonFromPath(path, { source = "browser" } = {}) {
   if (!path) return false;
   let raw;
   try {

@@ -202,7 +202,3 @@ function hideCloseBtn() {
   if (!closeBtn) return;
   closeBtn.classList.remove("show");
 }
-
-export function isViewerActive() {
-  return isActive;
-}

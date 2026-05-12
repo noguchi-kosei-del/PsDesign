@@ -231,70 +231,55 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
     out
 }
 
-fn emit_line_leadings(out: &mut String, m: &std::collections::HashMap<String, f64>) {
+// 【Phase 1 (v1.24.0 後) リファクタ】4 つの emit_* ヘルパーが「key を char/line
+// index の数値順にソート → `{"<idx>": <value>, ...}` 形式の JSON object literal を
+// 出力」する同型構造だったため、ジェネリック関数 emit_sorted_map_by_int_key に統合。
+// 各 emit_* は薄い formatter ラッパーとして残し、呼出側 (applyToPsd の per-PSD ループ等)
+// は無変更。新しい per-char 属性追加時はラッパー 1 行追加で済む。
+//
+// 出力順を char index 順に安定化（diff レビュー / JSX 側のループの予測可能性のため）。
+// ExtendScript 側は順序非依存だが、Rust 側で sort して emit するルールを統一する。
+//
+// 【非互換性に注意】旧 emit_line_leadings は lexical sort（"10" が "2" より先）
+// だったが、本統合で数値ソートに揃えた。line index は通常 10 未満で実害は無いが、
+// 行数 10+ のレイヤーで出力順が安定化される。JSX 側の動作は変わらない（順序非依存）。
+fn emit_sorted_map_by_int_key<T, F>(
+    out: &mut String,
+    m: &std::collections::HashMap<String, T>,
+    format_value: F,
+) where F: Fn(&T) -> String {
     out.push('{');
     let mut first = true;
-    // 出力順を安定化させるため key でソート（ExtendScript 側は順序非依存だが diff 安定化に有用）。
     let mut keys: Vec<&String> = m.keys().collect();
-    keys.sort();
+    keys.sort_by(|a, b| {
+        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
+    });
     for k in keys {
         if !first { out.push_str(", "); }
         first = false;
-        out.push_str(&format!("\"{}\": {}", k, m[k]));
+        out.push_str(&format!("\"{}\": {}", k, format_value(&m[k])));
     }
     out.push('}');
+}
+
+fn emit_line_leadings(out: &mut String, m: &std::collections::HashMap<String, f64>) {
+    emit_sorted_map_by_int_key(out, m, |v| format!("{}", v));
 }
 
 // 【v1.21.0】per-char サイズ map を JSX のオブジェクトリテラルとして emit。
-// key は char index（数値）。出力順を char index 順に安定化（diff レビューや
-// JSX 側のループの予測可能性のため）。
 fn emit_char_sizes(out: &mut String, m: &std::collections::HashMap<String, f64>) {
-    out.push('{');
-    let mut first = true;
-    let mut keys: Vec<&String> = m.keys().collect();
-    keys.sort_by(|a, b| {
-        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
-    });
-    for k in keys {
-        if !first { out.push_str(", "); }
-        first = false;
-        out.push_str(&format!("\"{}\": {}", k, m[k]));
-    }
-    out.push('}');
+    emit_sorted_map_by_int_key(out, m, |v| format!("{}", v));
 }
 
 // 【v1.21.0】per-char フォント map を JSX のオブジェクトリテラルとして emit。
-// value は PostScript 名（string）なので js_string でエスケープ。
+// value は PostScript 名（string）なので js_string でエスケープ（`"..."` を返す）。
 fn emit_char_fonts(out: &mut String, m: &std::collections::HashMap<String, String>) {
-    out.push('{');
-    let mut first = true;
-    let mut keys: Vec<&String> = m.keys().collect();
-    keys.sort_by(|a, b| {
-        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
-    });
-    for k in keys {
-        if !first { out.push_str(", "); }
-        first = false;
-        out.push_str(&format!("\"{}\": {}", k, js_string(m[k].as_str())));
-    }
-    out.push('}');
+    emit_sorted_map_by_int_key(out, m, |v| js_string(v.as_str()));
 }
 
 // 【v1.22.0】per-char 合成太字（faux bold）map を JSX のオブジェクトリテラルとして emit。
-// value は boolean。
 fn emit_char_bolds(out: &mut String, m: &std::collections::HashMap<String, bool>) {
-    out.push('{');
-    let mut first = true;
-    let mut keys: Vec<&String> = m.keys().collect();
-    keys.sort_by(|a, b| {
-        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
-    });
-    for k in keys {
-        if !first { out.push_str(", "); }
-        first = false;
-        out.push_str(&format!("\"{}\": {}", k, if m[k] { "true" } else { "false" }));
-    }
-    out.push('}');
+    emit_sorted_map_by_int_key(out, m, |v| if *v { "true".into() } else { "false".into() });
 }
 
 fn js_string(s: &str) -> String {
@@ -1179,11 +1164,14 @@ function applyTateChuYoko(layer, contents, enabled, direction) {
   if (fullText.length < 2) return;
 
   // ペア検出 (先頭から貪欲に 2 文字単位)
+  // 半角 "!!" / "!?" に加えて、全角 "！！" / "！？" も縦中横の対象として扱う。
+  // PSD 既存テキストは全角で組まれていることが多く、ユーザーが PsDesign で開いた
+  // 際に自動で縦中横化されるべき (ag-psd は全角のまま contents として返す)。
   var pairs = [];
   var i = 0;
   while (i < fullText.length - 1) {
     var two = fullText.charAt(i) + fullText.charAt(i + 1);
-    if (two === "!!" || two === "!?") {
+    if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
       pairs.push({ start: i, end: i + 2 });
       i += 2;
     } else {

@@ -2,6 +2,7 @@ mod fonts;
 mod jsx_gen;
 mod ocr;
 mod photoshop;
+mod tachimi;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -557,7 +558,9 @@ pub fn run() {
             ocr::cancel_ai_install,
             ocr::uninstall_ai_models,
             ocr::run_ai_ocr,
-            ocr::export_ai_text
+            ocr::export_ai_text,
+            tachimi::detect_tachimi_exe,
+            tachimi::launch_tachimi_with_files
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

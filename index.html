@@ -640,7 +640,6 @@
         <div class="progress-track" data-tauri-drag-region>
           <div class="progress-fill" id="progress-fill"></div>
         </div>
-        <div class="progress-count" id="progress-count" data-tauri-drag-region></div>
       </div>
     </div>
     <div class="progress-modal style-palette-browser-modal" id="style-palette-browser-modal" hidden>
@@ -856,6 +855,13 @@
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-punct-tsume">句読点 (、。) のツメ 50%</label>
               <select id="default-punct-tsume" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
+              </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-vertical-half-to-full">縦書き時の半角→全角自動変換 (英数字)</label>
+              <select id="default-vertical-half-to-full" class="settings-default-input">
                 <option value="on">適用</option>
                 <option value="off">適用しない</option>
               </select>

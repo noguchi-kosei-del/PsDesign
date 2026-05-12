@@ -12,6 +12,7 @@ import {
   toast,
 } from "../ui-feedback.js";
 import { baseName, joinPath } from "../utils/path.js";
+import { launchTachimiWithPaths } from "../services/tachimi.js";
 
 // PSD 読込時に false にリセットされ、保存成功で true になる。
 // 旧: 初回 Ctrl+S を別名保存にフォールバックさせるためのフラグ。
@@ -69,11 +70,24 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     // 警告ありなら success アニメをスキップして即閉じ（ユーザーには警告通知を優先表示）。
     // 純粋な成功時のみ緑チェックマークを再生してから閉じる。
     await hideProgress({ success: !hasWarn });
+    // 保存先 PSD パス一覧を組み立て（Tachimi に渡す）。
+    //   - saveMode "saveAs": <targetDir>/<元 PSD basename> として連番フォルダ内の出力先を指す
+    //   - saveMode "overwrite": 元の PSD パス自体（旧フロー互換）
+    // 配列の順序は getPages() の順 = ユーザーの並び順 = Tachimi 側で連番プレフィックスでも保持される
+    const savedPaths = (saveMode === "saveAs" && targetDir)
+      ? getPages().map((p) => joinPath(targetDir, baseName(p.path)))
+      : getPages().map((p) => p.path);
     // 保存完了は中央モーダルで通知。警告有無で kind を切替（warning=オレンジ + 警告 SVG / success=緑 + チェック SVG）。
+    // 「PDF 化に進む」ボタンを併設し、保存した PSD を Tachimi (写植チェッカー / PDF 化機能あり) に流して開く。
     await notifyDialog({
       title: hasWarn ? "保存完了（警告あり）" : "保存完了",
       message: `${result}${suffix}`,
       kind: hasWarn ? "warning" : "success",
+      primaryAction: {
+        label: "PDF 化に進む",
+        kind: "place",
+        onClick: () => launchTachimiWithPaths(savedPaths),
+      },
     });
   } catch (e) {
     console.error(e);

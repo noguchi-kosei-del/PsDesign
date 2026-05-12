@@ -31,6 +31,7 @@ import {
 import { confirmDialog, toast } from "./ui-feedback.js";
 import { centerTopLeft, refreshAllOverlays } from "./canvas-tools.js";
 import { rebuildLayerList } from "./text-editor.js";
+import { getDefault } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -370,6 +371,56 @@ export function deleteSelectedTxtBlock() {
   return true;
 }
 
+// 任意の (pageNumber, paragraphIndex) を直接指定して段落を削除する。
+// テキストエディタモードの段落左端 × ボタンから呼ばれる（選択状態に依存せず、
+// 該当段落を即削除）。内部ロジックは deleteSelectedTxtBlock と同じく:
+//   - 削除対象を sourceTxtRef で参照していた新規レイヤーを removeNewLayer
+//   - paragraphIndex > idx の新規レイヤーを 1 デクリメント
+//   - 全部 withHistoryTransient で 1 undo スナップショット化
+// 選択中ブロックの index が削除位置以降だった場合は補正（or クリア）して整合を取る。
+// pageNumber は parsePages の hasMarkers に応じて null（マーカー無し原稿）or 数値（マーカー有り）。
+export function deleteTxtBlockByIndex(pageNumber, idx) {
+  const source = getTxtSource();
+  if (!source) return false;
+  if (!Number.isInteger(idx) || idx < 0) return false;
+  const newContent = deleteBlockFromContent(source.content, pageNumber, idx);
+  if (newContent == null || newContent === source.content) return false;
+
+  // 選択 index の補正（削除対象 = 選択中ならクリア、削除位置より後ろが選択中なら -1）
+  const selectedIdx = getTxtSelectedBlockIndex();
+  if (selectedIdx === idx) {
+    setTxtSelectedBlockIndex(null);
+    setTxtSelection("");
+  } else if (Number.isInteger(selectedIdx) && selectedIdx > idx) {
+    setTxtSelectedBlockIndex(selectedIdx - 1);
+  }
+
+  let layerRemoved = false;
+  withHistoryTransient(() => {
+    const targetPage = pageNumber ?? null;
+    for (const layer of getNewLayers().slice()) {
+      const ref = layer?.sourceTxtRef;
+      if (!ref) continue;
+      const refPage = ref.pageNumber ?? null;
+      if (refPage !== targetPage) continue;
+      if (ref.paragraphIndex === idx) {
+        removeNewLayer(layer.tempId);
+        layerRemoved = true;
+      } else if (ref.paragraphIndex > idx) {
+        updateNewLayer(layer.tempId, {
+          sourceTxtRef: { ...ref, paragraphIndex: ref.paragraphIndex - 1 },
+        });
+      }
+    }
+    setTxtSource({ name: source.name, content: newContent });
+  });
+  if (layerRemoved) {
+    try { refreshAllOverlays(); } catch (_) {}
+    try { rebuildLayerList(); } catch (_) {}
+  }
+  return true;
+}
+
 // レイヤー削除（V ツールでの Delete/Backspace）から呼ばれる、layer → TXT 方向の cascade。
 // 削除された layer の `sourceTxtRef` で参照されていた段落を原稿テキストから取り除き、
 // 残ったレイヤーの paragraphIndex を補正する。
@@ -470,13 +521,26 @@ export function replaceBlockInContent(content, pageNumber, oldText, newText) {
   return norm.slice(0, absStart) + newText + norm.slice(absStart + oldLF.length);
 }
 
-// 半角数字 (U+0030 - U+0039) を全角数字 (U+FF10 - U+FF19) に変換する。
-// 縦書きの写植では半角数字を縦に並べるとレイアウトが崩れるため、
-// direction === "vertical" のときだけ変換する (横書きは半角のままにする)。
-export function convertDigitsForVertical(text, direction) {
-  if (direction !== "vertical") return String(text ?? "");
-  return String(text ?? "").replace(/[0-9]/g, (c) =>
-    String.fromCharCode(c.charCodeAt(0) - 0x30 + 0xff10),
+// 半角英数字 (0-9 / A-Z / a-z) を全角 (０-９ / Ａ-Ｚ / ａ-ｚ) に変換する。
+// 縦書きの写植では半角を縦に並べるとレイアウトが崩れるため、
+// direction === "vertical" かつ環境設定 verticalHalfToFullEnabled が true の
+// ときだけ変換する (横書き / OFF は素通し)。冪等動作（全角入力は対象外）。
+//
+// 変換テーブル:
+//   U+0030 - U+0039 (0-9)   → U+FF10 - U+FF19 (０-９)   オフセット +0xFEE0
+//   U+0041 - U+005A (A-Z)   → U+FF21 - U+FF3A (Ａ-Ｚ)   オフセット +0xFEE0
+//   U+0061 - U+007A (a-z)   → U+FF41 - U+FF5A (ａ-ｚ)   オフセット +0xFEE0
+//
+// 呼出経路: commitNewTxtInput（新規入力）/ ai-place.js mapBlockToNewLayer
+// （自動配置）/ ai-place.js syncPlacedFromTxt（自動配置済みレイヤーの追従）。
+// 原稿テキスト (state.txtSource.content) 自体は触らない設計（原稿は元データを
+// 保持、レイヤー側だけ全角化）。
+export function convertHalfToFullForVertical(text, direction) {
+  const s = String(text ?? "");
+  if (direction !== "vertical") return s;
+  if (getDefault("verticalHalfToFullEnabled") === false) return s;
+  return s.replace(/[0-9A-Za-z]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) + 0xFEE0),
   );
 }
 
@@ -549,33 +613,36 @@ export function commitNewTxtInput({ inputEl } = {}) {
   if (!inputEl) return;
   const text = (inputEl.value ?? "").trim();
   if (!text) return;
-  const pages = getPages();
-  if (pages.length === 0) {
-    toast("PSD が読み込まれていません", { kind: "error" });
-    return;
-  }
 
-  const pageIdx = getCurrentPageIndex();
-  const psdPage = pages[pageIdx];
-  if (!psdPage) return;
   // V ツール統合後は「新規テキスト方向」トグルから direction を取得する。
   const direction = getNewTextDirection();
   const sizePt = getTextSize();
   const leadingPct = getLeadingPct();
-  // 縦書きのときは半角数字を全角に置換 (横書きは入力のまま)。
+  // 縦書きのときは半角英数字 (0-9 / A-Z / a-z) を全角に置換 (横書き / 設定 OFF は素通し)。
   // 配置レイヤーの contents と原稿本文の追記内容、両方に同じ変換後テキストを使う
   // ことで、原稿 dblclick 編集 → ai-place の syncPlacedFromTxt 連動でも整合性を保つ。
-  const placedText = convertDigitsForVertical(text, direction);
+  const placedText = convertHalfToFullForVertical(text, direction);
 
-  const { x, y } = centerTopLeft(
-    psdPage,
-    { contents: placedText, sizePt, direction, leadingPct },
-    psdPage.width / 2,
-    psdPage.height / 2,
-  );
+  // 【PSD 未読込時の挙動】原稿テキストへの追記のみを行い、配置レイヤーは作らない。
+  // 後で PSD を読み込んで自動配置を実行すると、ai-place.js の buildPlacementPlan
+  // 側で「吹き出しに対応しない余り TXT は PSD ページ中央に配置」される。
+  const pages = getPages();
+  const hasPsd = pages.length > 0;
+  const pageIdx = hasPsd ? getCurrentPageIndex() : 0;
+  const psdPage = hasPsd ? pages[pageIdx] : null;
+  // 原稿側のページ番号: PSD ありなら 1-based の現在ページ、PSD 未読込なら
+  // getActivePageNumber() で PDF/TXT 由来のページ番号を取得（無ければ null）。
+  const pageNumber = hasPsd ? (pageIdx + 1) : getActivePageNumber();
 
-  // PSD ページ index は 0-based、原稿のページ番号は 1-based
-  const pageNumber = pageIdx + 1;
+  let placementCoords = null;
+  if (psdPage) {
+    placementCoords = centerTopLeft(
+      psdPage,
+      { contents: placedText, sizePt, direction, leadingPct },
+      psdPage.width / 2,
+      psdPage.height / 2,
+    );
+  }
 
   withHistoryTransient(() => {
     // 1) 原稿本文に追記 (txtSource が null なら空 content で初期化)
@@ -584,17 +651,21 @@ export function commitNewTxtInput({ inputEl } = {}) {
       appendBlockToCurrentPageContent(src.content, pageNumber, placedText);
     setTxtSource({ name: src.name, content: newContent });
 
-    // 2) 中央配置のレイヤー追加 (sourceTxtRef でリンク)
-    addNewLayer({
-      psdPath: psdPage.path,
-      x, y, contents: placedText,
-      fontPostScriptName: getCurrentFont() || null,
-      sizePt, direction, leadingPct,
-      strokeColor: getStrokeColor(),
-      strokeWidthPx: getStrokeWidthPx(),
-      fillColor: getFillColor(),
-      sourceTxtRef: { pageNumber, paragraphIndex },
-    });
+    // 2) PSD あり時のみ中央配置のレイヤー追加 (sourceTxtRef でリンク)
+    if (psdPage && placementCoords) {
+      addNewLayer({
+        psdPath: psdPage.path,
+        x: placementCoords.x,
+        y: placementCoords.y,
+        contents: placedText,
+        fontPostScriptName: getCurrentFont() || null,
+        sizePt, direction, leadingPct,
+        strokeColor: getStrokeColor(),
+        strokeWidthPx: getStrokeWidthPx(),
+        fillColor: getFillColor(),
+        sourceTxtRef: { pageNumber, paragraphIndex },
+      });
+    }
   });
 
   inputEl.value = "";
@@ -603,8 +674,10 @@ export function commitNewTxtInput({ inputEl } = {}) {
   // それと一致しなくても呼び捨てで OK（自身は手動でクリア後の availability を反映）。
   syncNewInputAvailability();
   syncNewInputAvailabilityFor(inputEl);
-  refreshAllOverlays();
-  rebuildLayerList();
+  if (hasPsd) {
+    refreshAllOverlays();
+    rebuildLayerList();
+  }
   // 連続入力できるよう textarea にフォーカスを残す
   inputEl.focus();
 }
@@ -612,12 +685,13 @@ export function commitNewTxtInput({ inputEl } = {}) {
 // 任意の input/textarea + 関連ボタン (id 規約: <inputId>-btn) の disabled 状態を更新。
 //   - input 自体は常に enabled（PSD 未読込でも下書きできるようにする）
 //   - ボタンは入力内容が無いときだけ disabled
-//   - PSD 未読込時の配置押下は commitNewTxtInput 内で toast による弾き
+//   - PSD 未読込時の配置押下は commitNewTxtInput 内で「原稿追記のみ」モードに分岐し、
+//     後の自動配置で「画像中央」配置の対象となる（ai-place.js: mapTxtToPageCenter）
 //
 // 旧仕様は input まで disabled にしていたが、PSD 未読込状態で「ボタンが押せない」
 // のと「文字が打てない」のがユーザーには区別できず「機能していない」と感じる原因
-// だった。エディタモードでは PSD なしで TXT を編集することもあり得るので、入力
-// 自体は受け付けてからエラー通知する設計に統一する。
+// だった。さらに「画像スキャン完了 + PSD 未読込」で原稿を先に書き溜めるフロー
+// にも対応するため、PSD 必須の制約自体を撤去し、入力 → 原稿追記が常に動作する設計に。
 export function syncNewInputAvailabilityFor(inputEl) {
   if (!inputEl) return;
   inputEl.disabled = false;

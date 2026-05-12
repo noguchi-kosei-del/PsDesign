@@ -3955,3 +3955,211 @@ I3. **サイドツールバーに「全選択」ボタン追加** ([index.html](
 > - 旧: 画像スキャン/自動配置 = 矩形ボタン高さ普通 → 新: 低 pill 型で省スペース
 > - 旧: 全選択は Ctrl+A のみ → 新: サイドツールバーにもボタン追加 (パン と レイヤー の間)
 
+---
+
+## v1.25.0: Tachimi 連携 + PSD 未読込テキスト追加 + UI ストライプ + 大規模リファクタ整理
+
+このバージョンは 6 つの柱で構成される:
+1. **保存完了から Tachimi 起動**（台割マネージャー由来のロジック移植 → 「PDF 化に進む」ボタン）
+2. **PSD 未読込でもテキスト追加可能**（commitNewTxtInput の必須チェック撤去）
+3. **自動配置で余り TXT を PSD ページ中央へ**（`leftoverTxt` 廃止）
+4. **エディタモードの段落に削除 × ボタン + 区切り線**（左端配置）
+5. **txt-source-viewer / editor-page-section-body のストライプ表示**（nth-child）
+6. **デッドコード整理 + 自動配置位置補正**（Phase A: 200 行近い削減 / Phase 1 Quick Wins: schema-driven + emit ヘルパー統合）
+
+加えて TCY 全角ペア対応、`!!` の TCY span 半角化（Chromium レンダリングバグ回避）、保存完了モーダルの 2 ボタン化、自動配置サイズ精度向上などの細かな修正が多数含まれる。
+
+### A. PSD 保存完了 → Tachimi 起動連携
+
+A1. **台割マネージャー由来の Tachimi 起動ロジックを移植** ([src-tauri/src/tachimi.rs](src-tauri/src/tachimi.rs) 新規作成):
+- 台割マネージャー (`Daiwari Manager`) の `commands/tachimi.rs` をベースに、ステージングフォルダ名を `daidori_tachimi_staging` → **`psdesign_tachimi_staging`** にリネーム（衝突回避）
+- 2 つの `#[tauri::command]`:
+  - `detect_tachimi_exe(hint: Option<String>) -> Option<String>`: hint（前回パス）→ 開発ビルド (`Desktop/Tachimi_開発/...`) → インストール想定 (`Program Files\Tachimi\` 等) の順に検索
+  - `launch_tachimi_with_files(exe_path, file_paths) -> Result<usize, String>`: ファイルを `%TEMP%\psdesign_tachimi_staging\` に集約（ハードリンク → コピー fallback）+ 連番プレフィックス + `%TEMP%\tachimi_cli_files.json` に JSON 配列で書き出し（Tachimi 側固定パス、COMIC-Bridge 連携と共有）→ `std::process::Command::new(exe_path).spawn()`
+- 依存追加: `dirs = "5"` (ホームディレクトリ取得用)
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) に `mod tachimi;` + `generate_handler!` 登録
+
+A2. **`notifyDialog` を 2 ボタン構造に拡張** ([src/ui-feedback.js](src/ui-feedback.js)):
+- 新オプション `primaryAction: { label, kind, onClick }` を追加。既存の cancel ボタン (`#confirm-modal-cancel`) を再利用して「OK + アクションボタン」の 2 ボタン構造化
+- `onClick` は async 対応、実行中は Esc/Enter/背景クリックを抑止（`actionPending` フラグ）
+- cleanup でフェード完了後に cancelBtn を元の状態へ復帰（label / class / hidden 全て）
+
+A3. **Tachimi 起動サービス** ([src/services/tachimi.js](src/services/tachimi.js) 新規):
+- `launchTachimiWithPaths(filePaths)`: localStorage `psdesign_tachimi_exe_path` から hint 取得 → `detect_tachimi_exe` invoke → 成功時に path 永続化 → `launch_tachimi_with_files` invoke
+- 検出失敗 / 起動失敗いずれも `notifyDialog({ kind: "warning" })` でエラー表示
+- 動的 import (`await import("@tauri-apps/api/core")`) でバンドル軽量化
+
+A4. **保存完了ダイアログに「PDF 化に進む」ボタン併設** ([src/bind/save.js](src/bind/save.js)):
+- `runSaveWithMode` の成功パスで、保存先 PSD パス一覧 (`getPages().map(p => joinPath(targetDir, baseName(p.path)))`) を組み立てて `primaryAction` に渡す
+- ボタン文言は当初「Tachimi で開く」だったが「PDF 化に進む」に変更（Tachimi の用途を「PDF 化作業の入り口」として明示）
+- 警告付き保存 (`hasWarn`) でも同じボタン併設
+
+### B. PSD 未読込時のテキスト追加対応
+
+B1. **`commitNewTxtInput` の PSD 必須チェック撤去** ([src/txt-source.js](src/txt-source.js)):
+- 旧: `getPages().length === 0` で `toast("PSD が読み込まれていません")` でエラー → 何もしない
+- 新: PSD 有無で分岐 (`hasPsd = pages.length > 0`)
+  - 共通: 原稿テキストに段落追記 (`appendBlockToCurrentPageContent`)
+  - PSD あり: 追記後に `addNewLayer` で PSD ページ中央配置（既存挙動を維持）
+  - **PSD 未読込: 追記のみ実行**、配置レイヤーはスキップ
+- `pageNumber` は `hasPsd ? (pageIdx + 1) : getActivePageNumber()` でフォールバック（PDF/TXT 由来のページ番号）
+- `refreshAllOverlays` / `rebuildLayerList` は PSD ありのときだけ呼出（不要な再描画を回避）
+
+B2. **想定される運用**:
+- 画像スキャン完了 → OCR 結果が原稿パネルに表示
+- ユーザーが「先に原稿を書き溜める」フロー: PSD 未読込でも追記できる
+- 後で PSD を読込 → 自動配置で全段落が配置（吹き出しに対応するものは吹き出し中央、余りは PSD ページ中央）
+
+### C. 自動配置で余り TXT を PSD ページ中央へ
+
+C1. **新ヘルパー `mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef)`** ([src/ai-place.js](src/ai-place.js)):
+- 吹き出し情報なしの余り TXT を PSD ページ幾何中心 (`width/2, height/2`) に配置
+- direction は `getNewTextDirection()` (UI トグル) を採用（吹き出し由来の direction が無いため）
+- bbox サイズは既存 `estimateLayerSize` で算出 → `x = width/2 - bboxW/2` で top-left に変換
+
+C2. **`buildPlacementPlan` を全段落配置ループに変更**:
+- 旧: `placedCount = Math.min(txt.length, sorted.length)` で TXT 段落を切り捨て
+- 新: 全 TXT 段落をループ
+  - `sorted[j]` あり → `mapBlockToNewLayer` (吹き出し中央配置)
+  - `sorted[j]` なし → `mapTxtToPageCenter` (PSD ページ中央配置)
+- `placedCount = txt.length` で全段落配置
+- `leftoverTxt` は空配列に（旧仕様で捨てられていた段落が解消）
+- `leftoverBubbles` のみ残す（余り吹き出しは依然として警告対象）
+- `status` から `"warn-txt-extra"` を撤去（余り TXT は中央配置に変わったため警告不要）
+
+C3. **TXT 編集連動 (`syncPlacedFromTxt`)**:
+- `sourceTxtRef.paragraphIndex` ベースで動作するため、PSD 中央配置のレイヤーも自動追従（無変更）
+
+### D. エディタモードの段落に × 削除ボタン + 区切り線
+
+D1. **`deleteTxtBlockByIndex(pageNumber, idx)`** を再導入 ([src/txt-source.js](src/txt-source.js)):
+- 任意の段落 index を引数で指定して削除
+- 既存 `deleteSelectedTxtBlock` と同じ cascade 削除ロジック（`withHistoryTransient` で 1 undo snapshot、`sourceTxtRef` 一致レイヤーを `removeNewLayer`、`paragraphIndex > idx` のレイヤーは index を -1 補正）
+- 選択中ブロックの整合: 削除対象 = 選択中ならクリア、削除位置より後ろが選択中なら -1
+
+D2. **`buildSection` の段落生成を 2 階層構造に再編** ([src/bind/editor-pane.js](src/bind/editor-pane.js)):
+```
+<div class="editor-page-paragraph">
+  <button class="editor-page-paragraph-delete-btn">×</button>  ← 左端 absolute
+  <div class="editor-page-paragraph-text" contenteditable>{text}</div>
+</div>
+```
+- × ボタン: lucide-x SVG (12×12)、`top: 4px; left: 4px` で左上配置
+- `mousedown` で `preventDefault + stopPropagation` → contentEditable からの focus 移動と blur → commit 暴発を抑止
+- `click` で `deleteTxtBlockByIndex(pageNumber, idx)` を即発火
+- `bindParagraphEdit(textEl, ...)` で **textEl 対象**に編集ハンドラ（既存関数は無変更で動作）
+
+D3. **× ボタンの右に縦の区切り線** ([src/styles.css](src/styles.css)):
+- `.editor-page-paragraph::before` 疑似要素で `position: absolute; left: 25px; top: 4px; bottom: 4px; width: 1px; background: var(--border)` の細い罫線
+- × ボタン領域 (`left: 4px` + `width: 18px` = 22px) と テキスト領域 (`padding-left: 32px`) の中間に配置
+- `pointer-events: none` でクリック干渉なし
+
+D4. **CSS 構造**:
+- `.editor-page-paragraph`: position relative + **`padding-left: 32px`**（× ボタン + 区切り線 + 隙間ぶん確保）
+- `.editor-page-paragraph-text`: 旧 paragraph のテキスト属性（cursor / line-height / font-size / color / outline）を子に移管
+- `.editor-page-paragraph:has(.editor-page-paragraph-text:focus)`: contentEditable focus 中の親に accent 枠（`:has` Chromium 105+）
+- hover ルールは specificity 0,3,1 でグローバル `button:hover` を上書き
+
+### E. ストライプ表示
+
+E1. **`.txt-block:nth-child(odd)`** ([src/styles.css](src/styles.css)):
+- 奇数番目の段落に `background: rgba(128, 128, 128, 0.08)` を適用
+- ニュートラル rgba でテーマ非依存（ライト / ダーク両方で自然）
+- specificity (0,2,0) で `:hover` / `.selected` / `.editing` と同等 → 後勝ちで正しく上書き
+
+E2. **`.editor-page-paragraph:nth-child(odd)`** で同等のストライプ:
+- 同じ rgba 値 `rgba(128, 128, 128, 0.08)` でサイドパネルと統一
+- `:hover` / `:has(.editor-page-paragraph-text:focus)` も同 specificity (0,2,0) で後勝ち
+
+### F. その他の改善（前段セッションから引き継ぎ）
+
+F1. **TCY 全角ペア対応** ([src/canvas-tools.js](src/canvas-tools.js) + [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)):
+- `TCY_PAIR_REGEX` / `findTcyPairs` / JSX `applyTateChuYoko` に全角 `！！` / `！？` を追加検出
+- PSD に元々全角で組まれた `！！` が縦中横で 1 セル化されるように
+
+F2. **TCY span を半角化して描画**（Chromium レンダリングバグ回避）:
+- `appendLineWithTracking` の TCY span 生成時に `textContent` を **半角 `!!` / `!?` に置換**してから DOM 挿入
+- Chromium の `text-combine-upright: all` が全角 `！！` で overflow:hidden により不可視になる挙動への workaround
+- `state.contents` は元の全角のまま保持 → Photoshop 保存は無影響
+
+F3. **bbox 計算で TCY ペアを `measureText` 実測ベースで補正**:
+- 半角 `!!` ≈ 0.4em → TCY 後 1em で **+0.6em**（広げる）
+- 全角 `！！` ≈ 2em → TCY 後 1em で **−1em**（縮める）
+- `measureLineExtentEmWithOverrides` に `tcyEnabled` パラメータ追加、差分補正で bbox を実描画にフィット
+
+F4. **半角→全角自動変換の設定化** ([src/settings.js](src/settings.js)):
+- 新環境設定キー `verticalHalfToFullEnabled: true`
+- 縦書き時のみ動作、数字 (0-9) + 英字 (A-Z, a-z) を `+0xFEE0` で全角化
+- `convertHalfToFullForVertical(text, direction)` を `commitNewTxtInput` / `mapBlockToNewLayer` / `syncPlacedFromTxt` で共通利用
+- contenteditable 経路は `applyConversionToInner` で「毎 input イベントで DOM を plain text に強制 normalize」（browser 自動挿入の `<div>` / `<br>` 対策込み）
+
+F5. **自動配置のテキストサイズ自動推定** ([src/ai-place.js](src/ai-place.js) `detectSizePtFromBlock`):
+- comic-text-detector の `font_size`（OCR 入力画像 px）を「PSD 物理座標系の pt」に換算
+- `FONT_SIZE_CALIBRATION = 0.92`（em-box → glyph 相当への経験補正）
+- bbox 上限キャップ: `maxPt = (thick_axis / denom) × 72 / dpi`（行数考慮）
+- 環境設定の `textSizeStep` (0.1 / 0.5) に丸め、`[6, 999]` クランプ
+
+F6. **JSX 新規テキスト配置の +0.2em padding inset 補正** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)):
+- CSS padding `0.2em` で bbox 中央にテキストを視覚配置する設計と Photoshop 配置位置の乖離を解消
+- 縦書き: `_boxRight = nl.x + _thick + _padInset - _halfLeading`
+- 横書き: `_fixDy = (nl.y + _padInset) - _actualTop`
+
+F7. **吹き出し中心からの下方向バイアス** ([src/ai-place.js](src/ai-place.js)):
+- `BUBBLE_PLACEMENT_Y_BIAS_EM = 0.3` で comic-text-detector の bbox 上寄り傾向を経験補正
+- 初回配置時のみ効き、テキスト編集で位置がリセットされない（中心固定の `syncPlacedFromTxt`）
+
+### G. デッドコード整理（Phase A: 即削除可）
+
+G1. **`src/pagebar.js` ファイル全削除**: v1.19.0 で UI 撤去済み、外部参照ゼロ
+G2. **CSS `--pagebar-*` 変数 10 行削除** (light/dark 各 5): pagebar 撤去後の残骸
+G3. **`src/normalize.js` `newRule()` 削除**: 未使用 export
+G4. **`src/canvas-tools.js` `enterInPlaceEditForLayer()` + `waitForMountedCtx()` 削除**: v1.5.0 で置換された残骸（約 60 行）
+G5. **`src/viewer-mode.js` `isViewerActive()` 削除**: 未使用 export
+G6. **`#progress-count` HTML 要素 + `.progress-count` CSS rule 削除**: v1.10.0 で `display: none` 化された残骸
+G7. **`src/style-palette.js` `loadJsonFromPath` の export 修飾子撤去**: 内部参照のみ
+G8. **`src/ai-ocr.js` debug `console.log` 整理**: 本番ビルドの stdout 残骸撤去（`console.warn` は stderr のみ残す）
+
+合計約 200 行削減 + ファイル 1 件削除。
+
+### H. Phase 1 Quick Wins リファクタ
+
+H1. **`repeatedDashTrackingMille` 旧 migrate 削除** ([src/settings.js](src/settings.js)):
+- v1.10.0 開発期の内部キー、リリース版未到達なので安全削除
+
+H2. **`jsx_gen.rs` の `emit_*` ヘルパー統合** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs)):
+- 4 つの emit 関数（`emit_line_leadings` / `emit_char_sizes` / `emit_char_fonts` / `emit_char_bolds`）が同型「`HashMap<String, T>` → sorted JSON object literal」だったので、ジェネリック関数 `emit_sorted_map_by_int_key<T, F>` に統合
+- 各 emit は薄い formatter ラッパー（3 行）に。新 per-char 属性追加コストが激減
+- 非互換性: 旧 `emit_line_leadings` のみ lexical sort（"10" が "2" より先）だったが、本統合で数値ソートに揃える（line index 10+ レイヤーで diff 安定化、JSX 動作は順序非依存で無影響）
+
+H3. **`settings-ui.js` を schema-driven 化** ([src/settings-ui.js](src/settings-ui.js)):
+- 13 個の default キーが HTML / `syncDefaultsUi` / `bindDefaultsInputs` に三重重複していたのを `DEFAULT_SCHEMA` 配列 + `FORMATTERS` テーブルで宣言化
+- `syncDefaultsUi` / `bindDefaultsInputs` は schema を loop するだけ。新フィールド追加が 1 行で済む
+- 約 95 行 → 約 55 行に圧縮
+
+H4. **settings.js の各 default キーに `scope:` JSDoc コメント追加**:
+- `creation-only` / `render-all` / `save-only` の 3 カテゴリ
+- 開発者向けに「設定変更時にどこへ反映されるか」を明示
+
+### マイグレーション影響
+
+- **既存 v1.24.0 までの設定**: `verticalHalfToFullEnabled` が無いユーザーは default `true` で穴埋め → 縦書き時に半角英数字が自動全角化される（互換性最優先なら `false` だが、要望が「自動全角」だったため true 採用）
+- **`repeatedDashTrackingMille`**: 旧キーは migrate 撤去、v1.24.0 以前の設定で残っていた場合は無視される（実害なし、`dashTrackingMille` のみ有効）
+- **Tachimi 連携**: PsDesign からの Tachimi 起動は **トリガー JSON `%TEMP%\tachimi_cli_files.json`** を Tachimi 側が読む仕様。台割マネージャー / COMIC-Bridge と同じ位置を使うため、複数アプリの同時起動で trigger 競合の可能性あり（実用上は問題なし、Tachimi が起動時に読み込んで削除する）
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.25.0`** に揃え。Cargo.lock も `cargo check` で自動追従。Rust 側に `dirs = "5"` 新規追加。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: PSD 保存完了ダイアログは「OK」のみ → 新: 「OK + PDF 化に進む」の 2 ボタン、Tachimi 起動で保存した PSD を流す
+> - 旧: PSD 未読込時のテキスト追加はエラー → 新: 原稿追記のみ実行、後の自動配置で PSD 中央配置
+> - 旧: 自動配置で TXT 段落数 > 吹き出し数なら余り捨て → 新: 余りは PSD ページ中央に配置、`warn-txt-extra` 廃止
+> - 旧: editor-page-paragraph は単一 div で contentEditable 直当て → 新: 親 + `.editor-page-paragraph-text` 子の 2 階層、左端に × ボタン + 縦の区切り線
+> - 旧: txt-source-viewer / editor-page-section-body は単色背景 → 新: 奇数番目に薄いグレー (`rgba(128,128,128,0.08)`) でストライプ表示
+> - 旧: `notifyDialog` は OK ボタン 1 つ → 新: `primaryAction` オプションで 2 ボタン化、cancel ボタンを再利用
+> - 旧: pagebar.js / pagebar CSS 変数 / 未使用 export 群が残存 → 新: 約 200 行のデッドコード削除、Phase A 完了
+> - 旧: `emit_*` 4 関数が同型コピペ → 新: `emit_sorted_map_by_int_key<T, F>` ジェネリック関数に統合
+> - 旧: 13 個の default キーが HTML / sync / bind に三重重複 → 新: `DEFAULT_SCHEMA` 配列で schema-driven 化
+> - 旧: TCY 全角 `！！` `！？` は検出されず縦に並ぶ → 新: 検出対象に追加 + TCY span 内を半角に置換して Chromium の合成 glyph レンダリングを安定化
+> - 旧: 自動配置のテキストサイズは固定 → 新: comic-text-detector の `font_size` を pt 換算 + 経験補正で per-bubble に推定
+

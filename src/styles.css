@@ -11,11 +11,6 @@
   --danger: #e74c3c;
   --canvas-bg: #181818;
   --page-bg: #2a2a2a;
-  --pagebar-track: #1c1c1d;
-  --pagebar-handle: linear-gradient(180deg, #4a4a4f 0%, #38383c 100%);
-  --pagebar-grip: rgba(255, 255, 255, 0.6);
-  --pagebar-track-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
-  --pagebar-handle-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
   --scrollbar-track: #1e1e1e;
   --scrollbar-thumb: #3e3e42;
   --scrollbar-thumb-hover: #5a5a5e;
@@ -36,11 +31,6 @@
   --danger: #d13438;
   --canvas-bg: #e8e8e8;
   --page-bg: #ffffff;
-  --pagebar-track: #dcdcdc;
-  --pagebar-handle: linear-gradient(180deg, #b8b8b8 0%, #a0a0a0 100%);
-  --pagebar-grip: rgba(255, 255, 255, 0.9);
-  --pagebar-track-shadow: none;
-  --pagebar-handle-shadow: none;
   --scrollbar-track: #e8e8e8;
   --scrollbar-thumb: #c0c0c0;
   --scrollbar-thumb-hover: #a0a0a0;
@@ -1362,25 +1352,77 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 6px;
   padding: 8px 10px;
 }
+/* 段落の外側コンテナ。左端 × 削除ボタンの absolute 配置基準 + ボタンぶんの左余白を確保。
+   テキスト本体は子要素 .editor-page-paragraph-text (contentEditable) に分離。 */
 .editor-page-paragraph {
-  white-space: pre-wrap;
-  padding: 4px 8px;
+  position: relative;
+  padding: 4px 8px 4px 32px;
   border-radius: 3px;
-  cursor: text;
   min-height: 1.4em;
+  border: 1px solid transparent;
+}
+/* × ボタンの右側に縦の区切り線。ボタン領域 (left: 4px + width: 18px = 22px) と
+   テキスト領域 (padding-left: 32px) の間に 1px の細い罫線を入れて視覚的に分離する。
+   段落の上下に 4px ずつ余白を残して短めに表示。 */
+.editor-page-paragraph::before {
+  content: "";
+  position: absolute;
+  left: 25px;
+  top: 4px;
+  bottom: 4px;
+  width: 1px;
+  background: var(--border);
+  pointer-events: none;
+}
+/* テキスト本体。contentEditable=true、focus/hover/outline はこの要素で受ける。 */
+.editor-page-paragraph-text {
+  white-space: pre-wrap;
+  cursor: text;
   line-height: 1.6;
   font-size: 13px;
   color: var(--text);
   outline: none;
-  border: 1px solid transparent;
+}
+/* 奇数番目の段落にうっすら背景色を付けてストライプ表示にする。
+   :hover / focus 中の :has() は同 specificity (0,2,0) で後勝ち、上書きされる。
+   テーマ依存しないニュートラル rgba で、ライト/ダーク両方で自然に見える設定。 */
+.editor-page-paragraph:nth-child(odd) {
+  background: rgba(128, 128, 128, 0.08);
 }
 .editor-page-paragraph:hover {
   background: var(--panel-hover);
 }
-.editor-page-paragraph:focus,
-.editor-page-paragraph.editing {
+/* contentEditable 子要素が focus 中のとき親に accent 枠を付ける（:has は Chromium 105+ 対応）。 */
+.editor-page-paragraph:has(.editor-page-paragraph-text:focus) {
   background: var(--bg);
   border-color: var(--accent);
+}
+
+/* 各段落の左端に表示する × 削除ボタン。クリックで deleteTxtBlockByIndex を即発火。
+   contentEditable 子要素からフォーカスが外れて blur → commit が走るのを防ぐため、
+   renderViewer 側で mousedown.preventDefault してフォーカス移動を抑止する。 */
+.editor-page-paragraph-delete-btn {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 18px;
+  height: 18px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  border-radius: 3px;
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+/* 親セレクタ込みで specificity 0,3,1 に上げ、global button:hover:not(:disabled) を上書き。 */
+.editor-page-paragraph .editor-page-paragraph-delete-btn:hover:not(:disabled) {
+  background: rgba(231, 76, 60, 0.12);
+  border-color: transparent;
+  color: var(--danger);
 }
 .editor-empty {
   position: absolute;
@@ -2930,6 +2972,14 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border: 1px solid transparent;
 }
 
+/* 奇数番目の段落にうっすら背景色を付けてストライプ表示にする。
+   :hover (.txt-block:hover) / 選択 (.txt-block.selected) / 編集中 (.txt-block.editing) は
+   同 specificity (0,2,0) で後勝ちになるので、ストライプ色を上書きしてくれる。
+   テーマ依存しないニュートラルな rgba にして、ライト/ダーク両方で自然に見えるよう調整。 */
+.txt-block:nth-child(odd) {
+  background: rgba(128, 128, 128, 0.08);
+}
+
 .txt-block:hover {
   background: var(--panel-hover);
   border-color: var(--border);
@@ -4024,10 +4074,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
    ラベル（"画像スキャン中…" / "自動配置中…" など）として残す。要素は残して JS の
    textContent 操作の互換性は保ったまま。 */
 #progress-modal .progress-detail,
-#progress-modal .progress-count {
-  display: none;
-}
-
 /* progress-title はアイコン直下のラベル位置で表示。白文字、中央寄せ、影で読みやすく。 */
 #progress-modal .progress-title {
   display: block;
@@ -4285,14 +4331,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
    進捗テキスト「●●中…」と loading-text の文言更新で動作中であることを伝える。 */
 .progress-fill.indeterminate {
   width: 100%;
-}
-
-.progress-count {
-  font-size: 11px;
-  color: var(--text-muted);
-  text-align: right;
-  min-height: 13px;
-  font-variant-numeric: tabular-nums;
 }
 
 .toast-container {

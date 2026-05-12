@@ -183,8 +183,9 @@ async function runAiOcr(files, {
   const unsubLog = await listen("ai_ocr:log", (e) => {
     const { line, stream } = e.payload || {};
     if (typeof line !== "string") return;
+    // stderr のみ console に残す（エラー診断用）。stdout は notifyDialog / detail 表示で
+    // 十分なため本番では console に流さない（旧 console.log は debug 残骸として撤去）。
     if (stream === "stderr") console.warn("[ai_ocr]", line);
-    else console.log("[ai_ocr]", line);
     // OCR の進捗イベントが流れるようになったら以降のログは UI に出さない
     // (tqdm 行が高頻度で来るため、frame thrashing を避ける)。
     if (phase === "ocr") return;

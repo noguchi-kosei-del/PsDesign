@@ -28,6 +28,7 @@ import {
 import { getPdfVirtualPageCount } from "../pdf-pages.js";
 import {
   commitNewTxtInput,
+  deleteTxtBlockByIndex,
   ensureTxtExtension,
   getActivePageNumber,
   getTxtPageCount,
@@ -141,11 +142,35 @@ function buildSection(pageNumber, blocks, activeNum, isMarkerless) {
     blocks.forEach((paragraph, idx) => {
       const el = document.createElement("div");
       el.className = "editor-page-paragraph";
-      el.contentEditable = "true";
-      el.spellcheck = false;
       el.dataset.paragraphIndex = String(idx);
-      el.textContent = paragraph;
-      bindParagraphEdit(el, paragraph, pageNumber);
+      // 左端 × 削除ボタン（lucide x の細い × アイコン）。確認なしの即削除で
+      // deleteTxtBlockByIndex を呼ぶ。mousedown.preventDefault で contentEditable
+      // からフォーカスが外れて blur → commit が走るのを抑止し、click 自体は通常発火。
+      const delBtn = document.createElement("button");
+      delBtn.type = "button";
+      delBtn.className = "editor-page-paragraph-delete-btn";
+      delBtn.setAttribute("aria-label", "この段落を削除");
+      delBtn.title = "この段落を削除";
+      delBtn.innerHTML = '<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+      delBtn.addEventListener("mousedown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      delBtn.addEventListener("click", (e) => {
+        e.stopPropagation();
+        e.preventDefault();
+        deleteTxtBlockByIndex(pageNumber, idx);
+      });
+      el.appendChild(delBtn);
+      // 編集対象は .editor-page-paragraph-text 子要素のみ。× ボタンが contentEditable
+      // 範囲外に保たれる（× の SVG が innerText 取得時にテキストとして混入しない）。
+      const textEl = document.createElement("div");
+      textEl.className = "editor-page-paragraph-text";
+      textEl.contentEditable = "true";
+      textEl.spellcheck = false;
+      textEl.textContent = paragraph;
+      el.appendChild(textEl);
+      bindParagraphEdit(textEl, paragraph, pageNumber);
       body.appendChild(el);
     });
   }

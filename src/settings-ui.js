@@ -99,32 +99,73 @@ function syncPageDirectionUi() {
   }
 }
 
-// 「デフォルト」タブ：保存値をフォームに反映。
+// 「写植設定」タブのフィールドを schema として宣言。HTML 要素 ID / settings.js のキー /
+// 値変換ロジック / applyToolDefaults を呼ぶかをここ 1 箇所で定義し、syncDefaultsUi と
+// bindDefaultsInputs はこの schema をループするだけの実装にする。新フィールド追加時は
+// 1 行追加すれば sync と bind の両方が自動配線される。
+//
+// type ごとの format / parse:
+//   number          : 数値入力。allowedValues 指定時は集合チェックで弾く
+//   text-trim       : 文字列入力。trim 適用、無効値なし
+//   bool-onoff      : select の "on"/"off" ⇔ true/false
+//   bool-showhide   : select の "show"/"hide" ⇔ true/false（showBadge 専用）
+//   bool-onoff-num50: select の "on"/"off" ⇔ 50/0 数値（句読点ツメ専用）
+//
+// applyTool: true のフィールドは setDefault 後に applyToolDefaults を呼んでツール状態へ
+// 即時反映。false は次回テキスト作成時 / 保存時にのみ getDefault() 経由で参照される。
+const FORMATTERS = {
+  "number": {
+    format: (v) => String(v ?? ""),
+    parse: (raw, entry) => {
+      const n = Number(raw);
+      if (!Number.isFinite(n)) return null;
+      if (entry.allowedValues && !entry.allowedValues.includes(n)) return null;
+      return n;
+    },
+  },
+  "text-trim": {
+    format: (v) => String(v ?? ""),
+    parse: (raw) => String(raw ?? "").trim(),
+  },
+  "bool-onoff": {
+    format: (v) => (v === false ? "off" : "on"),
+    parse: (raw) => raw !== "off",
+  },
+  "bool-showhide": {
+    format: (v) => (v === false ? "hide" : "show"),
+    parse: (raw) => raw !== "hide",
+  },
+  "bool-onoff-num50": {
+    // 句読点ツメは内部 0-100 だが UI は 適用/適用しない の 2 値。> 0 を ON とみなす。
+    // ON = 50%（標準的な漫画写植のツメ量）/ OFF = 0（機能無効）。
+    format: (v) => (Number(v) > 0 ? "on" : "off"),
+    parse: (raw) => (raw === "off" ? 0 : 50),
+  },
+};
+
+const DEFAULT_SCHEMA = [
+  { id: "default-text-size",            key: "textSize",                  type: "number",           applyTool: true },
+  { id: "default-text-size-step",       key: "textSizeStep",              type: "number",           allowedValues: [0.1, 0.5], applyTool: true },
+  { id: "default-leading-pct",          key: "leadingPct",                type: "number",           applyTool: true },
+  { id: "default-stroke-width",         key: "strokeWidthPx",             type: "number",           applyTool: true },
+  { id: "default-font",                 key: "fontPostScriptName",        type: "text-trim",        applyTool: true },
+  { id: "default-show-badge",           key: "showBadge",                 type: "bool-showhide",    applyTool: false },
+  { id: "default-dash-tracking",        key: "dashTrackingMille",         type: "number",           applyTool: true },
+  { id: "default-tilde-tracking",       key: "tildeTrackingMille",        type: "number",           applyTool: true },
+  { id: "default-tcy-enabled",          key: "tateChuYokoEnabled",        type: "bool-onoff",       applyTool: false },
+  { id: "default-symbol-font-enabled",  key: "symbolFontReplaceEnabled",  type: "bool-onoff",       applyTool: false },
+  { id: "default-punct-tsume",          key: "punctuationTsumePercent",   type: "bool-onoff-num50", applyTool: false },
+  { id: "default-vertical-half-to-full", key: "verticalHalfToFullEnabled", type: "bool-onoff",       applyTool: false },
+];
+
+// 「写植設定」タブ：保存値をフォームに反映。
 function syncDefaultsUi() {
   const d = getDefaults();
-  const ts = $("default-text-size");
-  const tss = $("default-text-size-step");
-  const lp = $("default-leading-pct");
-  const sw = $("default-stroke-width");
-  const ft = $("default-font");
-  const sb = $("default-show-badge");
-  const dt = $("default-dash-tracking");
-  const tt = $("default-tilde-tracking");
-  const tcy = $("default-tcy-enabled");
-  const sym = $("default-symbol-font-enabled");
-  const pt = $("default-punct-tsume");
-  if (ts) ts.value = String(d.textSize ?? "");
-  if (tss) tss.value = String(d.textSizeStep ?? 0.1);
-  if (lp) lp.value = String(d.leadingPct ?? "");
-  if (sw) sw.value = String(d.strokeWidthPx ?? "");
-  if (ft) ft.value = String(d.fontPostScriptName ?? "");
-  if (sb) sb.value = d.showBadge === false ? "hide" : "show";
-  if (dt) dt.value = String(d.dashTrackingMille ?? 0);
-  if (tt) tt.value = String(d.tildeTrackingMille ?? 0);
-  if (tcy) tcy.value = d.tateChuYokoEnabled === false ? "off" : "on";
-  if (sym) sym.value = d.symbolFontReplaceEnabled === false ? "off" : "on";
-  // 句読点ツメは内部 0-100 だが UI は 適用/適用しない の 2 値。> 0 を ON とみなす。
-  if (pt) pt.value = (Number(d.punctuationTsumePercent) > 0) ? "on" : "off";
+  for (const entry of DEFAULT_SCHEMA) {
+    const el = $(entry.id);
+    if (!el) continue;
+    el.value = FORMATTERS[entry.type].format(d[entry.key], entry);
+  }
   populateFontDatalist();
 }
 
@@ -333,75 +374,21 @@ export function initSettingsUi() {
   });
 }
 
+// DEFAULT_SCHEMA をループして各フィールドの change リスナーを登録する。
+// parse が null を返したら現在値で復帰、それ以外なら setDefault + 必要なら applyToolDefaults。
 function bindDefaultsInputs() {
-  const wireNumber = (id, key) => {
-    const inp = $(id);
-    if (!inp) return;
-    inp.addEventListener("change", () => {
-      const v = Number(inp.value);
-      if (!Number.isFinite(v)) {
-        // 無効入力 → 現在値で復帰。
+  for (const entry of DEFAULT_SCHEMA) {
+    const el = $(entry.id);
+    if (!el) continue;
+    el.addEventListener("change", () => {
+      const next = FORMATTERS[entry.type].parse(el.value, entry);
+      if (next === null) {
+        // 無効入力 → 現在値で復帰
         syncDefaultsUi();
         return;
       }
-      setDefault(key, v);
-      applyToolDefaults();
-    });
-  };
-  wireNumber("default-text-size",   "textSize");
-  wireNumber("default-leading-pct", "leadingPct");
-  wireNumber("default-stroke-width", "strokeWidthPx");
-  wireNumber("default-dash-tracking", "dashTrackingMille");
-  wireNumber("default-tilde-tracking", "tildeTrackingMille");
-
-  const tss = $("default-text-size-step");
-  if (tss) {
-    tss.addEventListener("change", () => {
-      const v = Number(tss.value);
-      if (v !== 0.1 && v !== 0.5) {
-        syncDefaultsUi();
-        return;
-      }
-      setDefault("textSizeStep", v);
-      applyToolDefaults();
-    });
-  }
-
-  const ft = $("default-font");
-  if (ft) {
-    ft.addEventListener("change", () => {
-      setDefault("fontPostScriptName", String(ft.value || "").trim());
-      applyToolDefaults();
-    });
-  }
-
-  const sb = $("default-show-badge");
-  if (sb) {
-    sb.addEventListener("change", () => {
-      setDefault("showBadge", sb.value !== "hide");
-    });
-  }
-
-  const tcy = $("default-tcy-enabled");
-  if (tcy) {
-    tcy.addEventListener("change", () => {
-      setDefault("tateChuYokoEnabled", tcy.value !== "off");
-    });
-  }
-
-  const sym = $("default-symbol-font-enabled");
-  if (sym) {
-    sym.addEventListener("change", () => {
-      setDefault("symbolFontReplaceEnabled", sym.value !== "off");
-    });
-  }
-
-  const pt = $("default-punct-tsume");
-  if (pt) {
-    pt.addEventListener("change", () => {
-      // ON = 50%（標準的な漫画写植のツメ量）/ OFF = 0（機能無効）。
-      // 値スケールは内部 0-100 のまま。JSX 側は > 0 で発火するので 0 が OFF 相当。
-      setDefault("punctuationTsumePercent", pt.value === "off" ? 0 : 50);
+      setDefault(entry.key, next);
+      if (entry.applyTool) applyToolDefaults();
     });
   }
 

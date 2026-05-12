@@ -489,8 +489,11 @@ function layerRectForExisting(page, layer, edit) {
   const ptInPsdPx = sizePt * (dpi / 72);
   // 【v1.x.0】句読点ツメも bbox 幅に反映（、 / 。 の個数 × tsume% × em ぶん長さが縮む）。
   const punctTsumePctExisting = Number(getDefault("punctuationTsumePercent")) || 0;
+  // 【v1.x.0】縦中横（!!/!?/！！/！？）も bbox 長軸に反映（TCY ペアごとに 1em 縮む）。
+  // 設定 ON かつ縦書きレイヤーのときのみ。
+  const tcyEnabledExisting = (getDefault("tateChuYokoEnabled") !== false) && isVertical;
   // 【v1.16.0】measureMaxLineExtentEm はここで sizePt が確定してから呼ぶ（per-char override も反映）。
-  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, edit.charFonts, punctTsumePctExisting);
+  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, edit.charFonts, punctTsumePctExisting, tcyEnabledExisting);
   // CJK 縦書きで小書き仮名（ょ・っ・ゃ等）や glyph の line-box overhang、
   // text-stroke の outset 半分（stroke 既定 20 PSD px → ~0.16em）を吸収するため
   // 列方向に 0.4em の安全余白を足す。テキスト本体は CSS で bbox 中央に配置するので
@@ -555,8 +558,10 @@ function layerRectForNew(page, nl) {
   const lineCount = Math.max(1, countLines(contents));
   // 【v1.x.0】句読点ツメも bbox 幅に反映（、 / 。 の個数 × tsume% × em ぶん長さが縮む）。
   const punctTsumePctNew = Number(getDefault("punctuationTsumePercent")) || 0;
+  // 【v1.x.0】縦中横（!!/!?/！！/！？）も bbox 長軸に反映（TCY ペアごとに 1em 縮む）。
+  const tcyEnabledNew = (getDefault("tateChuYokoEnabled") !== false) && isVertical;
   // 【v1.16.0】枠の自動調整 — 実描画幅で long を auto-fit（フォント変更 + per-char サイズ/フォント変更で bbox 自動更新）。
-  const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts, punctTsumePctNew);
+  const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts, punctTsumePctNew, tcyEnabledNew);
   // 行間 (%) を厚み係数に反映。125 が既定。
   // 小書き仮名 + stroke overhang を吸収する 0.4em の安全余白を THICK 軸に加算。テキスト本体は
   // CSS padding で bbox 中央に配置されるので、bbox が広がっても視覚位置は変わらない。
@@ -941,7 +946,7 @@ function getMeasureContext() {
 // (charSize / layerSize) 倍してから加算する → bbox が大きい文字に応じて伸びる。
 //
 // 戻り値: 0 〜 ∞（layer.sizePt em 単位）。空行は 0。測定不能なら null。
-function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs, punctTsumePct) {
+function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs, punctTsumePct, tcyEnabled) {
   if (!line) return 0;
   if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
   let ctx;
@@ -958,6 +963,37 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
       if (PUNCT_TSUME_CHAR_CODES.has(cc)) {
         const charSz = Number.isFinite(charSizes?.[lineStartIdx + k]) ? charSizes[lineStartIdx + k] : layerSizePt;
         tsumeReductionEm += tsumeMag * (charSz / layerSizePt);
+      }
+    }
+  }
+  // 縦中横ペアは 2 文字を 1 セル幅 (CJK 全角 1em) に圧縮して描画される。
+  // measureText が返す元の 2 文字幅は半角/全角でかなり異なる:
+  //   - 半角 !! / !? : measureText ≈ 0.4em（ASCII proportional は細い）
+  //   - 全角 ！！ / ！？: measureText ≈ 2em（CJK 全角 1em × 2）
+  // どちらの場合も TCY 後の bbox は 1em に正規化される必要があるため、
+  // ペアごとに「元の measureText 幅を引き、代わりに 1em を足す」差分補正を行う。
+  //   - 半角ペア: 元 0.4em → 1em で +0.6em（広げる）
+  //   - 全角ペア: 元 2em → 1em で -1em（縮める）
+  // これがないと半角ペア入力時に bbox が不足して `!!` がフレームから溢れる。
+  // tcyEnabled=true は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待。
+  let tcyAdjustEm = 0;
+  if (tcyEnabled && line.length >= 2) {
+    // TCY ペアの font-family は layer フォントを採用（TCY span 内は per-char font override 対象外）。
+    const tcyFam = cssFontFamily(layerFontPs) || "sans-serif";
+    for (let k = 0; k < line.length - 1; ) {
+      const two = line.slice(k, k + 2);
+      if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
+        let pairOrigEm = 0;
+        try {
+          ctx.font = `${refSizePx}px ${tcyFam}`;
+          const w = ctx.measureText(two).width;
+          pairOrigEm = w / refSizePx;
+        } catch { pairOrigEm = 0; }
+        // 元の幅 (totalEm に既に含まれている) を引き、TCY 後の 1em を足す
+        tcyAdjustEm += 1 - pairOrigEm;
+        k += 2;
+      } else {
+        k += 1;
       }
     }
   }
@@ -1016,15 +1052,17 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
     totalEm += segWidthAtLayerEm;
     i = j;
   }
-  // 句読点ツメぶんを最後にまとめて差し引き（負にならないようガード）。
-  const adjusted = totalEm - tsumeReductionEm;
+  // 句読点ツメぶんを引き、縦中横ぶん（半角は加算 / 全角は減算の符号付き差分）を足し合わせる。
+  // 負にならないようガード。
+  const adjusted = totalEm - tsumeReductionEm + tcyAdjustEm;
   return adjusted > 0 ? adjusted : 0;
 }
 
 // 全行の最大行幅を「layer.sizePt em 単位」で返す。
 // charSizes / charFonts に override があれば反映、なければ layer フォント単一で測定。
 // punctTsumePct: 句読点ツメ%。0 のとき無効。各行の measureLineExtentEmWithOverrides に伝搬。
-function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts, punctTsumePct) {
+// tcyEnabled: 縦中横を bbox 計算に反映するか。true なら !!/!?/！！/！？ ペアの 1 文字幅ぶんを減算。
+function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts, punctTsumePct, tcyEnabled) {
   if (!text) return 0;
   if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
   const fullText = String(text);
@@ -1033,7 +1071,7 @@ function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, ch
   let maxEm = 0;
   for (let li = 0; li < linesArr.length; li++) {
     const em = measureLineExtentEmWithOverrides(
-      linesArr[li], lineStarts[li], charSizes, charFonts, layerSizePt, postScriptName, punctTsumePct,
+      linesArr[li], lineStarts[li], charSizes, charFonts, layerSizePt, postScriptName, punctTsumePct, tcyEnabled,
     );
     if (em == null) continue;
     if (em > maxEm) maxEm = em;
@@ -1079,7 +1117,10 @@ function lineHasSymbolChar(s) {
 
 // 縦中横（tate-chu-yoko）対象の半角ペア。先頭から 2 文字単位で探索し、3 文字以上連続のとき
 // 余り 1 文字は単独扱い（ユーザー仕様）。Photoshop 側 (jsx_gen.rs) でも同じ判定を行う。
-const TCY_PAIR_REGEX = /!!|!\?/;
+// 縦中横の対象ペア: 半角 !! / !? に加え、全角 ！！ / ！？ も拾う（PSD 既存テキストは
+// 全角で組まれていることが多いため）。混在ペア (!！ / !？ / ！! / ！?) は意図しない
+// 入力途中のケースが多いので対象外。
+const TCY_PAIR_REGEX = /!!|!\?|！！|！？/;
 
 // 【v1.x.0】句読点ツメ（mojiZume）の対象。U+3001「、」/ U+3002「。」のみ。
 // Photoshop 側 (jsx_gen.rs applyPunctuationTsume) と同じ char code 集合。
@@ -1130,7 +1171,8 @@ function findTcyPairs(line) {
   const pairs = [];
   for (let i = 0; i < line.length - 1; ) {
     const two = line.slice(i, i + 2);
-    if (two === "!!" || two === "!?") {
+    // 半角 !! / !? と全角 ！！ / ！？ の両方を縦中横ペアとして扱う。
+    if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
       pairs.push({ start: i, end: i + 2 });
       i += 2;
     } else {
@@ -1205,7 +1247,15 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
     }
     const span = document.createElement("span");
     span.className = "tcy-span";
-    span.textContent = line.slice(pair.start, pair.end);
+    // Chromium の text-combine-upright: all は半角 !! / !? なら安定動作するが、
+    // 全角 ！！ (U+FF01) / ！？ (U+FF1F) を渡すと合成 glyph が overflow:hidden で
+    // 不可視になる挙動が発生する（実機確認済み）。state.contents は元のまま保持し、
+    // 表示用 DOM のみ半角に書換える（Photoshop 保存は別経路の applyTateChuYoko が
+    // 全角もそのまま baselineDirection=cross で扱うので影響なし）。
+    span.textContent = line
+      .slice(pair.start, pair.end)
+      .replace(/！/g, "!")
+      .replace(/？/g, "?");
     parentEl.appendChild(span);
     pos = pair.end;
   }
@@ -2240,6 +2290,12 @@ function startContentEditableEdit(ctx, target, options = {}) {
   const startContents = isExisting
     ? (startEdit.contents ?? target.layer.text ?? "")
     : (target.nl.contents ?? "");
+
+  // 縦書きレイヤーの半角→全角自動変換 direction（edit 開始時に一度だけ確定。
+  // edit 中の direction 変更は対象外）。readContents 内で maybeConvert に渡される。
+  const editDirection = isExisting
+    ? ((startEdit?.direction) ?? target.layer.direction ?? "horizontal")
+    : (target.nl.direction ?? "vertical");
   const startLineLeadings = isExisting
     ? { ...(startEdit.lineLeadings ?? {}) }
     : { ...(target.nl.lineLeadings ?? {}) };
@@ -2349,17 +2405,111 @@ function startContentEditableEdit(ctx, target, options = {}) {
     }
   };
 
+  // 縦書きレイヤーで半角英数字 (0-9 / A-Z / a-z) を全角に自動変換する。
+  // direction === "vertical" かつ環境設定 verticalHalfToFullEnabled が true の
+  // ときだけ動作（横書き / OFF は素通し）。冪等動作（全角入力は対象外）。
+  // 1:1 文字対応（UTF-16 1 code unit → 1 code unit）なので contenteditable の
+  // caret 位置や computeStringDiff のインデックス計算には影響しない。
+  // txt-source.js の convertHalfToFullForVertical と同じロジックを inline 化
+  // （canvas-tools.js → txt-source.js の import は循環参照になるため避ける）。
+  // 既存テキストにある半角は触らないため、input イベントで「ユーザーが新規に
+  // 打ち込んだ差分」のみ変換する設計（writeStateContents 経由）。
+  const maybeConvertHalfToFull = (s) => {
+    if (editDirection !== "vertical") return s;
+    if (getDefault("verticalHalfToFullEnabled") === false) return s;
+    return s.replace(/[0-9A-Za-z]/g, (c) =>
+      String.fromCharCode(c.charCodeAt(0) + 0xFEE0),
+    );
+  };
+
   // contenteditable の現在テキスト読み取り。
-  // innerText を使うと <br> 要素や <div> 境界も自動的に \n に変換してくれる。
-  // これにより keydown.preventDefault が WebView2 で完全に効かず browser 既定の
-  // <br> 挿入が走ってしまったケースでも、contents に改行が反映される（textContent
-  // だと <br> は無視されて改行が消える事故が発生する）。
-  // 縦書き contenteditable で innerText が rendered 順を返す心配は無く、
-  // storage 順を返すことを実機で確認済み。
+  // 【設計判断】TreeWalker で text node を直接連結する方式を採用。理由:
+  //   - innerText だと <br> / <div> 境界 / display:block 子要素の境界が暗黙的に
+  //     "\n" として現れる。半角 "!!" 等を打ち直した際に Chromium が自動的に
+  //     <div> 内に文字を wrap するケースがあり、 "!!" が "!\n!" として contents
+  //     に保存されてしまい、TCY (縦中横) のペア検出が走らず縦に並ぶ事故が起きる。
+  //   - 一方で Enter キー押下は keydown ハンドラ (preventDefault) で
+  //     "\n" text node を直接挿入するため、TreeWalker で順次連結すれば取得できる。
+  //     beforeinput の insertParagraph / insertLineBreak フォールバックも同様に
+  //     "\n" text node 経路を使用。
+  //   - つまり「browser 自動挿入の DOM 構造」は無視し、「明示的な \n text node」
+  //     だけを拾うことで、視覚と内部状態の乖離を Enter 由来に限定できる。
   // ​ (zero-width space) は insertTextAtCursor が caret anchor として
   // 末尾に追加する不可視文字。state.contents には残さないよう strip する。
-  const readContents = () =>
-    inner.innerText.replace(/\r\n?/g, "\n").replace(/​/g, "");
+  // 注: 変換は呼び出し側で applyConversionToInner / maybeConvertHalfToFull を
+  // 経由する。readContents 自身は変換せず DOM の生テキストを返す（diff 計算が
+  // 一致する必要があるため）。
+  const readContents = () => {
+    let out = "";
+    const walker = document.createTreeWalker(inner, NodeFilter.SHOW_TEXT);
+    let node;
+    while ((node = walker.nextNode())) {
+      out += node.textContent;
+    }
+    return out.replace(/\r\n?/g, "\n").replace(/​/g, "");
+  };
+
+  // 編集中の inner DOM を「plain text の text node 1 個」構造に正規化する。
+  // 1. 縦書き + 設定 ON のとき半角英数字を全角に変換（Photoshop 縦中横自動入力風の UX）
+  // 2. browser が <div> / <br> を自動挿入してしまったケースを必ず除去
+  //
+  // 1:1 文字対応なので既存の caret 位置（Selection の char offset）は保持される。
+  // 呼び出しタイミング: input イベント / compositionend / commit。
+  //
+  // 設計判断（v1.24.0 後の TCY バグ修正）: 旧実装は「変換が必要なときだけ DOM を書換」
+  // していたが、それだと browser 自動挿入の <div>/<br> が残ってしまう。具体的には
+  // 半角 "!!" を打ち直したときに `<div>!</div><div>!</div>` 構造が作られ、commit 後の
+  // renderOverlay で innerText が "!\n!" として state.contents に保存されて TCY ペア
+  // 検出が走らなくなる（結果 "!" が縦に並ぶ）。これを防ぐため、変換不要時も毎 input
+  // で textContent を書換えて DOM 構造を強制的にリセットする。
+  const applyConversionToInner = () => {
+    const raw = readContents();
+    const converted = (
+      editDirection === "vertical" && getDefault("verticalHalfToFullEnabled") !== false
+    ) ? maybeConvertHalfToFull(raw) : raw;
+    // 「全 child が text node」のときは zwsp anchor (Enter 後の caret anchor、v1.21.0
+    // C4-4) を維持するため書換しない。一方 <div> / <br> 等 element node が混入して
+    // いれば必ず plain text に書換える。比較は zwsp を strip した形で行う（converted
+    // 側は readContents で strip 済み、inner.textContent には zwsp が残るため）。
+    const allTextNodes = Array.from(inner.childNodes).every(
+      (n) => n.nodeType === Node.TEXT_NODE,
+    );
+    const innerTextStripped = inner.textContent.replace(/​/g, "");
+    if (allTextNodes && innerTextStripped === converted) return false;
+    // caret 位置を char offset で保持してから DOM を書換える
+    const sel = window.getSelection();
+    let savedStart = null;
+    let savedEnd = null;
+    if (sel && sel.rangeCount > 0) {
+      const r = sel.getRangeAt(0);
+      if (inner.contains(r.startContainer) || r.startContainer === inner) {
+        try {
+          const a = document.createRange();
+          a.selectNodeContents(inner);
+          a.setEnd(r.startContainer, r.startOffset);
+          savedStart = a.toString().length;
+          const b = document.createRange();
+          b.selectNodeContents(inner);
+          b.setEnd(r.endContainer, r.endOffset);
+          savedEnd = b.toString().length;
+        } catch (_) { /* fallthrough */ }
+      }
+    }
+    inner.textContent = converted;
+    // caret 復元: textContent 書換後は inner の child は単一 text node のみ
+    if (savedStart != null && sel) {
+      try {
+        const tn = inner.firstChild ?? inner;
+        const r = document.createRange();
+        const len = (tn.nodeType === 3 ? tn.length : converted.length);
+        r.setStart(tn, Math.min(savedStart, len));
+        r.setEnd(tn, Math.min(savedEnd ?? savedStart, len));
+        sel.removeAllRanges();
+        sel.addRange(r);
+      } catch (_) { /* ignore */ }
+    }
+    return true;
+  };
 
   // 単純差分: 共通接頭辞・接尾辞の外側を 1 つの編集領域とみなす（input 1 回 = 1 操作前提）
   const computeStringDiff = (a, b) => {
@@ -2598,10 +2748,15 @@ function startContentEditableEdit(ctx, target, options = {}) {
       // IME 候補表示中は state.contents を書き換えない（preedit が確定値として残ってしまうため）。
       // ただし visible text を使って bbox は visual update する。これにより IME で長文を
       // 入力してもテキストボックスが表示中の text に追従して広がる。
+      // 半角→全角の自動変換も IME 確定後 (compositionend → onInput 再呼出) に走らせる。
       const visibleText = readContents();
       recenterBox(visibleText);
       return;
     }
+    // 縦書き + 設定 ON のとき、ユーザーが新規に打ち込んだ半角英数字を即座に
+    // 全角化（DOM 自体を書換、caret 位置は 1:1 文字対応で維持）。Photoshop の
+    // 「縦中横自動入力」と類似の感覚で、編集中もリアルタイムに全角表示される。
+    applyConversionToInner();
     const newContents = readContents();
     if (newContents === lastContents) {
       reportCursor();
@@ -2779,67 +2934,6 @@ function startInPlaceEdit(ctx, target, options = {}) {
   startContentEditableEdit(ctx, target, {
     selectAll: true,
     afterCommit: options.afterCommit,
-  });
-}
-
-// 指定ページのレイヤー（既存 = 数値 layer.id / 新規 = 文字列 tempId）に対して
-// in-place 編集を起動する。原稿テキストパネルの dblclick ハンドラ等から呼ぶ。
-//
-// - ページが現在表示中でなければ setCurrentPageIndex で切替し、`mounts` Map に
-//   ctx が現れるまで rAF ポーリング（最大 ~10 frame）。spread-view の rAF debounce で
-//   レンダーが何 frame 後になるかは決め打ちできないため固定 rAF×N より polling が安全。
-// - direction（縦/横）に合わせて T/Y ツールへスイッチ（in-place 編集 textarea の見え方や
-//   その後のキャンバス操作の予測可能性のため。既存の startInPlaceEdit と同じく commit 後は
-//   ツールを戻さない＝既存挙動と一致）。
-//
-// options.afterCommit?: (value: string) => void — 編集確定（Ctrl+Enter / 外側クリック）後に
-//   新しい値で呼ばれる。Esc キャンセル時は呼ばれない。原稿テキストパネルからの呼び出し時に
-//   manuscript 側を同期するためのフック。
-//
-// 戻り値: 成功で true、ctx 取得失敗 / レイヤー不在 / page 不在で false。
-export async function enterInPlaceEditForLayer(pageIndex, layerKey, options = {}) {
-  if (!Number.isInteger(pageIndex) || pageIndex < 0) return false;
-
-  if (getCurrentPageIndex() !== pageIndex) {
-    setCurrentPageIndex(pageIndex);
-  }
-
-  const ctx = await waitForMountedCtx(pageIndex);
-  if (!ctx) return false;
-
-  const page = getPages()[pageIndex];
-  if (!page) return false;
-
-  let target;
-  if (typeof layerKey === "string") {
-    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === layerKey);
-    if (!nl) return false;
-    target = { kind: "new", nl };
-  } else {
-    const layer = page.textLayers.find((l) => l.id === layerKey);
-    if (!layer) return false;
-    target = { kind: "existing", layer };
-  }
-
-  // T/Y ツール廃止後は V のまま in-place 編集を開始する。direction は対象レイヤー自身の
-  // direction を startInPlaceEdit が読み取って floater の見え方を決定する。
-  setSelectedLayer(pageIndex, layerKey);
-  startInPlaceEdit(ctx, target, { afterCommit: options.afterCommit });
-  return true;
-}
-
-// `mounts.get(pageIndex)` が non-null になるまで rAF を最大 maxFrames 回待つ。
-// 同期的にすでに mount 済みなら 0 frame で返る。
-function waitForMountedCtx(pageIndex, maxFrames = 10) {
-  return new Promise((resolve) => {
-    let frames = 0;
-    const tick = () => {
-      const ctx = mounts.get(pageIndex);
-      if (ctx) { resolve(ctx); return; }
-      if (frames++ >= maxFrames) { resolve(null); return; }
-      requestAnimationFrame(tick);
-    };
-    tick();
   });
 }
 

@@ -78,8 +78,14 @@ export function setProgressIcon(svgString) {
 //            進捗バー内テキストに表示する（OCR の "残り 30 秒" など独自整形向け）。
 // バー幅は current/total から計算し fill.style.width に直接反映する（実進捗駆動）。
 // 現在/総数が無い場合は .indeterminate を付与してバー満タン表示にし、フラッシュで進行感を出す。
+//
+// 二重表示対策: showCount: false の経路では detail を progress-loading-text 側だけに反映し、
+// 中央テキスト (progress-detail) はクリアする。これがないと「画像スキャン中…」のようにバーと
+// 中央の両方に同じ進捗テキストが並んで重複表示される。
 export function updateProgress({ detail, current, total, showCount = true } = {}) {
-  if (detail != null) $("progress-detail").textContent = detail;
+  if (detail != null) {
+    $("progress-detail").textContent = showCount ? detail : "";
+  }
   const fill = $("progress-fill");
   const loadingText = $("progress-loading-text");
   if (typeof current === "number" && typeof total === "number" && total > 0) {
@@ -295,12 +301,19 @@ export function confirmDialog({
 // kind: "info" (既定) | "success" | "warning"
 //   - "success" → タイトル緑 + チェック (check-circle) SVG
 //   - "warning" → タイトルオレンジ + 警告 (alert-triangle) SVG
+//
+// primaryAction: { label, kind?, onClick } を渡すと「OK の隣に追加アクションボタン」を
+// 表示する。confirm-modal の cancel ボタンを再利用するため、notify 既定の「cancel 非表示」
+// 挙動を抑止する。クリックで onClick (async 可) を実行後、ダイアログを閉じる。
+// kind は "place" (緑枠 / page-jump-btn-place) など既存の page-jump-btn-* バリアントを指定。
+//
 // 戻り値は Promise<void>。
 export function notifyDialog({
   title = "通知",
   message = "",
   okLabel = "OK",
   kind = "info",
+  primaryAction = null,
 } = {}) {
   return new Promise((resolve) => {
     const modal = $("confirm-modal");
@@ -315,10 +328,23 @@ export function notifyDialog({
     applyTitleIcon(titleEl, title, kind);
     msgEl.textContent = message;
     okBtn.textContent = okLabel;
-    // Cancel ボタンは notify では非表示。次回 confirmDialog の呼び出し時に
-    // 復帰するよう cleanup で元の hidden 状態に戻す。
+    // Cancel ボタンは notify (primaryAction 無し) では非表示。primaryAction 有りなら
+    // 「OK + アクションボタン」の 2 ボタン構造で表示し、cancelBtn を再利用する。
     const prevCancelHidden = cancelBtn ? cancelBtn.hidden : false;
-    if (cancelBtn) cancelBtn.hidden = true;
+    const prevCancelText = cancelBtn ? cancelBtn.textContent : "";
+    const prevCancelClass = cancelBtn ? cancelBtn.className : "";
+    let actionPending = false;
+    if (cancelBtn) {
+      if (primaryAction && typeof primaryAction === "object") {
+        cancelBtn.hidden = false;
+        cancelBtn.textContent = primaryAction.label || "実行";
+        // page-jump-btn-* バリアント (place / primary / danger 等) を kind から組み立て
+        const variantKind = (primaryAction.kind || "primary");
+        cancelBtn.className = `page-jump-btn page-jump-btn-${variantKind}`;
+      } else {
+        cancelBtn.hidden = true;
+      }
+    }
     showModalAnimated(modal);
 
     const cleanup = () => {
@@ -326,26 +352,44 @@ export function notifyDialog({
       // Cancel ボタン復帰 / タイトルリセットはフェード完了後に。フェード中に Cancel が
       // 現れたりタイトルが平文に戻るチラつきを避ける。
       setTimeout(() => {
-        if (cancelBtn) cancelBtn.hidden = prevCancelHidden;
+        if (cancelBtn) {
+          cancelBtn.hidden = prevCancelHidden;
+          cancelBtn.textContent = prevCancelText;
+          cancelBtn.className = prevCancelClass;
+        }
         if (titleEl) {
           titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
           titleEl.textContent = title;
         }
       }, MODAL_ANIM_MS);
       okBtn.removeEventListener("click", onOk);
+      if (cancelBtn) cancelBtn.removeEventListener("click", onAction);
       modal.removeEventListener("mousedown", onOverlay);
       document.removeEventListener("keydown", onKey);
       resolve();
     };
     const onOk = () => cleanup();
-    const onOverlay = (e) => { if (e.target === modal) cleanup(); };
+    const onAction = async () => {
+      if (actionPending) return;
+      if (!primaryAction || typeof primaryAction.onClick !== "function") {
+        cleanup();
+        return;
+      }
+      actionPending = true;
+      try { await primaryAction.onClick(); } catch (err) { console.error("notifyDialog primaryAction error", err); }
+      actionPending = false;
+      cleanup();
+    };
+    const onOverlay = (e) => { if (e.target === modal && !actionPending) cleanup(); };
     const onKey = (e) => {
+      if (actionPending) return;
       if (e.key === "Escape" || e.key === "Enter") {
         e.preventDefault();
         cleanup();
       }
     };
     okBtn.addEventListener("click", onOk);
+    if (cancelBtn && primaryAction) cancelBtn.addEventListener("click", onAction);
     modal.addEventListener("mousedown", onOverlay);
     document.addEventListener("keydown", onKey);
     requestAnimationFrame(() => okBtn.focus());

@@ -18,6 +18,7 @@ import {
   getStrokeColor,
   getStrokeWidthPx,
   getFillColor,
+  getNewTextDirection,
   getPdfPaths,
   getTxtSource,
   onTxtSourceChange,
@@ -26,7 +27,7 @@ import {
   beginHistoryTransient,
   abortHistoryTransient,
 } from "./state.js";
-import { parsePages } from "./txt-source.js";
+import { parsePages, convertHalfToFullForVertical } from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runAiOcrForFiles, PLACE_ICON_SVG } from "./ai-ocr.js";
@@ -85,11 +86,31 @@ function countPunctTsumeCharsAI(line) {
   }
   return n;
 }
+// 【v1.x.0】縦中横の bbox 補正用カウント。
+// ai-place.js は文字数ベース（estimateLayerSize: `effective = ln.length - … - tcyPairs`）で
+// 概算するため、半角・全角どちらの TCY ペアでも「2 文字 → 1 セル」として 1 ぶん引く。
+// 自動配置時の bbox 縦長を「実描画セル数」に揃える目的（フレーム末尾の余白を解消）。
+// canvas-tools.js (measureText 経路) は別ロジックで半角/全角の差を実測補正する。
+function countTcyPairsAI(line) {
+  if (!line || line.length < 2) return 0;
+  let n = 0;
+  for (let k = 0; k < line.length - 1; ) {
+    const two = line.slice(k, k + 2);
+    if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
+      n++;
+      k += 2;
+    } else {
+      k += 1;
+    }
+  }
+  return n;
+}
 // canvas-tools.js layerRectForNew の幅・高さ計算と同一ロジック (px は PSD 座標)。
 // thick / long の安全余白 (+0.4em) も canvas-tools.js と揃える。
 // 【v1.x.0】句読点ツメ (`punctuationTsumePercent`) を long 軸にも反映:
 //   各行の effective char count = (chars - punctCount × tsume/100)。
 //   最も長い行（実 char で）の effective 長を採用。
+// 【v1.x.0】縦中横（!!/!?/！！/！？）も long 軸に反映: TCY ペアあたり 1em 引く。
 function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const dpi = psdPage.dpi ?? 72;
   const ptInPsdPx = sizePt * (dpi / 72);
@@ -99,14 +120,18 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   // 句読点ツメぶんを差し引いた最大行幅（em 単位）を計算
   const tsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
   const tsumeMag = tsumePct > 0 ? tsumePct / 100 : 0;
+  const isVertical = direction !== "horizontal";
+  // 縦中横は縦書きレイヤー + 設定 ON のときのみ bbox 計算に反映
+  const tcyEnabled = isVertical && (getDefault("tateChuYokoEnabled") !== false);
   let maxEffectiveChars = 1;
   for (const ln of String(contents ?? "").split(/\r?\n/)) {
     const punct = tsumeMag > 0 ? countPunctTsumeCharsAI(ln) : 0;
-    const effective = ln.length - punct * tsumeMag;
+    const tcyPairs = tcyEnabled ? countTcyPairsAI(ln) : 0;
+    // TCY ペア 1 個あたり 2 文字 → 1 セル幅に圧縮されるので 1em ぶん引く。
+    const effective = ln.length - punct * tsumeMag - tcyPairs;
     if (effective > maxEffectiveChars) maxEffectiveChars = effective;
   }
   const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (1.05 * maxEffectiveChars + 0.4));
-  const isVertical = direction !== "horizontal";
   const maxLong = isVertical ? psdPage.height * 0.95 : psdPage.width * 0.95;
   const long = Math.min(longRaw, maxLong);
   return {
@@ -181,7 +206,10 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   const cy = ((block.box[1] + block.box[3]) / 2) * sy;
   // 推定レイヤー矩形サイズ → top-left を中心合わせで算出
   // (canvas-tools.js: centerTopLeft = clickX - width/2, clickY - height/2)
-  const text = contents ?? "";
+  // 縦書きレイヤーは設定 verticalHalfToFullEnabled (default true) に従い、
+  // 半角英数字 (0-9 / A-Z / a-z) を全角に自動変換する。
+  // bbox 推定は変換後テキストで行うため、文字幅差は影響しない（char count ベース）。
+  const text = convertHalfToFullForVertical(contents ?? "", direction);
   // 検出フォントサイズが取れた吹き出しは見本に合わせる、取れなければデフォルトにフォールバック。
   const detectedPt = detectSizePtFromBlock(block, mokuroPage, psdPage);
   const sizePt = detectedPt ?? defaults.sizePt ?? 24;
@@ -210,6 +238,37 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   };
 }
 
+// 吹き出しに対応しない「余り TXT 段落」を PSD ページの幾何中心 (width/2, height/2)
+// に配置する。ユーザーが PSD 未読込時にテキストを追加したケース、または OCR の
+// 吹き出し検出数より原稿段落が多いケースで使う（旧仕様では `leftoverTxt` として
+// 捨てていたが、画像中央に置くことで全段落を必ず配置に乗せる）。
+// direction は吹き出し情報がないため `getNewTextDirection()` (UI トグル) を採用。
+function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
+  const direction = getNewTextDirection();
+  const text = convertHalfToFullForVertical(contents ?? "", direction);
+  const sizePt = defaults.sizePt ?? 24;
+  const { width, height } = estimateLayerSize(
+    psdPage, sizePt, text, defaults.leadingPct ?? 125, direction,
+  );
+  // PSD ページの幾何中心 (width/2, height/2) を bbox 中央に合わせる top-left に変換。
+  const x = psdPage.width / 2 - width / 2;
+  const y = psdPage.height / 2 - height / 2;
+  return {
+    psdPath: psdPage.path,
+    x,
+    y,
+    contents: text,
+    direction,
+    fontPostScriptName: defaults.fontPostScriptName,
+    sizePt,
+    leadingPct: defaults.leadingPct,
+    strokeColor: defaults.strokeColor,
+    strokeWidthPx: defaults.strokeWidthPx,
+    fillColor: defaults.fillColor,
+    sourceTxtRef,
+  };
+}
+
 // ============================================================
 // 配置プラン構築
 // ============================================================
@@ -222,7 +281,7 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
 //         bubbleCount,  // 検出吹き出し数
 //         txtCount,     // TXT ブロック数
 //         placedCount,  // 実際に配置するペア数
-//         status,       // "ok" | "warn-txt-extra" | "warn-bubble-extra" | "warn-empty-txt" | "warn-empty-bubble"
+//         status,       // "ok" | "warn-bubble-extra" | "warn-empty-txt" | "warn-empty-bubble"
 //         layers,       // NewLayer 配列 (placedCount 件)
 //         leftoverTxt,  // 余り TXT ブロック配列
 //         leftoverBubbles, // 余り吹き出しの OCR テキスト配列
@@ -242,25 +301,31 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
     const mokuro = mokuroDoc.pages[i];
     const txt = txtByPage.get(i + 1) ?? [];
     const sorted = sortBlocksMangaOrder(mokuro.blocks ?? []);
-    const placedCount = Math.min(txt.length, sorted.length);
     const layers = [];
-    for (let j = 0; j < placedCount; j++) {
-      // sourceTxtRef は TXT 編集時にレイヤー contents を追従させるための紐付け。
-      // pageNumber は 1-based、paragraphIndex はそのページ内 0-based。
-      layers.push(mapBlockToNewLayer(
-        sorted[j], mokuro, psd, txt[j], defaults,
-        { pageNumber: i + 1, paragraphIndex: j },
-      ));
+    // 全 TXT 段落を配置: sorted[j] があれば吹き出し中央、無ければ PSD ページ中央。
+    // 旧仕様は placedCount = min(txt, sorted) で余り TXT を捨てていたが、ユーザーが
+    // 入力欄から追加した段落も自動配置で拾うために全件処理に変更。
+    for (let j = 0; j < txt.length; j++) {
+      const block = sorted[j];
+      const sourceTxtRef = { pageNumber: i + 1, paragraphIndex: j };
+      if (block) {
+        layers.push(mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef));
+      } else {
+        // 余り TXT: PSD ページ中央に配置
+        layers.push(mapTxtToPageCenter(psd, txt[j], defaults, sourceTxtRef));
+      }
     }
-    const leftoverTxt = txt.slice(placedCount);
-    const leftoverBubbles = sorted.slice(placedCount).map((b) =>
+    const placedCount = txt.length;
+    // leftoverTxt は実質ゼロになるが、互換のため空配列で保持する
+    const leftoverTxt = [];
+    const leftoverBubbles = sorted.slice(txt.length).map((b) =>
       Array.isArray(b.lines) ? b.lines.join(" ") : ""
     );
     let status = "ok";
     if (sorted.length === 0 && txt.length === 0) status = "ok";
     else if (sorted.length === 0) status = "warn-empty-bubble";
     else if (txt.length === 0) status = "warn-empty-txt";
-    else if (txt.length > sorted.length) status = "warn-txt-extra";
+    // 旧 "warn-txt-extra" は廃止: 余り TXT は PSD 中央配置に変わったので警告不要。
     else if (sorted.length > txt.length) status = "warn-bubble-extra";
 
     out.pages.push({
@@ -517,8 +582,13 @@ function syncPlacedFromTxt() {
       if (!ref) continue;
       const paragraphs = txtByPage.get(ref.pageNumber);
       if (!paragraphs) continue;
-      const next = paragraphs[ref.paragraphIndex];
-      if (next == null) continue;
+      const rawNext = paragraphs[ref.paragraphIndex];
+      if (rawNext == null) continue;
+      // 縦書きレイヤーは設定 verticalHalfToFullEnabled に従い半角英数字を全角化。
+      // 原稿側は元データを保持する設計のため、レイヤー contents に変換後を書き戻す
+      // ことで原稿との見た目差分を吸収する（横書きと設定 OFF は冪等に素通し）。
+      const direction = layer.direction ?? "horizontal";
+      const next = convertHalfToFullForVertical(rawNext, direction);
       if (next === layer.contents) continue;
 
       // contents 変更で推定 width/height が変わるため、x/y をそのままにすると
@@ -529,7 +599,6 @@ function syncPlacedFromTxt() {
       if (psdPage) {
         const sizePt = layer.sizePt ?? 24;
         const leadingPct = layer.leadingPct ?? 125;
-        const direction = layer.direction ?? "horizontal";
         const oldRect = estimateLayerSize(psdPage, sizePt, layer.contents ?? "", leadingPct, direction);
         const newRect = estimateLayerSize(psdPage, sizePt, next, leadingPct, direction);
         const cx = (layer.x ?? 0) + oldRect.width / 2;

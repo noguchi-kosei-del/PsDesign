@@ -68,15 +68,3 @@ export function applyRules(text, settings) {
   }
   return out;
 }
-
-export function newRule() {
-  const id = (typeof crypto !== "undefined" && crypto.randomUUID)
-    ? crypto.randomUUID()
-    : `rule-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  return {
-    id,
-    enabled: true,
-    from: "",
-    to: "",
-  };
-}

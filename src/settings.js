@@ -12,29 +12,58 @@ export const DEFAULT_SETTINGS = {
   version: 2,
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
   pageDirectionInverted: false,
-  // 新規テキストレイヤーの初期値。アプリ起動時 / clearPages 時に state.js へ反映される。
+  // 新規テキストレイヤーの初期値 / レイアウト設定。
+  //
+  // 各キーに scope: タグを併記している。これは「設定変更時にどこへ反映されるか」を
+  // 開発者向けに明示するもの（ユーザー UI 文言ではない）。意味:
+  //   - creation-only : 新規テキストレイヤー作成時のみ参照。既存レイヤーは触らない。
+  //                     設定変更でも過去のレイヤーは旧値のまま。
+  //   - render-all    : canvas-tools.js の onSettingsChange(refreshAllOverlays) 経由で
+  //                     全 layer-box が再描画される。プレビュー反映あり。
+  //   - save-only     : Photoshop 保存時 (jsx_gen.rs) のみ参照。プレビューに変化なし。
+  //                     ※ render-all との二重指定もある（プレビュー + 保存両方）。
+  //
+  // 設計判断: 「既存レイヤーへの即時反映」は scope を引き上げる将来拡張余地あり。
+  // 現状の挙動を変えずに分類のみ明示している。
   defaults: {
-    textSize: 12,           // pt（実 pt、表示は基準PSD換算）
-    textSizeStep: 0.1,      // pt（size +/- ボタンと size-input の step。0.1 / 0.5）
-    leadingPct: 125,        // %（autoLeadingAmount）
-    strokeWidthPx: 20,      // px（フチの太さ）
-    fontPostScriptName: "", // 空文字 = 指定なし（system default）
-    showBadge: true,        // 選択中レイヤー下部のフォント名 + サイズバッジ（true: 表示 / false: 非表示）
+    // pt（実 pt、表示は基準PSD換算）。scope: creation-only
+    textSize: 12,
+    // pt（size +/- ボタンと size-input の step。0.1 / 0.5）。scope: render-all
+    // ※ tool 状態 (setTextSize の step 属性) に即時反映するため applyToolDefaults 経由
+    textSizeStep: 0.1,
+    // %（autoLeadingAmount）。scope: creation-only
+    leadingPct: 125,
+    // px（フチの太さ）。scope: creation-only
+    strokeWidthPx: 20,
+    // 空文字 = 指定なし（system default）。scope: creation-only
+    fontPostScriptName: "",
+    // 選択中レイヤー下部のフォント名 + サイズバッジ（true: 表示 / false: 非表示）。
+    // scope: render-all（refreshAllOverlays で全 layer-box の badge 有無が即時切替）
+    showBadge: true,
     // ‰（千分率）。連続記号のツメ量を group 別に保持。0 = OFF、負値（または絶対値）で詰まる。
     // 連続ランの最後の 1 文字は常に 0 のまま（後続文字との字間が詰まりすぎないように）。
+    // scope: render-all + save（プレビューと Photoshop 保存両方に反映）
     dashTrackingMille: -100,   // ダッシュ系（— ― – ‒ ‐ ‑ ー －）の連続詰め
     tildeTrackingMille: -300,  // チルダ系（〜 ～）の連続詰め
     // 縦書きの新規レイヤーで半角 !! / !? を自動的に「縦中横」(text-combine-upright) に
     // するか。Photoshop 書き戻しでも textStyleRange の tcy 属性を立てる。
+    // scope: render-all + save
     tateChuYokoEnabled: true,
     // 記号類（♡♥★☆♪♫♬♩♯♭→←↑↓〇○●△▲▽▼□■◇◆♠♣♦◎ など）を別フォントで自動置換するか。
     // ON のときプレビュー / Photoshop 書き戻し両方で symbolFontPostScriptName に置換される。
     // ユーザーが per-char で手動指定したフォントは尊重（自動置換 skip）。
+    // scope: render-all + save
     symbolFontReplaceEnabled: true,
-    symbolFontPostScriptName: "KozGoPr6N-Regular", // 小塚ゴシック Pr6N R
+    symbolFontPostScriptName: "KozGoPr6N-Regular", // 小塚ゴシック Pr6N R / scope: render-all + save
     // 句読点「、」(U+3001) と「。」(U+3002) を Photoshop 保存時にツメ N% で組む。
-    // 0 で OFF。プレビュー（CSS）には反映しない（Photoshop 専用機能）。
+    // 0 で OFF。v1.24.0 でプレビュー / bbox / 自動配置にも反映済み（render-all + save）。
+    // scope: render-all + save
     punctuationTsumePercent: 50,
+    // 縦書きレイヤーで半角の英数字 (0-9 / a-z / A-Z) を全角 (０-９ / ａ-ｚ / Ａ-Ｚ) に
+    // 自動変換するか。サイドバー / エディタモードの新規入力、自動配置の contents 生成、
+    // 自動配置済みレイヤーの TXT 追従同期に共通適用される（横書きと既存レイヤーには無影響）。
+    // scope: creation-only（設定 ON でも過去に半角で配置されたレイヤーはそのまま）
+    verticalHalfToFullEnabled: true,
   },
   shortcuts: {
     save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
@@ -103,9 +132,6 @@ function migrate(old) {
     }
     if (typeof d.dashTrackingMille === "number" && Number.isFinite(d.dashTrackingMille)) {
       out.defaults.dashTrackingMille = d.dashTrackingMille;
-    } else if (typeof d.repeatedDashTrackingMille === "number" && Number.isFinite(d.repeatedDashTrackingMille)) {
-      // 旧キー（v1.10.0 開発時に存在）からの自動移行。チルダは新規 default に従う。
-      out.defaults.dashTrackingMille = d.repeatedDashTrackingMille;
     }
     if (typeof d.tildeTrackingMille === "number" && Number.isFinite(d.tildeTrackingMille)) {
       out.defaults.tildeTrackingMille = d.tildeTrackingMille;
@@ -122,6 +148,9 @@ function migrate(old) {
     if (typeof d.punctuationTsumePercent === "number" && Number.isFinite(d.punctuationTsumePercent)) {
       // 0-100 にクランプ
       out.defaults.punctuationTsumePercent = Math.max(0, Math.min(100, d.punctuationTsumePercent));
+    }
+    if (typeof d.verticalHalfToFullEnabled === "boolean") {
+      out.defaults.verticalHalfToFullEnabled = d.verticalHalfToFullEnabled;
     }
   }
   if (old.shortcuts && typeof old.shortcuts === "object") {
