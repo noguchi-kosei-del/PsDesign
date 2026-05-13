@@ -1596,7 +1596,7 @@ function bindRubyTool() {
     withHistoryTransient(() => {
       setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, text, type, scale);
     });
-    // 編集中 DOM への即時反映（dotted underline インジケータ）。
+    // 編集中 DOM への即時反映（実 DOM ルビ wrap を inner に挿入）。
     applyEditModeRubyToRange(sel.start, sel.end, text, type, scale);
     refreshAllOverlays();
     rebuildLayerList();
@@ -1743,14 +1743,16 @@ function bindLeadingTool() {
   inc.addEventListener("click", () => adjustLeading(+5));
 
   // in-place 編集の context 変化に追従して input/ボタンの表示を更新。
-  // context が立つ → カーソル行の per-line 値（無ければ global）を表示し対象行ラベル ON。
+  // context が立つ → カーソル行の per-line 値（無ければ global）を表示。
   // context が消える → global 値に戻す。
+  // 旧 `syncRuby(leadingPct)` 呼出は v1.16.0 期の「leadingPct >= 150 でルビトグル active」
+  // 機構の残骸で、ルビ panel が独自 state（charRubies）に移行した時点で dead code 化していた
+  // が、未参照のままコードに残って `ReferenceError` を起こしていた。撤去済み。
   onEditingContextChange((ec) => {
     if (ec) {
       syncLeadingInputForEditingContext();
     } else {
       input.value = String(getLeadingPct());
-      syncRuby(getLeadingPct());
     }
   });
 }

@@ -189,12 +189,23 @@ export function applyEditModeStyleToRange(start, end, styleProps) {
   return true;
 }
 
-// 【v1.26.0】in-place 編集中のレイヤーで「ルビプレビュー」を表示する。
-// contenteditable 内に本物の <ruby> を挿入すると innerText に rt 内容も含まれて
-// contents tracking が壊れるため、データ属性経由で ::after 疑似要素にルビを描画する方式で
-// プレビューを実現する。span 自身は親文字 plain text のみを持つので innerText は変化しない。
+// 【v1.27.0】in-place 編集中のレイヤーで「ルビプレビュー」を表示する。
+// 旧 v1.26.0 では `<span class="ruby-edit-pending" data-ruby-text="rt">親文字</span>` +
+// CSS `::after { content: attr(data-ruby-text) }` の疑似要素方式でプレビューしていたが、
+// contenteditable 内で caret 移動 / 文字選択を解除すると Chromium が ::after の描画を
+// 破棄するケースが発生し、「文字選択を解除した瞬間にルビが消える」不具合が出ていた。
 //
-// finalize 後の renderInnerText 再構築で本物の <ruby> 構造（per-char 装飾を保持）に置き換わる。
+// これを解消するため、finalize 後の `renderInnerText` が使う本番の実 DOM 構造をそのまま
+// 編集中プレビューでも使う:
+//   <span class="ruby-wrap ruby-edit-pending">
+//     <span class="ruby-base">親文字 (or per-char 装飾 span)</span>
+//     <span class="ruby-text" contenteditable="false">rt</span>
+//   </span>
+// .ruby-text は contenteditable="false" にして caret の進入と readContents による
+// state.contents 破壊を両方とも防ぐ（readContents 側でも .ruby-text の text node を skip）。
+//
+// finalize 後の renderInnerText 再構築でも同じ DOM 構造に置き換わるため、編集中 → finalize
+// での「見た目の連続性」も担保される。
 //
 // 引数: start, end (char 範囲)、rubyText, rubyType, rubyScale
 // 戻り値: 編集中レイヤーが無い / range 解決失敗で false。
@@ -216,29 +227,91 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
     range.setEnd(endPos.node, endPos.offset);
   } catch { return false; }
 
-  // 範囲を span でラップ。span の textContent は親文字のまま（innerText に rt 内容を含めない）。
-  // ルビは ::after の content: attr(data-ruby-text) で疑似要素として描画。
-  const span = document.createElement("span");
-  span.className = "ruby-edit-pending";
-  span.setAttribute("data-ruby-text", rubyText);
+  // 既存の `.ruby-wrap` が範囲に交差する場合は事前に unwrap（親の中身を外に出して
+  // wrap 要素自体を削除）して、新規 wrap を nest させない。state.charRubies 側は
+  // setCharRubiesRange の dropOverlapping で既にクリーンになっているので、DOM 側
+  // だけ揃える必要がある。
+  unwrapRubyInRange(inner, range);
+  // 範囲が unwrap で text node の状態が変わった可能性があるため char index から
+  // 再解決する（unwrap は文字を消さないので start/end char index は不変）。
+  const startPos2 = charIndexToNodeOffset(inner, start);
+  const endPos2 = charIndexToNodeOffset(inner, end);
+  if (!startPos2 || !endPos2) return false;
+  try {
+    range.setStart(startPos2.node, startPos2.offset);
+    range.setEnd(endPos2.node, endPos2.offset);
+  } catch { return false; }
+
+  // 本番と同じ DOM 構造を組む:
+  //   <span class="ruby-wrap ruby-edit-pending">
+  //     <span class="ruby-base">親文字 (or 既存の per-char 装飾 span)</span>
+  //     <span class="ruby-text" contenteditable="false">rt</span>
+  //   </span>
+  // ruby-edit-pending クラスを併記する理由: 既存の `inner.querySelector(".ruby-edit-pending")`
+  // ガード（applyConversionToInner 内）と互換性を保つため。
+  const wrap = document.createElement("span");
+  wrap.className = "ruby-wrap ruby-edit-pending";
   if (rubyType === "mono" || rubyType === "group") {
-    span.setAttribute("data-ruby-type", rubyType);
+    wrap.setAttribute("data-ruby-type", rubyType);
   }
   if (Number.isFinite(rubyScale) && rubyScale > 0) {
-    span.style.setProperty("--ruby-scale", `${rubyScale / 100}em`);
+    wrap.style.setProperty("--ruby-scale", `${rubyScale / 100}em`);
   }
+  // 親文字部分: range の内容を extractContents で取り出して .ruby-base に詰める。
+  const base = document.createElement("span");
+  base.className = "ruby-base";
   try {
-    range.surroundContents(span);
-  } catch {
-    try {
-      const contents = range.extractContents();
-      span.appendChild(contents);
-      range.insertNode(span);
-    } catch { return false; }
-  }
-  // 親 inner の overflow:hidden が ::after の絶対配置を切り取らないように has-ruby クラスを付ける。
+    const contents = range.extractContents();
+    base.appendChild(contents);
+    wrap.appendChild(base);
+  } catch { return false; }
+  // ふりがな部分: 実 DOM の <span class="ruby-text"> として追加。
+  // contenteditable="false" で caret 進入を禁止 + readContents 側で除外する。
+  const rt = document.createElement("span");
+  rt.className = "ruby-text";
+  rt.contentEditable = "false";
+  rt.setAttribute("aria-hidden", "true");
+  rt.textContent = rubyText;
+  wrap.appendChild(rt);
+  try {
+    range.insertNode(wrap);
+  } catch { return false; }
+  // 親 inner の overflow:hidden が .ruby-text の絶対配置を切り取らないように has-ruby クラスを付ける。
   inner.classList.add("has-ruby");
   return true;
+}
+
+// 【v1.27.0】range と交差する既存 `.ruby-wrap` を inner DOM から unwrap する。
+// 「unwrap」= wrap 自身を外して .ruby-base の子要素を wrap の位置に移動 + .ruby-text を削除。
+// 結果として親文字（plain text もしくは per-char スタイル付き span）だけが残り、
+// その後の extractContents が予想通りに動作する。
+//
+// 「交差する wrap」の検出: wrap の bounding range (wrap 全体を覆う Range) と引数 range が
+// 交差する場合に unwrap 対象とする。range が wrap の内側に完全に収まっているケースも
+// 含まれる（user が既存 ruby を再適用するケース）。
+function unwrapRubyInRange(inner, range) {
+  if (!inner || !range) return;
+  const wraps = Array.from(inner.querySelectorAll(".ruby-wrap"));
+  for (const wrap of wraps) {
+    const wrapRange = document.createRange();
+    try { wrapRange.selectNode(wrap); } catch { continue; }
+    // range と wrapRange が交差するか
+    const intersects =
+      range.compareBoundaryPoints(Range.END_TO_START, wrapRange) < 0
+      && range.compareBoundaryPoints(Range.START_TO_END, wrapRange) > 0;
+    if (!intersects) { wrapRange.detach?.(); continue; }
+    // .ruby-base の中身を wrap の親に移動（wrap 位置に挿入）して wrap を削除。
+    const parent = wrap.parentNode;
+    if (!parent) continue;
+    const base = wrap.querySelector(":scope > .ruby-base");
+    if (base) {
+      while (base.firstChild) parent.insertBefore(base.firstChild, wrap);
+    }
+    parent.removeChild(wrap);
+  }
+  // unwrap 後に隣接 text node の正規化（merge）を行う。range の boundary 位置が
+  // text node 内 offset に正しく解決されるようにするため。
+  inner.normalize();
 }
 
 // inner 内の text node を順に走査し、char index に対応する (text node, offset) を返す。
@@ -1601,9 +1674,13 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // writing-mode: vertical-rl + text-orientation: mixed で <br> の column break が
     // 期待通り発火しないケース（行が前の column に続いてしまう）があるため、
     // white-space: pre-wrap が必ず尊重する \n text node に統一する。
+    // 【v1.27.0】charRubies 引数の渡し忘れバグ修正: 旧コードはこの経路で第 13 引数を
+    // 省略していたため、per-line leadingPct override 無しのレイヤー（大多数）で finalize
+    // 後の rebuild 時にルビが描画されない不具合があった。上の overrides 経路と同じく
+    // charRubies を渡すように修正。
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createTextNode("\n"));
-      appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
     }
   }
 }
@@ -2624,7 +2701,22 @@ function startContentEditableEdit(ctx, target, options = {}) {
   // 一致する必要があるため）。
   const readContents = () => {
     let out = "";
-    const walker = document.createTreeWalker(inner, NodeFilter.SHOW_TEXT);
+    // 【v1.27.0】.ruby-text（編集中プレビューのふりがな）の text node は state.contents から除外。
+    // これがないと「親（ふりがな）」のふりがな文字が contents に紛れ込み、その後の onInput で
+    // 巨大な textShift 差分として誤検出 → shiftCharMap が壊れて per-char 属性が崩壊する。
+    // .ruby-text は contenteditable="false" なので caret も入らない（ユーザーが触れない）。
+    const walker = document.createTreeWalker(inner, NodeFilter.SHOW_TEXT, {
+      acceptNode(node) {
+        let p = node.parentNode;
+        while (p && p !== inner) {
+          if (p.classList && p.classList.contains("ruby-text")) {
+            return NodeFilter.FILTER_REJECT;
+          }
+          p = p.parentNode;
+        }
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    });
     let node;
     while ((node = walker.nextNode())) {
       out += node.textContent;
@@ -2657,14 +2749,18 @@ function startContentEditableEdit(ctx, target, options = {}) {
     // 【v1.26.0】ruby-edit-pending span（applyEditModeRubyToRange が挿入）は許容
     // non-text node として扱う。これがないと ruby を振った直後に textContent 書換で
     // span が破壊され、ルビプレビューが消える。
+    // 【v1.27.0】ruby を実 DOM 化（.ruby-wrap）に変更。互換のため .ruby-edit-pending と
+    // .ruby-wrap の両方を許容ノードとして扱う（applyEditModeRubyToRange は両方の class
+    // を併記して挿入する）。
     const allAllowedNodes = Array.from(inner.childNodes).every(
       (n) => n.nodeType === Node.TEXT_NODE
         || (n.nodeType === Node.ELEMENT_NODE && n.classList
-            && n.classList.contains("ruby-edit-pending")),
+            && (n.classList.contains("ruby-edit-pending")
+                || n.classList.contains("ruby-wrap"))),
     );
     const innerTextStripped = inner.textContent.replace(/​/g, "");
-    // ruby-edit-pending を持つ inner は plain text 化を完全 skip（変換は ruby 削除後に再実行可能）。
-    const hasRubyPending = inner.querySelector(".ruby-edit-pending");
+    // ruby を持つ inner は plain text 化を完全 skip（変換は ruby 削除後に再実行可能）。
+    const hasRubyPending = inner.querySelector(".ruby-edit-pending, .ruby-wrap");
     if (hasRubyPending) return false;
     if (allAllowedNodes && innerTextStripped === converted) return false;
     // caret 位置を char offset で保持してから DOM を書換える

@@ -4401,3 +4401,84 @@ Rust 側:
 > - 旧: PSD 焼き付きは案 A（白フィル）で frameFX が残る → 新: 案 G ハイブリッド（psd.canvas ベース + 非表示レイヤー bbox を visibleCanvas で部分上書き + `isRectMostlyWhite` ガード + per-layer DILATE = stroke + 4）
 > - 旧: 縦中横は新規レイヤーのみ + 全角ペア検出はするが Photoshop で合成 glyph 化されないケースあり → 新: 既存レイヤーにも適用 + `applyTateChuYoko` 冒頭で全角→半角変換して `textItem.contents` を上書き、char index 1:1 で per-char 系には影響なし
 
+---
+
+## v1.27.0: ルビ消失バグ修正（in-place 編集 → 編集モード終了でルビが消える問題）+ ルビ表示位置タイト化
+
+### 概要
+
+v1.26.0 で実装したルビ機能 (per-char `charRubies`) に、**「ルビを振った後、編集モードを抜けると視覚的にルビが完全に消失する」** 致命的バグを発見・修正。バグの根本原因は 2 段階で、(1) 編集中プレビューの DOM 構造が `::after` 疑似要素方式で contenteditable 内の caret 操作に脆弱だった点、(2) 非編集レイヤー再描画パス (`renderInnerText`) で `appendLineWithTracking` への引数渡し漏れによりルビ DOM が生成されなかった点。**(2) が本命の核**で、ユーザーが per-line 行間 override を設定していない限り全レイヤーで発症していた。加えて in-edit プレビューの実 DOM 化 (Fix-A) + ルビ表示位置を親文字に密着させるタイト化、v1.16.0 期の dead code (`syncRuby`) 撤去を含む。
+
+### A. 致命バグ修正: `renderInnerText` の `charRubies` 引数渡し漏れ
+
+A1. **症状**: PsDesign で文字を選択 → ルビ panel から適用 → 編集モードを抜けると、ふりがな（rt 部分）が完全に表示されなくなる。state 上は `charRubies` が保存されているが描画されない。
+
+A2. **根本原因** ([src/canvas-tools.js renderInnerText](src/canvas-tools.js)): 内部で `appendLineWithTracking` を 2 経路（per-line `lineLeadings` override **あり** / **なし**）で呼ぶが、override **なし**経路（旧 1711 行目）で **`charRubies` 引数が抜けていた**:
+
+```diff
+-       appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag);
++       appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
+```
+
+ほとんどのレイヤーには行間 override が無いのでこちらの経路を通り、`appendRubySegment` が呼ばれず → finalize 後の rebuild 時にルビ DOM が一切生成されなかった。override **あり**経路（1701 行目）では正しく渡っていたため、per-line leading をいじっていたごく一部のレイヤーでのみ正常動作していた。
+
+A3. **v1.26.0 から潜在していたバグ**: ルビ機能リリース時から存在していたが、編集中は `applyEditModeRubyToRange` の `::after` 疑似要素で見えていたため、ユーザーは「振った直後は見えたが終了で消える」UX 上の現象として認識し、根本原因が render 側にあると気付かなかった。今回の Fix-A で in-edit プレビューも実 DOM に変わったため、finalize 後の rebuild も同じ実 DOM を通る必要があり、この引数渡し漏れが顕在化した。
+
+### B. Fix-A: 編集中プレビューを `::after` 疑似要素 → 実 DOM `<span class="ruby-text">` 化
+
+B1. **旧実装の問題** ([src/canvas-tools.js applyEditModeRubyToRange](src/canvas-tools.js)):
+- 旧仕様は `<span class="ruby-edit-pending" data-ruby-text="ひ">親文字</span>` + CSS `::after { content: attr(data-ruby-text) }` の疑似要素方式でルビをプレビュー
+- contenteditable 内で **caret 移動 / 文字選択を解除すると Chromium が `::after` の描画を破棄する** ケースが頻発（特に inline 要素の境界に caret が来たとき）
+- 結果: ルビを振った直後は表示されるが、ユーザーが文字選択を解除した瞬間にプレビューが消える
+
+B2. **新実装**: finalize 後の `renderInnerText` が使う本番の実 DOM 構造を、編集中プレビューでも同じく使うように変更:
+
+```html
+<span class="ruby-wrap ruby-edit-pending">
+  <span class="ruby-base">親文字 (or per-char 装飾 span)</span>
+  <span class="ruby-text" contenteditable="false" aria-hidden="true">rt</span>
+</span>
+```
+
+- `.ruby-text` に `contenteditable="false"` を付与 → caret が rt に進入できない
+- `aria-hidden="true"` でスクリーンリーダーから除外（rt は装飾要素）
+- 編集中 → finalize 後の DOM 構造が同一なので **「見た目の連続性」も担保**（旧仕様では ::after → 本番 DOM への切替で 1 フレーム揺れがあった）
+
+B3. **`readContents` の rt 除外** ([src/canvas-tools.js](src/canvas-tools.js)): `TreeWalker` の `acceptNode` で `.ruby-text` 内の text node を `FILTER_REJECT` するように変更。これがないと rt 文字が state.contents に紛れ込み、その後の `onInput` で巨大な textShift 差分として誤検出 → `shiftCharMap` / `shiftRubyMap` が壊れて per-char 属性が崩壊する。
+
+B4. **`applyConversionToInner` の許容ノード判定拡張**: `allAllowedNodes` の条件に `.ruby-wrap` を追加し、ruby が含まれる inner で半角→全角変換による DOM 強制書換が起きないように。既存の `hasRubyPending` 早期 return ガード（`.ruby-edit-pending, .ruby-wrap` 両対応）と二重で防御。
+
+B5. **`unwrapRubyInRange` ヘルパー追加**: ユーザーが既存ルビと重なる範囲に再適用したときに wrap が入れ子になるエッジケース対策。新規 wrap を挿入する前に交差する既存 wrap を unwrap (.ruby-base 子要素を親に戻して wrap 要素を削除) + `inner.normalize()` で text node 連結を整理。
+
+### C. dead code 撤去: `syncRuby` ReferenceError
+
+C1. **症状**: 編集モードを抜ける際に `Uncaught ReferenceError: syncRuby is not defined at main.js:1765` が発生し、後続の処理がスキップされていた。
+
+C2. **原因** ([src/main.js bindLeadingTool](src/main.js)): v1.16.0 期に「leadingPct >= 150 でルビトグル active 表示」という機構の sync 関数として `syncRuby` を `onEditingContextChange` listener から呼んでいたが、ルビ panel が独自 state (`charRubies`) に移行した時点で sync 関数の実装は撤去された一方、**呼び出し側だけが listener に残って ReferenceError を起こしていた**。
+
+C3. **修正**: 該当の呼出 1 行を削除（ec === null 分岐の `syncRuby(getLeadingPct());`）。新ルビ系の sync は `setCharRubiesRange` → `setEdit` 経路で state 連動するので明示的な sync 関数は不要。
+
+### D. ルビ表示位置のタイト化
+
+D1. **要望**: 親文字とふりがな（rt）の間に余白がありすぎて紙面写植らしくないため、親文字に密着するように寄せる。
+
+D2. **CSS 変更** ([src/styles.css](src/styles.css) `.ruby-text`):
+- **横書き**: `transform: translateX(-50%)` + `margin-bottom: 1px` → `transform: translate(-50%, 0.18em)` + `margin-bottom: 0`。translateY 正方向で親文字側に **0.18em 寄せる**
+- **縦書き** (`.layer-box[data-direction="vertical"] .ruby-text`): `transform: translateY(-50%)` + `margin-left: 2px` → `transform: translate(-0.18em, -50%)` + `margin-left: 0`。translateX 負方向で親文字側に **0.18em 寄せる**
+- `em` 単位で寄せているため、フォントサイズが変わっても親文字との距離感が維持される
+
+### E. CSS クリーンアップ
+
+E1. **`.ruby-edit-pending::after` ルール群を撤去** ([src/styles.css](src/styles.css)): 約 30 行の dead code を削除。`.ruby-edit-pending` クラスは新 DOM 構造 (`<span class="ruby-wrap ruby-edit-pending">`) で「編集中に追加された wrap」を示す薄い青背景の見た目だけを残す。`background: rgba(0, 120, 212, 0.12); border-radius: 2px;` の 2 行に圧縮。
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.27.0`** に揃え。Cargo.lock も自動追従。
+
+> **構造変更まとめ**:
+> - 旧: 編集中ルビプレビュー = `::after` 疑似要素方式、caret 操作で消える + state には保存されているが finalize 後 rebuild の引数渡し漏れで描画されない（v1.26.0 で同時発生していた 2 つの問題）→ 新: in-edit / non-editing 両方とも本番の実 DOM 構造 `<span class="ruby-wrap"><span class="ruby-base">親</span><span class="ruby-text">rt</span></span>` で統一、`appendLineWithTracking` 呼出に `charRubies` を確実に渡す
+> - 旧: `.ruby-text` の caret が contenteditable で揺れる可能性 → 新: `contenteditable="false"` で caret 進入禁止、`readContents` の TreeWalker `FILTER_REJECT` で state.contents 汚染も防止
+> - 旧: 既存ルビと重なる範囲に再適用すると wrap が入れ子化 → 新: `unwrapRubyInRange` で事前に交差 wrap を unwrap してから新 wrap を挿入、Range API + normalize() で text node 整合
+> - 旧: `syncRuby` 未定義関数の呼出が listener に残って finalize 時に ReferenceError → 新: 該当行を削除（v1.16.0 期 dead code）
+> - 旧: ルビ表示位置に `margin-bottom: 1px` / `margin-left: 2px` の余白あり → 新: `em` 単位 transform で `0.18em` 親文字側にシフト、紙面写植に近いタイトな表示
+

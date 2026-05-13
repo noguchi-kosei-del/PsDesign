@@ -650,60 +650,36 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   pointer-events: none;
   white-space: nowrap;
   user-select: none;
-  /* 横書き既定: 親文字の上、横中心揃え */
+  /* 横書き既定: 親文字の上、横中心揃え。
+     【v1.27.0】親文字との距離を圧縮: bottom: 100% から少しだけ親側にめり込ませる
+     (translateY で正方向) ことで、紙面写植に近いタイトな ruby 表示にする。 */
   bottom: 100%;
   left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 1px;
+  transform: translate(-50%, 0.18em);
+  margin-bottom: 0;
 }
-/* 縦書きの場合、.ruby-text を親の右側に配置 */
+/* 縦書きの場合、.ruby-text を親の右側に配置。
+   【v1.27.0】margin-left を撤去し translateX (親文字側へ -0.18em シフト) で親に密着させる。 */
 .layer-box[data-direction="vertical"] .ruby-text {
   bottom: auto;
   left: 100%;
   top: 50%;
-  transform: translateY(-50%);
+  transform: translate(-0.18em, -50%);
   margin-bottom: 0;
-  margin-left: 2px;
+  margin-left: 0;
   writing-mode: vertical-rl;
 }
 
-/* 【v1.26.0】in-place 編集中の「ルビプレビュー」。<ruby> 本体は contenteditable 内で
-   innerText に rt 内容を含めてしまい contents tracking が壊れるため、データ属性 + ::after
-   疑似要素方式でプレビューする。span 自身は親文字 plain text のみを持つ。
-   横書きでは親文字の上、縦書き（vertical-rl）では親文字の右に小さく表示。 */
+/* 【v1.27.0】in-place 編集中の「ルビプレビュー」。
+   旧 v1.26.0 では `<span class="ruby-edit-pending" data-ruby-text="rt">` + `::after { content: attr(...) }`
+   の疑似要素方式だったが、contenteditable 内で caret 移動 / 文字選択解除のたびに Chromium が
+   ::after の レンダリングを破棄する不具合が確認されたため廃止。
+   現在は finalize 後と同じ実 DOM 構造 `<span class="ruby-wrap ruby-edit-pending">`
+   `<span class="ruby-base">親</span><span class="ruby-text">rt</span></span>` を使う。
+   .ruby-edit-pending クラスは「編集中に追加された wrap」を示す薄い青背景の見た目だけを持つ。 */
 .ruby-edit-pending {
-  position: relative;
   background: rgba(0, 120, 212, 0.12);
   border-radius: 2px;
-}
-.ruby-edit-pending::after {
-  content: attr(data-ruby-text);
-  position: absolute;
-  font-size: var(--ruby-scale, 0.5em);
-  line-height: 1;
-  font-weight: normal;
-  color: inherit;
-  pointer-events: none;
-  white-space: nowrap;
-  user-select: none;
-  /* 横書き既定: 親文字の上、横中心揃え */
-  bottom: 100%;
-  left: 50%;
-  transform: translateX(-50%);
-  margin-bottom: 1px;
-}
-/* 縦書き（new-layer-text / existing-layer-text に writing-mode: vertical-rl が当たる）の場合、
-   ::after を親の「右側」に配置する。CSS で writing-mode を直接判定できないため、layer-box
-   の data-direction 属性で分岐。 */
-.layer-box[data-direction="vertical"] .ruby-edit-pending::after {
-  bottom: auto;
-  left: 100%;
-  top: 50%;
-  transform: translateY(-50%);
-  margin-bottom: 0;
-  margin-left: 2px;
-  /* 縦書きで表示時もルビ自体を縦書きにする */
-  writing-mode: vertical-rl;
 }
 
 /* フチのサムネ（なし / 白 / 黒）：3 つの丸スウォッチを横並び表示。 */

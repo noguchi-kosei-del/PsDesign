@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "psdesign"
-version = "1.26.0"
+version = "1.27.0"
 dependencies = [
  "dirs 5.0.1",
  "image",
