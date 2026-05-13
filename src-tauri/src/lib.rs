@@ -7,6 +7,16 @@ mod tachimi;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+// 【v1.26.0】ルビ 1 件分のエントリ。state.js の charRubies スキーマと対応。
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RubyEntry {
+    pub end: i64,
+    pub text: String,
+    #[serde(rename = "type")]
+    pub ruby_type: String, // "mono" | "group"
+    pub scale: f64,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LayerEdit {
     #[serde(rename = "layerId")]
@@ -45,6 +55,9 @@ pub struct LayerEdit {
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     #[serde(rename = "charBolds", default)]
     pub char_bolds: Option<HashMap<String, bool>>,
+    // 【v1.26.0】文字ごとのルビ。start index をキー、value は {end, text, type, scale}。
+    #[serde(rename = "charRubies", default)]
+    pub char_rubies: Option<HashMap<String, RubyEntry>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -80,6 +93,9 @@ pub struct NewLayer {
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     #[serde(rename = "charBolds", default)]
     pub char_bolds: Option<HashMap<String, bool>>,
+    // 【v1.26.0】文字ごとのルビ。start index をキー、value は {end, text, type, scale}。
+    #[serde(rename = "charRubies", default)]
+    pub char_rubies: Option<HashMap<String, RubyEntry>>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

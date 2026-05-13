@@ -368,6 +368,107 @@ export function getCharBold(psdPath, layerIdOrTempId, charIndex) {
   return e?.charBolds?.[charIndex];
 }
 
+// ===== 【v1.26.0】文字ごとのルビ（per-char ruby）=====
+// スキーマ: { "<startIndex>": {end, text, type:"mono"|"group", scale:50} }。
+// start index をキー、range 全体を 1 件で保持する（他の per-char API とは異なる形式）。
+// setCharRubiesRange: from..to に被る既存エントリを drop し、text が空文字なら何も書き込まない
+// （削除のみ）、text が非空なら {[from]: {end:to, text, type, scale}} を追加。
+function normalizeCharRubiesMap(map) {
+  if (!map || typeof map !== "object") return {};
+  const out = {};
+  for (const k of Object.keys(map)) {
+    const start = Number(k);
+    const entry = map[k];
+    if (!Number.isFinite(start) || !entry || typeof entry !== "object") continue;
+    if (typeof entry.text !== "string" || entry.text.length === 0) continue;
+    const end = Number(entry.end);
+    if (!Number.isFinite(end) || end <= start) continue;
+    out[String(start)] = {
+      end,
+      text: entry.text,
+      type: entry.type === "mono" ? "mono" : "group",
+      scale: Number.isFinite(Number(entry.scale)) ? Number(entry.scale) : 50,
+    };
+  }
+  return out;
+}
+
+function dropOverlapping(map, from, to) {
+  const out = {};
+  for (const k of Object.keys(map)) {
+    const start = Number(k);
+    const entry = map[k];
+    const end = Number(entry.end);
+    // 重複: [start, end) と [from, to) が交差していれば drop
+    if (start < to && end > from) continue;
+    out[String(start)] = entry;
+  }
+  return out;
+}
+
+export function setCharRubiesRange(psdPath, layerIdOrTempId, from, to, text, type, scale) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  const ttxt = typeof text === "string" ? text : "";
+  const rtype = type === "mono" ? "mono" : "group";
+  const rscale = Number.isFinite(Number(scale)) ? Number(scale) : 50;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    let cur = normalizeCharRubiesMap(state.newLayers[idx].charRubies);
+    cur = dropOverlapping(cur, from, to);
+    if (ttxt.length > 0) {
+      cur[String(from)] = { end: to, text: ttxt, type: rtype, scale: rscale };
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], charRubies: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    let cur = normalizeCharRubiesMap(existing.charRubies);
+    cur = dropOverlapping(cur, from, to);
+    if (ttxt.length > 0) {
+      cur[String(from)] = { end: to, text: ttxt, type: rtype, scale: rscale };
+    }
+    setEdit(psdPath, layerIdOrTempId, { charRubies: cur });
+  }
+}
+
+export function getCharRubies(psdPath, layerIdOrTempId) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.charRubies ?? {};
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  return e?.charRubies ?? {};
+}
+
+// 指定 char index を完全に覆う ruby エントリを返す（無ければ null）。
+export function getCharRubyAt(psdPath, layerIdOrTempId, charIndex) {
+  const map = getCharRubies(psdPath, layerIdOrTempId);
+  for (const k of Object.keys(map)) {
+    const start = Number(k);
+    const entry = map[k];
+    if (!Number.isFinite(start) || !entry) continue;
+    if (charIndex >= start && charIndex < Number(entry.end)) {
+      return { start, end: Number(entry.end), text: entry.text, type: entry.type, scale: entry.scale };
+    }
+  }
+  return null;
+}
+
+// 範囲 [from, to) と交差する ruby エントリがあるか判定。
+export function rangeHasAnyRuby(psdPath, layerIdOrTempId, from, to) {
+  const map = getCharRubies(psdPath, layerIdOrTempId);
+  for (const k of Object.keys(map)) {
+    const start = Number(k);
+    const entry = map[k];
+    if (!Number.isFinite(start) || !entry) continue;
+    const end = Number(entry.end);
+    if (start < to && end > from) return true;
+  }
+  return false;
+}
+
 export function getEditingContext() { return state.editingContext; }
 export function setEditingContext(ctx) {
   state.editingContext = ctx ?? null;
@@ -684,6 +785,8 @@ export function addNewLayer({
   leadingPct,
   syntheticBold,
   sourceTxtRef,
+  autoFontSwitched,
+  autoFontSwitchBucket,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -714,10 +817,23 @@ export function addNewLayer({
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     // 値あり → layer の syntheticBold より優先。値なし → layer 値にフォールバック。
     charBolds: {},
+    // 【v1.26.0 ルビ】文字ごとのルビ。スキーマは他の per-char とは異なり「start index を
+    // キーに range 全体を 1 件で保持」: { "<start>": {end, text, type:"mono"|"group", scale:50} }。
+    // overlap は禁止（setCharRubiesRange で正規化）。プレビューは <ruby><rt>...</rt></ruby>
+    // タグで描画、Photoshop 保存時は jsx_gen.rs の applyRubies で親レイヤーの直前に新規ルビ
+    // レイヤーを追加する。
+    charRubies: {},
     // 自動配置 (ai-place.js) で生成されたレイヤーは元 TXT 段落への参照を持つ。
     // { pageNumber, paragraphIndex } を保持し、後から TXT が編集されたときに
     // syncPlacedFromTxt が contents を追従させる。手動配置レイヤーは null。
     sourceTxtRef: sourceTxtRef ?? null,
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置で背景/ウニ判定により中丸ゴシック等に
+    // フォント自動切替された目印。ビューア / レイヤーリスト / 原稿テキスト で色強調するための
+    // UI 用フラグ。手動配置 = false。
+    autoFontSwitched: autoFontSwitched === true,
+    // 0..5 の bucket index (10% 刻み)。-1 は未切替 / 算出不能。
+    // CSS 側で auto-font-bucket-N クラス → 6 段階の色グラデーション。
+    autoFontSwitchBucket: Number.isInteger(autoFontSwitchBucket) ? autoFontSwitchBucket : -1,
   };
   state.newLayers.push(layer);
   pushHistorySnapshot();

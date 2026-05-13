@@ -189,6 +189,58 @@ export function applyEditModeStyleToRange(start, end, styleProps) {
   return true;
 }
 
+// 【v1.26.0】in-place 編集中のレイヤーで「ルビプレビュー」を表示する。
+// contenteditable 内に本物の <ruby> を挿入すると innerText に rt 内容も含まれて
+// contents tracking が壊れるため、データ属性経由で ::after 疑似要素にルビを描画する方式で
+// プレビューを実現する。span 自身は親文字 plain text のみを持つので innerText は変化しない。
+//
+// finalize 後の renderInnerText 再構築で本物の <ruby> 構造（per-char 装飾を保持）に置き換わる。
+//
+// 引数: start, end (char 範囲)、rubyText, rubyType, rubyScale
+// 戻り値: 編集中レイヤーが無い / range 解決失敗で false。
+export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubyScale) {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return false;
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return false;
+  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  if (!inner) return false;
+  if (typeof rubyText !== "string" || rubyText.length === 0) return false;
+
+  const startPos = charIndexToNodeOffset(inner, start);
+  const endPos = charIndexToNodeOffset(inner, end);
+  if (!startPos || !endPos) return false;
+
+  const range = document.createRange();
+  try {
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+  } catch { return false; }
+
+  // 範囲を span でラップ。span の textContent は親文字のまま（innerText に rt 内容を含めない）。
+  // ルビは ::after の content: attr(data-ruby-text) で疑似要素として描画。
+  const span = document.createElement("span");
+  span.className = "ruby-edit-pending";
+  span.setAttribute("data-ruby-text", rubyText);
+  if (rubyType === "mono" || rubyType === "group") {
+    span.setAttribute("data-ruby-type", rubyType);
+  }
+  if (Number.isFinite(rubyScale) && rubyScale > 0) {
+    span.style.setProperty("--ruby-scale", `${rubyScale / 100}em`);
+  }
+  try {
+    range.surroundContents(span);
+  } catch {
+    try {
+      const contents = range.extractContents();
+      span.appendChild(contents);
+      range.insertNode(span);
+    } catch { return false; }
+  }
+  // 親 inner の overflow:hidden が ::after の絶対配置を切り取らないように has-ruby クラスを付ける。
+  inner.classList.add("has-ruby");
+  return true;
+}
+
 // inner 内の text node を順に走査し、char index に対応する (text node, offset) を返す。
 function charIndexToNodeOffset(rootEl, charIndex) {
   let remaining = Math.max(0, charIndex);
@@ -466,7 +518,7 @@ export function getExistingLayerEffectiveSizePt(page, layer, edit) {
   return declaredSizePt ?? 24;
 }
 
-function layerRectForExisting(page, layer, edit) {
+export function layerRectForExisting(page, layer, edit) {
   const dpi = page.dpi ?? 72;
   const left0 = layer.left ?? 0;
   const top0 = layer.top ?? 0;
@@ -528,7 +580,10 @@ function layerRectForExisting(page, layer, edit) {
   const fallbackThick = ptInPsdPx * (thickSum + THICK_SAFETY);
   // long 軸: 実測 em があればそれ、無ければ chars × 1.05 のヒューリスティック。
   // CJK 縦書き等は chars と em がほぼ等価、Latin 系では em < chars になるので bbox が縮む。
-  const longChars = Number.isFinite(measuredEm) && measuredEm > 0 ? measuredEm : 1.05 * chars;
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】フォント未ロード fallback / Latin 文字幅誤判定で
+  // measuredEm が極端に小さくなる事故を防ぐため、最低 1.05 × chars を保証する。
+  const heuristicLong = 1.05 * chars;
+  const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
   const fallbackLong = ptInPsdPx * (longChars + LONG_SAFETY);
   const minThick = Math.max(ptInPsdPx * (leadingFactor + THICK_SAFETY), 20);
   const minLong = Math.max(ptInPsdPx * 2, 48);
@@ -548,7 +603,7 @@ function layerRectForExisting(page, layer, edit) {
   return { left, top, right: left + width, bottom: top + height, width, height, isVertical, ptInPsdPx, previewText };
 }
 
-function layerRectForNew(page, nl) {
+export function layerRectForNew(page, nl) {
   const dpi = page.dpi ?? 72;
   const isVertical = nl.direction !== "horizontal";
   const sizePt = nl.sizePt ?? 24;
@@ -588,7 +643,9 @@ function layerRectForNew(page, nl) {
     thickSum += v * lineMaxRatio;
   }
   const thick = Math.max(24, ptInPsdPx * (thickSum + 0.4));
-  const longChars = Number.isFinite(measuredEm) && measuredEm > 0 ? measuredEm : 1.05 * chars;
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】最低 1.05 × chars を保証して bbox 改行防止。
+  const heuristicLong = 1.05 * chars;
+  const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
   const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (longChars + 0.4));
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
@@ -681,6 +738,7 @@ function renderOverlay(ctx) {
       symbolFontPS,
       edit.charBolds,
       punctTsumePct,
+      edit.charRubies,
     );
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
@@ -723,6 +781,14 @@ function renderOverlay(ctx) {
     box.dataset.direction = rect.isVertical ? "vertical" : "horizontal";
     if (rotation) box.style.transform = `rotate(${rotation}deg)`;
     box.classList.add("text-box-preview");
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置で背景/ウニ判定によりフォント切替された印
+    // (UI 色強調用)。bucket = 0..5 の 10% 刻みでスコア帯ごとに別色 (青→緑→黄→橙→赤→濃赤)。
+    if (nl.autoFontSwitched) {
+      box.classList.add("auto-font-switched");
+      if (Number.isInteger(nl.autoFontSwitchBucket) && nl.autoFontSwitchBucket >= 0) {
+        box.classList.add(`auto-font-bucket-${nl.autoFontSwitchBucket}`);
+      }
+    }
     const inner = document.createElement("div");
     inner.className = "new-layer-text";
     if (pxPerPsd > 0) {
@@ -748,6 +814,7 @@ function renderOverlay(ctx) {
       symbolFontPSNew,
       nl.charBolds,
       punctTsumePctNew,
+      nl.charRubies,
     );
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
@@ -1198,7 +1265,7 @@ function findTcyPairs(line) {
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
 //
 // 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
-function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag) {
+function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies) {
   if (!line.length) {
     // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
     parentEl.appendChild(document.createTextNode("​"));
@@ -1206,7 +1273,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   }
   const dashMag = Math.abs(Number(dashMille) || 0);
   const tildeMag = Math.abs(Number(tildeMille) || 0);
-  const tcyPairs = tcyOn ? findTcyPairs(line) : [];
+  let tcyPairs = tcyOn ? findTcyPairs(line) : [];
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
@@ -1215,8 +1282,34 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。0..1 の em 量。
   const tsumeMag = Number.isFinite(punctTsumeMag) && punctTsumeMag > 0 ? punctTsumeMag : 0;
   const punctActive = tsumeMag > 0 && lineHasPunctTsumeChar(line);
+
+  // 【v1.26.0】ruby 範囲を line 内で抽出（line 内の local index に変換）。
+  // ruby 範囲は最優先で line を分割し、ruby 内の文字は <ruby> 構造で別出力する。
+  const lineEnd = lineStartIdx + line.length;
+  const rubySegmentsInLine = [];
+  if (charRubies) {
+    for (const k of Object.keys(charRubies)) {
+      const s = Number(k);
+      const entry = charRubies[k];
+      if (!Number.isFinite(s) || !entry) continue;
+      const e = Number(entry.end);
+      if (e <= lineStartIdx || s >= lineEnd) continue;
+      // line 範囲内に clipping（ruby が複数行に跨ぐケースは Phase A では line 末まで truncate）
+      const localStart = Math.max(s, lineStartIdx) - lineStartIdx;
+      const localEnd = Math.min(e, lineEnd) - lineStartIdx;
+      rubySegmentsInLine.push({ start: localStart, end: localEnd, entry });
+    }
+    rubySegmentsInLine.sort((a, b) => a.start - b.start);
+  }
+  const hasRuby = rubySegmentsInLine.length > 0;
+  // ruby 範囲内の tcy ペアは抑止（ruby のふりがな上で縦中横が当たると見た目が崩れる）。
+  if (hasRuby && tcyPairs.length > 0) {
+    tcyPairs = tcyPairs.filter((p) =>
+      !rubySegmentsInLine.some((r) => p.start < r.end && p.end > r.start));
+  }
+
   // 高速パス：何も装飾なし → 単純テキストノード 1 つで終わり
-  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !punctActive) {
+  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !punctActive && !hasRuby) {
     parentEl.appendChild(document.createTextNode(line));
     return;
   }
@@ -1240,27 +1333,107 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   // 「tcy 外」(per-char signature 統合) として出力する。
   // 句読点ツメは punctActive のときだけ tsumeMag を append... に渡す（高速パス判定とも整合）。
   const tsumeArg = punctActive ? tsumeMag : 0;
-  let pos = 0;
-  for (const pair of tcyPairs) {
-    if (pair.start > pos) {
-      appendStyledSegment(parentEl, line.slice(pos, pair.start), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
+
+  // 【v1.26.0】ruby 範囲があれば、まず line を「ruby 範囲ぶん」「それ以外（既存 tcy + styled）」
+  // で分割して出力する。これにより ruby は最優先で <ruby><rb>...<rt>...</rt></ruby> 構造化される。
+  const emitNonRubyRange = (fromLocal, toLocal) => {
+    if (toLocal <= fromLocal) return;
+    const sub = line.slice(fromLocal, toLocal);
+    // tcyPairs を sub の範囲に限定し、local index を sub 基準に再オフセット
+    const pairsInSub = tcyPairs
+      .filter((p) => p.start >= fromLocal && p.end <= toLocal)
+      .map((p) => ({ start: p.start - fromLocal, end: p.end - fromLocal }));
+    let pos = 0;
+    for (const pair of pairsInSub) {
+      if (pair.start > pos) {
+        appendStyledSegment(parentEl, sub.slice(pos, pair.start),
+          fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
+          hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
+      }
+      const span = document.createElement("span");
+      span.className = "tcy-span";
+      span.textContent = sub
+        .slice(pair.start, pair.end)
+        .replace(/！/g, "!")
+        .replace(/？/g, "?");
+      parentEl.appendChild(span);
+      pos = pair.end;
     }
-    const span = document.createElement("span");
-    span.className = "tcy-span";
-    // Chromium の text-combine-upright: all は半角 !! / !? なら安定動作するが、
-    // 全角 ！！ (U+FF01) / ！？ (U+FF1F) を渡すと合成 glyph が overflow:hidden で
-    // 不可視になる挙動が発生する（実機確認済み）。state.contents は元のまま保持し、
-    // 表示用 DOM のみ半角に書換える（Photoshop 保存は別経路の applyTateChuYoko が
-    // 全角もそのまま baselineDirection=cross で扱うので影響なし）。
-    span.textContent = line
-      .slice(pair.start, pair.end)
-      .replace(/！/g, "!")
-      .replace(/？/g, "?");
-    parentEl.appendChild(span);
-    pos = pair.end;
+    if (pos < sub.length) {
+      appendStyledSegment(parentEl, sub.slice(pos),
+        fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
+        hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
+    }
+  };
+
+  if (hasRuby) {
+    let cursor = 0;
+    for (const seg of rubySegmentsInLine) {
+      if (seg.start > cursor) emitNonRubyRange(cursor, seg.start);
+      appendRubySegment(parentEl,
+        line.slice(seg.start, seg.end), seg.start, lineStartIdx, seg.entry,
+        trackings, charSizes, defaultSizePt, charFonts,
+        symbolActive ? symbolFontPS : null, charBolds,
+        hasCharSizes, hasCharFonts, hasCharBolds, tsumeArg);
+      cursor = seg.end;
+    }
+    if (cursor < line.length) emitNonRubyRange(cursor, line.length);
+    return;
   }
-  if (pos < line.length) {
-    appendStyledSegment(parentEl, line.slice(pos), pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
+
+  // ruby なし → 既存パス（tcy + styled）。
+  emitNonRubyRange(0, line.length);
+}
+
+// 【v1.26.0】ruby segment を「親文字 wrap + 実 DOM のルビ span」構造で出力する。
+// 旧 <ruby> タグ方式は Chromium の writing-mode: vertical-rl サポートが不安定。
+// ::after 疑似要素方式も再描画後に消えるバグが残ったため、ルビを本物の <span class="ruby-text">
+// として DOM に入れる構造に変更。これで描画が確実に行われる。
+//
+// 構造:
+//   <span class="ruby-wrap">
+//     <span class="ruby-base">親文字</span>
+//     <span class="ruby-text">ふりがな</span>
+//   </span>
+// CSS で .ruby-text を absolute 配置（横書きは上、縦書きは右）。
+//
+// モノルビ（type === "mono" かつ スペース分割数 == parentText.length）は親文字 1 文字 + rt-pair
+// を文字ごとに並べる。グループルビは親文字全体に 1 つの rt を付ける。
+function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx, entry,
+                            trackings, charSizes, defaultSizePt, charFonts,
+                            symbolFontPS, charBolds,
+                            hasCharSizes, hasCharFonts, hasCharBolds, punctTsumeMag) {
+  if (!parentText.length || !entry || typeof entry.text !== "string") return;
+  const isMono = entry.type === "mono"
+    && /[ 　]/.test(entry.text)
+    && entry.text.split(/[ 　]+/).length === parentText.length;
+  const scale = (Number.isFinite(entry.scale) && entry.scale > 0) ? entry.scale : 50;
+
+  // 1 ペア（親 1 セグメント + ルビ 1 個）を ruby-wrap span として生成。
+  const makePair = (segText, segLocalStart, rubyText) => {
+    const wrap = document.createElement("span");
+    wrap.className = "ruby-wrap";
+    wrap.style.setProperty("--ruby-scale", `${scale / 100}em`);
+    const base = document.createElement("span");
+    base.className = "ruby-base";
+    appendStyledSegment(base, segText,
+      segLocalStart, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
+      hasCharSizes, hasCharFonts, symbolFontPS, charBolds, hasCharBolds, punctTsumeMag);
+    wrap.appendChild(base);
+    const rt = document.createElement("span");
+    rt.className = "ruby-text";
+    rt.textContent = rubyText;
+    wrap.appendChild(rt);
+    return wrap;
+  };
+
+  if (isMono) {
+    const parts = entry.text.split(/[ 　]+/);
+    for (let i = 0; i < parentText.length; i++) {
+      parentEl.appendChild(makePair(parentText[i], parentLocalStart + i, parts[i]));
+    }
+  } else {
+    parentEl.appendChild(makePair(parentText, parentLocalStart, entry.text));
   }
 }
 
@@ -1354,12 +1527,17 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
 // それ以外は単一テキストノードで描画（最軽量）。
 // isVertical: true なら writing-mode: vertical-rl 想定で per-line の幅 (列幅) を切替える。
 // defaultSizePt: layer 全体の sizePt（charSizes の em 換算に使う）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumePct) {
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumePct, charRubies) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
+  // 【v1.26.0】ruby 範囲 array に変換しておくと、appendLineWithTracking で line ごとに filter しやすい。
+  const hasCharRubies = charRubies && Object.keys(charRubies).length > 0;
+  // 【v1.26.0】親文字の `overflow: hidden`（new-layer-text / existing-layer-text 既定）が <ruby> の
+  // <rt> 部分を切り取ってしまうため、ruby ある時は `.has-ruby` クラスを付けて overflow: visible に。
+  inner.classList.toggle("has-ruby", hasCharRubies);
   const fallback = String((defaultLeadingPct ?? 125) / 100);
   const dashMag = Math.abs(Number(dashMille) || 0);
   const tildeMag = Math.abs(Number(tildeMille) || 0);
@@ -1371,8 +1549,8 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。punctTsumePct (0..100) → em 量に換算。
   const punctTsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
   const punctHits = punctTsumeMag > 0 && lineHasPunctTsumeChar(fullText);
-  // 高速パス：何も装飾なし（charBolds / 句読点ツメも含めて全部空のときだけ通る）
-  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !punctHits) {
+  // 高速パス：何も装飾なし（charBolds / 句読点ツメ / charRubies も含めて全部空のときだけ通る）
+  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !punctHits && !hasCharRubies) {
     inner.textContent = fullText;
     inner.style.lineHeight = fallback;
     return;
@@ -1415,7 +1593,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
           lineEl.style.marginBlockStart = `${extra}em`;
         }
       }
-      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag);
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
       inner.appendChild(lineEl);
     }
   } else {
@@ -2365,12 +2543,15 @@ function startContentEditableEdit(ctx, target, options = {}) {
   let finished = false;
 
   // 現在のレイヤー state から最新の per-char/line override を取り出す
+  // 【v1.26.0】charBolds / charRubies も含めて取得 → 編集時の index shift で全て同期。
   const readCurrentMaps = () => {
     if (isExisting) {
       const e = getEdit(page.path, target.layer.id) ?? {};
       return {
         charSizes: e.charSizes ?? {},
         charFonts: e.charFonts ?? {},
+        charBolds: e.charBolds ?? {},
+        charRubies: e.charRubies ?? {},
         lineLeadings: e.lineLeadings ?? {},
       };
     }
@@ -2379,6 +2560,8 @@ function startContentEditableEdit(ctx, target, options = {}) {
     return {
       charSizes: nl.charSizes ?? {},
       charFonts: nl.charFonts ?? {},
+      charBolds: nl.charBolds ?? {},
+      charRubies: nl.charRubies ?? {},
       lineLeadings: nl.lineLeadings ?? {},
     };
   };
@@ -2471,11 +2654,19 @@ function startContentEditableEdit(ctx, target, options = {}) {
     // C4-4) を維持するため書換しない。一方 <div> / <br> 等 element node が混入して
     // いれば必ず plain text に書換える。比較は zwsp を strip した形で行う（converted
     // 側は readContents で strip 済み、inner.textContent には zwsp が残るため）。
-    const allTextNodes = Array.from(inner.childNodes).every(
-      (n) => n.nodeType === Node.TEXT_NODE,
+    // 【v1.26.0】ruby-edit-pending span（applyEditModeRubyToRange が挿入）は許容
+    // non-text node として扱う。これがないと ruby を振った直後に textContent 書換で
+    // span が破壊され、ルビプレビューが消える。
+    const allAllowedNodes = Array.from(inner.childNodes).every(
+      (n) => n.nodeType === Node.TEXT_NODE
+        || (n.nodeType === Node.ELEMENT_NODE && n.classList
+            && n.classList.contains("ruby-edit-pending")),
     );
     const innerTextStripped = inner.textContent.replace(/​/g, "");
-    if (allTextNodes && innerTextStripped === converted) return false;
+    // ruby-edit-pending を持つ inner は plain text 化を完全 skip（変換は ruby 削除後に再実行可能）。
+    const hasRubyPending = inner.querySelector(".ruby-edit-pending");
+    if (hasRubyPending) return false;
+    if (allAllowedNodes && innerTextStripped === converted) return false;
     // caret 位置を char offset で保持してから DOM を書換える
     const sel = window.getSelection();
     let savedStart = null;
@@ -2542,6 +2733,33 @@ function startContentEditableEdit(ctx, target, options = {}) {
     const limit = Math.min(idx, str.length);
     for (let i = 0; i < limit; i++) if (str[i] === "\n") n++;
     return n;
+  };
+
+  // 【v1.26.0】charRubies map のシフト。{"<start>": {end, text, type, scale}} 形式で
+  // 値が range を持つため、shiftCharMap とは扱いが異なる。
+  //   - 編集範囲が ruby を完全に含む (pos <= start && pos+deleted >= end) → drop
+  //   - 部分重複 (pos < end && pos+deleted > start, ただし完全包含ではない) → drop（安全側）
+  //   - ruby の end <= pos (前方は未変化) → unchanged
+  //   - ruby の start >= pos + deleted (後方) → start/end を delta シフト
+  const shiftRubyMap = (map, pos, deleted, inserted) => {
+    if (!map || typeof map !== "object") return {};
+    const result = {};
+    const delta = inserted - deleted;
+    for (const k of Object.keys(map)) {
+      const start = Number(k);
+      const entry = map[k];
+      if (!Number.isFinite(start) || !entry) continue;
+      const end = Number(entry.end);
+      if (!Number.isFinite(end)) continue;
+      const editEnd = pos + deleted;
+      if (pos < end && editEnd > start) continue;
+      if (start >= editEnd) {
+        result[String(start + delta)] = { ...entry, end: end + delta };
+      } else {
+        result[String(start)] = { ...entry };
+      }
+    }
+    return result;
   };
 
   // per-line leading map のシフト（{ "2": 130 } 形式、行番号は 0-based）
@@ -2763,9 +2981,13 @@ function startContentEditableEdit(ctx, target, options = {}) {
       return;
     }
     const diff = computeStringDiff(lastContents, newContents);
-    const { charSizes, charFonts, lineLeadings } = readCurrentMaps();
+    const { charSizes, charFonts, charBolds, charRubies, lineLeadings } = readCurrentMaps();
     const newCharSizes = shiftCharMap(charSizes, diff.pos, diff.deleted, diff.inserted);
     const newCharFonts = shiftCharMap(charFonts, diff.pos, diff.deleted, diff.inserted);
+    // 【v1.26.0】charBolds も同じ shiftCharMap を適用（v1.22.0 で抜けていた既存バグ修正）。
+    const newCharBolds = shiftCharMap(charBolds, diff.pos, diff.deleted, diff.inserted);
+    // 【v1.26.0】charRubies はキーが range の start なので shiftRubyMap を使う。
+    const newCharRubies = shiftRubyMap(charRubies, diff.pos, diff.deleted, diff.inserted);
     const newLineLeadings = shiftLineMap(
       lineLeadings, lastContents, newContents,
       diff.pos, diff.deleted, diff.inserted,
@@ -2776,6 +2998,8 @@ function startContentEditableEdit(ctx, target, options = {}) {
         contents: newContents,
         charSizes: newCharSizes,
         charFonts: newCharFonts,
+        charBolds: newCharBolds,
+        charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });
     } else {
@@ -2783,6 +3007,8 @@ function startContentEditableEdit(ctx, target, options = {}) {
         contents: newContents,
         charSizes: newCharSizes,
         charFonts: newCharFonts,
+        charBolds: newCharBolds,
+        charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });
     }

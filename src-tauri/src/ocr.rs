@@ -13,6 +13,7 @@ use std::process::{Command, Stdio};
 use std::sync::{Mutex, OnceLock};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use image::GenericImageView;
 use pdfium_render::prelude::*;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager};
@@ -101,6 +102,19 @@ pub struct MokuroBlock {
     pub vertical: bool,
     pub font_size: f64,
     pub lines: Vec<String>,
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】bbox 外周解析メタデータ。
+    // OCR 完了後、ocr.rs 内で analyze_block_surroundings が埋める。
+    // - surrounding_white_ratio: bbox 外側リングの白率 (0..1)
+    //   → 白フチ自動付与の判定 (要件②) と背景スコアの根拠
+    // - surrounding_edge_changes: 1 周合計の白↔黒変化回数
+    // - surrounding_min_segment_edge_changes: 4 セグメント中の最小変化数
+    //   → ウニスコアの根拠 (全周分布のウニ突起検出)
+    #[serde(rename = "surroundingWhiteRatio", default, skip_serializing_if = "Option::is_none")]
+    pub surrounding_white_ratio: Option<f64>,
+    #[serde(rename = "surroundingEdgeChanges", default, skip_serializing_if = "Option::is_none")]
+    pub surrounding_edge_changes: Option<u32>,
+    #[serde(rename = "surroundingMinSegmentEdgeChanges", default, skip_serializing_if = "Option::is_none")]
+    pub surrounding_min_segment_edge_changes: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -587,8 +601,13 @@ pub async fn run_ai_ocr(
             e
         )
     })?;
-    let doc: MokuroDocument = serde_json::from_str(&content)
+    let mut doc: MokuroDocument = serde_json::from_str(&content)
         .map_err(|e| format!(".mokuroのパースに失敗しました: {}", e))?;
+
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置の白フチ / フォント差し替え判定用に、
+    // 各 block の bbox 外周を解析する。ここで実行しないと _guard drop で tempdir (画像) が
+    // 消えてしまう。
+    analyze_doc_in_place(&mut doc, &parent_dir);
 
     Ok(doc)
     // _guard drops here → temp dir removed
@@ -661,6 +680,144 @@ fn list_dir_for_diag(dir: &Path) -> String {
         "  (空)".to_string()
     } else {
         lines.join("\n")
+    }
+}
+
+// ============================================================
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】bbox 周辺ピクセル解析 (要件 ②)
+// ============================================================
+// OCR が出力した各 block の bbox の "外側リング" を 1 周なぞって解析する:
+//   surrounding_white_ratio: リング上で白とみなされたピクセルの比率
+//     → 低い (= 描画 / 線が多い) = フキダシ外 / フキダシ内に絵柄あり → 自動で白フチ
+//   surrounding_edge_changes: 1 周合計の白↔黒変化回数
+//   surrounding_min_segment_edge_changes: 4 セグメント中の最小変化数
+//     → 全周分布のウニ突起検出（ウニスコアの根拠）
+//
+// 安全側設計: 計算が失敗したら None のまま。自動配置側 (ai-place.js) は None なら従来挙動を維持。
+
+// img_path は mokuro 出力の画像パス。絶対 / 相対両対応。
+fn resolve_image_path(parent_dir: &Path, img_path: &str) -> Option<PathBuf> {
+    let p = PathBuf::from(img_path);
+    if p.is_absolute() && p.exists() {
+        return Some(p);
+    }
+    let rel = parent_dir.join(&p);
+    if rel.exists() {
+        return Some(rel);
+    }
+    // basename だけ抽出して volume/ 配下を探す (mokuro バージョンによっては相対が
+    // "_ocr/page_001.html" 等で実画像と乖離する可能性がある安全策)。
+    if let Some(name) = p.file_name() {
+        let candidate = parent_dir.join("volume").join(name);
+        if candidate.exists() {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
+fn analyze_block_surroundings(image: &image::DynamicImage, block: &MokuroBlock) -> Option<(f64, u32, u32)> {
+    let (img_w, img_h) = image.dimensions();
+    let img_w = img_w as i32;
+    let img_h = img_h as i32;
+    if img_w < 8 || img_h < 8 {
+        return None;
+    }
+    let bb = &block.bbox;
+    let fs = block.font_size.max(8.0);
+
+    // bbox 外側にマージンを取ってサンプリング。
+    // margin が大きすぎると隣のコマ枠 / 絵柄を巻き込んで white_ratio が下がりすぎ、
+    // 通常フキダシでも自動切替が誤発動する。font_size の半分程度に留める。
+    let margin = ((fs * 0.4) as i32).clamp(4, 30);
+    let x1 = (bb[0] as i32 - margin).max(0);
+    let y1 = (bb[1] as i32 - margin).max(0);
+    let x2 = (bb[2] as i32 + margin).min(img_w - 1);
+    let y2 = (bb[3] as i32 + margin).min(img_h - 1);
+
+    if x2 - x1 < 4 || y2 - y1 < 4 {
+        return None;
+    }
+
+    // 白判定: RGB 各 channel が WHITE_THRESHOLD 以上。
+    // 220 程度に設定: 純白 (255) だけだと JPEG 圧縮ノイズや軽い影で外れすぎる。
+    const WHITE_THRESHOLD: u8 = 220;
+    let is_white = |px: i32, py: i32| -> bool {
+        let pixel = image.get_pixel(px as u32, py as u32);
+        pixel[0] >= WHITE_THRESHOLD && pixel[1] >= WHITE_THRESHOLD && pixel[2] >= WHITE_THRESHOLD
+    };
+
+    // 1 周分のサンプル列を作る (角を重複させないように記述)。
+    let perim_estimate = (((x2 - x1) + (y2 - y1)) * 2 + 4) as usize;
+    let mut samples: Vec<bool> = Vec::with_capacity(perim_estimate);
+    // 上辺: 左→右
+    for x in x1..=x2 {
+        samples.push(is_white(x, y1));
+    }
+    // 右辺: 上→下 (角を重複させないため y1+1 から)
+    for y in (y1 + 1)..=y2 {
+        samples.push(is_white(x2, y));
+    }
+    // 下辺: 右→左 (角を重複させないため x2-1 から)
+    if x2 - 1 >= x1 {
+        for x in (x1..=(x2 - 1)).rev() {
+            samples.push(is_white(x, y2));
+        }
+    }
+    // 左辺: 下→上 (両端の角を重複させない)
+    if y2 - 1 > y1 {
+        for y in ((y1 + 1)..=(y2 - 1)).rev() {
+            samples.push(is_white(x1, y));
+        }
+    }
+
+    if samples.is_empty() {
+        return None;
+    }
+
+    let white_count = samples.iter().filter(|&&w| w).count();
+    let white_ratio = white_count as f64 / samples.len() as f64;
+
+    // エッジ変化数 + 4 セグメント分布最小値
+    let n = samples.len();
+    let mut changes: u32 = 0;
+    let mut seg_changes: [u32; 4] = [0; 4];
+    let seg_size = (n / 4).max(1);
+    for i in 1..n {
+        if samples[i] != samples[i - 1] {
+            changes += 1;
+            let seg = (i / seg_size).min(3);
+            seg_changes[seg] += 1;
+        }
+    }
+    if samples[0] != samples[n - 1] {
+        changes += 1;
+        seg_changes[0] += 1;
+    }
+    let min_seg = *seg_changes.iter().min().unwrap_or(&0);
+
+    Some((white_ratio, changes, min_seg))
+}
+
+// 各 page の画像を読み込み、各 block の周辺を解析して MokuroDocument を mut 更新。
+// tempdir が drop で削除される前 (run_ai_ocr 内) に呼び出すこと。
+fn analyze_doc_in_place(doc: &mut MokuroDocument, parent_dir: &Path) {
+    for page in &mut doc.pages {
+        let img_path = match resolve_image_path(parent_dir, &page.img_path) {
+            Some(p) => p,
+            None => continue,
+        };
+        let image = match image::open(&img_path) {
+            Ok(img) => img,
+            Err(_) => continue,
+        };
+        for block in &mut page.blocks {
+            if let Some((white, edge, min_seg)) = analyze_block_surroundings(&image, block) {
+                block.surrounding_white_ratio = Some(white);
+                block.surrounding_edge_changes = Some(edge);
+                block.surrounding_min_segment_edge_changes = Some(min_seg);
+            }
+        }
     }
 }
 

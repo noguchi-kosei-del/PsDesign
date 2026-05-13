@@ -126,6 +126,12 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
                     emit_char_bolds(&mut out, cb);
                 }
             }
+            if let Some(ref cr) = layer.char_rubies {
+                if !cr.is_empty() {
+                    out.push_str(", charRubies: ");
+                    emit_char_rubies(&mut out, cr);
+                }
+            }
             out.push_str("},\n");
         }
         out.push_str("], [\n");
@@ -182,6 +188,12 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
                 if !cb.is_empty() {
                     out.push_str(", charBolds: ");
                     emit_char_bolds(&mut out, cb);
+                }
+            }
+            if let Some(ref cr) = nl.char_rubies {
+                if !cr.is_empty() {
+                    out.push_str(", charRubies: ");
+                    emit_char_rubies(&mut out, cr);
                 }
             }
             out.push_str("},\n");
@@ -280,6 +292,21 @@ fn emit_char_fonts(out: &mut String, m: &std::collections::HashMap<String, Strin
 // 【v1.22.0】per-char 合成太字（faux bold）map を JSX のオブジェクトリテラルとして emit。
 fn emit_char_bolds(out: &mut String, m: &std::collections::HashMap<String, bool>) {
     emit_sorted_map_by_int_key(out, m, |v| if *v { "true".into() } else { "false".into() });
+}
+
+// 【v1.26.0】per-char ルビ map を JSX のオブジェクトリテラルとして emit。
+// 値は {end: N, text: "...", rubyType: "mono"|"group", scale: N}。
+// JSX 側でキー `type` は ExtendScript の予約語ではないが、わかりやすさのため `rubyType` に rename。
+fn emit_char_rubies(out: &mut String, m: &std::collections::HashMap<String, crate::RubyEntry>) {
+    emit_sorted_map_by_int_key(out, m, |v| {
+        format!(
+            "{{end: {}, text: {}, rubyType: {}, scale: {}}}",
+            v.end,
+            js_string(&v.text),
+            js_string(&v.ruby_type),
+            v.scale
+        )
+    });
 }
 
 fn js_string(s: &str) -> String {
@@ -408,6 +435,22 @@ function fillColorFor(name) {
 function normalizeLineBreaks(s) {
   if (typeof s !== "string") return s;
   return s.replace(/\r\n/g, "\r").replace(/\n/g, "\r");
+}
+
+// 【v1.26.0】PSD 保存時、tateChuYokoEnabled が ON のときに連続ペア「！！」「！？」を
+// 半角「!!」「!?」へ変換する。理由:
+//   - Photoshop の縦中横 (baselineDirection: cross) は半角文字での動作が最も安定。
+//     全角だと baselineDirection を当てても合成 glyph 化されず、結果ユーザー画面で
+//     縦書きのまま残るケースがある (実機確認済み)。
+//   - 連続 2 文字パターンだけ対象。単独の「！」は素通し (意図不明な単発を変換しない)。
+//   - 単純な逐次 replace で OK: ！！ / ！？ を半角ペアに置換するだけ。
+//     全角 → 半角は 1 文字 → 1 文字の置換なので、char index は保たれ、後段の
+//     per-char 系 (applyLineLeadings / applyPerCharSizesAndFonts / applyPerCharBolds /
+//     applyRubies / applySymbolFont / applyPunctuationTsume) も影響なし。
+function normalizeFullWidthToHalfTcy(s, tcyEnabled) {
+  if (!tcyEnabled) return s;
+  if (typeof s !== "string") return s;
+  return s.replace(/！！/g, "!!").replace(/！？/g, "!?");
 }
 
 function findLayerById(doc, id) {
@@ -799,6 +842,248 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
+// 【v1.26.0】===== ルビ =====
+// charRubies: { "<start>": {end, text, rubyType, scale}, ... }
+// 親レイヤーは保持。各ルビごとに新規テキストレイヤーを親の直前に追加する。
+// 命名規則: 「{ルビ文字}（{親文字}）」（Photoshop プラグイン版と互換）。
+//
+// 配置ロジック（Phase A 改良版）:
+//   contents の改行から「親文字が何行目（縦書きでは何列目）にあるか」を推定し、char range の
+//   おおまかな位置を計算する。ルビは親レイヤーの **外側**（縦書きなら親 bounds.right の外、
+//   横書きなら親 bounds.top の上）に必ず出るよう余白付きで配置するため、親テキストと重ならない。
+//   ユーザーは PS 側で必要に応じて微調整できる。
+function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirection, parentFontPS, parentFillColor) {
+  if (!charRubies || isObjEmpty(charRubies)) return;
+
+  for (var key in charRubies) {
+    if (!charRubies.hasOwnProperty(key)) continue;
+    var startChar = parseInt(key, 10);
+    var entry = charRubies[key];
+    if (!entry || typeof entry.text !== "string" || entry.text.length === 0) continue;
+    var endChar = entry.end;
+    if (!(endChar > startChar)) continue;
+    if (endChar > String(contents).length) continue;
+
+    var parentText = String(contents).substring(startChar, endChar);
+    var rubyText = entry.text;
+    var rubyType = entry.rubyType || "group";
+    var rubyScale = (typeof entry.scale === "number" && entry.scale > 0) ? entry.scale : 50;
+    var rubySizePt = fontSizePt * (rubyScale / 100);
+
+    // モノルビ: スペース/全角スペースで分割。子数と親数が一致するならモノ。
+    // 不一致はグループにフォールバック（プレビュー側 decideRubyType と一致挙動）。
+    var monoSegments = null;
+    if (rubyType === "mono") {
+      var parts = rubyText.split(/[ 　]+/);
+      if (parts.length === parentText.length) monoSegments = parts;
+    }
+
+    if (monoSegments) {
+      for (var mi = 0; mi < parentText.length; mi++) {
+        try {
+          createRubyLayer(parentLayer, contents, startChar + mi, startChar + mi + 1,
+                          parentText.charAt(mi), monoSegments[mi],
+                          rubySizePt, parentDirection, parentFontPS, parentFillColor);
+        } catch (eMono) {
+          addWarning("モノルビ「" + parentText.charAt(mi) + "（" + monoSegments[mi] + "）」適用失敗: " + eMono);
+        }
+      }
+    } else {
+      try {
+        createRubyLayer(parentLayer, contents, startChar, endChar,
+                        parentText, rubyText,
+                        rubySizePt, parentDirection, parentFontPS, parentFillColor);
+      } catch (eGroup) {
+        addWarning("グループルビ「" + parentText + "（" + rubyText + "）」適用失敗: " + eGroup);
+      }
+    }
+  }
+}
+
+// 1 個のルビレイヤーを生成して親の直前に挿入。
+function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rubyText,
+                          rubySizePt, parentDirection, parentFontPS, parentFillColor) {
+  var doc = app.activeDocument;
+  // 親レイヤーの bounds を再評価（layer 効果や前段の per-char 編集後の最新値）。
+  try {
+    parentLayer.translate(new UnitValue(0, "px"), new UnitValue(0, "px"));
+  } catch (eParentRf) {}
+  var parentBounds = getLayerBoundsPx(parentLayer);
+  if (!parentBounds) return;
+  // char range の推定 bounds（contents の改行ベース）。layer 全体 bounds を行/列で均等分割して
+  // char range の位置をおおまかに割り当てる。
+  var rangeBounds = estimateCharRangeBounds(parentBounds, contents, fromCh, toCh, parentDirection);
+
+  // 新規テキストレイヤー（doc 直下に作成 → 親直前に move の 2 段階パターン）。
+  var rubyLayer = doc.artLayers.add();
+  rubyLayer.kind = LayerKind.TEXT;
+  rubyLayer.name = rubyText + "（" + parentSubText + "）";
+  var rti = rubyLayer.textItem;
+  // direction 継承
+  try {
+    if (parentDirection === "vertical") rti.direction = Direction.VERTICAL;
+    else rti.direction = Direction.HORIZONTAL;
+  } catch (eDir) {}
+  rti.contents = rubyText;
+  if (typeof parentFontPS === "string" && parentFontPS.length > 0) {
+    try { rti.font = parentFontPS; } catch (eFn) {}
+  }
+  try { rti.size = new UnitValue(rubySizePt, "pt"); } catch (eSz) {}
+  try { rti.autoLeadingAmount = 100; rti.useAutoLeading = true; } catch (eAl) {}
+  if (parentFillColor) {
+    try { rti.color = parentFillColor; } catch (eCol) {}
+  }
+
+  // bounds の再評価トリガー（PS が text layer 作成直後の bounds 計算遅延に対応）。
+  // translate(0, 0) を呼ぶと PS は bounds を再計算する。
+  try {
+    rubyLayer.translate(new UnitValue(0, "px"), new UnitValue(0, "px"));
+  } catch (eRf) {}
+
+  // 配置：親 char range bounds の指定エッジに揃える。boundsNoEffects 優先で取得。
+  try {
+    var rbObj = getLayerBoundsPx(rubyLayer);
+    if (!rbObj) return;
+    var actualLeft = rbObj.left;
+    var actualTop = rbObj.top;
+    var actualRight = rbObj.right;
+    var actualBottom = rbObj.bottom;
+    var rubyWidth = actualRight - actualLeft;
+    var rubyHeight = actualBottom - actualTop;
+    // ルビと親の隙間（px）。0 にすると密着、大きくすると離れる。実用上 2〜4 px が良い。
+    var gap = 2;
+    var targetLeft, targetTop;
+    if (parentDirection === "vertical") {
+      // 縦書き: ルビは親 char range の **右** に配置（vertical-rl で「次の列」は左だが、ルビは
+      // 慣習的に親文字の右側に書く。親レイヤーの外側に置くため、parentBounds.right を基準にする）。
+      // ただし複数列の親レイヤーで char range が左の列にある場合、parentBounds.right ではなく
+      // rangeBounds.right を使うことで、その列のすぐ右隣に配置できる。
+      targetLeft = rangeBounds.right + gap;
+      // 縦位置: char range の縦中心 = ruby 縦中心
+      var rangeMidV = (rangeBounds.top + rangeBounds.bottom) / 2;
+      targetTop = rangeMidV - rubyHeight / 2;
+    } else {
+      // 横書き: ルビは親 char range の **上** に配置。
+      var rangeMidH = (rangeBounds.left + rangeBounds.right) / 2;
+      targetLeft = rangeMidH - rubyWidth / 2;
+      targetTop = rangeBounds.top - rubyHeight - gap;
+    }
+    var dx = targetLeft - actualLeft;
+    var dy = targetTop - actualTop;
+    if (dx !== 0 || dy !== 0) {
+      rubyLayer.translate(new UnitValue(dx, "px"), new UnitValue(dy, "px"));
+    }
+  } catch (ePlace) {}
+
+  // 親の直前に move（順序: 元の親 layer の真上）
+  try {
+    rubyLayer.move(parentLayer, ElementPlacement.PLACEBEFORE);
+  } catch (eMove) {}
+}
+
+// 親レイヤー全体の bounds を px 単位で取得。
+// boundsNoEffects を優先（layer 効果 = strokeEffect / drop shadow 等を除外したテキスト実体の bounds）。
+// 親テキストに白フチがあると bounds は拡大されルビが実テキストから離れすぎてしまう。
+// boundsNoEffects が無い古い PS バージョンでは通常の bounds にフォールバック。
+function getLayerBoundsPx(layer) {
+  try {
+    var bne = layer.boundsNoEffects;
+    return {
+      left: bne[0].as("px"),
+      top: bne[1].as("px"),
+      right: bne[2].as("px"),
+      bottom: bne[3].as("px")
+    };
+  } catch (eNoEff) {
+    try {
+      var b = layer.bounds;
+      return {
+        left: b[0].as("px"),
+        top: b[1].as("px"),
+        right: b[2].as("px"),
+        bottom: b[3].as("px")
+      };
+    } catch (e) { return null; }
+  }
+}
+
+// contents の改行構造から char range のおおまかな bounds を推定。
+// 縦書き(vertical-rl): 各行 = 列、lines[0] が一番右の列。char range の縦位置は
+//   その列内の char offset と「全行の最大長」から計算。これにより行ごとに長さが違っても
+//   char height が同じになり、複数行で char index と縦位置が整合する。
+// 横書き: 同様に「全行の最大長」で行内 char width を統一。
+// Phase A の精度として、per-char size override や複雑な改行は誤差が出る可能性あり。
+function estimateCharRangeBounds(parentBounds, contents, fromCh, toCh, parentDirection) {
+  var fullText = String(contents || "");
+  var lines = fullText.split("\n");
+  if (lines.length === 0) return parentBounds;
+  // 各行が contents 内で開始する char index と長さを事前計算。
+  var lineStartChs = [];
+  var maxLineLen = 0;
+  var lineStartCh = 0;
+  for (var i = 0; i < lines.length; i++) {
+    lineStartChs.push(lineStartCh);
+    if (lines[i].length > maxLineLen) maxLineLen = lines[i].length;
+    lineStartCh += lines[i].length + 1; // +1 for \n
+  }
+  if (maxLineLen === 0) return parentBounds;
+
+  // fromCh / toCh が属する行（0-based）と行内 offset を計算
+  var fromLine = 0, fromOffset = 0;
+  var toLine = 0, toOffset = 0;
+  for (var j = 0; j < lines.length; j++) {
+    var lineEnd = lineStartChs[j] + lines[j].length;
+    if (fromCh >= lineStartChs[j] && fromCh <= lineEnd) {
+      fromLine = j; fromOffset = fromCh - lineStartChs[j];
+    }
+    if (toCh > lineStartChs[j] && toCh <= lineEnd) {
+      toLine = j; toOffset = toCh - lineStartChs[j];
+    }
+  }
+
+  var totalLines = lines.length;
+  var width = parentBounds.right - parentBounds.left;
+  var height = parentBounds.bottom - parentBounds.top;
+
+  if (parentDirection === "vertical") {
+    // 縦書き(vertical-rl): lines[0] が一番右の列、列幅 = width / totalLines。
+    // 列内の char 高さ = height / maxLineLen で均等配置（行長が違っても char height 統一）。
+    var colW = width / totalLines;
+    var charH = height / maxLineLen;
+    var rightOfRange = parentBounds.right - fromLine * colW;
+    var leftOfRange = rightOfRange - colW;
+    // 行内の縦位置: fromOffset 番目の char の top を起点
+    var topY = parentBounds.top + fromOffset * charH;
+    var bottomY = (fromLine === toLine)
+      ? parentBounds.top + toOffset * charH
+      : parentBounds.top + lines[fromLine].length * charH; // 跨る場合は fromLine 末まで
+    if (bottomY <= topY) bottomY = topY + charH * 0.5; // 安全策
+    return {
+      left: leftOfRange,
+      right: rightOfRange,
+      top: topY,
+      bottom: bottomY,
+    };
+  }
+  // 横書き: lines[0] が一番上の行、行高 = height / totalLines。
+  // 行内 char 幅 = width / maxLineLen。
+  var rowH = height / totalLines;
+  var charW = width / maxLineLen;
+  var topOfRange = parentBounds.top + fromLine * rowH;
+  var bottomOfRange = topOfRange + rowH;
+  var leftSide = parentBounds.left + fromOffset * charW;
+  var rightSide = (fromLine === toLine)
+    ? parentBounds.left + toOffset * charW
+    : parentBounds.left + lines[fromLine].length * charW;
+  if (rightSide <= leftSide) rightSide = leftSide + charW * 0.5;
+  return {
+    top: topOfRange,
+    bottom: bottomOfRange,
+    left: leftSide,
+    right: rightSide,
+  };
+}
+
 // 【v1.22.0】===== 記号フォント自動置換（♡♥★☆♪♫♬♩♯♭→←↑↓〇○●◎△▲▽▼□■◇◆♠♣♦） =====
 // 写植本体フォントが対応していない記号類を別フォント（小塚ゴシック Pr6N R 等）で組む。
 // 既存・新規両方のレイヤーに適用。プレビュー側（canvas-tools.js の SYMBOL_CHAR_CODES）と
@@ -1163,6 +1448,25 @@ function applyTateChuYoko(layer, contents, enabled, direction) {
   var fullText = String(contents);
   if (fullText.length < 2) return;
 
+  // 【v1.26.0】PSD 保存時に全角 ！！/！？ を半角 !!/!? に変換する。
+  // Photoshop の縦中横 (baselineDirection: cross) は半角の合成 glyph 化が安定しており、
+  // 全角だと cross 属性を当てても縦に並んだまま残るケースが実機で確認されている。
+  // 半角化は char index 1:1 (全角 1 文字 → 半角 1 文字) なので、後段の per-char 系
+  // (applyLineLeadings / applyPerCharSizesAndFonts / applyPerCharBolds 等) に影響なし。
+  // 変換後の textItem.contents で pairs を再検出 (もちろん半角ペアも該当する)。
+  var hasFullWidthPair = fullText.indexOf("！！") >= 0 || fullText.indexOf("！？") >= 0;
+  if (hasFullWidthPair) {
+    var halfText = fullText.replace(/！！/g, "!!").replace(/！？/g, "!?");
+    try {
+      // 改行は \r で渡す (Photoshop textItem.contents の標準)。normalizeLineBreaks と同じ規約。
+      layer.textItem.contents = halfText.replace(/\n/g, "\r");
+      fullText = halfText;
+    } catch (eContentsRewrite) {
+      // contents 上書きに失敗しても、ペア検出は元 fullText のまま継続
+      addWarning("縦中横の半角化に失敗 (contents 上書き): " + eContentsRewrite);
+    }
+  }
+
   // ペア検出 (先頭から貪欲に 2 文字単位)
   // 半角 "!!" / "!?" に加えて、全角 "！！" / "！？" も縦中横の対象として扱う。
   // PSD 既存テキストは全角で組まれていることが多く、ユーザーが PsDesign で開いた
@@ -1429,6 +1733,21 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           addWarning("合成太字の適用に失敗 (layer " + e.id + "): " + eBold);
         }
       }
+      // 【v1.26.0】ルビ。親レイヤーは保持しつつ、ルビごとに新規テキストレイヤーを
+      // 親の直前に追加する（Photoshop ruby プラグインと同じ方針）。
+      if (e.charRubies && !isObjEmpty(e.charRubies)) {
+        try {
+          var __szR = ti.size.value;
+          var __dirR = (typeof e.direction === "string") ? e.direction
+                       : (ti.direction === Direction.VERTICAL ? "vertical" : "horizontal");
+          var __fontR = (typeof e.font === "string" && e.font.length > 0) ? e.font : ti.font;
+          var __colR = null;
+          try { __colR = ti.color; } catch (eCol0) {}
+          applyRubies(layer, ti.contents, e.charRubies, __szR, __dirR, __fontR, __colR);
+        } catch (eRuby) {
+          addWarning("ルビの適用に失敗 (layer " + e.id + "): " + eRuby);
+        }
+      }
       // 【v1.22.0】記号フォント置換（♡♥★☆♪♫♬♩♯♭ など → symbolFontPostScriptName）。
       // 既存レイヤーにも適用（保存される PSD 内の全テキストを統一する方針）。
       // ユーザーが per-char で手動指定したフォント (e.charFonts[i]) がある char は skip。
@@ -1445,6 +1764,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           applyPunctuationTsume(layer, ti.contents, punctuationTsumePercent);
         } catch (eTsume) {
           addWarning("句読点ツメの適用に失敗 (layer " + e.id + "): " + eTsume);
+        }
+      }
+      // 【v1.26.0】縦中横（!! / !? の自動 tcy）。既存レイヤーにも適用（PSD 内に全角 ！！ で
+      // 組まれているテキストを保存時に半角化 + 縦中横 cross 属性を当てる）。
+      // 縦書きレイヤーのみ対象。direction は e.direction → ti.direction の優先順で判定。
+      if (tateChuYokoEnabled) {
+        try {
+          var __dirTcy = (typeof e.direction === "string") ? e.direction
+                       : (ti.direction === Direction.VERTICAL ? "vertical" : "horizontal");
+          if (__dirTcy === "vertical") {
+            applyTateChuYoko(layer, ti.contents, true, __dirTcy);
+          }
+        } catch (eTcyExisting) {
+          addWarning("縦中横の適用に失敗 (layer " + e.id + "): " + eTcyExisting);
         }
       }
       if (typeof e.rotation === "number" && e.rotation !== 0) {
@@ -1506,7 +1839,15 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var _dpi = doc.resolution;
           var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
           var _ptInPx = _sizePt * (_dpi / 72);
+          // CSS .new-layer-text の padding は両方向で 0.2em だが、Photoshop での
+          // 植字位置補正は方向で異なる：
+          //  - 横書き: 0.2em (CSS padding-top と一致、v1.4.0 と整合)
+          //  - 縦書き: 0.3em (v1.26.0 移植/PsDesign-main v1.24.0)
+          //     縦書きは Photoshop の font sidebearing + line-box gutter が CSS の半分よりも
+          //     大きく出る経験値があり、0.2em では約 0.1em ぶん左ズレが残る。0.3em で吸収。
+          //     24pt/600dpi で従来 0.2em (40px) → 0.3em (60px) と +20px 右シフト。
           var _padInset = 0.2 * _ptInPx;
+          var _padInsetV = 0.3 * _ptInPx;
           var _fixDx, _fixDy;
           if (nl.direction === "vertical") {
             var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
@@ -1524,10 +1865,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             if (_halfLeading < 0) _halfLeading = 0;
             // bbox.right (= nl.x + thick) は v1.5.0 で +0.4em 拡張されたが、
             // CSS padding-right 0.2em で text 右端は bbox.right から 0.2em 内側に入る。
-            // よって preview の text 右端は nl.x + thick + 0.2em - halfLeading の位置にある。
-            // (nl.x 自身が bubble center 基準で 0.2em 左にシフトしている分も加味すると、
-            //  preview text 右端の絶対位置は v1.4.0 と同じ。JSX 補正にだけ +0.2em が抜けていた。)
-            var _boxRight = nl.x + _thick + _padInset - _halfLeading;
+            // 【v1.26.0 移植】縦書きは sidebearing 込みで _padInsetV (0.3em) を使う。
+            var _boxRight = nl.x + _thick + _padInsetV - _halfLeading;
             _fixDx = _boxRight - _actualRight;
             _fixDy = nl.y - _actualTop;
           } else {
@@ -1573,6 +1912,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             applyPerCharBolds(layerRef, nti.contents, nl.charBolds, nl.syntheticBold === true);
           } catch (eBoldNew) {
             addWarning("新規レイヤーの合成太字適用に失敗: " + eBoldNew);
+          }
+        }
+        // 【v1.26.0】ルビ（新規レイヤー）。親 layer の textKey 上書きが完了してから呼ぶ。
+        // ルビレイヤーは親の直前に追加され、新規 text グループ (__textGroup) 内に居る。
+        if (nl.charRubies && !isObjEmpty(nl.charRubies)) {
+          try {
+            var __szRN = nti.size.value;
+            var __dirRN = nl.direction || "vertical";
+            var __fontRN = (typeof nl.font === "string" && nl.font.length > 0) ? nl.font : nti.font;
+            var __colRN = null;
+            try { __colRN = nti.color; } catch (eCol1) {}
+            applyRubies(layerRef, nti.contents, nl.charRubies, __szRN, __dirRN, __fontRN, __colRN);
+          } catch (eRubyN) {
+            addWarning("新規レイヤーのルビ適用に失敗: " + eRubyN);
           }
         }
         // 【v1.22.0】記号フォント置換（♡♥★☆♪♫♬♩♯♭ など → symbolFontPostScriptName）。

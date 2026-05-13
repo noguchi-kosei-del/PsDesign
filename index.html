@@ -570,10 +570,6 @@
                     <span class="size-unit">%</span>
                     <button id="leading-dec-btn" class="size-btn" type="button" title="狭く">−</button>
                   </div>
-                  <div class="ruby-toggle" role="group" aria-label="ルビ">
-                    <button id="ruby-off-btn" class="ruby-toggle-btn" type="button" data-ruby="off" title="ルビなし（行間 125%）">なし</button>
-                    <button id="ruby-on-btn" class="ruby-toggle-btn" type="button" data-ruby="on" title="ルビあり（行間 150%）">ルビ</button>
-                  </div>
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="stroke">
@@ -590,6 +586,39 @@
                     <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
                     <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
                   </div>
+                </div>
+              </div>
+              <div class="editor-tab-panel" data-tab-panel="ruby">
+                <div class="editor-panel-label">ルビ</div>
+                <div class="ruby-row">
+                  <div class="ruby-parent-display" id="ruby-parent-display" title="選択中の親文字" aria-live="polite">
+                    <span class="ruby-parent-empty">文字を選択</span>
+                  </div>
+                </div>
+                <div class="ruby-row">
+                  <input id="ruby-text-input" class="ruby-text-input" type="text"
+                         placeholder="ふりがな" aria-label="ふりがな"
+                         autocomplete="off" autocorrect="off" spellcheck="false" disabled />
+                </div>
+                <div class="ruby-row">
+                  <div class="ruby-mode-toggle" role="group" aria-label="ルビ種別">
+                    <button id="ruby-mode-auto-btn" class="ruby-mode-btn active" type="button"
+                            data-mode="auto" title="入力からモノ/グループを自動判定">自動</button>
+                    <button id="ruby-mode-mono-btn" class="ruby-mode-btn" type="button"
+                            data-mode="mono" title="モノルビ強制">モノ</button>
+                    <button id="ruby-mode-group-btn" class="ruby-mode-btn" type="button"
+                            data-mode="group" title="グループルビ強制">グループ</button>
+                  </div>
+                  <div class="ruby-scale-group" role="group" aria-label="ルビサイズ">
+                    <input id="ruby-scale-input" class="ruby-scale-input" type="number"
+                           min="20" max="100" step="5" value="50" aria-label="ルビサイズ %" />
+                    <span class="size-unit">%</span>
+                  </div>
+                </div>
+                <div class="ruby-row ruby-actions">
+                  <button id="ruby-apply-btn" class="ruby-apply-btn" type="button" disabled>適用</button>
+                  <button id="ruby-remove-btn" class="ruby-remove-btn" type="button" disabled
+                          title="選択範囲内のルビを削除">削除</button>
                 </div>
               </div>
             </div>
@@ -865,6 +894,25 @@
                 <option value="on">適用</option>
                 <option value="off">適用しない</option>
               </select>
+            </div>
+            <!-- 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置の白フチ自動付与・中丸ゴシック自動切替 -->
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-auto-stroke-enabled">自動配置: 背景上に白フチを自動付与</label>
+              <select id="default-auto-stroke-enabled" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
+              </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-cloud-shape-font-enabled">自動配置: 背景/ウニフラッシュ吹き出しで中丸ゴシック自動切替</label>
+              <select id="default-cloud-shape-font-enabled" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
+              </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-cloud-shape-font-postscript">中丸ゴシック PostScript 名 (空でフォント差し替えなし)</label>
+              <input id="default-cloud-shape-font-postscript" class="settings-default-input" type="text" list="default-font-list" placeholder="DFGMaruGothic-Md" />
             </div>
           </div>
         </div>

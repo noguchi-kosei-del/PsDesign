@@ -4163,3 +4163,241 @@ H4. **settings.js の各 default キーに `scope:` JSDoc コメント追加**:
 > - 旧: TCY 全角 `！！` `！？` は検出されず縦に並ぶ → 新: 検出対象に追加 + TCY span 内を半角に置換して Chromium の合成 glyph レンダリングを安定化
 > - 旧: 自動配置のテキストサイズは固定 → 新: comic-text-detector の `font_size` を pt 換算 + 経験補正で per-bubble に推定
 
+---
+
+## v1.26.0: PsDesign-main v1.24.0 機能の合体（自動配置の自動スタイリング + 描画品質向上 + PSD 焼き付き対策）+ 縦中横の半角化保存
+
+### 概要
+
+別フォーク (`PsDesign-main`, v1.24.0) が独自に進化させていた **11 グループ A〜K の改善**を ver_1.0 へ一括移植したバージョン。両フォークは v1.23.0 まで共通だったが、v1.24.0 から枝分かれし、ver_1.0 は「別名保存連番化・エディタモード見本切替・選択 UX 刷新・矢印キー再設計」(v1.24.0) と「Tachimi 連携・PSD 未読込テキスト追加・UI ストライプ・大規模リファクタ整理」(v1.25.0) を進化させた一方、PsDesign-main は「連結フキダシ検出・自動配置精度・白フチ自動付与・中丸ゴシック自動切替・PSD 焼き付き対策」を独自実装していた。
+
+このバージョンで両者を統合した。衝突した部分は ver_1.0 既存挙動を優先（Tachimi 連携・別名保存連番化・選択 UX・矢印キーは保持）し、PsDesign-main の機能を **重ねる** 形で実装。
+
+加えて、PSD 保存時に全角「！！」「！？」を半角「!!」「!?」に変換してから縦中横 (`baselineDirection: cross`) を当てる処理を追加（実機で Photoshop が全角ペアに対して合成 glyph 化しない不具合の対策）。
+
+### A. 連結フキダシ検出（ひょうたん型対応）
+
+[src/ai-place.js](src/ai-place.js):
+- `groupConnectedBlocks(blocks, debugTag)` 新設（Union-Find with path compression）
+- `pairMatchHeuristic(a, b)` で 3 条件 AND 判定:
+  1. `vertical` (縦書き/横書き) 一致
+  2. `font_size` 比 ≤ 1.4 (40% 差まで)
+  3. (P1) 主軸方向ひょうたん: `primaryGap ≤ font_size × 5.0` AND `perpDiff ≤ font_size × 2.5`、または
+     (P2) 直交軸方向ひょうたん: `sideGap ≤ font_size × 1.5` AND `sideCenterDiff ≤ font_size × 2.5`
+- 定数: `FONT_SIZE_RATIO_THRESHOLD = 1.4` / `PRIMARY_AXIS_GAP_FACTOR = 5.0` / `PERP_AXIS_ALIGN_FACTOR = 2.5` / `SIDE_AXIS_GAP_FACTOR = 1.5`
+- 連結グループ member ≥ 2 のブロックは `mapBlockToNewLayer` 内で sizePt を `defaults.sizePt` に統一（検出 font_size の揺れで連結セリフ間サイズがバラつくのを防ぐ）
+- console に `[ai-place] blocks=N groups=M connected_groups=K` + 各 block の bbox / font_size + 各ペアの判定結果（主軸 gap・側方 gap・perpDiff・fsRatio・reason）を距離順に最大 30 件出力するデバッグログ
+
+### B. 自動配置の文字サイズ精度改善
+
+[src/ai-place.js](src/ai-place.js) `detectSizePtFromBlock`:
+- 第 4 引数 `contents` を追加し、行数 / 最長行文字数を TXT contents から導出
+  - 旧: `block.lines` を使用（OCR の行分割で実配置 TXT と乖離）
+  - 新: contents が渡されれば優先（`countLines` / `longestLine`）、未指定時のみ block.lines にフォールバック
+- bbox 「厚み」軸 cap に加えて、**「長軸」cap** を追加:
+  - `maxLongPt = (longPsdPx / longChars) × 72 / dpi`
+  - 検出器が過大検出した sizePt を「char ベースの em 1 倍」で上から押さえる
+- 1pt 単位スナップ + `[6, 999]` クランプは継続
+
+### C. 白フチ自動付与（Rust 画像解析）
+
+[src-tauri/src/ocr.rs](src-tauri/src/ocr.rs):
+- `MokuroBlock` に 3 フィールド追加（serde rename + `skip_serializing_if`）:
+  - `surrounding_white_ratio: Option<f64>` (0..1 の白率)
+  - `surrounding_edge_changes: Option<u32>` (1 周合計の白↔黒変化数)
+  - `surrounding_min_segment_edge_changes: Option<u32>` (4 セグメント中の最小変化数)
+- `analyze_block_surroundings(image, block) -> Option<(f64, u32, u32)>` 新設:
+  - bbox 外側マージン: `((fs * 0.4) as i32).clamp(4, 30)`
+  - 外周リングを 1 周なぞって RGB ≥ 220 (`WHITE_THRESHOLD`) で白判定
+  - 角を重複させない走査順序（上→右→下→左）
+  - 1 周分の `samples: Vec<bool>` から `white_ratio` / `changes` / `seg_changes[4]` の最小を算出
+- `analyze_doc_in_place(doc, parent_dir)` で各 page の画像を `image::open` → 各 block を analyze → MokuroDocument を mut 更新
+- `resolve_image_path(parent_dir, img_path)` で絶対 / 相対 / volume/ 配下の 3 経路を試す
+- `run_ai_ocr` の `Ok(doc)` 直前に `analyze_doc_in_place(&mut doc, &parent_dir)` を呼ぶ（tempdir drop 前）
+- `use image::GenericImageView` を追加
+
+[src/ai-place.js](src/ai-place.js) `mapBlockToNewLayer`:
+- `defaults.autoStrokeEnabled && (strokeColor === "none" || null) && surroundingWhiteRatio < threshold (0.7)` で自動 `strokeColor = "white"`
+- ユーザーが手動で別の strokeColor を選んでいる場合は上書きせず尊重
+
+### D. 中丸ゴシック自動切替 + 6 段階信号風カラー
+
+[src/ai-place.js](src/ai-place.js) `mapBlockToNewLayer`:
+- 合成スコア計算:
+  ```
+  背景スコア = 1 - white_ratio                       (周囲が黒いほど高い)
+  ウニスコア = min(min_seg_edge_changes / 6, 1)      (4 セグメントすべてに凹凸が分布するほど高い)
+  合成 = max(背景, ウニ)
+  合成 ≥ 0.5 (= cloudShapeScoreThreshold) で 中丸ゴシック (`DFGMaruGothic-Md`) に切替
+  bucket = floor((score - 0.5) / 0.1)  // 0..5 の 10% 刻み
+  ```
+
+[src/state.js](src/state.js) `addNewLayer`:
+- 戻り値に `autoFontSwitched: boolean` + `autoFontSwitchBucket: number (-1〜5)` 追加
+
+[src/styles.css](src/styles.css):
+- `.auto-font-bucket-0..5` で `--auto-font-color` CSS 変数を信号風カラーに設定
+  - bucket 0 (50-59%) `#3b82f6` 青 / 1 (60-69%) `#22c55e` 緑 / 2 (70-79%) `#eab308` 黄 / 3 (80-89%) `#f97316` 橙 / 4 (90-99%) `#ef4444` 赤 / 5 (100%) `#dc2626` 濃赤
+- 3 箇所で色強調:
+  - `.layer-box-new.auto-font-switched`: 2px box-shadow リング + `.new-layer-text` 文字色
+  - `.layer-list li.auto-font-switched`: 左 3px ボーダー + `.layer-text` 文字色
+  - `.txt-block.auto-font-switched`: 左 3px ボーダー + 文字色（selected 時は `#f3f4f6` で薄白に切替）
+
+[src/canvas-tools.js](src/canvas-tools.js) / [src/text-editor.js](src/text-editor.js) / [src/txt-source.js](src/txt-source.js):
+- 各 render パスで `nl.autoFontSwitched` を見て該当 li / box / txt-block に class 付与
+- txt-source.js は同 paragraphIndex を参照する複数レイヤーがある場合に最大 bucket を採用 (`autoBucketByPara` Map)
+- ai-place.js `applyPlan` 末尾で `renderTxtSourceViewer()` を呼んで原稿パネル即時更新
+
+[src/settings.js](src/settings.js) / [src/settings-ui.js](src/settings-ui.js) / [index.html](index.html):
+- `cloudShapeFontEnabled: true` / `cloudShapeScoreThreshold: 0.5` / `cloudShapeFontPostScriptName: "DFGMaruGothic-Md"` を defaults に追加
+- 写植設定タブに 2 行追加（「自動配置: 背景/ウニフラッシュ吹き出しで中丸ゴシック自動切替」のセレクト + 中丸ゴシック PostScript 名の text input）
+
+### E. デフォルトフォント優先 + yBias = 0
+
+[src/ai-place.js](src/ai-place.js) `runAutoPlace`:
+- 旧: `fontPostScriptName: getCurrentFont()`
+- 新: `fontPostScriptName: getDefault("fontPostScriptName") || getCurrentFont()`
+- ユーザーが手動でツール状態のフォントを変えても、自動配置はデフォルト値を尊重
+
+[src/ai-place.js](src/ai-place.js):
+- `BUBBLE_PLACEMENT_Y_BIAS_EM = 0.3` → **0** に変更
+- UI 上の bbox 中心と植字位置を完全一致（旧 0.3em 下シフトを撤廃）
+
+### F. Photoshop 植字位置補正（縦書き 0.2em → 0.3em）
+
+[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyToPsd` 新規レイヤー処理:
+- 旧: `_padInset = 0.2 * _ptInPx`（両方向共通）
+- 新: 縦書き専用 `_padInsetV = 0.3 * _ptInPx`、横書きは `_padInset = 0.2` 維持
+- 縦書きは Photoshop の font sidebearing + line-box gutter が CSS の半分よりも大きく出るため、0.2em では約 0.1em ぶん左ズレが残る → 0.3em で吸収（24pt/600dpi で +20px 右シフト）
+
+### G. commit 系の中心固定（フォント・サイズ・行間変更時）
+
+[src/canvas-tools.js](src/canvas-tools.js):
+- `layerRectForExisting` / `layerRectForNew` を `export function` 化（text-editor.js から import 可能に）
+
+[src/text-editor.js](src/text-editor.js):
+- `getLayerCenter(ref)`: 変更前の bbox 中心 (cx, cy) を取得
+- `recenterLayerToCenter(ref, oldCenter)`: フィールド更新後に新 rect を取得して x/y (or dx/dy) を再計算
+  - existing: `addEditOffset(ddx, ddy)` で delta を加算
+  - new: `nl.x = oldCenter.cx - newRect.width / 2; nl.y = oldCenter.cy - newRect.height / 2` で直接書き込み
+- `commitFontToSelections` / `commitSingleFieldToSelections` (= sizePt / leadingPct) の各 mutator に center-fix を組み込み
+  - 変更前に oldCenter を取得 → setEdit/updateNewLayer → recenterLayerToCenter
+- これがないと box が左上を起点に伸び、視覚的に「テキストや白フチが左寄りに動く」現象になる
+
+### H. GPU 合成 hint（text-stroke ズレ対策）
+
+[src/styles.css](src/styles.css) `.layer-box`:
+- `will-change: transform, left, top` + `backface-visibility: hidden` を追加
+- `-webkit-text-stroke` + `paint-order: stroke fill` の組合せで CSS transform 適用時に stroke だけ古い位置に残る WebView2 (Chromium) のレンダリングバグ対策
+- box を独立 GPU 合成レイヤー化して、stroke 含む全描画を一体として動かす
+
+### I. bbox 改行防止
+
+[src/canvas-tools.js](src/canvas-tools.js) `layerRectForExisting` / `layerRectForNew`:
+- 旧: `longChars = measuredEm > 0 ? measuredEm : 1.05 * chars`
+- 新:
+  ```js
+  const heuristicLong = 1.05 * chars;
+  const longChars = measuredEm > heuristicLong ? measuredEm : heuristicLong;
+  ```
+- `measureText` ベースの実描画幅が極端に小さい値を返した場合（フォント未ロード fallback / Latin 文字幅誤判定）でも、最低 `1.05 × chars` em を保証
+- `white-space: pre-wrap` で折り返しが起きる事故を防止
+
+### J. PSD 焼き付き対策（案 G ハイブリッド方式）
+
+[src/psd-loader.js](src/psd-loader.js):
+- `isLayerHidden(layer)` ヘルパー追加: `!!layer.hidden || layer.visible === false`
+  - ag-psd のバージョンによっては `hidden` ではなく `visible: false` のみセットされるケースに両対応
+- `collectTextLayers` / `collectHiddenLayersForMasking` の判定を `isLayerHidden` で統一
+- `collectHiddenLayersForMasking` で `extractStroke(layer)` 経由の `strokePx` を取得して `out` に格納
+- **`collectVisibleNonTextLayers(layer, parentVisible, out)`** 新設:
+  - 可視 + 非テキスト + 非フォルダ + canvas を持つ レイヤーを集める
+  - フォルダはスキップして子を再帰（フォルダ合成 canvas を採用すると内部テキストごと焼き込まれるため）
+  - 出力順は ag-psd children 順 (上→下)、描画時は reverse で下から上に drawImage
+- **`isRectMostlyWhite(ctx, sx, sy, w, h)`** 新設:
+  - 5 点 (4 隅 + 中央) を `getImageData` でサンプリング、全て RGB ≥ 250 で「ほぼ白」判定
+- **`rebuildCanvasMaskingHidden(psd)`** 新設（旧 `maskHiddenLayersOnComposite` を置換）:
+  1. ベース描画: `psd.canvas` をそのまま canvas に描画（= 元の見た目維持）
+  2. visibleCanvas 作成: `collectVisibleNonTextLayers` で集めた可視非テキストレイヤーを reverse 順に drawImage（絵柄背景）
+  3. 上書き: 非表示レイヤーの bbox + per-layer DILATE 余白（`Math.ceil(strokePx) + 4`）を visibleCanvas で部分上書き → 非表示テキスト位置に「絵柄」が戻る
+  4. ガード: 上書き矩形が `isRectMostlyWhite` のときは skip して psd.canvas を維持（白塗り事故防止）
+  5. console に `[psd-loader] mask skip: visibleCanvas が空のため N件 上書き回避 / M件 上書き` を出力
+- 旧 `maskHiddenLayersOnComposite`（案 A: 白フィル）は frameFX 白フチが残るケースがあり置換、関数自体は将来の参考として残置
+
+### K. 設定 version 8 + 旧キー強制リセット
+
+[src/settings.js](src/settings.js):
+- `DEFAULT_SETTINGS.version` を 2 → **8** に bump
+- 新キー 5 つ追加:
+  - `autoStrokeEnabled: true`
+  - `autoStrokeWhiteRatioThreshold: 0.7`
+  - `cloudShapeFontEnabled: true`
+  - `cloudShapeScoreThreshold: 0.5`
+  - `cloudShapeFontPostScriptName: "DFGMaruGothic-Md"`
+- migrate で v7 以前の `cloudShape*` 保存値を破棄して新デフォルト 0.5 を強制反映（旧フォーク由来の 0.9 等が残っているケース対策）。`oldVersion >= 8` のとき限り保存値を尊重するガード付き
+
+### L. 縦中横 (`！！` / `！？`) の半角化保存 + 既存レイヤーへの適用
+
+[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs):
+- `applyTateChuYoko` の冒頭に **全角 → 半角自動変換** を追加:
+  ```js
+  if (fullText.indexOf("！！") >= 0 || fullText.indexOf("！？") >= 0) {
+    var halfText = fullText.replace(/！！/g, "!!").replace(/！？/g, "!?");
+    layer.textItem.contents = halfText.replace(/\n/g, "\r");
+    fullText = halfText;
+  }
+  ```
+- Photoshop の `baselineDirection: cross` は半角の合成 glyph 化が安定しており、全角だと cross 属性を当てても縦に並んだまま残るケースが実機で確認されたため
+- 半角化は char index 1:1（全角 1 文字 → 半角 1 文字）なので後段の per-char 系（`applyLineLeadings` / `applyPerCharSizesAndFonts` / `applyPerCharBolds` 等）に影響なし
+- **既存レイヤーにも `applyTateChuYoko` を呼ぶように追加**（従来は新規レイヤーのみ）:
+  - `applyPunctuationTsume` の直後で `tateChuYokoEnabled` && 縦書きのとき呼出
+  - direction は `e.direction` → `ti.direction` の優先順で判定
+  - これにより PSD 内に元から全角「！！」で組まれているテキストレイヤーも保存時に半角化 + 縦中横 cross 属性が当たる
+- `normalizeFullWidthToHalfTcy(s, tcyEnabled)` ヘルパー関数を `normalizeLineBreaks` の隣に追加（将来 contents 設定の前段で変換したい場合用）
+
+### 衝突回避（ver_1.0 独自機能の保持）
+
+PsDesign-main 機能を「重ねる」形で実装し、以下の ver_1.0 独自挙動は無傷で保持:
+- Tachimi 連携 ([src/services/tachimi.js](src/services/tachimi.js))
+- 別名保存連番化 ([src/bind/save.js](src/bind/save.js) の `写植完了(N)/`)
+- エディタモード見本切替 (`editor-left-pane-segment`)
+- 選択 UX（青実線 outline / 水色点線複数選択 / バッジ重なり解決）
+- 矢印キー再設計（V ツール nudge / レイヤーサイクル / Alt+↑↓ TXT 段落選択）
+- 半角→全角自動変換（`verticalHalfToFullEnabled`、縦書きで英数字を全角化、ver_1.0 v1.16.0）
+- 句読点ツメ・縦中横の bbox 反映（ai-place.js の `estimateLayerSize`、ver_1.0 v1.24.0）
+- 余り TXT を PSD 中央配置（`mapTxtToPageCenter`、ver_1.0 v1.25.0）
+
+### 修正ファイル一覧
+
+フロントエンド:
+- [src/settings.js](src/settings.js) — K（version 8 + 新キー 5 件 + migrate）
+- [src/settings-ui.js](src/settings-ui.js) — K（DEFAULT_SCHEMA 拡張）
+- [index.html](index.html) — K（写植設定タブ 3 フィールド追加）
+- [src/state.js](src/state.js) — D（`addNewLayer` に `autoFontSwitched` / `autoFontSwitchBucket`）
+- [src/ai-place.js](src/ai-place.js) — A〜E（`groupConnectedBlocks` / `pairMatchHeuristic` / `detectSizePtFromBlock` 拡張 / `mapBlockToNewLayer` 拡張 / `BUBBLE_PLACEMENT_Y_BIAS_EM = 0` / `runAutoPlace` defaults）
+- [src/canvas-tools.js](src/canvas-tools.js) — G+I（`layerRectFor*` export 化 + bbox 改行防止）+ D（layer-box-new に auto-font-switched クラス）
+- [src/text-editor.js](src/text-editor.js) — G（`getLayerCenter` / `recenterLayerToCenter` + commit 系）+ D（layer-list li に auto-font-switched クラス）
+- [src/styles.css](src/styles.css) — D（6 段階カラー）+ H（GPU 合成 hint）
+- [src/txt-source.js](src/txt-source.js) — D（renderViewer に auto-font-switched / bucket 反映）
+- [src/psd-loader.js](src/psd-loader.js) — J（`isLayerHidden` 統一 + `collectVisibleNonTextLayers` / `isRectMostlyWhite` / `rebuildCanvasMaskingHidden` 新設）
+
+Rust 側:
+- [src-tauri/src/ocr.rs](src-tauri/src/ocr.rs) — C（MokuroBlock 3 フィールド + `analyze_doc_in_place` / `analyze_block_surroundings` / `resolve_image_path` 新設 + `image::GenericImageView` import）
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) — F（縦書き padInset 0.3em）+ L（`applyTateChuYoko` 全角→半角自動変換 + 既存レイヤー対応 + `normalizeFullWidthToHalfTcy` ヘルパー）
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.26.0`** に揃え。Cargo.lock も `cargo check` 経由で自動追従。
+
+> **構造変更まとめ**:
+> - 旧: 自動配置は per-block の独立サイズ → 新: ひょうたん型を Union-Find で検出して連結グループは `defaults.sizePt` に統一、サイズ精度は TXT 行数ベースで bbox 長軸 cap 追加
+> - 旧: 自動配置で白フチは defaults のみ → 新: Rust 画像解析で bbox 外周白率を計算 → 白率 < 0.7 で `strokeColor: "white"` 自動付与（ユーザー手動指定は尊重）
+> - 旧: 自動配置で背景の濃さ判定なし → 新: 合成スコア (背景 + ウニ) 0.5 閾値で中丸ゴシック自動切替 + 6 段階信号風カラー（青→緑→黄→橙→赤→濃赤）でビューア / レイヤーリスト / 原稿テキストの 3 箇所を色強調
+> - 旧: 自動配置のフォントはツール状態優先 + yBias 0.3em で下シフト → 新: 環境設定デフォルトフォント優先 + yBias 0 で「UI 中心 = bbox 中心 = 配置中心」を一致
+> - 旧: jsx_gen.rs 縦書き植字位置補正 0.2em → 新: 縦書き 0.3em（sidebearing 込み）、横書き 0.2em 維持
+> - 旧: フォント / サイズ / 行間変更で box が左上起点に伸縮 → 新: commit 系に center-fix を組み込み、中心固定で box が広がる
+> - 旧: `.layer-box` に GPU 合成 hint なし → 新: `will-change` + `backface-visibility` で text-stroke + transform の WebView2 ズレを解消
+> - 旧: bbox 長軸は `measuredEm > 0 ? measuredEm : 1.05*chars` で measure が小さい値を返すと改行発生 → 新: `max(measuredEm, 1.05*chars)` で最低保証
+> - 旧: PSD 焼き付きは案 A（白フィル）で frameFX が残る → 新: 案 G ハイブリッド（psd.canvas ベース + 非表示レイヤー bbox を visibleCanvas で部分上書き + `isRectMostlyWhite` ガード + per-layer DILATE = stroke + 4）
+> - 旧: 縦中横は新規レイヤーのみ + 全角ペア検出はするが Photoshop で合成 glyph 化されないケースあり → 新: 既存レイヤーにも適用 + `applyTateChuYoko` 冒頭で全角→半角変換して `textItem.contents` を上書き、char index 1:1 で per-char 系には影響なし
+

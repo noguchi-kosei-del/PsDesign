@@ -9,7 +9,10 @@ const STORAGE_KEY = "psdesign_settings";
 
 // デフォルト設定。バージョン番号を持ち、将来の項目追加時に migrate() で穴埋め。
 export const DEFAULT_SETTINGS = {
-  version: 2,
+  // v8: 中丸ゴシック自動切替の閾値を 0.5 (50%) に設定 + UI 側で 10% 刻みの
+  //     6 段階バケット (50-59 / 60-69 / 70-79 / 80-89 / 90-99 / 100) で色分け。
+  //     旧 v7 以前 (デフォルト閾値 0.9 だった想定) の保存値を破棄して新デフォルト 0.5 を強制反映。
+  version: 8,
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
   pageDirectionInverted: false,
   // 新規テキストレイヤーの初期値 / レイアウト設定。
@@ -64,6 +67,26 @@ export const DEFAULT_SETTINGS = {
     // 自動配置済みレイヤーの TXT 追従同期に共通適用される（横書きと既存レイヤーには無影響）。
     // scope: creation-only（設定 ON でも過去に半角で配置されたレイヤーはそのまま）
     verticalHalfToFullEnabled: true,
+
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置で吹き出し外周の白率が低い
+    // (= フキダシ外 / フキダシ内に絵柄あり) 場合に白フチを自動付与するか。Rust 側
+    // (ocr.rs analyze_doc_in_place) が各 block の周辺白率 (0..1) を計算済み。
+    // ユーザーが手動で別の strokeColor を選んでいる場合は上書きせず尊重。
+    // scope: creation-only (自動配置で新規作成されるレイヤーにのみ反映)
+    autoStrokeEnabled: true,
+    autoStrokeWhiteRatioThreshold: 0.7,   // 周辺白率がこの値未満なら白フチ付与
+
+    // 【v1.26.0 移植】自動配置で「背景上 (フキダシ無し)」または「ウニフラッシュ吹き出し」
+    // を検出したら指定フォントに切り替えるか (デフォルト ON)。
+    // ai-place.js で 0..1 の合成スコアを算出し、cloudShapeScoreThreshold 以上で切替。
+    //   背景スコア = 1 - white_ratio                        (周囲が黒いほど高い)
+    //   ウニスコア = min(min_seg_edge_changes / 6, 1.0)     (全周分布の凹凸ほど高い)
+    //   max(背景, ウニ) >= 閾値 (デフォルト 0.5 = 50%) で発火。
+    // UI では bucket = floor((score - 0.5) / 0.1) で 10% 刻みの 6 段階に分類して色分け。
+    // scope: creation-only
+    cloudShapeFontEnabled: true,
+    cloudShapeScoreThreshold: 0.5,        // 0..1 (50% = 0.5)
+    cloudShapeFontPostScriptName: "DFGMaruGothic-Md", // 中丸ゴシック (環境依存。空ならフォント差し替えしない)
   },
   shortcuts: {
     save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
@@ -151,6 +174,28 @@ function migrate(old) {
     }
     if (typeof d.verticalHalfToFullEnabled === "boolean") {
       out.defaults.verticalHalfToFullEnabled = d.verticalHalfToFullEnabled;
+    }
+    // 【v1.26.0 移植】白フチ自動付与
+    if (typeof d.autoStrokeEnabled === "boolean") {
+      out.defaults.autoStrokeEnabled = d.autoStrokeEnabled;
+    }
+    if (typeof d.autoStrokeWhiteRatioThreshold === "number"
+        && Number.isFinite(d.autoStrokeWhiteRatioThreshold)) {
+      out.defaults.autoStrokeWhiteRatioThreshold = Math.max(0, Math.min(1, d.autoStrokeWhiteRatioThreshold));
+    }
+    // 【v1.26.0 移植】中丸ゴシック自動切替。v8 以降のみ cloudShape* の保存値を尊重する。
+    // v7 以前の保存値は破棄して新デフォルト 0.5 を強制反映。
+    const oldVersion = Number.isFinite(old.version) ? old.version : 0;
+    if (typeof d.cloudShapeFontEnabled === "boolean" && oldVersion >= 8) {
+      out.defaults.cloudShapeFontEnabled = d.cloudShapeFontEnabled;
+    }
+    if (typeof d.cloudShapeScoreThreshold === "number"
+        && Number.isFinite(d.cloudShapeScoreThreshold)
+        && oldVersion >= 8) {
+      out.defaults.cloudShapeScoreThreshold = Math.max(0, Math.min(1, d.cloudShapeScoreThreshold));
+    }
+    if (typeof d.cloudShapeFontPostScriptName === "string") {
+      out.defaults.cloudShapeFontPostScriptName = d.cloudShapeFontPostScriptName;
     }
   }
   if (old.shortcuts && typeof old.shortcuts === "object") {

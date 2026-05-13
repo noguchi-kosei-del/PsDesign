@@ -8,8 +8,11 @@ import {
   snapNextSize,
   // 【v1.16.0】in-place 編集 textarea 上の文字選択キャッシュ
   getLastInplaceSelection,
+  onInplaceSelectionChange,
   // 【v1.21.0】per-char サイズ・フォント変更時の編集中 DOM リアルタイム反映
   applyEditModeStyleToRange,
+  // 【v1.26.0】ルビ予定インジケータの編集中 DOM 反映
+  applyEditModeRubyToRange,
   getExistingLayerEffectiveSizePt,
 } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
@@ -147,6 +150,11 @@ import {
   setCharSizesRange,
   // 【v1.22.0】per-char 合成太字
   setCharBoldsRange,
+  // 【v1.26.0】per-char ルビ
+  setCharRubiesRange,
+  getCharRubyAt,
+  rangeHasAnyRuby,
+  withHistoryTransient,
   getEdit,
   getSelectedLayers,
   getNewTextDirection,
@@ -1491,6 +1499,137 @@ function bindBoldToggle() {
   });
 }
 
+// 【v1.26.0】ルビパネル。in-place 編集中の文字選択範囲 + ふりがな入力 → 「適用」ボタンで
+// charRubies に書き込む。モノ/グループ自動判定は「入力にスペースあり and 分割数 == 親文字数」
+// のときモノ、それ以外グループ。手動 mode (自動/モノ/グループ) で強制も可。
+function bindRubyTool() {
+  const parentEl = document.getElementById("ruby-parent-display");
+  const inputEl = document.getElementById("ruby-text-input");
+  const scaleEl = document.getElementById("ruby-scale-input");
+  const applyBtn = document.getElementById("ruby-apply-btn");
+  const removeBtn = document.getElementById("ruby-remove-btn");
+  const modeAuto = document.getElementById("ruby-mode-auto-btn");
+  const modeMono = document.getElementById("ruby-mode-mono-btn");
+  const modeGroup = document.getElementById("ruby-mode-group-btn");
+  if (!parentEl || !inputEl || !applyBtn || !removeBtn) return;
+
+  let currentMode = "auto"; // "auto" | "mono" | "group"
+
+  // フォーカスを盗まないように mousedown を抑制（in-place 編集を保護）。
+  // ただし input 系（ふりがな + scale）は通常通りフォーカスを許可する。
+  const noFocusSteal = (el) => el && el.addEventListener("mousedown", (e) => e.preventDefault());
+  [applyBtn, removeBtn, modeAuto, modeMono, modeGroup].forEach(noFocusSteal);
+
+  const setMode = (m) => {
+    currentMode = m;
+    [
+      [modeAuto, "auto"],
+      [modeMono, "mono"],
+      [modeGroup, "group"],
+    ].forEach(([b, k]) => {
+      if (b) b.classList.toggle("active", k === m);
+    });
+  };
+  modeAuto?.addEventListener("click", () => setMode("auto"));
+  modeMono?.addEventListener("click", () => setMode("mono"));
+  modeGroup?.addEventListener("click", () => setMode("group"));
+
+  const clampRubyScale = (n) => {
+    const v = Number(n);
+    if (!Number.isFinite(v)) return 50;
+    return Math.max(20, Math.min(100, Math.round(v / 5) * 5));
+  };
+
+  const decideRubyType = (mode, text, parentText) => {
+    if (mode === "mono") return "mono";
+    if (mode === "group") return "group";
+    // auto
+    if (/[ 　]/.test(text)) {
+      const parts = text.split(/[ 　]+/);
+      if (parts.length === parentText.length) return "mono";
+    }
+    return "group";
+  };
+
+  // 文字選択変化で親文字表示と入力欄の有効化を切替
+  const updateSelection = (sel) => {
+    if (sel && sel.end > sel.start) {
+      const targetId = sel.tempId ?? sel.layerId;
+      const ec = getEditingContext();
+      const contents = ec?.contents ?? "";
+      const parentText = contents.substring(sel.start, sel.end);
+      parentEl.textContent = parentText || "（選択範囲）";
+      inputEl.disabled = false;
+      applyBtn.disabled = false;
+      // 既存ルビがあれば入力欄に reload
+      const existing = getCharRubyAt(sel.psdPath, targetId, sel.start);
+      if (existing && existing.end === sel.end) {
+        inputEl.value = existing.text;
+        if (existing.scale) scaleEl.value = String(existing.scale);
+        if (existing.type) setMode(existing.type);
+        removeBtn.disabled = false;
+      } else {
+        inputEl.value = "";
+        removeBtn.disabled = !rangeHasAnyRuby(sel.psdPath, targetId, sel.start, sel.end);
+      }
+    } else {
+      parentEl.innerHTML = '<span class="ruby-parent-empty">文字を選択</span>';
+      inputEl.disabled = true;
+      applyBtn.disabled = true;
+      removeBtn.disabled = true;
+      inputEl.value = "";
+    }
+  };
+  onInplaceSelectionChange(updateSelection);
+  updateSelection(getLastInplaceSelection());
+
+  // 適用
+  const doApply = () => {
+    const sel = getLastInplaceSelection();
+    if (!sel || sel.end <= sel.start) return;
+    const text = inputEl.value.trim();
+    if (!text) return;
+    const targetId = sel.tempId ?? sel.layerId;
+    const parentText = parentEl.textContent || "";
+    const scale = clampRubyScale(scaleEl.value);
+    const type = decideRubyType(currentMode, text, parentText);
+    withHistoryTransient(() => {
+      setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, text, type, scale);
+    });
+    // 編集中 DOM への即時反映（dotted underline インジケータ）。
+    applyEditModeRubyToRange(sel.start, sel.end, text, type, scale);
+    refreshAllOverlays();
+    rebuildLayerList();
+    removeBtn.disabled = false;
+  };
+  applyBtn.addEventListener("click", doApply);
+
+  // 削除
+  removeBtn.addEventListener("click", () => {
+    const sel = getLastInplaceSelection();
+    if (!sel || sel.end <= sel.start) return;
+    const targetId = sel.tempId ?? sel.layerId;
+    withHistoryTransient(() => {
+      setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, "", "group", 50);
+    });
+    refreshAllOverlays();
+    rebuildLayerList();
+    inputEl.value = "";
+    removeBtn.disabled = true;
+  });
+
+  // Enter で apply、Esc でクリア
+  inputEl.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.isComposing) {
+      e.preventDefault();
+      doApply();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      inputEl.value = "";
+    }
+  });
+}
+
 function bindSizeTool() {
   const input = document.getElementById("size-input");
   const dec = document.getElementById("size-dec-btn");
@@ -1567,36 +1706,18 @@ function syncLeadingInputForEditingContext() {
   const targetId = ec.tempId ?? ec.layerId;
   const v = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
   if (document.activeElement !== input) input.value = String(v);
-  // ルビトグルも追従
-  const onActive = v >= 150;
-  const off = document.getElementById("ruby-off-btn");
-  const on = document.getElementById("ruby-on-btn");
-  if (off) off.classList.toggle("active", !onActive);
-  if (on) on.classList.toggle("active", onActive);
 }
 
 function bindLeadingTool() {
   const input = document.getElementById("leading-input");
   const dec = document.getElementById("leading-dec-btn");
   const inc = document.getElementById("leading-inc-btn");
-  const rubyOff = document.getElementById("ruby-off-btn");
-  const rubyOn = document.getElementById("ruby-on-btn");
   if (!input || !dec || !inc) return;
 
   input.value = String(getLeadingPct());
-  // ルビトグルの active 表示は現在の leading から導出。150 以上で「ルビあり」、
-  // それ未満は「ルビなし」を highlight する。手動で 130 のような中間値にしても
-  // どちらかが必ず active なので状態が分かりやすい。
-  const syncRuby = (v) => {
-    const onActive = v >= 150;
-    if (rubyOff) rubyOff.classList.toggle("active", !onActive);
-    if (rubyOn) rubyOn.classList.toggle("active", onActive);
-  };
   onLeadingPctChange((v) => {
     if (document.activeElement !== input) input.value = String(v);
-    syncRuby(v);
   });
-  syncRuby(getLeadingPct());
 
   input.addEventListener("input", () => {
     const v = parseInt(input.value, 10);
@@ -1617,11 +1738,9 @@ function bindLeadingTool() {
   // ボタン群は in-place 編集 textarea からのフォーカス移動を抑止する。これがないと
   // + を押すたびに textarea が blur → カーソル行が失われ、editingContext が消える。
   const keepFocus = (el) => el && el.addEventListener("mousedown", (e) => e.preventDefault());
-  keepFocus(dec); keepFocus(inc); keepFocus(rubyOff); keepFocus(rubyOn);
+  keepFocus(dec); keepFocus(inc);
   dec.addEventListener("click", () => adjustLeading(-5));
   inc.addEventListener("click", () => adjustLeading(+5));
-  if (rubyOff) rubyOff.addEventListener("click", () => applyLeading(125));
-  if (rubyOn) rubyOn.addEventListener("click", () => applyLeading(150));
 
   // in-place 編集の context 変化に追従して input/ボタンの表示を更新。
   // context が立つ → カーソル行の per-line 値（無ければ global）を表示し対象行ラベル ON。
@@ -1945,6 +2064,7 @@ function init() {
   bindSizeTool();
   bindLeadingTool();
   bindBoldToggle();
+  bindRubyTool();
   bindZoomTool();
   bindPageChange();
   bindStylePalette();

@@ -186,12 +186,35 @@ function renderViewer() {
   }
 
   const selectedIdx = getTxtSelectedBlockIndex();
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+  // 自動配置で背景/ウニ判定によりフォント切替された段落の bucket マップ。
+  // 同じ paragraph を参照するレイヤーが複数あるかもしれないので、最大 bucket
+  // (= 最も濃い色) を採用する。bucket = 0..5 の 10% 刻みで色分け。
+  const autoBucketByPara = new Map();
+  for (const layer of getNewLayers()) {
+    if (!layer?.autoFontSwitched) continue;
+    const ref = layer.sourceTxtRef;
+    if (!ref || !Number.isInteger(ref.paragraphIndex)) continue;
+    if (hasMarkers && ref.pageNumber !== pageNumber) continue;
+    const bucket = Number.isInteger(layer.autoFontSwitchBucket) ? layer.autoFontSwitchBucket : -1;
+    const existing = autoBucketByPara.get(ref.paragraphIndex);
+    if (existing == null || bucket > existing) {
+      autoBucketByPara.set(ref.paragraphIndex, bucket);
+    }
+  }
   blocks.forEach((paragraph, idx) => {
     const el = document.createElement("div");
     el.className = "txt-block";
     el.dataset.blockIndex = String(idx);
     el.textContent = paragraph;
     if (idx === selectedIdx) el.classList.add("selected");
+    if (autoBucketByPara.has(idx)) {
+      el.classList.add("auto-font-switched");
+      const b = autoBucketByPara.get(idx);
+      if (Number.isInteger(b) && b >= 0) {
+        el.classList.add(`auto-font-bucket-${b}`);
+      }
+    }
     el.addEventListener("click", () => selectBlock(idx, paragraph));
     el.addEventListener("dblclick", (e) => {
       e.preventDefault(); // text selection の暴走を抑止

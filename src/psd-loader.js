@@ -124,12 +124,20 @@ function effectiveFontSize(rawFontSize, transform) {
   return rawFontSize * scale;
 }
 
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】非表示判定を統一する。
+// ag-psd のバージョンによっては `hidden` ではなく `visible: false` のみセットされる
+// ケースがあるため両方確認する。collectTextLayers / collectHiddenLayersForMasking /
+// collectVisibleNonTextLayers で同じ判定関数を使う。
+function isLayerHidden(layer) {
+  return !!layer.hidden || layer.visible === false;
+}
+
 // PSD 上で非表示になっているレイヤー / フォルダ（およびその子孫）は
 // 「読み込みから除外したものとして扱う」ため、collectTextLayers では親フォルダ
 // の可視性を伝播し、テキストレイヤー本体 or 上位グループのいずれかが非表示
 // であればテキスト一覧に含めない。
 function collectTextLayers(layer, out = [], parentVisible = true) {
-  const effectiveVisible = parentVisible && !layer.hidden;
+  const effectiveVisible = parentVisible && !isLayerHidden(layer);
   if (layer.text && typeof layer.id === "number") {
     if (!effectiveVisible) {
       // 非表示テキストはスキップ（子は持たない想定だがネストにも備えて return しない）
@@ -171,7 +179,7 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
 // psd.canvas でも独立した「物体」として焼き込まれていないので無視して
 // よい（裏側の絵柄を白で潰す副作用も無くなる）。
 function collectHiddenLayersForMasking(layer, parentVisible, out) {
-  const selfHidden = !!layer.hidden;
+  const selfHidden = isLayerHidden(layer);
   const effectiveVisible = parentVisible && !selfHidden;
 
   if (
@@ -180,11 +188,18 @@ function collectHiddenLayersForMasking(layer, parentVisible, out) {
     layer.canvas.width > 0 &&
     layer.canvas.height > 0
   ) {
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+    // frameFX (白フチ) サイズを取得して mask の dilate 量を決める根拠にする。
+    // 白フチ無しのレイヤーは小さい dilate で文字輪郭ぴったりに消す。
+    const stroke = extractStroke(layer);
+    const strokePx = stroke.strokeColor === "none" ? 0 : stroke.strokeWidthPx;
     out.push({
       canvas: layer.canvas,
       left: layer.left ?? 0,
       top: layer.top ?? 0,
       name: layer.name,
+      isText: !!layer.text,
+      strokePx,
     });
   }
 
@@ -193,6 +208,176 @@ function collectHiddenLayersForMasking(layer, parentVisible, out) {
     for (const child of layer.children) {
       collectHiddenLayersForMasking(child, effectiveVisible, out);
     }
+  }
+}
+
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+// 全レイヤーツリーを再帰スキャンし、可視 + 非テキスト + canvas を持つ レイヤーを集める。
+// 出力順はツリーの上から (= ag-psd children 順) なので、描画時は reverse する。
+//
+// グループ canvas (フォルダ合成済み) を採用すると、内部に可視テキストが含まれていた
+// ときに「テキストごと焼き込まれた絵柄」が visibleCanvas に入ってしまい、それで
+// 非表示部分を上書きすると「可視テキスト位置に焼き込みテキスト」が見えてしまう。
+// よって **フォルダはスキップして子を再帰**、ラスター本体 (canvas を持つ非フォルダ)
+// だけを描画候補に集める。
+function collectVisibleNonTextLayers(layer, parentVisible, out) {
+  const selfHidden = isLayerHidden(layer);
+  const effectiveVisible = parentVisible && !selfHidden;
+
+  // テキストレイヤーは除外 (子は持たない想定だが念のため再帰)
+  if (layer.text) {
+    if (Array.isArray(layer.children)) {
+      for (const child of layer.children) {
+        collectVisibleNonTextLayers(child, effectiveVisible, out);
+      }
+    }
+    return;
+  }
+  // フォルダ (children あり) はスキップして子を再帰。フォルダ自身の合成 canvas は
+  // 内部テキストを含む可能性があるので採用しない。
+  const isFolder = Array.isArray(layer.children);
+  if (!isFolder &&
+      effectiveVisible &&
+      layer.canvas &&
+      layer.canvas.width > 0 &&
+      layer.canvas.height > 0) {
+    out.push(layer);
+    return;
+  }
+  if (isFolder) {
+    for (const child of layer.children) {
+      collectVisibleNonTextLayers(child, effectiveVisible, out);
+    }
+  }
+}
+
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+// 矩形が「ほぼ白で塗られている (= 絵柄が無い)」かを軽量サンプリングで判定。
+// 4 隅 + 中央の 5 点を getImageData で取り、すべて白に近ければ true。
+// 「visibleCanvas の該当領域に何も描画されなかった」ケース (= ag-psd で
+// 線画/背景レイヤーの canvas が取得できなかった) を検出して、上書き処理を
+// skip するために使う。元の psd.canvas を残すことで「白塗り問題」を防ぐ。
+function isRectMostlyWhite(ctx, sx, sy, w, h) {
+  try {
+    const samples = [
+      [Math.floor(sx + w / 2), Math.floor(sy + h / 2)],
+      [sx, sy],
+      [sx + w - 1, sy],
+      [sx, sy + h - 1],
+      [sx + w - 1, sy + h - 1],
+    ];
+    for (const [x, y] of samples) {
+      const data = ctx.getImageData(x, y, 1, 1).data;
+      if (data[0] < 250 || data[1] < 250 || data[2] < 250) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 【v1.26.0 移植 (PsDesign-main v1.24.0) 案G】ハイブリッド方式:
+//   1) psd.canvas をベースに描画 (現状の見た目を完全維持)
+//   2) 非表示レイヤーの bbox 範囲だけ、可視非テキストレイヤーで再合成した画像で上書き
+//   → 非表示テキストの焼き込みだけが「絵柄に置き換わる」、その他は psd.canvas のまま
+//
+// 旧 maskHiddenLayersOnComposite (案 A: 白フィル) は frameFX (白フチ) が残るケースが
+// あったため、案 G に置換。ベースに psd.canvas を使うため、再合成画像が不完全でも
+// 全体が真っ白くなることはない。再合成画像が空 (白) なら非表示部分だけが白になる
+// (= 案 B/D の矩形 fill 相当に degrade)。
+function rebuildCanvasMaskingHidden(psd) {
+  try {
+    if (!psd || !psd.width || !psd.height) return null;
+    const canvas = document.createElement("canvas");
+    canvas.width = psd.width;
+    canvas.height = psd.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    // (1) ベース: psd.canvas をそのまま描画 (= 元の見た目)
+    if (psd.canvas) {
+      ctx.drawImage(psd.canvas, 0, 0);
+    } else {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, psd.width, psd.height);
+    }
+
+    // (2) 非表示レイヤーを集める
+    const hiddenList = [];
+    if (Array.isArray(psd.children)) {
+      for (const child of psd.children) {
+        collectHiddenLayersForMasking(child, true, hiddenList);
+      }
+    }
+    if (hiddenList.length === 0) return canvas;
+
+    // (3) 可視非テキストレイヤーで「絵柄背景」用の合成画像を作る
+    const visibleCanvas = document.createElement("canvas");
+    visibleCanvas.width = psd.width;
+    visibleCanvas.height = psd.height;
+    const vctx = visibleCanvas.getContext("2d");
+    if (!vctx) return canvas;
+    vctx.fillStyle = "#ffffff";
+    vctx.fillRect(0, 0, psd.width, psd.height);
+    const visibleLayers = [];
+    if (Array.isArray(psd.children)) {
+      for (const child of psd.children) {
+        collectVisibleNonTextLayers(child, true, visibleLayers);
+      }
+    }
+    // 描画順は「下から上」なので reverse
+    for (const layer of visibleLayers.reverse()) {
+      const lc = layer.canvas;
+      if (!lc || lc.width === 0 || lc.height === 0) continue;
+      const op = (typeof layer.opacity === "number") ? layer.opacity / 255 : 1;
+      vctx.globalAlpha = Math.max(0, Math.min(1, op));
+      vctx.drawImage(lc, layer.left ?? 0, layer.top ?? 0);
+    }
+    vctx.globalAlpha = 1;
+
+    // (4) 非表示レイヤーの bbox 範囲 + DILATE 余白だけ、visibleCanvas から切り出して上書き。
+    // DILATE は frameFX (白フチ) サイズ (layer.strokePx) を加味して per-layer に決める。
+    // 例: stroke 0 → DILATE 4 / stroke 20 → DILATE 24 / stroke 50 → DILATE 54
+    //
+    // 【ガード】visibleCanvas の該当矩形が「ほぼ白」(= 元 PSD で線画/背景レイヤーの canvas が
+    // 取得できなかった) なら上書きを skip して psd.canvas を残す。これで「テキスト位置が
+    // ぽっかり白くなる」事故を防ぐ (元の見た目維持にフォールバック)。
+    const psdW = psd.width;
+    const psdH = psd.height;
+    let skippedAll = 0;
+    let drawnAll = 0;
+    for (const item of hiddenList) {
+      const lc = item.canvas;
+      if (!lc || lc.width === 0 || lc.height === 0) continue;
+      const strokePx = Number.isFinite(item.strokePx) && item.strokePx > 0 ? item.strokePx : 0;
+      const DILATE = Math.ceil(strokePx) + 4;
+      const left0 = (item.left ?? 0) - DILATE;
+      const top0 = (item.top ?? 0) - DILATE;
+      const right0 = (item.left ?? 0) + lc.width + DILATE;
+      const bottom0 = (item.top ?? 0) + lc.height + DILATE;
+      const sx = Math.max(0, Math.floor(left0));
+      const sy = Math.max(0, Math.floor(top0));
+      const ex = Math.min(psdW, Math.ceil(right0));
+      const ey = Math.min(psdH, Math.ceil(bottom0));
+      const w = ex - sx;
+      const h = ey - sy;
+      if (w <= 0 || h <= 0) continue;
+
+      // visibleCanvas の該当矩形が一様白かを 5 点サンプリング (4 隅 + 中央) で判定
+      if (isRectMostlyWhite(vctx, sx, sy, w, h)) {
+        skippedAll++;
+        continue; // 絵柄が無い → 上書きしない (psd.canvas のまま残す)
+      }
+      ctx.drawImage(visibleCanvas, sx, sy, w, h, sx, sy, w, h);
+      drawnAll++;
+    }
+    if (skippedAll > 0) {
+      console.info(`[psd-loader] mask skip: visibleCanvas が空のため ${skippedAll}件 上書き回避 / ${drawnAll}件 上書き`);
+    }
+    return canvas;
+  } catch (e) {
+    console.warn("rebuildCanvasMaskingHidden failed:", e);
+    return null;
   }
 }
 
@@ -258,19 +443,17 @@ export async function loadPsdFromPath(path) {
   }
   const dpi = psd.imageResources?.resolutionInfo?.horizontalResolution ?? 72;
 
-  // 非表示レイヤー / フォルダが存在するなら、ag-psd の合成済み canvas には
-  // 当時の状態（= 表示時の焼き込み）が残っている可能性が高い。
-  // 各非表示レイヤー自身の canvas を「形状マスク」として利用し、その輪郭
-  // 部分だけを白で塗ることで、裏側の絵柄を保ったままレイヤー本体だけ消す。
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0) 案G】
+  // 非表示レイヤー (テキスト含む) の焼き込みを「実際の絵柄」で上書き。
+  // psd.canvas をベースにしつつ、非表示テキスト位置だけ可視レイヤー再合成画像で
+  // 置き換えるので、現状の見た目を維持しつつ非表示テキストの焼き付きが消える。
+  // 旧 maskHiddenLayersOnComposite (案 A 白フィル) は frameFX 白フチが残る欠点があった。
   let canvas = psd.canvas;
-  if (Array.isArray(psd.children) && canvas) {
-    const hiddenLayers = [];
-    for (const child of psd.children) {
-      collectHiddenLayersForMasking(child, true, hiddenLayers);
-    }
-    if (hiddenLayers.length > 0) {
-      const masked = maskHiddenLayersOnComposite(psd, hiddenLayers);
-      if (masked) canvas = masked;
+  if (Array.isArray(psd.children)) {
+    const rebuilt = rebuildCanvasMaskingHidden(psd);
+    if (rebuilt) {
+      canvas = rebuilt;
+      console.info(`[psd-loader] canvas 部分再合成 OK | path=${path}`);
     }
   }
 

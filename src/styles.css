@@ -530,21 +530,59 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   gap: 10px;
 }
 
-/* ルビ有無トグル：方向トグルと同じ見た目で 2 段選択。テキストラベル用に幅を少し広く。 */
-.ruby-toggle {
+/* 【v1.26.0】ルビ panel：行間 panel の下に配置。
+   親文字 display / ふりがな input / mode 切替 + scale / 適用・削除ボタンの 4 行構成。 */
+.ruby-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+}
+.ruby-row + .ruby-row { margin-top: 4px; }
+.ruby-parent-display {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.ruby-parent-empty { color: var(--text-muted); }
+.ruby-text-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 3px 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+}
+.ruby-text-input:focus { border-color: var(--accent); outline: none; }
+.ruby-text-input:disabled { background: var(--panel); color: var(--text-muted); cursor: not-allowed; }
+/* 種別トグル：自動 / モノ / グループ */
+.ruby-mode-toggle {
   display: inline-flex;
   border: 1px solid var(--border);
   border-radius: 4px;
   overflow: hidden;
+  flex-shrink: 0;
 }
-.ruby-toggle-btn {
+.ruby-mode-btn {
   min-width: 36px;
-  padding: 4px 8px;
+  padding: 3px 6px;
   background: transparent;
   color: var(--text);
   border: none;
   font-size: 11px;
-  line-height: 1;
+  line-height: 1.2;
   cursor: pointer;
   white-space: nowrap;
   transition: background 0.1s;
@@ -552,9 +590,121 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   align-items: center;
   justify-content: center;
 }
-.ruby-toggle-btn + .ruby-toggle-btn { border-left: 1px solid var(--border); }
-.ruby-toggle-btn:hover:not(.active) { background: var(--panel-hover); }
-.ruby-toggle-btn.active { background: var(--accent); color: #fff; }
+.ruby-mode-btn + .ruby-mode-btn { border-left: 1px solid var(--border); }
+.ruby-mode-btn:hover:not(.active) { background: var(--panel-hover); }
+.ruby-mode-btn.active { background: var(--accent); color: #fff; }
+.ruby-scale-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+.ruby-scale-input {
+  width: 40px;
+  padding: 1px 4px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 11px;
+  text-align: right;
+  -moz-appearance: textfield;
+}
+.ruby-scale-input::-webkit-outer-spin-button,
+.ruby-scale-input::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+.ruby-actions { gap: 8px; }
+.ruby-apply-btn, .ruby-remove-btn {
+  flex: 1 1 0;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-hover);
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+}
+.ruby-apply-btn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); color: #fff; }
+.ruby-remove-btn:hover:not(:disabled) { background: rgba(231, 76, 60, 0.18); border-color: var(--danger); color: var(--danger); }
+.ruby-apply-btn:disabled,
+.ruby-remove-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* 【v1.26.0】in-app プレビューのルビ表示（編集後 / 非編集状態）。
+   <ruby> タグや ::after 疑似要素ではなく本物の <span> 要素を使ってルビを描画する。
+   構造: <span class="ruby-wrap"><span class="ruby-base">親</span><span class="ruby-text">ルビ</span></span>
+   .ruby-wrap は inline-block で親文字幅を保ち、.ruby-text は absolute で外側に出す。 */
+.ruby-wrap {
+  position: relative;
+  display: inline-block;
+}
+.ruby-base {
+  /* 親文字（インライン） */
+}
+.ruby-text {
+  position: absolute;
+  font-size: var(--ruby-scale, 0.5em);
+  line-height: 1;
+  font-weight: normal;
+  color: inherit;
+  pointer-events: none;
+  white-space: nowrap;
+  user-select: none;
+  /* 横書き既定: 親文字の上、横中心揃え */
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 1px;
+}
+/* 縦書きの場合、.ruby-text を親の右側に配置 */
+.layer-box[data-direction="vertical"] .ruby-text {
+  bottom: auto;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-bottom: 0;
+  margin-left: 2px;
+  writing-mode: vertical-rl;
+}
+
+/* 【v1.26.0】in-place 編集中の「ルビプレビュー」。<ruby> 本体は contenteditable 内で
+   innerText に rt 内容を含めてしまい contents tracking が壊れるため、データ属性 + ::after
+   疑似要素方式でプレビューする。span 自身は親文字 plain text のみを持つ。
+   横書きでは親文字の上、縦書き（vertical-rl）では親文字の右に小さく表示。 */
+.ruby-edit-pending {
+  position: relative;
+  background: rgba(0, 120, 212, 0.12);
+  border-radius: 2px;
+}
+.ruby-edit-pending::after {
+  content: attr(data-ruby-text);
+  position: absolute;
+  font-size: var(--ruby-scale, 0.5em);
+  line-height: 1;
+  font-weight: normal;
+  color: inherit;
+  pointer-events: none;
+  white-space: nowrap;
+  user-select: none;
+  /* 横書き既定: 親文字の上、横中心揃え */
+  bottom: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  margin-bottom: 1px;
+}
+/* 縦書き（new-layer-text / existing-layer-text に writing-mode: vertical-rl が当たる）の場合、
+   ::after を親の「右側」に配置する。CSS で writing-mode を直接判定できないため、layer-box
+   の data-direction 属性で分岐。 */
+.layer-box[data-direction="vertical"] .ruby-edit-pending::after {
+  bottom: auto;
+  left: 100%;
+  top: 50%;
+  transform: translateY(-50%);
+  margin-bottom: 0;
+  margin-left: 2px;
+  /* 縦書きで表示時もルビ自体を縦書きにする */
+  writing-mode: vertical-rl;
+}
 
 /* フチのサムネ（なし / 白 / 黒）：3 つの丸スウォッチを横並び表示。 */
 .stroke-toggle {
@@ -1811,6 +1961,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: auto;
   cursor: move;
   box-sizing: border-box;
+  /* 【v1.26.0 移植 (PsDesign-main v1.24.0)】GPU 合成 hint。
+     -webkit-text-stroke + paint-order: stroke fill の組合せで CSS transform 適用時に
+     stroke だけ古い位置に残る WebView2 (Chromium) のレンダリングバグ対策。box を独立
+     GPU 合成レイヤー化して、stroke 含む全描画を一体として動かす。 */
+  will-change: transform, left, top;
+  backface-visibility: hidden;
 }
 
 /* 単一選択時: 青の実線 outline (--accent)。既存 / 新規どちらも同じ青で統一。
@@ -1842,6 +1998,31 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   bottom: 100%;
   margin-top: 0;
   margin-bottom: 10px;
+}
+
+/* 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+   自動配置で背景/ウニ判定によりフォント自動切替されたレイヤーの強調表示 (要件④)。
+   合成スコアを 10% 刻みのバケットに分けて、信号風の色分けで確信度を可視化する。
+   50%以上 青 → 60% 緑 → 70% 黄 → 80% 橙 → 90% 赤 → 100% 濃赤
+   CSS variable --auto-font-color を bucket クラスから設定し、各表示箇所
+   (layer-box / layer-list / txt-block) で同じ変数を参照する。 */
+.auto-font-bucket-0 { --auto-font-color: #3b82f6; }   /* 50-59% 青 */
+.auto-font-bucket-1 { --auto-font-color: #22c55e; }   /* 60-69% 緑 */
+.auto-font-bucket-2 { --auto-font-color: #eab308; }   /* 70-79% 黄 */
+.auto-font-bucket-3 { --auto-font-color: #f97316; }   /* 80-89% 橙 */
+.auto-font-bucket-4 { --auto-font-color: #ef4444; }   /* 90-99% 赤 */
+.auto-font-bucket-5 { --auto-font-color: #dc2626; }   /* 100% 濃赤 */
+
+.layer-box-new.auto-font-switched {
+  box-shadow: 0 0 0 2px var(--auto-font-color, #ef4444);
+}
+.layer-box-new.auto-font-switched.selected {
+  /* 選択時は外側に半透明白リングを重ねて bucket 色との視覚干渉を避ける */
+  box-shadow: 0 0 0 2px var(--auto-font-color, #ef4444),
+              0 0 0 4px rgba(255, 255, 255, 0.55);
+}
+.layer-box-new.auto-font-switched .new-layer-text {
+  color: var(--auto-font-color, #ef4444);
 }
 
 /* V ツール swap 中、入れ替え対象 B（A の元位置に移動するフレーム）を緑で強調。
@@ -1898,12 +2079,28 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: none;
 }
 
+/* 【v1.26.0】ルビが含まれる layer は overflow を visible に切り替えて、<ruby> の <rt> や
+   in-edit プレビューの ::after 疑似要素を bbox 外側まで表示できるようにする。
+   renderInnerText / applyEditModeRubyToRange が has-ruby クラスを付け外しする。 */
+.new-layer-text.has-ruby,
+.existing-layer-text.has-ruby {
+  overflow: visible;
+}
+
 .existing-layer-text {
   opacity: 0.35;
 }
 
 .layer-box-existing.selected .existing-layer-text {
   opacity: 0.85;
+}
+
+/* 【v1.26.0】既存レイヤーにルビが付いている場合、選択解除時の opacity:0.35 ではルビが
+   ほぼ見えなくなるため、has-ruby 時は選択状態に関係なく高 opacity に保つ。PSD canvas の
+   ベース文字と多少重なって見えるが、ルビが見えないよりは許容される視認性。 */
+.existing-layer-text.has-ruby,
+.layer-box-existing.selected .existing-layer-text.has-ruby {
+  opacity: 1;
 }
 
 .layer-box-new[data-direction="vertical"] .new-layer-text,
@@ -3000,6 +3197,19 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: #fff;
 }
 
+/* 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+   自動配置で背景/ウニ判定によりフォント切替された段落の強調表示 (要件④)。
+   bucket 0..5 の 10% 刻みで色グラデ。CSS variable --auto-font-color を参照。
+   選択時は accent 背景上で読みやすい薄白に統一 (bucket 色と干渉させない)。 */
+.txt-block.auto-font-switched {
+  border-left: 3px solid var(--auto-font-color, #ef4444);
+  padding-left: 5px;
+  color: var(--auto-font-color, #ef4444);
+}
+.txt-block.auto-font-switched.selected {
+  color: #f3f4f6;
+}
+
 .txt-block-spacer {
   height: 6px;
 }
@@ -3178,6 +3388,21 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: var(--panel);
 }
 
+/* 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+   自動配置で背景/ウニ判定によりフォント自動切替されたレイヤーの行強調 (要件④)。
+   bucket 0..5 の 10% 刻みで色グラデ。CSS variable --auto-font-color を参照。
+   選択時は accent 背景に対し薄色で文字色を示す。 */
+.layer-list li.auto-font-switched {
+  border-left: 3px solid var(--auto-font-color, #ef4444);
+  padding-left: 9px;
+}
+.layer-list li.auto-font-switched .layer-text {
+  color: var(--auto-font-color, #ef4444);
+}
+.layer-list li.auto-font-switched.selected .layer-text {
+  color: #f3f4f6;
+}
+
 .layer-list .layer-item-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -3303,15 +3528,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 /* 編集 panel コンパクト化（v1.22.0 でタブ撤去 → 縦並び全表示に伴う省スペース化）。
    panel 内ボタン・入力の vertical padding を絞り、各 panel の高さを約半分に圧縮する。
-   size-btn / size-input / ruby-toggle-btn は editor-tab-panel 内のみで使われるが、
-   将来の流用に備えてセレクタはスコープを切る。 */
-.editor-tab-panel .size-btn,
-.editor-tab-panel .ruby-toggle-btn { padding-top: 0; padding-bottom: 0; line-height: 1.2; }
+   size-btn / size-input は editor-tab-panel 内のみで使われるが、将来の流用に備えてスコープを切る。 */
+.editor-tab-panel .size-btn { padding-top: 0; padding-bottom: 0; line-height: 1.2; }
 .editor-tab-panel .size-input { padding-top: 1px; padding-bottom: 1px; }
 .editor-tab-panel .stroke-dot { width: 16px; height: 16px; min-width: 16px; }
 
 /* 【v1.22.0】合成太字（faux bold）トグルボタン。size-row 右側に配置。
-   ラベル「太字」(2 文字) と他のトグルボタン（ruby-toggle-btn 等）と視覚的に揃えるため
+   ラベル「太字」(2 文字) と他のトグルボタン（ruby-mode-btn 等）と視覚的に揃えるため
    font-size は 11px、min-width は 36px。aria-pressed で active 表示を切替。 */
 .bold-toggle-btn {
   min-width: 36px;

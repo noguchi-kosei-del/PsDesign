@@ -27,7 +27,7 @@ import {
   beginHistoryTransient,
   abortHistoryTransient,
 } from "./state.js";
-import { parsePages, convertHalfToFullForVertical } from "./txt-source.js";
+import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runAiOcrForFiles, PLACE_ICON_SVG } from "./ai-ocr.js";
@@ -156,7 +156,10 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
 const FONT_SIZE_CALIBRATION = 0.92;
 const ASSUMED_LEADING_FACTOR = 1.25;
 
-function detectSizePtFromBlock(block, mokuroPage, psdPage) {
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】contents 引数を追加し、行数 / 最長行文字数を
+// TXT contents から導出する（block.lines は OCR 出力で実配置 TXT と乖離するため）。
+// bbox 長軸 cap も追加して過大検出を抑える。
+function detectSizePtFromBlock(block, mokuroPage, psdPage, contents) {
   const fs = block?.font_size;
   if (!Number.isFinite(fs) || fs <= 0) return null;
   const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
@@ -168,19 +171,45 @@ function detectSizePtFromBlock(block, mokuroPage, psdPage) {
   // 1) detector の font_size を PSD pt に換算 + 軽いキャリブレーション
   let pt = ((fs * scale) * 72) / dpi * FONT_SIZE_CALIBRATION;
 
-  // 2) bbox の "厚み" から物理的な上限 pt を算出して上から押さえる。
+  // 2) 行数 / 最長文字数は TXT 側 contents から導出する方が信頼できる (要件③)。
+  //    block.lines は OCR が分割した行数で、実際に配置する TXT セリフとは乖離する
+  //    ことが多い。contents 未指定時のみ block.lines にフォールバック。
+  let lineCount;
+  let longChars;
+  if (contents != null) {
+    lineCount = Math.max(1, countLines(contents));
+    longChars = Math.max(1, longestLine(contents));
+  } else {
+    const lines = Array.isArray(block.lines) ? block.lines : [];
+    lineCount = Math.max(1, lines.length);
+    const maxLineLen = lines.reduce(
+      (acc, ln) => Math.max(acc, typeof ln === "string" ? ln.length : 0),
+      1,
+    );
+    longChars = maxLineLen;
+  }
+
+  // 3) bbox の "厚み" から物理的な上限 pt を算出して上から押さえる。
   //    縦書きは横幅 = (1 + (n-1) × leading) × em の関係で em を逆算。横書きは縦高で同様。
   //    1 行は denom=1（bbox とほぼ等価）、2 行は denom=2.25、3 行は 3.5 …と多列ほど厳しく。
-  const lines = Array.isArray(block.lines) ? block.lines : [];
-  const lineCount = Math.max(1, lines.length);
   const isVertical = !!block.vertical;
   const thickPsdPx = isVertical
     ? (block.box[2] - block.box[0]) * sx
     : (block.box[3] - block.box[1]) * sy;
   if (Number.isFinite(thickPsdPx) && thickPsdPx > 0) {
     const denom = 1 + Math.max(0, lineCount - 1) * ASSUMED_LEADING_FACTOR;
-    const maxPt = ((thickPsdPx / denom) * 72) / dpi;
-    if (Number.isFinite(maxPt) && maxPt > 0) pt = Math.min(pt, maxPt);
+    const maxThickPt = ((thickPsdPx / denom) * 72) / dpi;
+    if (Number.isFinite(maxThickPt) && maxThickPt > 0) pt = Math.min(pt, maxThickPt);
+  }
+
+  // 4) bbox の "長軸" (縦書き=縦高, 横書き=横幅) と最長行文字数からも上限を出す。
+  //    em 約 1 倍が文字幅相当と仮定して、過大検出を上から押さえる。
+  const longPsdPx = isVertical
+    ? (block.box[3] - block.box[1]) * sy
+    : (block.box[2] - block.box[0]) * sx;
+  if (Number.isFinite(longPsdPx) && longPsdPx > 0 && longChars > 0) {
+    const maxLongPt = ((longPsdPx / longChars) * 72) / dpi;
+    if (Number.isFinite(maxLongPt) && maxLongPt > 0) pt = Math.min(pt, maxLongPt);
   }
 
   if (!Number.isFinite(pt) || pt <= 0) return null;
@@ -191,28 +220,191 @@ function detectSizePtFromBlock(block, mokuroPage, psdPage) {
   return Math.max(6, Math.min(999, snapped));
 }
 
-// 自動配置時、吹き出し中心からテキストを少し下方向にずらすバイアス (em 単位)。
-// 画像スキャンエンジン (吹き出し検出側) の bbox が「上方向に寄っていて下が長め」になりやすく、
-// そのまま中心に置くと視覚的に上寄りに見えるため経験補正。
-// 単位は em (× ptInPsdPx)。値を増やすほど下に動く。0 で従来挙動。
-const BUBBLE_PLACEMENT_Y_BIAS_EM = 0.3;
+// 自動配置時、吹き出し中心からテキストを下方向にずらすバイアス (em 単位)。
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】UI 上の bbox 中心と植字位置を一致させるため
+// 0 (バイアスなし) に固定。値を増やすほど下にずれる (UI と Photoshop 保存後で位置が乖離するので注意)。
+const BUBBLE_PLACEMENT_Y_BIAS_EM = 0;
 
-function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef) {
+// ============================================================
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】連結吹き出し検出 (要件①)
+// ============================================================
+// 「ひょうたん型フキダシ」 = 視覚的には 1 つの吹き出しだが、輪郭が
+// 途中でくびれて 2 つの円がつながったような形状になっており、
+// comic-text-detector が 2 つの独立 block として分割検出した状態を想定。
+//
+// bbox + font_size + vertical のメタデータから heuristic で判定する。
+//
+// 判定 3 条件 (すべて満たすときに同一フキダシと認定):
+//   (a) vertical (縦書き / 横書き) が一致
+//   (b) font_size が近い:  max/min ≤ FONT_SIZE_RATIO_THRESHOLD
+//   (P1) primaryGap ≤ font_size × PRIMARY_AXIS_GAP_FACTOR
+//        AND perpDiff ≤ font_size × PERP_AXIS_ALIGN_FACTOR
+//   (P2) sideGap ≤ font_size × SIDE_AXIS_GAP_FACTOR
+//        AND sideCenterDiff ≤ font_size × PERP_AXIS_ALIGN_FACTOR
+//
+// 認定グループは検出 font_size の揺れに左右されず、ユーザー指定の
+// 基本フォントサイズ (defaults.sizePt) に統一する。
+
+const FONT_SIZE_RATIO_THRESHOLD = 1.4;
+const PRIMARY_AXIS_GAP_FACTOR = 5.0;
+const PERP_AXIS_ALIGN_FACTOR = 2.5;
+const SIDE_AXIS_GAP_FACTOR = 1.5;
+
+function fontSizeOf(blk) {
+  const fs = blk?.font_size;
+  return Number.isFinite(fs) && fs > 0 ? fs : 12;
+}
+
+function pairMatchHeuristic(a, b) {
+  const A = a.box, B = b.box;
+  const isVertical = !!a.vertical;
+  const fsA = fontSizeOf(a);
+  const fsB = fontSizeOf(b);
+  const fsRatio = Math.max(fsA, fsB) / Math.max(1, Math.min(fsA, fsB));
+  const fsAvg = (fsA + fsB) / 2;
+
+  let primaryGap, perpDiff, sideGap, sideCenterDiff;
+  let primaryAxisLabel, sideAxisLabel;
+  if (isVertical) {
+    primaryGap = Math.max(0, Math.max(A[1] - B[3], B[1] - A[3]));   // Y gap (主軸)
+    perpDiff = Math.abs((A[0] + A[2]) / 2 - (B[0] + B[2]) / 2);     // X 中心差
+    sideGap = Math.max(0, Math.max(A[0] - B[2], B[0] - A[2]));      // X gap (側方)
+    sideCenterDiff = Math.abs((A[1] + A[3]) / 2 - (B[1] + B[3]) / 2); // Y 中心差
+    primaryAxisLabel = "Y gap";
+    sideAxisLabel = "X gap";
+  } else {
+    primaryGap = Math.max(0, Math.max(A[0] - B[2], B[0] - A[2]));
+    perpDiff = Math.abs((A[1] + A[3]) / 2 - (B[1] + B[3]) / 2);
+    sideGap = Math.max(0, Math.max(A[1] - B[3], B[1] - A[3]));
+    sideCenterDiff = Math.abs((A[0] + A[2]) / 2 - (B[0] + B[2]) / 2);
+    primaryAxisLabel = "X gap";
+    sideAxisLabel = "Y gap";
+  }
+  const primaryTol = fsAvg * PRIMARY_AXIS_GAP_FACTOR;
+  const perpTol = fsAvg * PERP_AXIS_ALIGN_FACTOR;
+  const sideTol = fsAvg * SIDE_AXIS_GAP_FACTOR;
+
+  const result = {
+    primaryGap, perpDiff, sideGap, sideCenterDiff,
+    primaryTol, perpTol, sideTol, fsRatio,
+  };
+
+  if (!!a.vertical !== !!b.vertical) {
+    return { match: false, reason: "vertical 不一致", ...result };
+  }
+  if (fsRatio > FONT_SIZE_RATIO_THRESHOLD) {
+    return { match: false, reason: `font_size 差大 (ratio=${fsRatio.toFixed(2)})`, ...result };
+  }
+
+  const matchPrimary = primaryGap <= primaryTol && perpDiff <= perpTol;
+  if (matchPrimary) {
+    return { match: true, reason: "主軸ひょうたん", ...result };
+  }
+  const matchSide = sideGap <= sideTol && sideCenterDiff <= perpTol;
+  if (matchSide) {
+    return { match: true, reason: "横ひょうたん", ...result };
+  }
+
+  let reason;
+  if (primaryGap > primaryTol && sideGap > sideTol) {
+    reason = `両方向距離大 (${primaryAxisLabel}=${primaryGap.toFixed(0)}/${primaryTol.toFixed(0)} ${sideAxisLabel}=${sideGap.toFixed(0)}/${sideTol.toFixed(0)})`;
+  } else if (primaryGap <= primaryTol) {
+    reason = `主軸OKだが直交ズレ (perp=${perpDiff.toFixed(0)}/${perpTol.toFixed(0)})`;
+  } else if (sideGap <= sideTol) {
+    reason = `側方OKだが直交ズレ (sideCenter=${sideCenterDiff.toFixed(0)}/${perpTol.toFixed(0)})`;
+  } else {
+    reason = "条件未マッチ";
+  }
+  return { match: false, reason, ...result };
+}
+
+// blocks 各要素について「グループ ID」「グループ内 member 数 >= 2 か」を返す。
+// 戻り値: { groupId: number, connected: boolean }[]  (blocks と同じ index)
+function groupConnectedBlocks(blocks, debugTag = "") {
+  const n = blocks.length;
+  if (n === 0) return [];
+  // Union-Find with path compression
+  const parent = Array.from({ length: n }, (_, i) => i);
+  const find = (i) => {
+    while (parent[i] !== i) {
+      parent[i] = parent[parent[i]];
+      i = parent[i];
+    }
+    return i;
+  };
+  const union = (a, b) => {
+    const ra = find(a), rb = find(b);
+    if (ra !== rb) parent[ra] = rb;
+  };
+  const pairLogs = [];
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const r = pairMatchHeuristic(blocks[i], blocks[j]);
+      pairLogs.push({ i, j, ...r });
+      if (r.match) union(i, j);
+    }
+  }
+  const rootToGroup = new Map();
+  let nextGroupId = 0;
+  const groupIds = new Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!rootToGroup.has(r)) rootToGroup.set(r, nextGroupId++);
+    groupIds[i] = rootToGroup.get(r);
+  }
+  const memberCount = new Array(nextGroupId).fill(0);
+  for (let i = 0; i < n; i++) memberCount[groupIds[i]]++;
+  const connectedGroupCount = memberCount.filter((c) => c >= 2).length;
+  console.info(`[ai-place]${debugTag} blocks=${n} groups=${nextGroupId} connected_groups=${connectedGroupCount}`);
+  for (let i = 0; i < n; i++) {
+    const b = blocks[i].box;
+    const fs = blocks[i].font_size;
+    const v = blocks[i].vertical;
+    console.info(
+      `[ai-place]${debugTag} [block ${i}] vert=${v} fs=${fs} bbox=(${Math.round(b[0])},${Math.round(b[1])})-(${Math.round(b[2])},${Math.round(b[3])}) groupId=${groupIds[i]}${memberCount[groupIds[i]] >= 2 ? " ★連結" : ""}`,
+    );
+  }
+  const sortedPairs = [...pairLogs].sort(
+    (a, b) => Math.min(a.primaryGap, a.sideGap) - Math.min(b.primaryGap, b.sideGap),
+  );
+  const showCount = Math.min(sortedPairs.length, 30);
+  for (let i = 0; i < showCount; i++) {
+    const p = sortedPairs[i];
+    const tag = p.match ? "★連結" : "単独 ";
+    console.info(
+      `[ai-place]${debugTag} ${tag} pair(${p.i},${p.j}): primaryGap=${p.primaryGap.toFixed(0)}/${p.primaryTol.toFixed(0)} perpDiff=${p.perpDiff.toFixed(0)}/${p.perpTol.toFixed(0)} sideGap=${p.sideGap.toFixed(0)}/${p.sideTol.toFixed(0)} sideCenter=${p.sideCenterDiff.toFixed(0)}/${p.perpTol.toFixed(0)} fsRatio=${p.fsRatio.toFixed(2)} → ${p.reason}`,
+    );
+  }
+  if (sortedPairs.length > showCount) {
+    console.info(`[ai-place]${debugTag} (... 残り ${sortedPairs.length - showCount} ペアは省略 / 距離が遠いため)`);
+  }
+  return groupIds.map((g) => ({ groupId: g, connected: memberCount[g] >= 2 }));
+}
+
+function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef, groupInfo) {
   const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
   const sy = psdPage.height / Math.max(mokuroPage.img_height, 1);
   const direction = block.vertical ? "vertical" : "horizontal";
   // bubble bbox の中心を PSD 座標に変換 → "ユーザーがクリックした位置" と等価。
   const cx = ((block.box[0] + block.box[2]) / 2) * sx;
   const cy = ((block.box[1] + block.box[3]) / 2) * sy;
-  // 推定レイヤー矩形サイズ → top-left を中心合わせで算出
-  // (canvas-tools.js: centerTopLeft = clickX - width/2, clickY - height/2)
   // 縦書きレイヤーは設定 verticalHalfToFullEnabled (default true) に従い、
   // 半角英数字 (0-9 / A-Z / a-z) を全角に自動変換する。
   // bbox 推定は変換後テキストで行うため、文字幅差は影響しない（char count ベース）。
   const text = convertHalfToFullForVertical(contents ?? "", direction);
-  // 検出フォントサイズが取れた吹き出しは見本に合わせる、取れなければデフォルトにフォールバック。
-  const detectedPt = detectSizePtFromBlock(block, mokuroPage, psdPage);
-  const sizePt = detectedPt ?? defaults.sizePt ?? 24;
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
+  // 連結グループに属するブロック (member >= 2) はサイズを基本フォントサイズに統一。
+  // 検出 font_size の揺れで連結セリフ間のサイズがバラつくのを防ぐ。
+  // 単独ブロックは従来通り detectSizePtFromBlock の検出値、無効なら defaults にフォールバック。
+  // contents を渡すことで、検出側ロジックが TXT 行数 / 最長行文字数を使って bbox から
+  // em を逆算できる (block.lines より信頼度高) → 要件③ の精度改善。
+  let sizePt;
+  if (groupInfo && groupInfo.connected) {
+    sizePt = defaults.sizePt ?? 24;
+  } else {
+    const detectedPt = detectSizePtFromBlock(block, mokuroPage, psdPage, text);
+    sizePt = detectedPt ?? defaults.sizePt ?? 24;
+  }
   const { width, height } = estimateLayerSize(
     psdPage, sizePt, text, defaults.leadingPct ?? 125, direction,
   );
@@ -222,19 +414,85 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   const yBias = ptInPsdPx * BUBBLE_PLACEMENT_Y_BIAS_EM;
   const x = cx - width / 2;
   const y = cy - height / 2 + yBias;
+
+  // ============================================================
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+  // 周辺解析メタデータに基づくスタイル自動選択 (要件 ②, ④)
+  // ============================================================
+  // Rust 側 (ocr.rs analyze_doc_in_place) が各 block の bbox 外周を解析し以下を埋めている:
+  //   surroundingWhiteRatio       (0..1) 白率
+  //   surroundingEdgeChanges      (int)  1 周合計の白↔黒変化数
+  //   surroundingMinSegmentEdgeChanges (int) 4 セグメント中の最小変化数
+  let strokeColor = defaults.strokeColor;
+  let fontPostScriptName = defaults.fontPostScriptName;
+  let autoFontSwitched = false;
+  let autoFontSwitchBucket = -1;
+
+  // (要件②) 白率 < 閾値 → 描画上 → 白フチ自動付与
+  // ユーザーが defaults で別の strokeColor を選んでいる場合は上書きせず尊重。
+  let appliedStroke = false;
+  if (defaults.autoStrokeEnabled
+      && (strokeColor === "none" || strokeColor == null)
+      && Number.isFinite(block?.surroundingWhiteRatio)
+      && block.surroundingWhiteRatio < (defaults.autoStrokeWhiteRatioThreshold ?? 0.7)) {
+    strokeColor = "white";
+    appliedStroke = true;
+  }
+
+  // (要件④) 背景スコア / ウニスコア の合成最大値 ≥ 閾値 (デフォルト 50% = 0.5) で
+  //   中丸ゴシックに切替。bucket = 10% 刻みの 6 段階で UI 色分け。
+  //   背景スコア = 1 - white_ratio       (周囲が黒いほど高い)
+  //   ウニスコア = min(min_seg / 6, 1)   (4 セグメントすべてに凹凸が分布するほど高い)
+  // 切替先 PS 名が空のときは何もしない。
+  let scoreReason = null;
+  let bgScore = 0;
+  let uniScore = 0;
+  if (defaults.cloudShapeFontEnabled && defaults.cloudShapeFontPostScriptName) {
+    const wr = block?.surroundingWhiteRatio;
+    const ms = block?.surroundingMinSegmentEdgeChanges;
+    if (Number.isFinite(wr)) bgScore = Math.max(0, Math.min(1, 1 - wr));
+    if (Number.isFinite(ms)) uniScore = Math.max(0, Math.min(1, ms / 6));
+    const score = Math.max(bgScore, uniScore);
+    const threshold = defaults.cloudShapeScoreThreshold ?? 0.5;
+    if (score >= threshold) {
+      fontPostScriptName = defaults.cloudShapeFontPostScriptName;
+      autoFontSwitched = true;
+      // bucket: 50-59 → 0, 60-69 → 1, 70-79 → 2, 80-89 → 3, 90-99 → 4, 100 → 5
+      autoFontSwitchBucket = Math.max(0, Math.min(5, Math.floor((score - 0.5) / 0.1)));
+      const pct = Math.round(score * 100);
+      scoreReason = bgScore >= uniScore ? `背景(${pct}%)` : `ウニ(${pct}%)`;
+    }
+  }
+
+  // デバッグログ
+  const wrStr = Number.isFinite(block?.surroundingWhiteRatio)
+    ? block.surroundingWhiteRatio.toFixed(2) : "-";
+  const ecStr = Number.isFinite(block?.surroundingEdgeChanges)
+    ? block.surroundingEdgeChanges : "-";
+  const msStr = Number.isFinite(block?.surroundingMinSegmentEdgeChanges)
+    ? block.surroundingMinSegmentEdgeChanges : "-";
+  const tags = [];
+  if (appliedStroke) tags.push("白フチ");
+  if (scoreReason) tags.push(`★${scoreReason}→${fontPostScriptName}`);
+  console.info(
+    `[ai-place] surround page=${(sourceTxtRef?.pageNumber ?? "?")} idx=${sourceTxtRef?.paragraphIndex ?? "?"} white=${wrStr} edge=${ecStr} minSeg=${msStr} bg=${bgScore.toFixed(2)} uni=${uniScore.toFixed(2)} ${tags.length ? "[" + tags.join(", ") + "]" : "[default]"}`,
+  );
+
   return {
     psdPath: psdPage.path,
     x,
     y,
     contents: text,
     direction,
-    fontPostScriptName: defaults.fontPostScriptName,
+    fontPostScriptName,
     sizePt,
     leadingPct: defaults.leadingPct,
-    strokeColor: defaults.strokeColor,
+    strokeColor,
     strokeWidthPx: defaults.strokeWidthPx,
     fillColor: defaults.fillColor,
     sourceTxtRef,
+    autoFontSwitched,        // UI で色強調するためのフラグ
+    autoFontSwitchBucket,    // 0..5 の 10% 刻みバケット (UI 色分け用)、-1 は未切替
   };
 }
 
@@ -301,6 +559,11 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
     const mokuro = mokuroDoc.pages[i];
     const txt = txtByPage.get(i + 1) ?? [];
     const sorted = sortBlocksMangaOrder(mokuro.blocks ?? []);
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
+    // 連結グループ判定 (ひょうたん型フキダシ検出)。Union-Find で 3 条件 (vertical 一致 +
+    // font_size 近 + bbox 重なり/近接) を満たすペアが同グループになる。
+    // 連結グループに属する block は mapBlockToNewLayer 内でサイズを defaults.sizePt に統一。
+    const groups = groupConnectedBlocks(sorted, ` page ${i + 1}`);
     const layers = [];
     // 全 TXT 段落を配置: sorted[j] があれば吹き出し中央、無ければ PSD ページ中央。
     // 旧仕様は placedCount = min(txt, sorted) で余り TXT を捨てていたが、ユーザーが
@@ -309,7 +572,7 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
       const block = sorted[j];
       const sourceTxtRef = { pageNumber: i + 1, paragraphIndex: j };
       if (block) {
-        layers.push(mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef));
+        layers.push(mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef, groups[j]));
       } else {
         // 余り TXT: PSD ページ中央に配置
         layers.push(mapTxtToPageCenter(psd, txt[j], defaults, sourceTxtRef));
@@ -426,6 +689,9 @@ function applyPlan(plan) {
     // overlay の再描画とレイヤーリスト更新を即座に反映
     try { renderAllSpreads(); } catch (_) {}
     try { rebuildLayerList(); } catch (_) {}
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】原稿テキストパネルの該当段落も色強調
+    // (autoFontSwitched フラグに連動)。
+    try { renderTxtSourceViewer(); } catch (_) {}
   }
   return added;
 }
@@ -494,13 +760,23 @@ async function runAutoPlace() {
     }
 
     // 3. プラン構築
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+    // フォントは「現在のフォント (ツール状態)」ではなく **環境設定のデフォルトフォント** を優先。
+    // ユーザーが手動でツール状態のフォントを変えても、自動配置はデフォルト値を尊重する。
     const defaults = {
-      fontPostScriptName: getCurrentFont(),
+      fontPostScriptName: getDefault("fontPostScriptName") || getCurrentFont(),
       sizePt: getTextSize(),
       leadingPct: getLeadingPct(),
       strokeColor: getStrokeColor(),
       strokeWidthPx: getStrokeWidthPx(),
       fillColor: getFillColor(),
+      // 周辺解析に基づく白フチ自動付与 (要件 ②)
+      autoStrokeEnabled: getDefault("autoStrokeEnabled"),
+      autoStrokeWhiteRatioThreshold: getDefault("autoStrokeWhiteRatioThreshold"),
+      // 中丸ゴシック自動切替 (要件 ④, 背景 + ウニ合成スコア)
+      cloudShapeFontEnabled: getDefault("cloudShapeFontEnabled"),
+      cloudShapeScoreThreshold: getDefault("cloudShapeScoreThreshold"),
+      cloudShapeFontPostScriptName: getDefault("cloudShapeFontPostScriptName"),
     };
     const plan = buildPlacementPlan(cache.doc, psdPages, txtByPage, defaults);
 

@@ -31,6 +31,8 @@ import {
   // 【v1.16.0】per-char フォント編集
   setCharFontsRange,
   getCharFont,
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】commit 系の中心固定で position delta を加算
+  addEditOffset,
 } from "./state.js";
 import {
   refreshAllOverlays,
@@ -42,6 +44,9 @@ import {
   // 【v1.21.0】per-char フォント変更時の編集中 DOM リアルタイム反映
   applyEditModeStyleToRange,
   cssFontFamily,
+  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】commit 系の中心固定で bbox 再計算用
+  layerRectForExisting,
+  layerRectForNew,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { confirmDialog } from "./ui-feedback.js";
@@ -184,6 +189,14 @@ export function rebuildLayerList() {
     li.dataset.pageIndex = String(pageIndex);
     li.dataset.layerId = nl.tempId;
     li.dataset.layerKind = "new";
+    // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置で背景/ウニ判定によりフォント切替された印
+    // (CSS で色強調)。bucket = 0..5 の 10% 刻みでスコア帯ごとに別色 (青→緑→黄→橙→赤→濃赤)。
+    if (nl.autoFontSwitched) {
+      li.classList.add("auto-font-switched");
+      if (Number.isInteger(nl.autoFontSwitchBucket) && nl.autoFontSwitchBucket >= 0) {
+        li.classList.add(`auto-font-bucket-${nl.autoFontSwitchBucket}`);
+      }
+    }
     const direction = nl.direction ?? "vertical";
     li.innerHTML = `
       <div class="layer-item-body">
@@ -1002,10 +1015,59 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
   refreshAllOverlays();
 }
 
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+// レイヤーの bbox 中心を取得 (PSD 座標)。フォント・サイズ・行間変更で bbox サイズが変わるため、
+// 変更前の中心を保持して変更後に再配置するための ヘルパー。
+// existing は addEditOffset で蓄積された dx/dy も含めた現在位置を返す。
+// new は nl.x/nl.y が top-left なので width/2, height/2 を加算。
+function getLayerCenter(ref) {
+  if (ref.kind === "existing") {
+    const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+    const rect = layerRectForExisting(ref.page, ref.layer, edit);
+    return { cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 };
+  } else {
+    const rect = layerRectForNew(ref.page, ref.newLayer);
+    return { cx: rect.left + rect.width / 2, cy: rect.top + rect.height / 2 };
+  }
+}
+
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】
+// レイヤーを oldCenter (= 変更前の中心) に来るように left/top (or dx/dy) を再計算。
+// commitFontToSelections / commitSingleFieldToSelections から呼ばれる。
+function recenterLayerToCenter(ref, oldCenter) {
+  if (!oldCenter) return;
+  if (ref.kind === "existing") {
+    // 既存: 新 rect の中心と oldCenter の差分を addEditOffset で加算する。
+    // state から最新の edit を再取得（commit 系で既に書き込まれている）して bbox 計算。
+    const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+    const newRect = layerRectForExisting(ref.page, ref.layer, edit);
+    const newCx = newRect.left + newRect.width / 2;
+    const newCy = newRect.top + newRect.height / 2;
+    const ddx = oldCenter.cx - newCx;
+    const ddy = oldCenter.cy - newCy;
+    if (ddx !== 0 || ddy !== 0) {
+      addEditOffset(ref.page.path, ref.layer.id, ddx, ddy);
+    }
+  } else {
+    // 新規: 新 rect.width/height で oldCenter から逆算した top-left を直接書き込む。
+    // state から最新の newLayer を再取得（commit 系で既に書き込まれている）。
+    const list = getNewLayersForPsd(ref.page.path);
+    const latest = list.find((l) => l.tempId === ref.newLayer.tempId) ?? ref.newLayer;
+    const newRect = layerRectForNew(ref.page, latest);
+    const newX = oldCenter.cx - newRect.width / 2;
+    const newY = oldCenter.cy - newRect.height / 2;
+    updateNewLayer(ref.newLayer.tempId, { x: newX, y: newY });
+  }
+}
+
 // edit-font ブラシモード用: 選択中の全レイヤーに同じ postScriptName を書き込む。
 // 既に同フォントのレイヤーは skip して無駄な undo ステップを作らない。
 // 1 件以上書き込まれた場合だけ rebuildLayerList / refreshAllOverlays を実行し true を
 // 返す（呼び出し側が二重 rebuild を避けられるようにするため）。
+//
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】フォント変更で bbox サイズが変わるため、UI 上の中心
+// を固定したまま box の left/top を再計算する。これがないと box が左上を起点に伸び、
+// 視覚的に「テキストや白フチが左寄りに動く」現象になる。
 export function commitFontToSelections(ps) {
   if (!ps) return false;
   const selections = getSelectedLayers();
@@ -1023,11 +1085,14 @@ export function commitFontToSelections(ps) {
         cur = ref.newLayer.fontPostScriptName ?? null;
       }
       if (cur === ps) continue;
+      // 中心固定: 変更前の rect 中心を取得 → フィールド更新 → 新 rect 取得 → x/y 補正。
+      const oldCenter = getLayerCenter(ref);
       if (ref.kind === "existing") {
         setEdit(ref.page.path, ref.layer.id, { fontPostScriptName: ps });
       } else {
         updateNewLayer(ref.newLayer.tempId, { fontPostScriptName: ps });
       }
+      recenterLayerToCenter(ref, oldCenter);
       any = true;
     }
     return any || false;
@@ -1041,6 +1106,10 @@ export function commitFontToSelections(ps) {
 
 // 単一フィールド（sizePt / leadingPct など）を選択中の全レイヤーに書き込む。
 // 値が変わらないレイヤーはスキップして余計な history snapshot を作らない。
+//
+// 【v1.26.0 移植 (PsDesign-main v1.24.0)】サイズ / 行間変更で bbox の幅・高さが変わるため、
+// commitFontToSelections と同じく「中心固定」で box の left/top を再計算する。
+// 視覚的に「中心位置を保ったまま box が広がる」自然な挙動になる。
 function commitSingleFieldToSelections(field, value) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
@@ -1057,11 +1126,13 @@ function commitSingleFieldToSelections(field, value) {
         cur = ref.newLayer[field];
       }
       if (cur === value) continue;
+      const oldCenter = getLayerCenter(ref);
       if (ref.kind === "existing") {
         setEdit(ref.page.path, ref.layer.id, { [field]: value });
       } else {
         updateNewLayer(ref.newLayer.tempId, { [field]: value });
       }
+      recenterLayerToCenter(ref, oldCenter);
       any = true;
     }
     return any || false;
