@@ -15,7 +15,8 @@
 
 param(
     [switch]$Force,
-    [string]$RuntimeDir
+    [string]$RuntimeDir,
+    [string]$SharedOcrRoot = "G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\OCR"
 )
 
 $ErrorActionPreference = "Stop"
@@ -47,6 +48,87 @@ function Write-Step($message) {
 }
 
 Write-Step "Target runtime directory: $RuntimeDir"
+Write-Step "Shared OCR source: $SharedOcrRoot"
+
+function Copy-DirectoryFromShared {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    if (-not (Test-Path $Source)) {
+        return $false
+    }
+    New-Item -ItemType Directory -Force -Path $Destination | Out-Null
+    robocopy $Source $Destination /E /R:2 /W:2 /NFL /NDL /NJH /NJS /NP | Out-Null
+    $code = $LASTEXITCODE
+    if ($code -gt 7) {
+        throw "共有OCRフォルダからのコピーに失敗しました (robocopy exit $code): $Source -> $Destination"
+    }
+    return $true
+}
+
+function Copy-FileFromShared {
+    param(
+        [Parameter(Mandatory)][string]$Source,
+        [Parameter(Mandatory)][string]$Destination
+    )
+    if (-not (Test-Path $Source)) {
+        return $false
+    }
+    $parent = Split-Path -Parent $Destination
+    New-Item -ItemType Directory -Force -Path $parent | Out-Null
+    Copy-Item -Path $Source -Destination $Destination -Force
+    return $true
+}
+
+function Restore-SharedOcrPackages {
+    if (-not (Test-Path $SharedOcrRoot)) {
+        Write-Host "Shared OCR source not found; package install will use pip sources." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Step "Restoring OCR packages from shared OCR source"
+    $sitePackages = Join-Path $RuntimeDir "Lib/site-packages"
+    Copy-DirectoryFromShared `
+        -Source (Join-Path $SharedOcrRoot "manga_ocr/package/manga_ocr") `
+        -Destination (Join-Path $sitePackages "manga_ocr") | Out-Null
+    Copy-DirectoryFromShared `
+        -Source (Join-Path $SharedOcrRoot "manga_ocr/package/manga_ocr-0.1.14.dist-info") `
+        -Destination (Join-Path $sitePackages "manga_ocr-0.1.14.dist-info") | Out-Null
+    Copy-FileFromShared `
+        -Source (Join-Path $SharedOcrRoot "manga_ocr/Scripts/manga_ocr.exe") `
+        -Destination (Join-Path $RuntimeDir "Scripts/manga_ocr.exe") | Out-Null
+    Copy-DirectoryFromShared `
+        -Source (Join-Path $SharedOcrRoot "comic_text_detector/package/comic_text_detector") `
+        -Destination (Join-Path $sitePackages "comic_text_detector") | Out-Null
+}
+
+function Restore-SharedOcrModelCache {
+    if (-not (Test-Path $SharedOcrRoot)) {
+        Write-Host "Shared OCR source not found; model cache will use online download if needed." -ForegroundColor Yellow
+        return $false
+    }
+
+    Write-Step "Restoring OCR model cache from shared OCR source"
+    $restored = $false
+    $userHomeDir = $env:USERPROFILE
+    if (-not $userHomeDir) {
+        $userHomeDir = [Environment]::GetFolderPath("UserProfile")
+    }
+    $hfModelSource = Join-Path $SharedOcrRoot "manga_ocr/models/models--kha-white--manga-ocr-base"
+    $hfModelDest = Join-Path $userHomeDir ".cache/huggingface/hub/models--kha-white--manga-ocr-base"
+    if (Copy-DirectoryFromShared -Source $hfModelSource -Destination $hfModelDest) {
+        $restored = $true
+    }
+
+    $detectorSource = Join-Path $SharedOcrRoot "comic_text_detector/models/comictextdetector.pt"
+    $detectorDest = Join-Path $userHomeDir ".cache/manga-ocr/comictextdetector.pt"
+    if (Copy-FileFromShared -Source $detectorSource -Destination $detectorDest) {
+        $restored = $true
+    }
+
+    return $restored
+}
 
 if ($Force -and (Test-Path $RuntimeDir)) {
     Write-Step "Force: removing existing runtime"
@@ -135,6 +217,11 @@ Invoke-Pip -PhaseLabel "Phase 4b" -Args ($PipBaseArgs + @("manga-ocr"))
 Write-Step "Phase 4c. オーケストレータをインストール中"
 Invoke-Pip -PhaseLabel "Phase 4c" -Args ($PipBaseArgs + @("mokuro"))
 
+# 共有ドライブに保管した OCR エンジンを優先して復元する。
+# pip は依存ライブラリの解決に使い、manga-ocr / comic-text-detector 本体と
+# モデルキャッシュは社内共有フォルダの内容を正とする。
+Restore-SharedOcrPackages
+
 # ---------------------------------------------------------------------------
 # Phase 5. Replace torch with CUDA 12.8 build
 # ---------------------------------------------------------------------------
@@ -161,17 +248,22 @@ if (-not (Test-Path $mokuroExe)) {
 # ---------------------------------------------------------------------------
 # Phase 6b. 画像スキャンエンジンの重みファイルを事前ダウンロード
 # ---------------------------------------------------------------------------
-# 画像スキャンエンジンの重みファイル (~500MB) は本来初回スキャン時に
-# 遅延ダウンロードされるが、本アプリは ocr.rs で HF_HUB_OFFLINE=1 を強制しているため
-# キャッシュが無いとスキャンが起動できない。インストール時にネットがある今のうちに
-# from_pretrained() を一度走らせて HuggingFace から取得しておく。
-# 既にキャッシュ済みなら no-op で即終了する。
-Write-Step "Phase 6b. 画像スキャンエンジンの重みファイルを事前ダウンロード中"
+# 画像スキャンエンジンの重みファイルは共有ドライブを優先ソースにする。
+# 共有ドライブが使えない / キャッシュが不足している場合のみ、従来どおり
+# from_pretrained() がオンライン取得を試みる。
+Write-Step "Phase 6b. 画像スキャンエンジンの重みファイルを準備中"
+$restoredOcrCache = Restore-SharedOcrModelCache
 $env:PYTHONWARNINGS = "ignore::UserWarning"
+if ($restoredOcrCache) {
+    $env:HF_HUB_OFFLINE = "1"
+    $env:TRANSFORMERS_OFFLINE = "1"
+}
 & $PythonExe -u -c "from manga_ocr import MangaOcr; MangaOcr()"
 Remove-Item Env:PYTHONWARNINGS -ErrorAction SilentlyContinue
+Remove-Item Env:HF_HUB_OFFLINE -ErrorAction SilentlyContinue
+Remove-Item Env:TRANSFORMERS_OFFLINE -ErrorAction SilentlyContinue
 if ($LASTEXITCODE -ne 0) {
-    throw "Phase 6b: AIモデルの事前ダウンロードに失敗しました (exit $LASTEXITCODE). ネット接続を確認して再実行してください。"
+    throw "Phase 6b: AIモデルの準備に失敗しました (exit $LASTEXITCODE). 共有OCRフォルダまたはネット接続を確認して再実行してください。"
 }
 
 # ---------------------------------------------------------------------------

@@ -7,6 +7,9 @@ mod tachimi;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fs;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 
 // 【v1.26.0】ルビ 1 件分のエントリ。state.js の charRubies スキーマと対応。
 // 【v1.29.x UI-coord】offset_x / offset_y: ビューアー上のルビ wrap の実描画位置を
@@ -207,6 +210,95 @@ async fn list_fonts() -> Result<Vec<FontEntry>, String> {
 #[tauri::command]
 async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))
+}
+
+fn script_output_text_dir() -> Result<PathBuf, String> {
+    let desktop = dirs::desktop_dir()
+        .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
+        .ok_or_else(|| "Desktop folder was not found".to_string())?;
+    Ok(desktop.join("Script_Output").join("COMIPO_text\u{62BD}\u{51FA}"))
+}
+
+fn sanitize_txt_filename(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    out = out.trim().trim_matches('.').to_string();
+    if out.is_empty() {
+        out = "untitled.txt".to_string();
+    }
+    if !out.to_ascii_lowercase().ends_with(".txt") {
+        out.push_str(".txt");
+    }
+    out
+}
+
+#[tauri::command]
+async fn save_editor_text_to_script_output(
+    content: String,
+    default_name: Option<String>,
+) -> Result<String, String> {
+    let dir = script_output_text_dir()?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Script_Output folder create failed ({}): {}", dir.display(), e))?;
+    let name = sanitize_txt_filename(default_name.as_deref().unwrap_or("untitled.txt"));
+    let path = dir.join(name);
+    fs::write(&path, content)
+        .map_err(|e| format!("text save failed ({}): {}", path.display(), e))?;
+    Ok(path.to_string_lossy().to_string())
+}
+
+fn write_progen_handoff(text_path: &Path) -> Result<(), String> {
+    if !text_path.is_file() {
+        return Err(format!("saved text file was not found: {}", text_path.display()));
+    }
+    let dir = script_output_text_dir()?;
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("handoff folder create failed ({}): {}", dir.display(), e))?;
+    let marker = dir.join(".progen_handoff.txt");
+    fs::write(&marker, text_path.to_string_lossy().as_bytes())
+        .map_err(|e| format!("handoff marker write failed ({}): {}", marker.display(), e))
+}
+
+fn find_progen_launcher() -> Option<PathBuf> {
+    let desktop = dirs::desktop_dir()
+        .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))?;
+    let root = desktop.join("progen_DEMO").join("data");
+    let candidates = [
+        root.join("dev.bat"),
+        root.join("src-tauri").join("target").join("release").join("progen.exe"),
+        root.join("src-tauri").join("target").join("debug").join("progen.exe"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+#[tauri::command]
+async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
+    let text_path = PathBuf::from(text_path);
+    write_progen_handoff(&text_path)?;
+    let launcher = find_progen_launcher().ok_or_else(|| {
+        "ProGen launcher was not found under Desktop\\progen_DEMO\\data".to_string()
+    })?;
+
+    if launcher.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("bat")).unwrap_or(false) {
+        Command::new("cmd")
+            .args(["/C", "start", "", &launcher.to_string_lossy()])
+            .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")))
+            .spawn()
+            .map_err(|e| format!("ProGen dev.bat launch failed: {}", e))?;
+    } else {
+        Command::new(&launcher)
+            .spawn()
+            .map_err(|e| format!("ProGen launch failed ({}): {}", launcher.display(), e))?;
+    }
+    Ok(launcher.to_string_lossy().to_string())
 }
 
 // 【v1.16.0】使用フォントの拡張 — TTC face 抽出コマンド（FontFace API は TTC をそのまま渡すと
@@ -597,6 +689,8 @@ pub fn run() {
             apply_edits_via_photoshop,
             list_fonts,
             read_binary_file,
+            save_editor_text_to_script_output,
+            launch_progen_with_text,
             read_font_face_bytes,
             list_psd_files,
             list_directory_entries,

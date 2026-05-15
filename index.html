@@ -266,14 +266,6 @@
                 <span id="editor-dirty-dot" class="editor-dirty-dot" aria-hidden="true" hidden></span>
               </div>
               <div class="editor-toolbar editor-toolbar-row2" role="group" aria-label="編集操作">
-                <button id="editor-ruby-btn" class="editor-toolbar-btn" type="button" title="選択文字列にルビ（親（ふりがな））を付与" disabled>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                    <path d="M4 7V4h16v3"/>
-                    <path d="M9 20h6"/>
-                    <path d="M12 4v16"/>
-                  </svg>
-                  <span>ルビ付け</span>
-                </button>
                 <button id="editor-save-btn" class="editor-toolbar-btn" type="button" title="テキストを保存（元ファイルがあれば上書き、無ければ別名保存）" disabled>
                   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -282,6 +274,10 @@
                   </svg>
                   <span>テキスト保存</span>
                 </button>
+                <div id="editor-page-mode-tabs" class="editor-page-mode-tabs" role="tablist" aria-label="ページ表示モード">
+                  <button id="editor-page-mode-all" class="editor-page-mode-btn active" type="button" data-mode="all" aria-pressed="true">全ページ</button>
+                  <button id="editor-page-mode-single" class="editor-page-mode-btn" type="button" data-mode="single" aria-pressed="false">ページごと</button>
+                </div>
                 <div class="editor-page-nav" role="group" aria-label="ページ移動">
                   <button id="editor-page-prev-btn" class="editor-toolbar-btn editor-page-nav-btn" type="button" title="前のページ (Ctrl+←)" aria-label="前のページ" disabled>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">

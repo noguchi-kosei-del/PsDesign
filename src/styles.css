@@ -1408,6 +1408,37 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   user-select: none;
 }
 
+.editor-page-mode-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel-hover);
+}
+.editor-page-mode-btn {
+  min-width: 64px;
+  padding: 3px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 600;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.editor-page-mode-btn:hover:not(.active) {
+  color: var(--text);
+}
+.editor-page-mode-btn.active {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
+}
+
 .editor-filename-row {
   display: flex;
   align-items: center;
@@ -1455,32 +1486,39 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
-  padding: 12px 16px;
+  padding: 16px 24px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
+  gap: 0;
+  font-family: Consolas, "Courier New", "Noto Sans JP", monospace;
+  font-size: 14px;
+  line-height: 1.8;
 }
 .editor-page-section {
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  background: var(--panel-body);
-  overflow: hidden;
-  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow: visible;
+  margin-bottom: 12px;
 }
 .editor-page-section.active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  box-shadow: none;
 }
 .editor-page-section-header {
+  position: sticky;
+  top: -16px;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: 6px;
   padding: 4px 10px;
+  margin: 0 0 6px;
+  border: 1px solid rgba(0, 120, 212, 0.28);
+  border-radius: 4px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--text-muted);
+  color: var(--accent);
   background: var(--panel);
-  border-bottom: 1px solid var(--border);
   letter-spacing: 0.04em;
 }
 .editor-page-section.active .editor-page-section-header {
@@ -1495,17 +1533,23 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .editor-page-section-body {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 8px 10px;
+  gap: 0;
+  padding: 0;
 }
 /* 段落の外側コンテナ。左端 × 削除ボタンの absolute 配置基準 + ボタンぶんの左余白を確保。
    テキスト本体は子要素 .editor-page-paragraph-text (contentEditable) に分離。 */
 .editor-page-paragraph {
   position: relative;
-  padding: 4px 8px 4px 32px;
-  border-radius: 3px;
+  padding: 0 10px 0 32px;
+  border-radius: 0;
   min-height: 1.4em;
   border: 1px solid transparent;
+  white-space: pre-wrap;
+  word-break: break-word;
+  cursor: text;
+  color: var(--text);
+  outline: none;
+  transition: border-color 0.1s ease, background 0.1s ease, box-shadow 0.1s ease;
 }
 /* × ボタンの右側に縦の区切り線。ボタン領域 (left: 4px + width: 18px = 22px) と
    テキスト領域 (padding-left: 32px) の間に 1px の細い罫線を入れて視覚的に分離する。
@@ -1524,8 +1568,8 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .editor-page-paragraph-text {
   white-space: pre-wrap;
   cursor: text;
-  line-height: 1.6;
-  font-size: 13px;
+  line-height: inherit;
+  font-size: inherit;
   color: var(--text);
   outline: none;
 }
@@ -1542,6 +1586,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .editor-page-paragraph:has(.editor-page-paragraph-text:focus) {
   background: var(--bg);
   border-color: var(--accent);
+}
+.editor-page-paragraph:focus {
+  border-color: var(--accent);
+  border-radius: 4px;
+  background: var(--bg);
+  box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.16);
 }
 
 /* 各段落の左端に表示する × 削除ボタン。クリックで deleteTxtBlockByIndex を即発火。

@@ -3093,7 +3093,7 @@ dependencies = [
 
 [[package]]
 name = "psdesign"
-version = "1.30.3"
+version = "1.30.4"
 dependencies = [
  "base64 0.22.1",
  "dirs 5.0.1",

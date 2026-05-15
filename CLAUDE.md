@@ -5181,3 +5181,37 @@ var PHOTOSHOP_RUBY_PARENT_BIAS_PX
 > - 旧: dash 系 8 種類 + tilde 系 2 種類のみ認識 → 新: dash 14 種類 (罫線素片・マイナス記号・小書きダッシュ追加) + tilde 4 種類 (ASCII チルダ・SMALL TILDE 追加)
 > - 旧: ルビ位置の親離し px は固定 7.5 で全フォントサイズ共通 → 新: 13pt 基準でフォントサイズ比例計算 (大サイズフォントには大きな bias、小サイズには小さな bias)
 > - 旧: 「―に -300 が当たる」の原因不明 → 新: 多層 DEBUG ログ (payload / applyToPsd / contents / run / tracking) で原因をピンポイント切り分け可能
+
+---
+
+## v1.30.4: editor-pages-viewer / ProGen handoff / OCR shared cache
+
+### editor-pages-viewer
+
+- テキストエディタモードの `editor-pages-viewer` を ProGen のテキストエディタ表示に寄せ、全ページ表示 / 単ページ表示を切り替えられる構成に更新。
+- 各テキスト項目は contenteditable で直接編集でき、Ctrl+Enter で確定、Esc で戻せるようにした。
+- `editor-page-section-header` は透過しない背景に変更。
+- `editor-pages-viewer-wrap` の各テキスト項目に削除ボタンを追加。
+- `editor-toolbar editor-toolbar-row2` からルビ付けボタンを削除。
+
+### Script_Output / ProGen連携
+
+- テキスト保存時、Tachimi と同じく `C:\Users\noguchi-kosei\Desktop\Script_Output\COMIPO_text抽出` に `.txt` を保存するように変更。
+- 保存完了ダイアログに `ProGenを開く` ボタンを追加し、保存済みテキスト情報を維持したまま ProGen を起動できるようにした。
+- ProGen 起動先は `C:\Users\noguchi-kosei\Desktop\progen_DEMO\data` の最新版を優先。
+- ProGen 起動ポート `1450` に対応。
+- ProGen 側で PsDesign から渡したテキストを起動時に読み込み、TXT読込状態も更新されるようにした。
+
+### OCR / AI installer
+
+- `manga-ocr` / `comic-text-detector` の保管先として以下の共有フォルダを使用:
+  `G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\OCR`
+- AIインストール時は共有フォルダから `manga_ocr` パッケージ、`comic_text_detector` パッケージ、`manga-ocr` の HuggingFace モデルキャッシュ、`comictextdetector.pt` を優先復元するようにした。
+- 共有フォルダが見つからない、または不足している場合は従来のオンライン取得にフォールバック。
+- PowerShell の読み取り専用 `$HOME` 変数と衝突しないよう、インストールスクリプト内のユーザーホーム変数名を修正。
+- AIアンインストール時は進行中インストールプロセスを停止し、読み取り専用属性を解除してから複数回リトライ削除するようにした。
+- アンインストール対象に `~\.cache\manga-ocr\comictextdetector.pt` も追加。
+
+### Version
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を `1.30.4` に更新。

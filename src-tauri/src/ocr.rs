@@ -991,6 +991,56 @@ pub struct UninstallResult {
     errors: Vec<String>,
 }
 
+fn clear_readonly_recursive(path: &Path) {
+    let Ok(meta) = std::fs::metadata(path) else {
+        return;
+    };
+
+    if meta.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(path) {
+            for entry in entries.flatten() {
+                clear_readonly_recursive(&entry.path());
+            }
+        }
+    }
+
+    let mut perms = meta.permissions();
+    if perms.readonly() {
+        perms.set_readonly(false);
+        let _ = std::fs::set_permissions(path, perms);
+    }
+}
+
+fn remove_path_with_retries(path: &Path) -> Result<(), String> {
+    if !path.exists() {
+        return Ok(());
+    }
+
+    let mut last_error: Option<std::io::Error> = None;
+    for attempt in 0..12 {
+        clear_readonly_recursive(path);
+        let result = if path.is_dir() {
+            std::fs::remove_dir_all(path)
+        } else {
+            std::fs::remove_file(path)
+        };
+
+        match result {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                last_error = Some(e);
+                if attempt < 11 {
+                    std::thread::sleep(std::time::Duration::from_millis(350));
+                }
+            }
+        }
+    }
+
+    Err(last_error
+        .map(|e| e.to_string())
+        .unwrap_or_else(|| "unknown error".to_string()))
+}
+
 /// 画像スキャンエンジンをアンインストールする。
 ///   1. AI ランタイム本体: `%LOCALAPPDATA%\PsDesign\ai-runtime\`（約 5GB、Python + pip インストール物）
 ///   2. HuggingFace モデルキャッシュのうち本アプリが使う models--kha-white--manga-ocr-base のみ
@@ -1002,10 +1052,12 @@ pub async fn uninstall_ai_models(app: AppHandle) -> Result<UninstallResult, Stri
     let mut deleted: Vec<String> = Vec::new();
     let mut errors: Vec<String> = Vec::new();
 
+    let _ = cancel_ai_install();
+
     // 1) AI ランタイム本体
     if let Ok(rt) = user_runtime_dir(&app) {
         if rt.exists() {
-            match std::fs::remove_dir_all(&rt) {
+            match remove_path_with_retries(&rt) {
                 Ok(_) => deleted.push(rt.to_string_lossy().to_string()),
                 Err(e) => errors.push(format!("ランタイム削除失敗 {}: {}", rt.display(), e)),
             }
@@ -1019,9 +1071,13 @@ pub async fn uninstall_ai_models(app: AppHandle) -> Result<UninstallResult, Stri
         let hf_hub = home.join(".cache").join("huggingface").join("hub");
         let model_dir = hf_hub.join("models--kha-white--manga-ocr-base");
         let lock_dir = hf_hub.join(".locks").join("models--kha-white--manga-ocr-base");
-        for p in [model_dir, lock_dir] {
+        let detector_model = home
+            .join(".cache")
+            .join("manga-ocr")
+            .join("comictextdetector.pt");
+        for p in [model_dir, lock_dir, detector_model] {
             if p.exists() {
-                match std::fs::remove_dir_all(&p) {
+                match remove_path_with_retries(&p) {
                     Ok(_) => deleted.push(p.to_string_lossy().to_string()),
                     Err(e) => {
                         errors.push(format!("モデルキャッシュ削除失敗 {}: {}", p.display(), e))

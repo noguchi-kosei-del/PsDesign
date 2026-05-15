@@ -1,11 +1,3 @@
-// テキストエディタペイン (view-mode "editor" 時に表示)。
-// 原稿テキストパネル風のページ別 section + 中央配置入力欄を提供する。
-//   - parsePages で `<<NPage>>` ごとに section 化、各段落は contenteditable で常時編集可能
-//   - 編集確定 (blur / Ctrl+Enter) → updateTxtSourceBlock で原稿全体を書換 → state 同期
-//   - 下部の #editor-new-input + #editor-new-input-btn で PSD ページ中央へ新規配置
-//     (commitNewTxtInput を txt-source.js と共有)
-//   - ページ送り (←/→) で対応する section を active 化 + scrollIntoView
-
 import {
   getCurrentPageIndex,
   getPages,
@@ -24,32 +16,27 @@ import {
   setPdfPageIndex,
   setTxtDirty,
   setTxtFilePath,
+  setTxtSource,
 } from "../state.js";
 import { getPdfVirtualPageCount } from "../pdf-pages.js";
 import {
   commitNewTxtInput,
   deleteTxtBlockByIndex,
-  ensureTxtExtension,
   getActivePageNumber,
   getTxtPageCount,
-  loadTxtFromPath,
-  parsePages,
-  pickTxtPath,
-  pickTxtSavePath,
   syncNewInputAvailabilityFor,
-  updateTxtSourceBlock,
 } from "../txt-source.js";
-import {
-  confirmDialog,
-  promptDialog,
-  toast,
-} from "../ui-feedback.js";
+import { notifyDialog, promptDialog, toast } from "../ui-feedback.js";
 
 const $ = (id) => document.getElementById(id);
+const EDITOR_PAGE_MODE_KEY = "psdesign_editor_page_mode";
+const PAGE_MARKER_RE = /<<\s*([0-9\uFF10-\uFF19]+)\s*Page\s*>>/gi;
+
+let editorPageMode = loadEditorPageMode();
+let editingBlock = false;
 
 function getEls() {
   return {
-    viewerWrap: $("editor-pages-viewer-wrap"),
     viewer: $("editor-pages-viewer"),
     empty: $("editor-empty"),
     newInput: $("editor-new-input"),
@@ -61,6 +48,8 @@ function getEls() {
     pagePrev: $("editor-page-prev-btn"),
     pageNext: $("editor-page-next-btn"),
     pageLabel: $("editor-page-label"),
+    pageModeAll: $("editor-page-mode-all"),
+    pageModeSingle: $("editor-page-mode-single"),
   };
 }
 
@@ -74,78 +63,160 @@ function pageNumLabel(n) {
   return String(n).padStart(2, "0");
 }
 
-// 現在ページ番号（PSD or PDF/TXT 単体）。renderViewer の active 判定に使う。
+function loadEditorPageMode() {
+  try {
+    return localStorage.getItem(EDITOR_PAGE_MODE_KEY) === "single" ? "single" : "all";
+  } catch (_) {
+    return "all";
+  }
+}
+
+function syncEditorPageModeButtons() {
+  const els = getEls();
+  const all = editorPageMode === "all";
+  if (els.pageModeAll) {
+    els.pageModeAll.classList.toggle("active", all);
+    els.pageModeAll.setAttribute("aria-pressed", all ? "true" : "false");
+  }
+  if (els.pageModeSingle) {
+    els.pageModeSingle.classList.toggle("active", !all);
+    els.pageModeSingle.setAttribute("aria-pressed", all ? "false" : "true");
+  }
+}
+
+function setEditorPageMode(mode) {
+  editorPageMode = mode === "single" ? "single" : "all";
+  try { localStorage.setItem(EDITOR_PAGE_MODE_KEY, editorPageMode); } catch (_) {}
+  syncEditorPageModeButtons();
+  renderViewer({ scrollToActive: editorPageMode === "all" });
+}
+
+function toHalfWidthInt(s) {
+  const normalized = String(s).replace(/[\uFF10-\uFF19]/g, (c) => (
+    String.fromCharCode(c.charCodeAt(0) - 0xfee0)
+  ));
+  const n = parseInt(normalized, 10);
+  return Number.isFinite(n) ? n : null;
+}
+
+function blockFromSegment(segment, absoluteStart) {
+  const leading = segment.match(/^\n+/)?.[0]?.length ?? 0;
+  const trailing = segment.match(/\n+$/)?.[0]?.length ?? 0;
+  const text = segment.slice(leading, segment.length - trailing);
+  if (text.length === 0) return null;
+  return { text, offset: absoluteStart + leading };
+}
+
+function splitBlocksWithOffsets(sectionText, sectionStart) {
+  const blocks = [];
+  const re = /\n[ \t\u3000]*\n/g;
+  let last = 0;
+  let m;
+  while ((m = re.exec(sectionText)) !== null) {
+    const block = blockFromSegment(sectionText.slice(last, m.index), sectionStart + last);
+    if (block) blocks.push(block);
+    last = m.index + m[0].length;
+  }
+  const tail = blockFromSegment(sectionText.slice(last), sectionStart + last);
+  if (tail) blocks.push(tail);
+  return blocks;
+}
+
+function buildPageModel(content) {
+  const normalized = (content ?? "").replace(/\r\n?/g, "\n");
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  const pages = [];
+  const pageByNumber = new Map();
+
+  const ensurePage = (pageNumber) => {
+    if (!pageByNumber.has(pageNumber)) {
+      const page = { pageNumber, blocks: [] };
+      pageByNumber.set(pageNumber, page);
+      pages.push(page);
+    }
+    return pageByNumber.get(pageNumber);
+  };
+
+  let lastIndex = 0;
+  let currentPage = null;
+  let hasMarkers = false;
+  let match;
+  while ((match = re.exec(normalized)) !== null) {
+    hasMarkers = true;
+    if (currentPage != null) {
+      ensurePage(currentPage).blocks.push(
+        ...splitBlocksWithOffsets(normalized.slice(lastIndex, match.index), lastIndex),
+      );
+    }
+    currentPage = toHalfWidthInt(match[1]);
+    if (currentPage != null) ensurePage(currentPage);
+    lastIndex = match.index + match[0].length;
+  }
+
+  if (hasMarkers) {
+    if (currentPage != null) {
+      ensurePage(currentPage).blocks.push(...splitBlocksWithOffsets(normalized.slice(lastIndex), lastIndex));
+    }
+    return { hasMarkers: true, pages, allBlocks: [], normalized };
+  }
+
+  return {
+    hasMarkers: false,
+    pages: [],
+    allBlocks: splitBlocksWithOffsets(normalized, 0),
+    normalized,
+  };
+}
+
+function replaceBlockAtOffset(offset, originalText, newText) {
+  if (!Number.isFinite(offset)) return false;
+  const source = getTxtSource();
+  if (!source) return false;
+  const content = (source.content ?? "").replace(/\r\n?/g, "\n");
+  const original = (originalText ?? "").replace(/\r\n?/g, "\n");
+  const updated = (newText ?? "").replace(/\r\n?/g, "\n");
+  if (!original || updated === original) return false;
+  if (content.slice(offset, offset + original.length) !== original) return false;
+  const nextContent = content.slice(0, offset) + updated + content.slice(offset + original.length);
+  setTxtSource({ name: source.name, content: nextContent });
+  setTxtDirty(true);
+  return true;
+}
+
 function getCurrentActivePageNumber() {
   return getActivePageNumber();
 }
 
-// 現在ページの section のみを再描画する。
-// ページ送り (onPageIndexChange / onPdfPageIndexChange) のたびに呼ばれ、
-// 表示中の section が現在ページ用のものに置き換わる。
-function renderViewer() {
-  const els = getEls();
-  if (!els.viewer) return;
-  const source = getTxtSource();
-  els.viewer.innerHTML = "";
-  if (!source) {
-    if (els.empty) els.empty.hidden = false;
-    return;
-  }
-  const content = source.content ?? "";
-  if (els.empty) els.empty.hidden = content.length !== 0;
-  if (content.length === 0) return;
-
-  const parsed = parsePages(content);
-  const activeNum = getCurrentActivePageNumber();
-
-  if (!parsed.hasMarkers) {
-    // ページマーカー無し原稿: 1 つの section にすべての段落を入れる。
-    const sec = buildSection(null, parsed.all, activeNum, true);
-    els.viewer.appendChild(sec);
-    return;
-  }
-
-  // 現在ページに対応する段落のみ抽出して 1 つの section として描画。
-  // 該当ページにマーカーが無い / 段落が無い場合も section 自体は出して
-  // 「（このページには段落がありません）」プレースホルダで明示する。
-  const blocks = parsed.byPage.get(activeNum) ?? [];
-  const sec = buildSection(activeNum, blocks, activeNum, false);
-  els.viewer.appendChild(sec);
-}
-
-// pageNumber: マーカー有り → number, 無し → null
-// blocks: 段落配列
-// activeNum: 現在の active page number（active class 付与判定用）
-// isMarkerless: true ならヘッダーを「ページ区切りなし」表記に
-function buildSection(pageNumber, blocks, activeNum, isMarkerless) {
+function buildSection(pageNumber, blocks, activeNum, options = {}) {
+  const { markerless = false, showHeader = true } = options;
   const sec = document.createElement("section");
   sec.className = "editor-page-section";
   sec.dataset.pageNumber = String(pageNumber ?? 0);
-  if (!isMarkerless && pageNumber === activeNum) sec.classList.add("active");
-  if (isMarkerless) sec.classList.add("active"); // マーカー無しは常時 active 表示
+  if (markerless || pageNumber === activeNum) sec.classList.add("active");
 
-  const header = document.createElement("header");
-  header.className = "editor-page-section-header";
-  header.textContent = isMarkerless
-    ? "ページ区切りなし"
-    : `P${pageNumLabel(pageNumber)}`;
-  sec.appendChild(header);
+  if (showHeader) {
+    const header = document.createElement("header");
+    header.className = "editor-page-section-header";
+    header.textContent = markerless ? "ページ区切りなし" : `P${pageNumLabel(pageNumber)}`;
+    sec.appendChild(header);
+  }
 
   const body = document.createElement("div");
   body.className = "editor-page-section-body";
   if (blocks.length === 0) {
     const hint = document.createElement("div");
     hint.className = "editor-page-section-empty-hint";
-    hint.textContent = "（このページには段落がありません）";
+    hint.textContent = "このページには段落がありません";
     body.appendChild(hint);
   } else {
-    blocks.forEach((paragraph, idx) => {
+    blocks.forEach((block, idx) => {
       const el = document.createElement("div");
       el.className = "editor-page-paragraph";
       el.dataset.paragraphIndex = String(idx);
-      // 左端 × 削除ボタン（lucide x の細い × アイコン）。確認なしの即削除で
-      // deleteTxtBlockByIndex を呼ぶ。mousedown.preventDefault で contentEditable
-      // からフォーカスが外れて blur → commit が走るのを抑止し、click 自体は通常発火。
+      el.dataset.pageNumber = String(pageNumber ?? 0);
+      el.dataset.offset = String(block.offset);
+      el.dataset.originalText = block.text;
+
       const delBtn = document.createElement("button");
       delBtn.type = "button";
       delBtn.className = "editor-page-paragraph-delete-btn";
@@ -157,20 +228,24 @@ function buildSection(pageNumber, blocks, activeNum, isMarkerless) {
         e.stopPropagation();
       });
       delBtn.addEventListener("click", (e) => {
-        e.stopPropagation();
         e.preventDefault();
-        deleteTxtBlockByIndex(pageNumber, idx);
+        e.stopPropagation();
+        editingBlock = false;
+        deleteTxtBlockByIndex(markerless ? null : pageNumber, idx);
       });
       el.appendChild(delBtn);
-      // 編集対象は .editor-page-paragraph-text 子要素のみ。× ボタンが contentEditable
-      // 範囲外に保たれる（× の SVG が innerText 取得時にテキストとして混入しない）。
+
       const textEl = document.createElement("div");
       textEl.className = "editor-page-paragraph-text";
       textEl.contentEditable = "true";
       textEl.spellcheck = false;
-      textEl.textContent = paragraph;
+      textEl.dataset.paragraphIndex = String(idx);
+      textEl.dataset.pageNumber = String(pageNumber ?? 0);
+      textEl.dataset.offset = String(block.offset);
+      textEl.dataset.originalText = block.text;
+      textEl.textContent = block.text;
       el.appendChild(textEl);
-      bindParagraphEdit(textEl, paragraph, pageNumber);
+      bindParagraphEdit(textEl);
       body.appendChild(el);
     });
   }
@@ -178,89 +253,122 @@ function buildSection(pageNumber, blocks, activeNum, isMarkerless) {
   return sec;
 }
 
-// 1 つの contenteditable 段落に編集 listener を張る。
-//   - 編集開始時の originalText を closure で保持
-//   - blur で innerText を取得し LF 正規化、originalText と異なれば updateTxtSourceBlock
-//   - Ctrl+Enter / Cmd+Enter で blur → commit
-//   - Escape で aborted=true → blur → revert
-//   - IME 中は finalize しない
-function bindParagraphEdit(el, originalText, pageNumber) {
+function renderViewer({ scrollToActive = false } = {}) {
+  const els = getEls();
+  if (!els.viewer) return;
+  if (editingBlock) return;
+
+  const source = getTxtSource();
+  els.viewer.innerHTML = "";
+  if (!source) {
+    if (els.empty) els.empty.hidden = false;
+    return;
+  }
+
+  const content = source.content ?? "";
+  if (els.empty) els.empty.hidden = content.length !== 0;
+  if (content.length === 0) return;
+
+  const model = buildPageModel(content);
+  const activeNum = getCurrentActivePageNumber();
+
+  if (!model.hasMarkers) {
+    els.viewer.appendChild(buildSection(null, model.allBlocks, activeNum, { markerless: true }));
+    return;
+  }
+
+  if (editorPageMode === "all") {
+    const pages = model.pages.length > 0 ? model.pages : [{ pageNumber: activeNum, blocks: [] }];
+    for (const page of pages) {
+      els.viewer.appendChild(buildSection(page.pageNumber, page.blocks, activeNum));
+    }
+    if (scrollToActive) {
+      requestAnimationFrame(() => {
+        const active = els.viewer.querySelector(".editor-page-section.active");
+        active?.scrollIntoView?.({ block: "start", behavior: "smooth" });
+      });
+    }
+    return;
+  }
+
+  const page = model.pages.find((p) => p.pageNumber === activeNum) ?? { pageNumber: activeNum, blocks: [] };
+  els.viewer.appendChild(buildSection(page.pageNumber, page.blocks, activeNum));
+  els.viewer.scrollTop = 0;
+}
+
+function bindParagraphEdit(el) {
   let aborted = false;
   let composing = false;
 
   el.addEventListener("compositionstart", () => { composing = true; });
   el.addEventListener("compositionend", () => { composing = false; });
-  el.addEventListener("focus", () => { aborted = false; });
+  el.addEventListener("focus", () => {
+    aborted = false;
+    editingBlock = true;
+  });
 
   el.addEventListener("keydown", (e) => {
     if (composing) return;
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      el.blur(); // → onBlur で commit
+      el.blur();
     } else if (e.key === "Escape") {
       e.preventDefault();
       aborted = true;
-      el.blur(); // → onBlur で revert
+      el.blur();
+    } else if (
+      e.key === "ArrowLeft"
+      || e.key === "ArrowRight"
+      || e.key === "ArrowUp"
+      || e.key === "ArrowDown"
+    ) {
+      e.stopPropagation();
     }
   });
 
   el.addEventListener("blur", () => {
+    editingBlock = false;
+    const original = el.dataset.originalText ?? "";
     if (aborted) {
-      // 元テキストに戻して終了。setTxtSource は呼ばないので listener も発火せず、
-      // 他の編集状態は保持される。
-      el.textContent = originalText;
+      el.textContent = original;
       aborted = false;
       return;
     }
-    // contenteditable の改行は browser によって <br> / <div> になり得るため、
-    // textContent ではなく innerText で取得して LF 正規化する。
     const newText = (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n");
-    if (newText === originalText) return;
-    // 空文字に変更されてもここでは段落削除はしない（過剰スコープ回避、UI で空段落として表示）。
-    const changed = updateTxtSourceBlock(pageNumber, originalText, newText);
-    if (changed) {
-      // setTxtSource → onTxtSourceChange listener で renderViewer が走るので
-      // この el への以降の操作は不要（DOM 自体が再構築される）。
-      // 見た目のフラッシュ抑止のため、ここで el.contentEditable を一時的に false にしない。
-    }
+    const changed = replaceBlockAtOffset(Number(el.dataset.offset), original, newText);
+    if (!changed) renderViewer();
   });
 }
 
-// content / filename / dirty を DOM に反映（viewer 自体は別経路で再描画）。
 function syncFromState() {
   const els = getEls();
   if (!els.viewer) return;
   const source = getTxtSource();
   const path = getTxtFilePath();
   const dirty = getTxtDirty();
-  const content = source?.content ?? "";
 
-  // ファイル名表示
   const display = path ? baseName(path) : (source?.name || "テキスト未読込");
   if (els.filename) {
     els.filename.textContent = display;
     els.filename.title = path || (source ? source.name : "");
   }
 
-  // ダーティドット表示
-  const showDirty = !!source && dirty;
-  if (els.dirtyDot) els.dirtyDot.hidden = !showDirty;
-
-  // ボタン enabled
   const hasContent = !!source;
+  if (els.dirtyDot) els.dirtyDot.hidden = !(hasContent && dirty);
   if (els.save) els.save.disabled = !hasContent;
   if (els.ruby) els.ruby.disabled = !hasContent;
-
-  // 新規入力欄の disabled は PSD ロード状態 + 入力内容で更新
   if (els.newInput) syncNewInputAvailabilityFor(els.newInput);
+  syncEditorPageModeButtons();
 }
 
-async function writeTxtFile(outputPath, content) {
+async function writeTxtFile(content, defaultName) {
   const { invoke } = await import("@tauri-apps/api/core");
-  await invoke("export_ai_text", { content, outputPath });
+  return await invoke("save_editor_text_to_script_output", { content, defaultName });
 }
 
 async function handleSave() {
+  await handleSaveAuto();
+  return;
   const source = getTxtSource();
   const path = getTxtFilePath();
   if (!source || !path) return;
@@ -275,6 +383,8 @@ async function handleSave() {
 }
 
 async function handleSaveAs() {
+  await handleSaveAuto();
+  return;
   const source = getTxtSource();
   if (!source) return;
   let outputPath;
@@ -298,17 +408,53 @@ async function handleSaveAs() {
   }
 }
 
-// 元ファイルパスがあれば上書き、無ければ別名で保存（OCR 結果や browser D&D 由来など
-// pathなし経路でも初回保存できるようにする）。
+async function launchProgenWithText(savedPath) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("launch_progen_with_text", { textPath: savedPath });
+}
+
+function defaultSaveNameFor(source) {
+  const fromSource = source?.name;
+  const fromPath = getTxtFilePath() ? baseName(getTxtFilePath()) : "";
+  return fromSource || fromPath || "untitled.txt";
+}
+
 async function handleSaveAuto() {
   const source = getTxtSource();
   if (!source) return;
-  if (getTxtFilePath()) await handleSave();
-  else await handleSaveAs();
+  let outputPath;
+  try {
+    outputPath = await writeTxtFile(source.content, defaultSaveNameFor(source));
+    setTxtFilePath(outputPath);
+    setTxtDirty(false);
+  } catch (e) {
+    console.error(e);
+    toast(`保存失敗: ${e?.message ?? e}`, { kind: "error" });
+    return;
+  }
+
+  const displayName = baseName(outputPath);
+  await notifyDialog({
+    title: "保存が完了しました",
+    message: `${displayName}\n${outputPath}`,
+    okLabel: "閉じる",
+    kind: "success",
+    primaryAction: {
+      label: "ProGenを開く",
+      kind: "place",
+      onClick: async () => {
+        try {
+          await launchProgenWithText(outputPath);
+          toast("ProGenへテキスト情報を渡しました", { kind: "success", duration: 1800 });
+        } catch (e) {
+          console.error(e);
+          toast(`ProGen起動失敗: ${e?.message ?? e}`, { kind: "error" });
+        }
+      },
+    },
+  });
 }
 
-// ルビ付け: 現在フォーカス中の contenteditable 内で文字選択中なら、
-// その範囲を「親（ふりがな）」に置換する。
 async function handleAddRuby() {
   const sel = window.getSelection();
   if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
@@ -316,11 +462,10 @@ async function handleAddRuby() {
     return;
   }
   const range = sel.getRangeAt(0);
-  // 選択範囲が contenteditable 段落内に収まっているか確認。
   const parent = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
     ? range.commonAncestorContainer.parentElement
     : range.commonAncestorContainer;
-  const paragraph = parent && parent.closest && parent.closest(".editor-page-paragraph");
+  const paragraph = parent && parent.closest && parent.closest(".editor-page-paragraph-text");
   if (!paragraph) {
     toast("段落内のテキストを選択してください", { kind: "info", duration: 2000 });
     return;
@@ -333,29 +478,19 @@ async function handleAddRuby() {
     placeholder: "ふりがな",
   });
   if (ruby == null || ruby === "") return;
-  const replacement = `${parentText}（${ruby}）`;
-  // contenteditable の選択範囲を直接置換 → blur で updateTxtSourceBlock が走る。
   range.deleteContents();
-  range.insertNode(document.createTextNode(replacement));
-  // 選択を解除して caret を末尾に。
+  range.insertNode(document.createTextNode(`${parentText}（${ruby}）`));
   sel.removeAllRanges();
   paragraph.focus();
-  // 見た目を即時反映してから blur で commit を発火させる（focus → blur で
-  // bindParagraphEdit の onBlur が走る）。
   paragraph.blur();
 }
 
-// 新規入力欄から中央配置をコミット。txt-source.js の commitNewTxtInput を共有。
 function handleCommitNewInput() {
   const els = getEls();
   if (!els.newInput) return;
   commitNewTxtInput({ inputEl: els.newInput });
 }
 
-// 現在のページソース判定（main.js の activePageSource と同じロジックを local 実装）。
-// main.js から import すると静的循環 import が発生し、評価順序によっては
-// activePageSource が undefined のままバインドされる事故が起きる。state / pdf-pages /
-// txt-source からは循環なく取れるので、ここで再実装する。
 function localActivePageSource() {
   const psd = getPages().length;
   if (psd > 0) return { source: "psd", total: psd, current: getCurrentPageIndex() };
@@ -366,40 +501,29 @@ function localActivePageSource() {
   return null;
 }
 
-// エディタモードのページ送り。同期モード固定で実装する（PDF/PSD ペインが
-// 隠されているのでアクティブペインの概念が無いため、両ペイン共通の同期動作で OK）。
 function localAdvancePage(delta) {
   const info = localActivePageSource();
   if (!info) return;
   const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
   if (info.source === "psd") setCurrentPageIndex(next);
-  else setPdfPageIndex(next); // pdf / txt はどちらも pdfPageIndex 駆動
+  else setPdfPageIndex(next);
 }
 
-// ページナビボタンのラベル / disabled を現在ページソースから更新する。
-// 「P02 / 24」のような ゼロ埋め 2 桁表記。ソースが無いときは「— / —」。
 function syncPageNav() {
   const els = getEls();
   if (!els.pageLabel) return;
   const info = localActivePageSource();
   if (!info || info.total <= 0) {
-    els.pageLabel.textContent = "— / —";
+    els.pageLabel.textContent = "- / -";
     if (els.pagePrev) els.pagePrev.disabled = true;
     if (els.pageNext) els.pageNext.disabled = true;
     return;
   }
-  const cur = info.current + 1; // 1-based 表示
-  const padCur = String(cur).padStart(2, "0");
-  els.pageLabel.textContent = `P${padCur} / ${info.total}`;
+  els.pageLabel.textContent = `P${String(info.current + 1).padStart(2, "0")} / ${info.total}`;
   if (els.pagePrev) els.pagePrev.disabled = info.current <= 0;
   if (els.pageNext) els.pageNext.disabled = info.current >= info.total - 1;
 }
 
-// Ctrl+← / Ctrl+→ でページ送り。
-// エディタモード (view-mode === "editor") のときだけ動作させ、他モードでは
-// 既存ショートカット (pageFirst / pageLast) を尊重する。
-// capture フェーズで先取りして preventDefault + stopImmediatePropagation することで、
-// settings.js の findShortcutMatch 経由の dispatcher より先に処理を奪う。
 function onEditorPageNavShortcut(e) {
   if (!(e.ctrlKey || e.metaKey)) return;
   if (e.altKey || e.shiftKey) return;
@@ -409,6 +533,22 @@ function onEditorPageNavShortcut(e) {
   e.stopPropagation();
   e.stopImmediatePropagation();
   localAdvancePage(e.key === "ArrowLeft" ? -1 : 1);
+}
+
+function onViewerKeydown(e) {
+  if (editingBlock || editorPageMode === "all") return;
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  const tag = e.target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+
+  let delta = 0;
+  if (e.key === "ArrowLeft" || e.key === "ArrowUp" || e.key === "PageUp") delta = -1;
+  else if (e.key === "ArrowRight" || e.key === "ArrowDown" || e.key === "PageDown") delta = 1;
+  else return;
+
+  e.preventDefault();
+  e.stopPropagation();
+  localAdvancePage(delta);
 }
 
 function bindNewInput() {
@@ -429,33 +569,25 @@ function bindNewInput() {
       }
     }
   });
-  if (els.newInputBtn) {
-    els.newInputBtn.addEventListener("click", handleCommitNewInput);
-  }
+  els.newInputBtn?.addEventListener("click", handleCommitNewInput);
 }
 
 export function bindEditorPane() {
   const els = getEls();
   if (!els.viewer) return;
 
-  // ツールバー (row2) 配線。row1 系のボタン (#editor-open-btn / #editor-saveas-btn /
-  // #editor-copy-btn / #editor-clear-btn / #editor-mark-delete-btn) は HTML 上既に
-  // 撤去されている。null チェックで安全に扱う。
   els.save?.addEventListener("click", handleSaveAuto);
   els.ruby?.addEventListener("click", handleAddRuby);
-
-  // ページ移動ボタン
   els.pagePrev?.addEventListener("click", () => localAdvancePage(-1));
   els.pageNext?.addEventListener("click", () => localAdvancePage(+1));
+  els.pageModeAll?.addEventListener("click", () => setEditorPageMode("all"));
+  els.pageModeSingle?.addEventListener("click", () => setEditorPageMode("single"));
+  els.viewer.tabIndex = 0;
+  els.viewer.addEventListener("keydown", onViewerKeydown);
 
-  // 新規テキスト入力欄
   bindNewInput();
-
-  // Ctrl+← / Ctrl+→ ショートカット（エディタモード時のみ active）
   document.addEventListener("keydown", onEditorPageNavShortcut, true);
 
-  // txtSource 変化で全 viewer 再描画 + filename / dirty / footer 同期。
-  // TXT 単体運用時は activePageSource の total が変わるためページラベルも更新。
   onTxtSourceChange(() => {
     renderViewer();
     syncFromState();
@@ -463,48 +595,39 @@ export function bindEditorPane() {
   });
   onTxtFilePathChange(syncFromState);
   onTxtDirtyChange(syncFromState);
-
-  // ページ送り連動: PSD or PDF の page index が変化 → 現在ページ用 section に再描画。
-  // 旧仕様の「active class だけ動かす」ではなく、表示する section 自体を入れ替える。
   onPageIndexChange(() => {
-    renderViewer();
+    renderViewer({ scrollToActive: editorPageMode === "all" });
     syncPageNav();
   });
   onPdfPageIndexChange(() => {
-    // PSD 読込中は onPageIndexChange が同期ブリッジ経由で発火するためスキップ。
     if (getPages().length > 0) return;
-    renderViewer();
+    renderViewer({ scrollToActive: editorPageMode === "all" });
     syncPageNav();
   });
   onPdfChange(() => {
     if (getPages().length > 0) return;
-    renderViewer();
+    renderViewer({ scrollToActive: editorPageMode === "all" });
     syncPageNav();
   });
 
-  // PSD ロード/クリアで新規入力欄の disabled を更新（getActivePageNumber も
-  // 判定先が変わるため、現在ページ用 section に再描画する）。
   window.addEventListener("psdesign:psd-loaded", () => {
     if (els.newInput) syncNewInputAvailabilityFor(els.newInput);
-    renderViewer();
+    renderViewer({ scrollToActive: editorPageMode === "all" });
     syncPageNav();
   });
 
-  // 初期化反映。
+  syncEditorPageModeButtons();
   renderViewer();
   syncFromState();
   syncPageNav();
 }
 
-// view-mode が "editor" に切り替わったときのフォーカス制御。
-// main.js bindParallelViewMode が呼ぶ。
-// active section の最初の段落へフォーカスを移すと自然な編集開始位置になる。
 export function focusEditor() {
   const viewer = $("editor-pages-viewer");
   if (!viewer) return;
   requestAnimationFrame(() => {
     const active = viewer.querySelector(".editor-page-section.active");
-    const first = (active || viewer).querySelector(".editor-page-paragraph");
+    const first = (active || viewer).querySelector(".editor-page-paragraph-text");
     if (first) first.focus();
   });
 }
