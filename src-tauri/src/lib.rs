@@ -1,3 +1,4 @@
+mod alignment;
 mod fonts;
 mod jsx_gen;
 mod ocr;
@@ -8,6 +9,12 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
 // 【v1.26.0】ルビ 1 件分のエントリ。state.js の charRubies スキーマと対応。
+// 【v1.29.x UI-coord】offset_x / offset_y: ビューアー上のルビ wrap の実描画位置を
+// 親レイヤー基準の PSD 座標 (px) で保持。canvas-tools.js scheduleRubyOffsetMeasure が
+// renderOverlay 後にビューアー DOM から実測して setCharRubyOffset で書き戻す。
+// 値があれば JSX 側 createRubyLayer はこの座標をルビ「中心」として配置するため、
+// CSS / JSX の計算式不一致による位置ズレが完全に排除される。Option (未設定なら従来の
+// 計算式 fallback)。
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RubyEntry {
     pub end: i64,
@@ -15,6 +22,14 @@ pub struct RubyEntry {
     #[serde(rename = "type")]
     pub ruby_type: String, // "mono" | "group"
     pub scale: f64,
+    #[serde(rename = "offsetX", default)]
+    pub offset_x: Option<f64>,
+    #[serde(rename = "offsetY", default)]
+    pub offset_y: Option<f64>,
+    #[serde(rename = "absX", default)]
+    pub abs_x: Option<f64>,
+    #[serde(rename = "absY", default)]
+    pub abs_y: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -102,6 +117,10 @@ pub struct NewLayer {
 pub struct PsdEdits {
     #[serde(rename = "psdPath")]
     pub psd_path: String,
+    #[serde(rename = "pageWidth", default)]
+    pub page_width: Option<f64>,
+    #[serde(rename = "pageHeight", default)]
+    pub page_height: Option<f64>,
     pub layers: Vec<LayerEdit>,
     #[serde(rename = "newLayers", default)]
     pub new_layers: Vec<NewLayer>,
@@ -135,7 +154,22 @@ pub struct EditPayload {
     // 新規 + 既存レイヤー両方に JSX 側で適用する。0 のとき機能 OFF。0-100 の percent 値。
     #[serde(rename = "punctuationTsumePercent", default)]
     pub punctuation_tsume_percent: f64,
+    // 【v1.29.x】ルビあり行間（%）。JSX 側 createRubyLayer で「親文字行と前の行のちょうど中間」
+    // 配置を計算するために使う。ビューアー (CSS の --ruby-row-leading-pct) と完全に
+    // 同じ値で、デフォルト 150。未指定（旧 payload）のとき 150 として扱う。
+    #[serde(rename = "rubyLeadingPct", default = "default_ruby_leading_pct")]
+    pub ruby_leading_pct: f64,
+    // 【v1.29.x】ルビ位置 Photoshop 微調整: 親 fontSize 単位で親側に追加シフト
+    #[serde(rename = "rubyPhotoshopOffsetEm", default = "default_ruby_photoshop_offset_em")]
+    pub ruby_photoshop_offset_em: f64,
+    // 【v1.29.x】ルビ位置 Photoshop 微調整: 親離し方向の固定 PSD px
+    #[serde(rename = "rubyPhotoshopBiasPx", default = "default_ruby_photoshop_bias_px")]
+    pub ruby_photoshop_bias_px: f64,
 }
+
+fn default_ruby_leading_pct() -> f64 { 150.0 }
+fn default_ruby_photoshop_offset_em() -> f64 { 0.0 }
+fn default_ruby_photoshop_bias_px() -> f64 { 0.0 }
 
 // 【v1.16.0】使用フォントの拡張 — TTC face_index を保持して全 face を個別管理。
 #[derive(Debug, Serialize)]
@@ -575,6 +609,7 @@ pub fn run() {
             ocr::uninstall_ai_models,
             ocr::run_ai_ocr,
             ocr::export_ai_text,
+            alignment::compute_alignment,
             tachimi::detect_tachimi_exe,
             tachimi::launch_tachimi_with_files
         ])

@@ -13,6 +13,10 @@ import {
 } from "../ui-feedback.js";
 import { baseName, joinPath } from "../utils/path.js";
 import { launchTachimiWithPaths } from "../services/tachimi.js";
+// 【v1.29.x UI-coord】保存前に全 page のルビ wrap 実描画位置を同期測定して state に書き戻す。
+// これにより exportEdits が「最新の UI 上の位置」を含む payload を返し、JSX 側 createRubyLayer が
+// ビューアーと完全一致した位置にルビレイヤーを配置できる (rAF 遅延を待たずに済む)。
+import { measureAllRubyOffsetsSync } from "../canvas-tools.js";
 
 // PSD 読込時に false にリセットされ、保存成功で true になる。
 // 旧: 初回 Ctrl+S を別名保存にフォールバックさせるためのフラグ。
@@ -51,6 +55,10 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     toast("編集内容がありません", { kind: "info" });
     return;
   }
+  // 【v1.29.x UI-coord】payload 構築前に、全 page のルビ wrap 実描画位置を同期測定して
+  // state に書き戻す。これがないと rAF 遅延で「新規に適用したばかりのルビの offsetX/Y が
+  // payload に含まれない」事故が起き、JSX 側で計算式 fallback が使われて位置がズレる。
+  try { measureAllRubyOffsetsSync(); } catch (e) { console.warn("[save] ruby offset measure failed:", e); }
   const base = exportEdits();
   const payload = {
     ...base,

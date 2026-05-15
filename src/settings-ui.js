@@ -147,11 +147,17 @@ const DEFAULT_SCHEMA = [
   { id: "default-text-size",            key: "textSize",                  type: "number",           applyTool: true },
   { id: "default-text-size-step",       key: "textSizeStep",              type: "number",           allowedValues: [0.1, 0.5], applyTool: true },
   { id: "default-leading-pct",          key: "leadingPct",                type: "number",           applyTool: true },
+  // 【v1.29.0】ルビ適用時にその行の lineLeadings を自動上書きする %
+  { id: "default-ruby-leading-pct",     key: "rubyLeadingPct",            type: "number",           applyTool: false },
+  // 【v1.29.x】ルビ位置微調整
+  { id: "default-ruby-parent-offset-em",   key: "rubyParentOffsetEm",      type: "number",           applyTool: false },
+  { id: "default-ruby-photoshop-offset-em", key: "rubyPhotoshopOffsetEm",  type: "number",           applyTool: false },
+  { id: "default-ruby-photoshop-bias-px",  key: "rubyPhotoshopBiasPx",     type: "number",           applyTool: false },
   { id: "default-stroke-width",         key: "strokeWidthPx",             type: "number",           applyTool: true },
   { id: "default-font",                 key: "fontPostScriptName",        type: "text-trim",        applyTool: true },
   { id: "default-show-badge",           key: "showBadge",                 type: "bool-showhide",    applyTool: false },
-  { id: "default-dash-tracking",        key: "dashTrackingMille",         type: "number",           applyTool: true },
-  { id: "default-tilde-tracking",       key: "tildeTrackingMille",        type: "number",           applyTool: true },
+  { id: "default-dash-run-tracking",    key: "dashRunTrackingMille",      type: "number",           applyTool: true },
+  { id: "default-tilde-run-kerning",    key: "tildeRunKerningMille",      type: "number",           applyTool: true },
   { id: "default-tcy-enabled",          key: "tateChuYokoEnabled",        type: "bool-onoff",       applyTool: false },
   { id: "default-symbol-font-enabled",  key: "symbolFontReplaceEnabled",  type: "bool-onoff",       applyTool: false },
   { id: "default-punct-tsume",          key: "punctuationTsumePercent",   type: "bool-onoff-num50", applyTool: false },
@@ -384,16 +390,24 @@ function bindDefaultsInputs() {
   for (const entry of DEFAULT_SCHEMA) {
     const el = $(entry.id);
     if (!el) continue;
-    el.addEventListener("change", () => {
+    const commit = (revertInvalid) => {
       const next = FORMATTERS[entry.type].parse(el.value, entry);
       if (next === null) {
-        // 無効入力 → 現在値で復帰
-        syncDefaultsUi();
+        if (revertInvalid) {
+          // 無効入力 → 現在値で復帰
+          syncDefaultsUi();
+        }
         return;
       }
       setDefault(entry.key, next);
       if (entry.applyTool) applyToolDefaults();
-    });
+    };
+    el.addEventListener("change", () => commit(true));
+    if (entry.type === "number") {
+      // 数値欄は保存ボタン等へ移る前でも最新値を保持する。dash / tilde のような
+      // 隣接フィールドが同値に見える事故を避けるため、入力中から個別 key に反映する。
+      el.addEventListener("input", () => commit(false));
+    }
   }
 
   const reset = $("settings-reset-defaults-btn");

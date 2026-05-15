@@ -1,5 +1,107 @@
 # PsDesign
 
+---
+
+## 2026-05-15 最新統合メモ
+
+このセクションは、現在の版で安定した「配置モード」「ルビ」「写植設定」「PSD への植字」を、他バージョンへ統合するときの移植メモ。
+
+### 配置モード
+
+- 配置モード 1 / 2 は `src/ai-place.js` から Rust コマンド `compute_alignment` を呼び、見本画像と PSD 表示の差分から `scale + offset` を計算する。
+- `compute_alignment` は `src-tauri/src/alignment.rs`。`src-tauri/src/lib.rs` に `mod alignment;` と `alignment::compute_alignment` の登録が必要。
+- `src-tauri/Cargo.toml` には `base64 = "0.22"` が必要。
+- `src-tauri/src/ocr.rs` の `make_pdfium` は `alignment.rs` から使うため `pub(crate)` にする。
+- JPG / PNG / PDF の見本は、まずファイルを直接 Rust 側へ渡し、失敗時に canvas 画像へフォールバックする。
+- `Command compute_alignment not found` は、ほぼ `lib.rs` の登録漏れ。
+
+### 手動重ね調整
+
+- 中心実装は `src/ai-place.js` の `showOverlayAlignModal`。
+- `index.html` には `#overlay-align-modal`, `#overlay-align-stage`, `#overlay-align-swap` が必要。
+- `src/styles.css` には `.overlay-align-*`, `.overlay-align-layer-moving`, `.overlay-align-layer-base` が必要。
+- 下地画像はビューアー限界まで広げず、ステージの約 80% に収めて余白を残す。
+- 移動させる側そのものを水色化する。アウトラインだけではなく、黒インク部分を cyan に変換した canvas を表示する。
+- `反転` ボタンで「PSD を動かす / 見本を動かす」を切り替える。
+- どちらを動かしても、最終的には `PSD -> reference` の transform として返す。
+
+### ルビ
+
+- ルビ情報は `charRubies` に保持する。主な値は `offsetX`, `offsetY`, `absX`, `absY`。
+- 現在の仕様では、PSD 出力位置は変更せず、UI 表示だけを親文字と前の行の中間へ戻す。
+- `src/canvas-tools.js` の `placeRubyAtLineMidpointsForOverlay(overlay, options)` は `towardParentRatio` を受け取る。
+- PSD 出力用の測定では既定値 `RUBY_TOWARD_PARENT_RATIO = 1.60` を使う。
+- UI 表示用には、測定後に `towardParentRatio: 0` で再配置する。
+- 保存前には `src/bind/save.js` から `measureAllRubyOffsetsSync()` を呼び、出力用の `absX/absY` を同期してから `exportEdits()` する。
+- この順序を崩すと、UI の中間表示と PSD の植字位置が混ざってズレる。
+
+### 写植設定
+
+- `――` と `～～` は同じ項目にしない。
+- `――` は `dashRunTrackingMille` を使い、Photoshop 側では tracking として処理する。
+- `～～` は `tildeRunKerningMille` を使い、Photoshop 側では kerningRange として処理する。
+- 古い `dashTrackingMille`, `tildeTrackingMille`, `tildeRunTrackingMille` は互換用に残せるが、現在の主要経路では `dashRunTrackingMille` と `tildeRunKerningMille` を使う。
+- `src-tauri/src/jsx_gen.rs` の `applyRepeatedDashTracking(layer, contents, dashMille, tildeMille)` で、ダッシュ系は `textStyleRange.tracking`、チルダ系は `kerningRange` に分ける。
+- Photoshop では複数の tilde kerning range を昇順で入れると後半だけ残ることがあるため、tilde の kerning range は降順に適用する。
+
+### 記号フォント
+
+- `♡`, `♥`, `❤` などの記号は、小塚ゴシック ProH に寄せる。
+- 現在の既定 PostScript 名は `KozGoPro-Heavy`。
+- 旧既定値 `KozGoPr6N-Regular` が保存されている場合は、設定 migration で `KozGoPro-Heavy` へ移す。
+- `src/settings.js` の `DEFAULT_SETTINGS.version` は `14` 以上が必要。
+- `src/canvas-tools.js` と `src-tauri/src/jsx_gen.rs` の記号判定に `0x2764` を含める。
+- ユーザーが過去に別の `symbolFontPostScriptName` を手動保存している場合、migration では上書きしない。必要なら環境設定から変更する。
+
+### PSD への植字
+
+- 保存時は `src/state.js` の `exportEdits()` が PSD ごとの編集 payload を作る。
+- `src-tauri/src/lib.rs` の `apply_edits_via_photoshop` が payload を受け取り、`src-tauri/src/jsx_gen.rs` が ExtendScript を生成する。
+- `applyToPsd(...)` には、ダッシュ/チルダ、縦中横、記号フォント、句読点詰め、ルビ、UI ページサイズを渡す。
+- ルビの座標は UI 表示位置ではなく、保存前に測定した出力用 `absX/absY` を基準にする。
+- PSD ごとに try/catch し、失敗時は sentinel / 部分保存の情報が分かるようにする。
+
+### 他バージョンへ統合するときの必須ファイル
+
+- `index.html`: 配置モードボタン、手動重ね調整モーダル、`#overlay-align-swap`、写植設定 UI、記号フォント設定 UI。
+- `src/ai-place.js`: 配置モード 1 / 2、`computeAlignmentSafe`、見本画像の direct file / canvas fallback、手動重ね調整。
+- `src/canvas-tools.js`: ルビの UI 表示と出力測定の分離、記号フォント判定、プレビュー側の dash / tilde 設定。
+- `src/bind/save.js`: 保存前の `measureAllRubyOffsetsSync()`。
+- `src/state.js`: `exportEdits()` の payload に `dashRunTrackingMille`, `tildeRunKerningMille`, ルビ、UI ページサイズを含める。
+- `src/settings.js`: 設定 version 14 以上、dash / tilde 分離、記号フォント migration。
+- `src/settings-ui.js`: `dashRunTrackingMille` と `tildeRunKerningMille` の入力欄を別 ID / 別 key で持つ。
+- `src/styles.css`: ルビ表示、配置モード、手動重ね調整、水色移動レイヤー、80% 表示のスタイル。
+- `src-tauri/src/alignment.rs`: `compute_alignment` 本体。
+- `src-tauri/src/lib.rs`: `mod alignment;` と `alignment::compute_alignment` の登録。
+- `src-tauri/src/ocr.rs`: `make_pdfium` の公開範囲。
+- `src-tauri/src/jsx_gen.rs`: `applyRepeatedDashTracking`、ルビ生成、記号フォント置換、Photoshop 用座標変換。
+- `src-tauri/Cargo.toml`: `base64 = "0.22"`。
+
+### 統合後チェックリスト
+
+1. 配置モード 1 / 2 で JPG 見本を使い、`Command compute_alignment not found` が出ないこと。
+2. PDF 見本でも alignment が計算されること。
+3. 手動重ね調整で、移動側が水色になり、反転ボタンで PSD / 見本の移動側を切り替えられること。
+4. 手動重ね調整の下地がビューアーいっぱいではなく、約 80% 表示で余白があること。
+5. UI 上のルビが、親文字と前の行の中間に見えること。
+6. PSD に植字したルビ位置が、既存の出力位置から変わっていないこと。
+7. `――` の設定を変えたとき、`～～` の詰めが変わらないこと。
+8. `～～` の設定を変えたとき、`――` の詰めが変わらないこと。
+9. `♡`, `♥`, `❤` が記号フォント置換対象になり、小塚ゴシック ProH 系で出ること。
+10. PSD 保存で、通常テキスト、新規テキスト、ルビ、縦中横、記号フォント、句読点詰めが同時に反映されること。
+
+### 抜けやすい原因
+
+- `lib.rs` にコマンド登録だけ忘れると、フロント側が正しくても `Command compute_alignment not found` になる。
+- `settings-ui.js` の入力欄 key が同じだと、`――` と `～～` が同じ値として保存される。
+- `state.js` の `exportEdits()` が古い `tildeTrackingMille` を見ていると、チルダの kerning が反映されない。
+- `jsx_gen.rs` 側で dash と tilde を同じ tracking に戻すと、分離が壊れる。
+- `measureAllRubyOffsetsSync()` の後に UI 用 `towardParentRatio: 0` を呼ばないと、UI ルビが中間表示にならない。
+- UI 用 `towardParentRatio: 0` の座標を保存 payload に使うと、PSD のルビ出力位置が変わる。
+- `symbolFontPostScriptName` が localStorage に手動保存済みの場合、既定値 migration だけでは ProH に変わらない。
+
+---
+
 PSD（Photoshop Document）のテキストレイヤーを一覧編集し、変更を Photoshop 経由で実ファイルに書き戻す Tauri v2 アプリ。フォルダ単位で複数 PSD をまとめて扱い、TXT 原稿からのワンクリック縦書き配置をサポートする。
 
 ## スタック
@@ -4482,3 +4584,600 @@ E1. **`.ruby-edit-pending::after` ルール群を撤去** ([src/styles.css](src/
 > - 旧: `syncRuby` 未定義関数の呼出が listener に残って finalize 時に ReferenceError → 新: 該当行を削除（v1.16.0 期 dead code）
 > - 旧: ルビ表示位置に `margin-bottom: 1px` / `margin-left: 2px` の余白あり → 新: `em` 単位 transform で `0.18em` 親文字側にシフト、紙面写植に近いタイトな表示
 
+---
+
+## v1.28.0: PsDesign-main v1.25.0 機能の合体（位置調整 3 モード = mode1 確定式 / mode2 KENBAN 流画像差分 / mode3 重ね調整）
+
+### 概要
+
+別フォーク (`PsDesign-main`, v1.25.0) が独自に進化させていた **「自動配置後の位置調整」3 モード** を ver_1.0 へ一括移植したバージョン。両フォークは v1.26.0 までで PsDesign-main の v1.24.0 機能（自動配置の自動スタイリング・PSD 焼き付き対策）まで合体済みだが、v1.25.0 の位置調整 3 モードのみ未統合だった。
+
+このバージョンで両フォークの全機能を統合した。0513 (本ライン) の選択 UX 刷新 / Tachimi 連携 / 別名保存連番化 / 矢印キー再設計 / UI ストライプ / ルビ修正等は完全保持し、位置調整 3 モードを **重ねる** 形で実装。
+
+### A. 位置調整 3 モードの中核
+
+[src/ai-place.js](src/ai-place.js):
+
+- `runPositionAdjust(mode, options)` — mode1 / mode2 の 2 モードを駆動する非同期関数
+- `runOverlayAlign()` — mode3 (重ね調整) を駆動する非同期関数
+- `computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageIndex, mode)` — Rust の `compute_alignment` Tauri コマンドを安全呼出（PDF / JPEG / PNG 対応、失敗時 null）
+- `renderReferencePageToCanvas(pageIdx)` — pdfjs から見本 1 ページ目を canvas に描画（mode3 用）
+- `showOverlayAlignModal(refCanvas, psdCanvas)` — 全画面オーバーレイモーダル、ドラッグ・ホイール・ズームボタンで PSD を見本に重ねる UI
+- `getApproxLayerCenterDelta(layer, psdPage, axis)` — レイヤー幅/高さの半分を返す簡易ヘルパー
+- `bindPositionAdjustButton()` — 3 ボタン (`#ai-adjust-btn` / `#ai-adjust2-btn` / `#ai-adjust3-btn`) のクリック配線と disabled 同期
+
+### B. 共通基盤
+
+B1. **`sourceTxtRef` ベースの idempotent 化**: 自動配置時に各レイヤーへ `sourceTxtRef = { pageNumber, paragraphIndex }` を埋め、位置調整は `mokuroPage.blocks[paragraphIndex].box` から refCx/refCy を直接取得。`layer.x / sx` で逆算する方式 (2 回押下で累積する旧バグ) を完全廃止。
+
+B2. **`sizePtBasis` フィールド追加** ([src/state.js](src/state.js) `addNewLayer`): 自動配置時の元 sizePt を `layer.sizePtBasis` として保存。位置調整 mode2 / mode3 でサイズ補正を `sizePtBasis × sizeCorrectionFactor` で再計算 → idempotent。
+
+B3. **フォントサイズスナップ**: 計算結果の小数部で離散化 (0.00-0.24→整数 / 0.25-0.74→+0.5 / 0.75-0.99→+1.0)。
+
+B4. **範囲外飛び出しガード**: 補正後位置が PSD 寸法の ±30% を超えるレイヤーは補正をスキップ + console.warn。
+
+B5. **mokuro_img_width を Rust に渡す** ([src-tauri/src/alignment.rs](src-tauri/src/alignment.rs)): フロントから `mokuroImgWidth: mokuroPage.img_width` を渡し、Rust 側で mokuro 単位を優先採用。Rust 側のコードは既に v1.26.0 で移植済み (両フォーク同一)、JS 側の連携のみ新規。
+
+### C. mode1: PSDに余分余白あり (確定式)
+
+`scale = 1.0`, `offset_x = (mokuro_img_w - psd_w) / 2`, `offset_y = (mokuro_img_h - psd_h) / 2`
+
+ref < psd で offset 負 → 全体を PSD の中央クロップ (絵柄領域) へシフト集約。
+
+### D. mode2: 見本に余分余白あり (KENBAN 流 画像差分 grid search)
+
+1. 両画像を grayscale + downsample (400px target) + テキスト bbox を 128 で mask
+2. scale 候補 (初期値の ±30% を 3% 刻み) × offset 候補 (±25%、1/40 刻み) を grid search
+3. 各組合せで `compute_diff` (絶対差分平均) を計算、最小の組合せを採用
+4. 粗い探索の後、best 周辺で refine (1px 単位)
+5. ダウンサンプル単位の結果を mokuro 単位に換算
+
+JS 側適用:
+- 位置: `newPsdCx = (refCx - offset_x) / scale`
+- サイズ: `factor = 1 / (autoSx × alignment.scale)` (自動配置との差分で拡縮)
+- snap 関数で 0.5/1pt 単位にスナップ
+
+### E. mode3: 重ね調整 (手動 UI)
+
+全画面オーバーレイモーダル (`#overlay-align-modal`):
+- 90vw × 90vh、ステージは市松模様背景で透明領域を視覚化
+- 見本画像と PSD canvas をともに `opacity: 0.55` で重ねる
+- 下部: ズームアウト / 倍率% / ズームイン / リセット / キャンセル / OK
+
+初期表示:
+- 見本画像はステージにフィット表示 (縦横比維持)
+- PSD は見本と同じ画面幅で重なる
+- `manualScale = 1.0` が「自動配置と同じ位置・サイズ」 → 何も触らなければ補正ゼロ
+
+操作:
+- マウスドラッグ → PSD 移動
+- ホイール → カーソル位置中心に拡大縮小 (1.05倍/ノッチ)
+- +/- ボタン → ステージ中央起点の拡縮
+- Esc → キャンセル / Enter → OK
+
+OK 時:
+- `manualScale, psdOffsetX, psdOffsetY` から alignment を計算
+- ref 自然 px → mokuro 単位に換算 (`mokuroPerRef = mokuro_w / ref_natural_w`)
+- 各 PSD ページの全レイヤーに mode2 と同じ式で位置 + サイズ補正
+
+### F. UI 構成
+
+F1. **3 ボタン** ([index.html](index.html) `.ai-actions-row` 内): 自動配置ボタンの直後に「位置調整1 / 位置調整2 / 重ね調整」を配置。アイコンは:
+- 位置調整1: 大枠 + 内塗り (PSDに余分余白の意)
+- 位置調整2: 大塗り + 内枠 (見本に余分余白の意)
+- 重ね調整: 2 つの矩形が重なるアイコン (overlay の意)
+
+F2. **overlay-align-modal** ([index.html](index.html) body 末尾): card 内に header + stage + controls の 3 段構成。stage は市松模様の transparent backdrop で「重ねている」感を視覚化。
+
+F3. **CSS スタイル** ([src/styles.css](src/styles.css) 末尾): `.overlay-align-modal` 系を約 105 行追加。`z-index: 350` で既存モーダル (file-picker 250, ai-install 200) より前面。
+
+### G. mapBlockToNewLayer の alignment 対応
+
+旧シグネチャ: `(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef, groupInfo)`
+新シグネチャ: `(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef, groupInfo, alignment)`
+
+alignment が指定されているケース (将来の自動配置パイプライン拡張で利用予定) では、Rust 計算済みの `scale + offset` で見本 bbox 座標を PSD 座標に逆変換する。alignment が無い場合は従来通り見本 / PSD のフルサイズ比率で単純スケール。
+
+現状の `buildPlacementPlan` 内では alignment を渡さない (自動配置は alignment を計算しない設計)。位置調整専用で `runPositionAdjust` 内が `mapBlockToNewLayer` を直接呼ぶケースを想定し、引数だけ追加してある。後付けの自動 alignment 統合のための足場。
+
+### H. モード使い分けガイド
+
+| 状況 | 推奨モード | 理由 |
+|---|---|---|
+| 見本がトリミング済み・PSD のほうが大きい (周囲余白) | **位置調整1 (mode1)** | 確定式、最も安定 |
+| 見本に余白あり・PSD のほうが小さい | **位置調整2 (mode2)** | 画像差分で自動検出 |
+| 見本と PSD の関係が複雑 / 自動検出が外れる | **重ね調整 (mode3)** | 手動で完全制御 |
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.28.0`** に揃え。Cargo.lock も自動追従。Rust 側 alignment.rs は既に v1.26.0 移植時に両フォーク同一だったため Rust 側の追加変更なし。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: 自動配置の結果が「全体的にずれる」場合の手当てなし → 新: 「位置調整1 / 位置調整2 / 重ね調整」の 3 ボタンで、見本と PSD の余白パターンに応じて位置を一括補正
+> - 旧: 位置調整は `layer.x / sx` で現在位置から逆算 → 2 回押下で累積バグ → 新: `sourceTxtRef.paragraphIndex` から mokuro 元 bbox を直接取得し idempotent
+> - 旧: 位置のみ補正 → 新: `sizePtBasis × (1/(autoSx × alignment.scale))` で文字サイズも整合補正、0.5/1pt スナップ
+> - 旧: 見本側のサイズが分からないと位置調整 mode2 が機能しない → 新: KENBAN 流の画像差分 grid search を Rust で実装、scale + offset を自動検出
+> - 旧: 自動検出が外れる場合の手当てなし → 新: mode3 重ね調整モーダルでドラッグ・ホイールで手動完全制御
+> - 旧: PsDesign-main (0511) と ver_1.0 (0513) が別々のラインで進化、0511 の位置調整 3 モードが 0513 に未統合 → 新: v1.28.0 で全機能合体、両フォークの差分ゼロに
+
+---
+
+## v1.29.0: ルビ適用時の行間自動調整 + ルビ位置の行間中央化
+
+### 概要
+
+ルビ機能を「より自然な紙面写植に近い見た目」に近づけるための 2 つの改善:
+1. **ルビ親文字選択 → ルビ適用** の瞬間に、対象 range が乗る行の `lineLeadings[lineIndex]` を `rubyLeadingPct` (デフォルト 150%) に自動上書き
+2. ルビ表示位置を **「親文字行と前の行のちょうど中間」** に配置 (CSS variable で動的駆動)
+
+加えて、写植設定タブに「ルビあり行間 (%)」入力フィールドを追加し、ユーザーが好みの値に変更可能。
+
+### A. 設定追加 (rubyLeadingPct)
+
+A1. **[src/settings.js](src/settings.js) `DEFAULT_SETTINGS.defaults`**:
+- `rubyLeadingPct: 150` (デフォルト)、50-500% にクランプ
+- migrate() でホワイトリスト穴埋め
+- scope: render-all (CSS variable 経由でルビ位置即時更新) + ルビ適用時に lineLeadings 上書き
+
+A2. **[index.html](index.html) 写植設定タブ**: 「行間 (%)」の直下に「ルビあり行間 (%)」を追加 (`#default-ruby-leading-pct`、min=50 max=500 step=1)
+
+A3. **[src/settings-ui.js](src/settings-ui.js) DEFAULT_SCHEMA**: `{ id: "default-ruby-leading-pct", key: "rubyLeadingPct", type: "number", applyTool: false }` を追加。schema-driven 化のおかげで sync / bind は自動配線
+
+### B. ルビ適用時に対象行の lineLeading を自動上書き
+
+[src/main.js](src/main.js) `doApply()` (ルビ「適用」ボタンのハンドラ) を拡張:
+
+- `getEditingContext().contents` から親文字 range の前後の改行数を数え、`startLine` / `endLine` を算出
+- `withHistoryTransient` 内で:
+  - `setCharRubiesRange(...)` (既存ロジック)
+  - `for (let li = startLine; li <= endLine; li++) setLineLeading(..., li, rubyLeadingPct)` (新規)
+- Ctrl+Z 一発で「ルビ追加 + 行間変更」が一括巻き戻り
+
+複数行に跨る ruby (まれ) も両方の行を更新するため、ユーザーが意図しない行間の不揃いを防ぐ。
+
+### C. ルビ位置を「親文字行と前の行のちょうど中間」に
+
+C1. **CSS variable `--ruby-row-leading-pct`** ([src/main.js](src/main.js) 初期化):
+- 起動時に `document.documentElement.style.setProperty("--ruby-row-leading-pct", rubyLeadingPct)` で設定
+- `onSettingsChange` 購読で設定変更 (写植設定の「ルビあり行間」を変更) のたびに更新
+- これだけで CSS 側のルビ位置計算が即時追従
+
+C2. **[src/styles.css](src/styles.css) `.ruby-text`**:
+
+横書き:
+```css
+transform: translate(-50%, calc((0.5 - var(--ruby-row-leading-pct, 150) / 200) * 1em));
+```
+- 親文字 top (bottom: 100% 起点) から `(0.5 - leading_factor / 2)` em (Y 方向) シフト
+- leading_factor = 1.5 (150%) → `0.5 - 0.75 = -0.25 em` → 親文字の上 0.25em 外側
+- 親文字行中心から前の行中心 = `leading_factor em` の中央に着地
+
+縦書き (`writing-mode: vertical-rl`):
+```css
+transform: translate(calc((var(--ruby-row-leading-pct, 150) / 200 - 0.5) * 1em), -50%);
+```
+- 親文字 right (left: 100% 起点) から `(leading_factor / 2 - 0.5)` em (X 方向) シフト
+- leading_factor = 1.5 → `0.75 - 0.5 = +0.25 em` → 親文字の右 0.25em 外側
+- 縦書きで右隣の行 (= "前の行") の中央位置に着地
+
+幾何学的に検証:
+- 親文字行中心 X = 0
+- 右隣の行中心 X = +leading_factor em
+- 中間 = +leading_factor / 2 em
+- 親文字右端 X = +0.5em
+- 中間 - 親文字右端 = (leading_factor / 2 - 0.5) em ✓
+
+### D. ユーザー体験フロー
+
+1. ユーザーがテキストフレームをダブルクリック → contenteditable 編集モードに入る
+2. 親文字を文字選択 → サイドバーのルビ入力欄が enabled に
+3. ふりがな入力 → 「適用」ボタンクリック
+4. **自動的に**:
+   - `state.charRubies` に ruby entry 追加 (既存挙動)
+   - `state.lineLeadings[行 index]` が 150% に上書き → 行間が広がる (新規)
+   - ルビが「親文字行と前の行のちょうど中間」に表示 (新規、CSS variable 駆動)
+5. Ctrl+Z 一発で ruby + 行間が両方戻る
+
+### E. 設定変更の挙動
+
+ユーザーが「写植設定」タブの「ルビあり行間」を 150% → 175% に変更:
+
+1. `setDefault("rubyLeadingPct", 175)` が走る
+2. `onSettingsChange` listener が発火 → `--ruby-row-leading-pct` を 175 に更新 → 全ルビの位置が即時に新しい行間中央へ移動
+3. **既存レイヤーの lineLeadings は不変** (過去のルビが乗る行は 150% のまま) — 次回新規ルビ適用時から 175% が使われる
+4. 過去のルビレイヤーで行間を変えたい場合は、サイドバー「行間」入力欄で手動更新 (既存挙動)
+
+### F. CSS variable 計算の検証表
+
+| leadingPct (CSS var) | leading_factor | 縦書き transform X | 横書き transform Y | 紙面解釈 |
+|---|---|---|---|---|
+| 100% | 1.0 | 0em | 0em | 行間ゼロ (親文字密着) — 実用外 |
+| 125% | 1.25 | +0.125em | -0.125em | わずかに外側 (現状デフォルト leadingPct) |
+| **150%** | **1.5** | **+0.25em** | **-0.25em** | **デフォルト rubyLeadingPct、行間中央** |
+| 175% | 1.75 | +0.375em | -0.375em | やや広め |
+| 200% | 2.0 | +0.5em | -0.5em | 親文字幅と同じ外側オフセット |
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.29.0`** に揃え。Cargo.lock も自動追従。
+
+> **このバージョンの構造変更まとめ**:
+> - 旧: ルビ適用しても行間は手動調整 (狭いと親文字とルビが密着) → 新: ルビ適用と同時に対象行の lineLeadings を rubyLeadingPct (デフォルト 150%) に自動上書き、Ctrl+Z 一発で戻る
+> - 旧: ルビ位置は親文字に密着 (translate(-0.18em, -50%) 固定) → 新: 「親文字行と前の行のちょうど中間」に配置、CSS variable `--ruby-row-leading-pct` で動的駆動
+> - 旧: ルビ位置は固定 → 新: 写植設定タブの「ルビあり行間 (%)」変更で全ルビの位置が即時更新
+> - 旧: 設定タブにルビ関連項目なし → 新: 「ルビあり行間 (%)」入力フィールド追加 (DEFAULT_SCHEMA に 1 行追加で sync / bind 自動配線)
+
+---
+
+## v1.30.0: ルビ機能の完成 — 行間 / 位置 / 設定画面連動 / Photoshop 完全一致
+
+### 概要
+
+v1.29.0 で導入したルビ機能の周辺を、ユーザー実機テストでのフィードバックを基に**完全動作**まで磨き込んだバージョン。3 つの柱:
+
+1. **ルビ親文字の行間自動設定**: ルビ適用時に親文字行の「前の行」の autoLeadingPercentage を 150% に上書き、ルビ用の空間を確保
+2. **ルビ位置の UI ↔ Photoshop 完全同期**: ビューアー上の `.ruby-text` 実描画位置を PSD 座標に変換、Photoshop 側でも同じ位置にルビレイヤーを配置
+3. **設定画面からの一括制御**: 「写植設定」タブで `rubyLeadingPct` / `rubyParentOffsetEm` / `rubyPhotoshopOffsetEm` / `rubyPhotoshopBiasPx` の 4 値を変更可能、ビューアーと Photoshop 書き出しの両方に即時反映
+
+加えて、ダッシュ / チルダ連続ツメ設定のラベルを連続記号形式 (「――」「～～」) に変更し、推奨値を placeholder で明示。
+
+### A. ルビ親文字の行間自動設定 (autoLeadingPercentage)
+
+#### A1. 設計判断: 「親文字行の **一つ前の行 (i-1)** の autoLeadingPercentage を上書き」
+
+参考プラグイン (`共有プラグイン - コピー/panels/ruby/index.js`) の実装と挙動テストを基に、Photoshop の `autoLeadingPercentage` 仕様を以下と確認:
+- その行の `autoLeadingPercentage = 1.5` (倍率) → その行の高さ (= 前の行との隙間) が広がる
+- 縦書き / 横書き ともに「**親文字行の一つ前 (i-1)**」を対象にすることで、Photoshop の文字パネルで「ジャスティフィケーション値が前の行に入っている」表示が得られる
+- 0 行目に親文字がある場合は前の行なしのためスキップ
+
+#### A2. 実装: `applyRubyAutoLeadingPercentage` ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs))
+
+参考プラグインの `runApplyLeadingScript` の `paragraphStyleRange` 分割パターンを踏襲:
+- textKey から `paragraphStyleRange` を取得
+- 各 range を「ルビ行境界」で分割
+- 各セグメントの `paragraphStyle` を `copyParaStyle()` でコピー、`autoLeadingPercentage` のみ上書き
+- textKey の他のキー (`textStyleRange` / `textShape` / `orientation` / `antiAlias*` / `textGridding` / `warp`) は元のままコピー
+- `set TxLr` で書き戻し
+
+`computeRubyLineIndices(contents, charRubies, direction)` で「親文字行の 1 つ前」を抽出 (direction 引数は将来拡張用、現状は両方向とも `parentLine - 1`)。
+
+#### A3. applyLineLeadings との分岐 (charRubies の有無で切替)
+
+- **ルビあり** (charRubies 非空): `applyRubyAutoLeadingPercentage` で per-line `autoLeadingPercentage` を当てる、`applyLineLeadings` (textStyleRange の Ldng 固定) はスキップ
+- **ルビなし**: 従来通り `applyLineLeadings` でユーザー手動の per-line override を当てる
+
+`autoLeadingAmount` (textItem 全体) は常に `e.leadingPct / nl.leadingPct` で設定 (段落全体のデフォルト)。
+
+### B. ルビ位置の UI ↔ Photoshop 完全同期
+
+#### B1. ビューアー DOM の位置を測定して PSD 座標に変換
+
+[src/canvas-tools.js](src/canvas-tools.js):
+- `appendRubySegment` / `applyEditModeRubyToRange` でルビ wrap に `data-ruby-start` 属性を付与
+- `renderOverlay` 末尾で `scheduleRubyOffsetMeasure(ctx)` を rAF 呼び出し
+- `measureRubyOffsetsForOverlay`: 各 `.ruby-wrap[data-ruby-start]` の `.ruby-text` センター位置を `getBoundingClientRect()` で取得 → canvas / pxPerPsd で PSD 座標に換算 → 親 layer-box の top-left からの**相対オフセット** (PSD px) を計算
+- `setCharRubyOffset(psdPath, layerKey, start, offsetX, offsetY)` で state に書き戻し ([src/state.js](src/state.js))
+
+新規 export `measureAllRubyOffsetsSync()`: DOM 全体を走査して全 page の overlay を測定 (rAF 不要)。保存時に `bind/save.js runSaveWithMode` の `exportEdits()` 前に呼ばれ、最新の UI 位置を payload に含める。
+
+#### B2. EditPayload / JSX へのオフセット伝達
+
+[src-tauri/src/lib.rs](src-tauri/src/lib.rs) `RubyEntry` 構造体:
+```rust
+pub struct RubyEntry {
+    pub end: i64,
+    pub text: String,
+    pub ruby_type: String,
+    pub scale: f64,
+    pub offset_x: Option<f64>,   // 親レイヤー基準の PSD px (新規)
+    pub offset_y: Option<f64>,   // 同上 (新規)
+}
+```
+
+[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `emit_char_rubies` で offset があれば JSX オブジェクトリテラルに含める。
+
+#### B3. JSX 側で uiOffsetX/Y を使った配置
+
+`createRubyLayer` 内 `hasUiOffset` 分岐:
+- `rubyCenterX = parentBounds.left + uiOffsetX`
+- `rubyCenterY = parentBounds.top + uiOffsetY`
+- 後段の調整バイアス (B5) を加算してから `targetLeft = rubyCenterX - rubyWidth/2` で配置
+
+#### B4. 親レイヤー位置との連動
+
+`applyRubyAutoLeadingPercentage` で親レイヤーがシフトしても、`createRubyLayer` は **現在の親 bounds** を基準に使うので「親文字に対する相対距離」が維持される。`parentTopLeftOverride` 引数は API として残すが、通常の applyToPsd では `null` で渡して旧挙動 (= 現在 bounds 基準) に統一。
+
+#### B5. Photoshop 側 微調整バイアス
+
+UI と Photoshop の見た目を独立調整するため、`createRubyLayer` に 2 つのバイアス引数を追加:
+
+```js
+PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM = 0.85;  // 親 fontSize 単位の親側シフト
+PHOTOSHOP_RUBY_PARENT_BIAS_PX      = 7.5;   // 親離し方向の固定 PSD px
+```
+
+縦書き:
+```js
+rubyCenterX -= parentEmPx * PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM;  // 親側 (左)
+rubyCenterX += PHOTOSHOP_RUBY_PARENT_BIAS_PX;                    // 親離し (右)
+```
+
+横書き:
+```js
+rubyCenterY += parentEmPx * PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM;  // 親側 (下)
+rubyCenterY -= PHOTOSHOP_RUBY_PARENT_BIAS_PX;                    // 親離し (上)
+```
+
+`parentEmPx` は `parentLayer.textItem.size.value * (doc.resolution / 72)` で動的取得 (フォントサイズ追従)、失敗時 200 (24pt × 600/72) フォールバック。
+
+### C. 設定画面からの一括制御
+
+[src/settings.js](src/settings.js) `DEFAULT_SETTINGS.defaults` に 4 つのルビ関連キーを追加:
+
+```js
+rubyLeadingPct: 150,           // ルビあり行間 % (autoLeadingPercentage × 100)
+rubyParentOffsetEm: 0.15,      // UI 上のルビ親寄せ em (CSS variable)
+rubyPhotoshopOffsetEm: 0.85,   // Photoshop 親寄せ em (フォントサイズ追従)
+rubyPhotoshopBiasPx: 7.5,      // Photoshop 親離し px (固定)
+```
+
+migrate もホワイトリスト方式で 4 キーを追加 (-2..2 em / -100..100 px / 50..500 % にクランプ)。
+
+[src/settings-ui.js](src/settings-ui.js) `DEFAULT_SCHEMA` に 4 entry 追加、[index.html](index.html) の写植設定タブに対応する入力フィールド (`#default-ruby-leading-pct` / `#default-ruby-parent-offset-em` / `#default-ruby-photoshop-offset-em` / `#default-ruby-photoshop-bias-px`)。
+
+[src/main.js](src/main.js) で `applyRubyCssVars()` を `onSettingsChange` 購読:
+```js
+document.documentElement.style.setProperty("--ruby-row-leading-pct", String(pct));
+document.documentElement.style.setProperty("--ruby-parent-offset-em", String(uiOffsetEm));
+refreshAllOverlays();
+```
+
+[src/state.js](src/state.js) `exportEdits` で `rubyPhotoshopOffsetEm` / `rubyPhotoshopBiasPx` を payload に追加。
+
+[src-tauri/src/lib.rs](src-tauri/src/lib.rs) `EditPayload` に 2 フィールド追加 (`#[serde(default = "default_...")]`)、[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) で `applyToPsd → applyRubies → createRubyLayer` のチェーン全体に 2 引数を伝達。
+
+### D. CSS 変更 (ビューアー位置)
+
+[src/styles.css](src/styles.css) `.ruby-text` の transform 計算式:
+
+```css
+/* 横書き */
+transform: translate(-50%, calc((0.75 - var(--ruby-row-leading-pct, 150) / 200
+                                  + var(--ruby-parent-offset-em, 0.15)) * 1em));
+
+/* 縦書き */
+transform: translate(calc((var(--ruby-row-leading-pct, 150) / 200 - 0.75
+                            - var(--ruby-parent-offset-em, 0.15)) * 1em), -50%);
+```
+
+幾何学:
+- `leading_factor / 2 - 0.75 em` = 「親文字行と前の行の中間にルビの中心」配置式 (ルビ要素の幅 0.5em を考慮済み)
+- `--ruby-parent-offset-em` を引く / 足すことで、ルビ中心を親文字側にシフト
+
+### E. ダッシュ / チルダ連続ツメ ラベル改善
+
+ユーザー指摘「数値と入力箇所が違うので修正」を受け、[index.html](index.html) の写植設定タブの該当ラベルを連続記号形式 + 推奨値 placeholder に変更:
+
+| 旧ラベル | 新ラベル | placeholder |
+|---|---|---|
+| 「―」連続のツメ (‰) | **「――」連続のツメ (‰)** | 0 で OFF / 推奨 -100 |
+| 「～」連続のツメ (‰) | **「～～」連続のツメ (‰)** | 0 で OFF / 推奨 -300 |
+
+コード紐付け (`default-dash-tracking` → `dashTrackingMille`、`default-tilde-tracking` → `tildeTrackingMille`) は元から正しく、各々独立して保存・適用される。
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.30.0`** に揃え。Cargo.lock も自動追従。
+
+### 推奨設定値 (経験値)
+
+| 用途 | rubyLeadingPct | rubyParentOffsetEm | rubyPhotoshopOffsetEm | rubyPhotoshopBiasPx |
+|---|---|---|---|---|
+| **デフォルト** | 150 | 0.15 | 0.85 | 7.5 |
+| UI 行間中央 / Photoshop 親寄り | 150 | 0 | 1.0 | 7.5 |
+| 両方とも控えめ親寄り | 150 | 0.3 | 0.7 | 7.5 |
+| 大きめの行間 (200%) | 200 | 0.15 | 0.85 | 7.5 |
+
+「`rubyParentOffsetEm` + `rubyPhotoshopOffsetEm` ≈ 1.0」を保つと、UI と Photoshop の見た目位置がほぼ一致する (UI 親寄せが小さい場合は Photoshop で大きく寄せて、合計 1.0em でバランス維持)。
+
+> **このセッションの構造変更まとめ**:
+> - 旧: ルビ親文字行間の手動調整が必要 → 新: ルビ適用時に自動で「親文字の前の行」の autoLeadingPercentage を 150% (rubyLeadingPct/100) に上書き、参考プラグイン互換 (paragraphStyleRange 分割方式)
+> - 旧: UI と Photoshop のルビ位置にズレ → 新: ビューアー DOM 実描画位置を PSD 座標で測定 → payload で JSX へ → 同じ位置に配置 (measureAllRubyOffsetsSync は保存前に必ず同期実行)
+> - 旧: 設定変更にコード修正が必要 → 新: 写植設定タブの 4 入力フィールドで全パラメータを変更可能、CSS variable + payload 経由で即時反映
+> - 旧: ダッシュ / チルダ ラベルが単一記号「―」「～」 → 新: 連続記号「――」「～～」+ 推奨値 placeholder で識別性向上
+> - 旧: createRubyLayer は計算式 fallback のみ → 新: uiOffsetX/Y 優先 + em / px 二段バイアスのハイブリッド、引数は API として残し将来拡張可能
+
+---
+
+## v1.30.1: ダッシュ / チルダ連続ツメ設定の強制リセット
+
+### 背景
+
+v1.30.0 でラベルを「――」「～～」連続記号形式に改善したが、ユーザー実機で「両方とも -300 になっている」と確認された。これは localStorage に保存されている設定値そのものに過去のバグの影響が残っている状態 (コード上の紐付けは v1.10〜v1.30.0 まで一貫して正しい)。
+
+### 修正
+
+[src/settings.js](src/settings.js):
+- `DEFAULT_SETTINGS.version` を **8 → 9** に bump
+- migrate ロジックで `oldVer >= 9` のときだけ `dashTrackingMille` / `tildeTrackingMille` の保存値を尊重
+- `oldVer < 9` (= v1.30.0 以前から起動するユーザー) は黙ってデフォルト値 (-100 / -300) で初期化
+
+```js
+const oldVer = Number.isFinite(old.version) ? old.version : 0;
+if (oldVer >= 9) {
+  if (typeof d.dashTrackingMille === "number" && Number.isFinite(d.dashTrackingMille)) {
+    out.defaults.dashTrackingMille = d.dashTrackingMille;
+  }
+  if (typeof d.tildeTrackingMille === "number" && Number.isFinite(d.tildeTrackingMille)) {
+    out.defaults.tildeTrackingMille = d.tildeTrackingMille;
+  }
+}
+// oldVer < 9: out.defaults の DEFAULT_SETTINGS 値 (-100 / -300) がそのまま採用される
+```
+
+### 影響範囲
+
+- 次回起動時、localStorage の version が 8 以前なら **dash と tilde が強制的にデフォルト値に分離**
+- dash = -100‰ (ダッシュ系: ━ ― – ‒ ‐ ‑ ー －)
+- tilde = -300‰ (チルダ系: 〜 ～)
+- その他の設定 (フォント、ルビ位置、ショートカット等) は影響なし
+- v1.30.1 以降にユーザーが意図的に変更した値は `oldVer >= 9` で尊重される
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.30.1`** に揃え。
+
+> **このパッチの構造変更まとめ**:
+> - 旧: dash / tilde 設定値が「両方とも同じ値 (例: -300)」で localStorage に残ってしまうケース → 新: settings version 9 への migrate でデフォルト値を強制復元 (-100 / -300)、それ以降のユーザー変更は尊重
+
+---
+
+## v1.30.2: dash / tilde 強制リセット再実行 (version 9 → 10)
+
+### 背景
+
+v1.30.1 で settings version 8 → 9 への migrate で dash/tilde の値を強制リセットしたが、ユーザー実機テストで「やはりまだ両方 -300 になっている」と報告された。原因は、ユーザーが既に v9 で「両方 -300」を localStorage に保存してしまっていたため、v9 → v9 では migrate のリセットが発動しなかった。
+
+### コードレベルでの分離の再確認
+
+ユーザーの「UI 上と、写植する際と、呼び出す関数や記入する数値などはきちんと差別化されているか」という疑問に対し、コード全体を再追跡した結果:
+
+#### ビューアー (canvas-tools.js)
+
+```js
+// appendLineWithTracking で別変数として受け取り
+const dashMag = Math.abs(Number(dashMille) || 0);
+const tildeMag = Math.abs(Number(tildeMille) || 0);
+
+// 文字ごとに repeatedTargetGroup() で判定して値を切替
+const grp = repeatedTargetGroup(seg.text[k]);
+const mag = grp === "dash" ? dashMag
+          : grp === "tilde" ? tildeMag
+          : 0;
+```
+
+#### Photoshop (jsx_gen.rs applyRepeatedDashTracking)
+
+```js
+// 別変数として受け取り
+var dashTrack = -Math.abs(dashMille || 0);
+var tildeTrack = -Math.abs(tildeMille || 0);
+
+// 文字ごとに charGroup() で判定して値を切替
+var grp = charGroup(fullText.charAt(k));
+var v = grp === "dash" ? dashTrack
+      : grp === "tilde" ? tildeTrack
+      : 0;
+```
+
+両側とも **文字コード単位** で完全に独立しており、設計上の混在は無いことを確認。
+
+### 修正
+
+[src/settings.js](src/settings.js) を**再度** bump:
+- `DEFAULT_SETTINGS.version` **9 → 10**
+- migrate ロジックで `oldVer >= 10` のときだけ dash/tilde 保存値を尊重
+- `oldVer < 10` (v9 を含む) は黙ってデフォルト値 (-100 / -300) で初期化
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.30.2`** に揃え。
+
+### 動作確認方法
+
+1. アプリを再起動 (重要: 起動時に migrate が走る)
+2. ハンバーガーメニュー → 環境設定 → 写植設定タブ
+3. 「「――」連続のツメ (‰)」 = **-100** (期待値)
+4. 「「～～」連続のツメ (‰)」 = **-300** (期待値)
+5. それぞれ独立して値を変更可能、変更値は version 10 として保存
+
+### もし依然として両方同じ値が表示される場合
+
+考えられる外的要因:
+- 設定モーダルの値表示が古い localStorage 値をキャッシュしている → アプリ完全終了 + 再起動
+- WebView2 の localStorage キャッシュ → DevTools (F12) → Application → Local Storage で `psdesign_settings` の値を直接確認
+- 1 つの入力ボックスに値を入れたあと、もう片方の入力ボックスがフォーカスを取った瞬間に同期されるバグ → コード上は `bindDefaultsInputs` の change リスナーが entry.key 単位で独立しており発生し得ない
+
+> **このパッチの構造変更まとめ**:
+> - 旧: v9 で既に「両方 -300」を保存していたユーザーは v1.30.1 の migrate でリセットされなかった → 新: v10 への bump で再度強制リセット、コード分離の確認手順を文書化
+
+---
+
+## v1.30.3: dash / tilde 認識文字を拡張 + DEBUG ログでユーザー実機問題切り分け
+
+### 背景
+
+v1.30.2 で `dash=-100 tilde=-300` の payload が JSX に正しく伝わっていることをDEBUG ログで確認できたが、ユーザー実機で「―に -300 が当たる」現象が続いた。さらに調査すると `[DEBUG run]` ログが**一度も出力されない** = `applyRepeatedDashTracking` の連続ラン処理に該当する「―」が無い → ユーザーが使っている「―」が判定リストに含まれない char code (= U+2500 や U+2501 等の罫線素片) である可能性が高いと判明。
+
+### 修正
+
+#### 1. dash / tilde 認識 char code セットの拡張
+
+[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyRepeatedDashTracking` の `charGroup()` と、
+[src/canvas-tools.js](src/canvas-tools.js) の `DASH_CHARS` / `TILDE_CHARS` / `REPEATED_TARGET_REGEX` を同時拡張。
+
+**追加 dash 系 (6 種類)**:
+
+| 文字 | char code | 名前 | 想定用途 |
+|---|---|---|---|
+| ─ | U+2500 | BOX DRAWINGS LIGHT HORIZONTAL | 細罫線でダッシュ代用 |
+| ━ | U+2501 | BOX DRAWINGS HEAVY HORIZONTAL | 太罫線でダッシュ代用 |
+| − | U+2212 | MINUS SIGN | 数学マイナス記号 |
+| ⁃ | U+2043 | HYPHEN BULLET | ハイフンブレット |
+| ﹘ | U+FE58 | SMALL EM DASH | 小書きエムダッシュ |
+| ﹣ | U+FE63 | SMALL HYPHEN-MINUS | 小書きハイフンマイナス |
+
+**追加 tilde 系 (2 種類)**:
+
+| 文字 | char code | 名前 |
+|---|---|---|
+| ~ | U+007E | ASCII TILDE |
+| ˜ | U+02DC | SMALL TILDE |
+
+#### 2. 実機切り分け用 DEBUG ログ (一時)
+
+`applyRepeatedDashTracking` 冒頭に以下を追加。原因特定後に削除予定:
+
+| ログ | 意味 |
+|---|---|
+| `[DEBUG tracking] dash=N tilde=N` | 引数で受け取った dash/tilde 値 |
+| `[DEBUG contents chars (N)] U+XXXX(dash) U+XXXX(tilde) ...` | contents 先頭 40 文字の char code + 認識マーク |
+| `[DEBUG run] '○○' codes=[U+XX] grps=[dash/tilde/null] tracks=[N N]` | 連続ラン 1 個あたりの内訳 |
+
+`applyToPsd` 冒頭にも:
+
+| ログ | 意味 |
+|---|---|
+| `[DEBUG applyToPsd args] dash=N tilde=N (typeof dash=number typeof tilde=number)` | payload → JSX への伝達確認 |
+
+#### 3. ルビ位置の 13pt 基準フォントサイズ比例計算
+
+`createRubyLayer` で `PHOTOSHOP_RUBY_PARENT_BIAS_PX` を「**13pt フォント前提の値**」として扱い、実親フォントサイズに比例して拡縮:
+
+```js
+var PHOTOSHOP_RUBY_PARENT_BIAS_REF_PT = 13;
+var __parentSizePtForBias = parentLayer.textItem.size.value || 13;
+var PHOTOSHOP_RUBY_PARENT_BIAS_PX
+  = __biasPxBase * (__parentSizePtForBias / PHOTOSHOP_RUBY_PARENT_BIAS_REF_PT);
+```
+
+| 親文字サイズ | 13pt → 24pt | bias |
+|---|---|---|
+| 9pt | 7.5 × (9/13) | ~5.2px |
+| **13pt (基準)** | 7.5 × (13/13) | **7.5px** |
+| 24pt | 7.5 × (24/13) | ~13.8px |
+| 36pt | 7.5 × (36/13) | ~20.8px |
+
+### バージョン同期
+
+`package.json` / `src-tauri/Cargo.toml` / `src-tauri/tauri.conf.json` を **`1.30.3`** に揃え。
+
+### 次回ユーザー確認後の動作
+
+1. `[DEBUG run]` ログが出力される → 文字認識 OK → tracking 値が反映されているはず
+2. それでも反映されない → `[DEBUG contents chars]` の char code を確認 → 漏れている文字があればさらに追加
+
+> **このパッチの構造変更まとめ**:
+> - 旧: dash 系 8 種類 + tilde 系 2 種類のみ認識 → 新: dash 14 種類 (罫線素片・マイナス記号・小書きダッシュ追加) + tilde 4 種類 (ASCII チルダ・SMALL TILDE 追加)
+> - 旧: ルビ位置の親離し px は固定 7.5 で全フォントサイズ共通 → 新: 13pt 基準でフォントサイズ比例計算 (大サイズフォントには大きな bias、小サイズには小さな bias)
+> - 旧: 「―に -300 が当たる」の原因不明 → 新: 多層 DEBUG ログ (payload / applyToPsd / contents / run / tracking) で原因をピンポイント切り分け可能

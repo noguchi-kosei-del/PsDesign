@@ -489,6 +489,27 @@
               </svg>
               <span>自動配置</span>
             </button>
+            <button id="ai-adjust-btn" class="ai-place-btn" type="button" title="位置調整1: PSDに余分余白あり (確定式)" aria-label="位置調整1" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="1"/>
+                <rect x="8" y="8" width="8" height="8" rx="0.5" fill="currentColor" fill-opacity="0.25"/>
+              </svg>
+              <span>位置調整1</span>
+            </button>
+            <button id="ai-adjust2-btn" class="ai-place-btn" type="button" title="位置調整2: 見本に余分余白あり (画像差分 grid search)" aria-label="位置調整2" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="18" height="18" rx="1" fill="currentColor" fill-opacity="0.25"/>
+                <rect x="8" y="8" width="8" height="8" rx="0.5"/>
+              </svg>
+              <span>位置調整2</span>
+            </button>
+            <button id="ai-adjust3-btn" class="ai-place-btn" type="button" title="重ね調整: 見本に PSD を半透明で重ねて手動調整" aria-label="重ね調整" disabled>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="3" width="14" height="14" rx="1"/>
+                <rect x="7" y="7" width="14" height="14" rx="1" fill="currentColor" fill-opacity="0.35"/>
+              </svg>
+              <span>重ね調整</span>
+            </button>
           </div>
           <div class="side-panel-tabs" role="tablist">
             <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
@@ -594,6 +615,7 @@
                   <div class="ruby-parent-display" id="ruby-parent-display" title="選択中の親文字" aria-live="polite">
                     <span class="ruby-parent-empty">文字を選択</span>
                   </div>
+                  <span class="ruby-line-hint" id="ruby-line-hint" aria-live="polite" hidden></span>
                 </div>
                 <div class="ruby-row">
                   <input id="ruby-text-input" class="ruby-text-input" type="text"
@@ -844,6 +866,22 @@
               <input type="number" id="default-leading-pct" class="settings-default-input" min="50" max="500" step="1" />
             </div>
             <div class="settings-default-row">
+              <label class="settings-default-label" for="default-ruby-leading-pct">ルビあり行間 (%)</label>
+              <input type="number" id="default-ruby-leading-pct" class="settings-default-input" min="50" max="500" step="1" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-ruby-parent-offset-em">ルビ UI 親寄せ (em)</label>
+              <input type="number" id="default-ruby-parent-offset-em" class="settings-default-input" min="-2" max="2" step="0.05" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-ruby-photoshop-offset-em">ルビ Photoshop 親寄せ (em)</label>
+              <input type="number" id="default-ruby-photoshop-offset-em" class="settings-default-input" min="-2" max="2" step="0.05" />
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-ruby-photoshop-bias-px">ルビ Photoshop 親離し (px)</label>
+              <input type="number" id="default-ruby-photoshop-bias-px" class="settings-default-input" min="-100" max="100" step="0.5" />
+            </div>
+            <div class="settings-default-row">
               <label class="settings-default-label" for="default-stroke-width">フチの太さ (px)</label>
               <input type="number" id="default-stroke-width" class="settings-default-input" min="0" max="999" step="0.1" />
             </div>
@@ -860,12 +898,12 @@
               </select>
             </div>
             <div class="settings-default-row">
-              <label class="settings-default-label" for="default-dash-tracking">「―」連続のツメ (‰)</label>
-              <input type="number" id="default-dash-tracking" class="settings-default-input" min="-1000" max="1000" step="10" placeholder="0 で OFF" />
+              <label class="settings-default-label" for="default-dash-run-tracking">「――」連続のトラッキング (‰)</label>
+              <input type="number" id="default-dash-run-tracking" class="settings-default-input" min="-1000" max="1000" step="10" placeholder="0 で OFF / 推奨 -100" />
             </div>
             <div class="settings-default-row">
-              <label class="settings-default-label" for="default-tilde-tracking">「～」連続のツメ (‰)</label>
-              <input type="number" id="default-tilde-tracking" class="settings-default-input" min="-1000" max="1000" step="10" placeholder="0 で OFF" />
+              <label class="settings-default-label" for="default-tilde-run-kerning">「～～」連続のカーニング (‰)</label>
+              <input type="number" id="default-tilde-run-kerning" class="settings-default-input" min="-1000" max="1000" step="10" placeholder="0 で OFF / 推奨 -300" />
             </div>
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-tcy-enabled">「!!」「!?」を縦中横に</label>
@@ -1038,6 +1076,28 @@
         <div class="ai-place-review-actions">
           <button type="button" id="ai-place-review-cancel" class="page-jump-btn">キャンセル</button>
           <button type="button" id="ai-place-review-ok" class="page-jump-btn page-jump-btn-primary">配置を実行</button>
+        </div>
+      </div>
+    </div>
+    <!-- 【v1.28.0 移植】重ね調整 (mode3) モーダル: 見本とPSDを半透明で重ねて手動位置/スケール調整 -->
+    <div class="overlay-align-modal" id="overlay-align-modal" hidden>
+      <div class="overlay-align-card" role="dialog" aria-modal="true" aria-labelledby="overlay-align-title">
+        <div class="overlay-align-header">
+          <span class="overlay-align-title" id="overlay-align-title">重ね調整: 見本に PSD を重ねる</span>
+          <span class="overlay-align-help">PSD をドラッグで移動 / ホイールで拡大縮小</span>
+        </div>
+        <div class="overlay-align-stage" id="overlay-align-stage">
+          <!-- 見本画像と PSD canvas が重ねて配置される -->
+        </div>
+        <div class="overlay-align-controls">
+          <button type="button" id="overlay-align-zoom-out" class="overlay-align-btn">−</button>
+          <span id="overlay-align-zoom-label" class="overlay-align-zoom-label">100%</span>
+          <button type="button" id="overlay-align-zoom-in" class="overlay-align-btn">+</button>
+          <span class="overlay-align-spacer"></span>
+          <button type="button" id="overlay-align-swap" class="overlay-align-btn">反転</button>
+          <button type="button" id="overlay-align-reset" class="overlay-align-btn">リセット</button>
+          <button type="button" id="overlay-align-cancel" class="overlay-align-btn">キャンセル</button>
+          <button type="button" id="overlay-align-ok" class="overlay-align-btn overlay-align-btn-primary">OK</button>
         </div>
       </div>
     </div>

@@ -383,12 +383,21 @@ function normalizeCharRubiesMap(map) {
     if (typeof entry.text !== "string" || entry.text.length === 0) continue;
     const end = Number(entry.end);
     if (!Number.isFinite(end) || end <= start) continue;
-    out[String(start)] = {
+    const normalized = {
       end,
       text: entry.text,
       type: entry.type === "mono" ? "mono" : "group",
       scale: Number.isFinite(Number(entry.scale)) ? Number(entry.scale) : 50,
     };
+    // 【v1.29.x UI-coord】ビューアー上のルビ wrap の実描画位置を PSD 座標 (親レイヤー基準) で
+    // 保持。canvas-tools.js が renderOverlay 後に setCharRubyOffset() で書き込む。
+    // 値があれば JSX 側の createRubyLayer はこの座標をそのまま使う (計算ズレ排除)。
+    // 未設定 / NaN のときは JSX 側の幾何計算 fallback。
+    if (Number.isFinite(Number(entry.offsetX))) normalized.offsetX = Number(entry.offsetX);
+    if (Number.isFinite(Number(entry.offsetY))) normalized.offsetY = Number(entry.offsetY);
+    if (Number.isFinite(Number(entry.absX))) normalized.absX = Number(entry.absX);
+    if (Number.isFinite(Number(entry.absY))) normalized.absY = Number(entry.absY);
+    out[String(start)] = normalized;
   }
   return out;
 }
@@ -440,6 +449,37 @@ export function getCharRubies(psdPath, layerIdOrTempId) {
   }
   const e = getEdit(psdPath, layerIdOrTempId);
   return e?.charRubies ?? {};
+}
+
+// 【v1.29.x UI-coord】指定 ruby エントリにビューアー描画時の PSD 座標オフセットを記録する。
+// renderOverlay の最後で .ruby-wrap の位置を測って呼ぶ。history snapshot は出さない
+// (UI 由来のキャッシュであり、user の編集操作ではない)。
+export function setCharRubyOffset(psdPath, layerIdOrTempId, start, offsetX, offsetY, absX = null, absY = null) {
+  if (!Number.isInteger(start)) return;
+  if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY)) return;
+  const absolute = {};
+  if (Number.isFinite(Number(absX))) absolute.absX = Number(absX);
+  if (Number.isFinite(Number(absY))) absolute.absY = Number(absY);
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].charRubies ?? {}) };
+    const key = String(start);
+    if (!cur[key]) return; // ルビ entry がない位置は無視
+    cur[key] = { ...cur[key], offsetX, offsetY, ...absolute };
+    // pushHistorySnapshot は呼ばない (UI cache 更新のため)
+    state.newLayers[idx] = { ...state.newLayers[idx], charRubies: cur };
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.charRubies ?? {}) };
+    const key = String(start);
+    if (!cur[key]) return;
+    cur[key] = { ...cur[key], offsetX, offsetY, ...absolute };
+    // setEdit は pushHistorySnapshot を内部で呼ぶので使わず、edits マップに直接書き込む。
+    const eKey = `${psdPath}::${layerIdOrTempId}`;
+    const e = state.edits.get(eKey) ?? { psdPath, layerId: layerIdOrTempId };
+    state.edits.set(eKey, { ...e, charRubies: cur });
+  }
 }
 
 // 指定 char index を完全に覆う ruby エントリを返す（無ければ null）。
@@ -673,7 +713,13 @@ export function exportEdits() {
   const byPsd = new Map();
   const ensure = (psdPath) => {
     if (!byPsd.has(psdPath)) {
-      byPsd.set(psdPath, { layers: [], newLayers: [] });
+      const page = state.pages.find((p) => p.path === psdPath) ?? null;
+      byPsd.set(psdPath, {
+        pageWidth: Number.isFinite(Number(page?.width)) ? Number(page.width) : null,
+        pageHeight: Number.isFinite(Number(page?.height)) ? Number(page.height) : null,
+        layers: [],
+        newLayers: [],
+      });
     }
     return byPsd.get(psdPath);
   };
@@ -693,8 +739,8 @@ export function exportEdits() {
 
   // 連続記号のツメ（環境設定の global 値）。新規レイヤー（newLayers）にだけ JSX 側で適用する。
   // 既存レイヤー（layers / edits）は触らない方針。0 のとき機能 OFF。dash/tilde グループ別。
-  const dashTrackingMille = Number(getDefault("dashTrackingMille")) || 0;
-  const tildeTrackingMille = Number(getDefault("tildeTrackingMille")) || 0;
+  const dashTrackingMille = Number(getDefault("dashRunTrackingMille")) || 0;
+  const tildeTrackingMille = Number(getDefault("tildeRunKerningMille")) || 0;
   // 縦中横（!! / !? の自動 tcy）も新規・縦書きレイヤーにだけ JSX 側で適用する。
   const tateChuYokoEnabled = getDefault("tateChuYokoEnabled") !== false;
   // 記号フォント置換（♡♥★☆♪ 等を別フォントで自動置換）。新規 + 既存両方に JSX 側で適用する。
@@ -703,6 +749,16 @@ export function exportEdits() {
   const symbolFontPostScriptName = String(getDefault("symbolFontPostScriptName") || "");
   // 句読点ツメ（、。を Photoshop 保存時にツメ N% で組む）。新規 + 既存両方に適用。0 で OFF。
   const punctuationTsumePercent = Number(getDefault("punctuationTsumePercent")) || 0;
+  // 【v1.29.x】ルビあり行間。JSX 側 (createRubyLayer) が「行間中央」配置を計算するために
+  // 受け取る。ビューアー (CSS) の --ruby-row-leading-pct と完全に同じ値を使う。
+  const rubyLeadingPct = Number(getDefault("rubyLeadingPct")) || 150;
+  // 【v1.29.x】ルビ位置の Photoshop 側 微調整値。
+  //   rubyPhotoshopOffsetEm: Photoshop 保存時だけ追加する em 補正 (default 0)
+  //   rubyPhotoshopBiasPx  : Photoshop 保存時だけ追加する px 補正 (default 0)
+  const rubyPhotoshopOffsetEm = Number.isFinite(Number(getDefault("rubyPhotoshopOffsetEm")))
+    ? Number(getDefault("rubyPhotoshopOffsetEm")) : 0;
+  const rubyPhotoshopBiasPx = Number.isFinite(Number(getDefault("rubyPhotoshopBiasPx")))
+    ? Number(getDefault("rubyPhotoshopBiasPx")) : 0;
 
   return {
     dashTrackingMille,
@@ -711,6 +767,9 @@ export function exportEdits() {
     symbolFontReplaceEnabled,
     symbolFontPostScriptName,
     punctuationTsumePercent,
+    rubyLeadingPct,
+    rubyPhotoshopOffsetEm,
+    rubyPhotoshopBiasPx,
     edits: Array.from(byPsd.entries()).map(([psdPath, { layers, newLayers }]) => ({
       psdPath,
       layers,
@@ -834,6 +893,10 @@ export function addNewLayer({
     // 0..5 の bucket index (10% 刻み)。-1 は未切替 / 算出不能。
     // CSS 側で auto-font-bucket-N クラス → 6 段階の色グラデーション。
     autoFontSwitchBucket: Number.isInteger(autoFontSwitchBucket) ? autoFontSwitchBucket : -1,
+    // 【v1.28.0 移植 (PsDesign-main v1.25.0)】自動配置時の元 sizePt。
+    // 位置調整 mode2 / mode3 でサイズ補正を idempotent にするために保存する。
+    // layer.sizePt が後から更新されても、補正は sizePtBasis × sizeCorrectionFactor で再計算。
+    sizePtBasis: Number.isFinite(sizePt) ? sizePt : null,
   };
   state.newLayers.push(layer);
   pushHistorySnapshot();

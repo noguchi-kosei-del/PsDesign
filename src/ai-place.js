@@ -20,15 +20,17 @@ import {
   getFillColor,
   getNewTextDirection,
   getPdfPaths,
+  getPdfDoc,
   getTxtSource,
   onTxtSourceChange,
   getNewLayers,
   updateNewLayer,
   beginHistoryTransient,
+  commitHistoryTransient,
   abortHistoryTransient,
 } from "./state.js";
 import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
-import { notifyDialog, confirmDialog, hideProgress } from "./ui-feedback.js";
+import { notifyDialog, confirmDialog, hideProgress, promptDialog, showProgress, updateProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runAiOcrForFiles, PLACE_ICON_SVG } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
@@ -39,6 +41,8 @@ import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 const $ = (id) => document.getElementById(id);
 
 let runningPlace = false;
+// 【v1.28.0 移植】位置調整 (3 モード) の二重起動防止フラグ
+let runningAdjust = false;
 // 直近に適用された配置プランのテキスト内容指紋。
 // 同一テキストで連続して自動配置するときに確認ダイアログを出すために使う。
 let lastPlacedFingerprint = null;
@@ -381,13 +385,89 @@ function groupConnectedBlocks(blocks, debugTag = "") {
   return groupIds.map((g) => ({ groupId: g, connected: memberCount[g] >= 2 }));
 }
 
-function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef, groupInfo) {
+// 【v1.28.0 移植 (PsDesign-main v1.24.0+ / v1.25.0)】
+// 見本と PSD の差分から scale + offset を Rust の compute_alignment で計算。
+// mode = "mode1" (PSDに余分) / "mode2" (見本に余分) を Rust に渡す。
+// PDF / JPEG / PNG に対応。失敗 / 見本未指定 は null を返してフォールバック。
+let lastAlignmentError = "";
+
+async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageIndex = 0, mode = "mode1") {
+  if (!referencePath) return null;
+  if (!psdPage?.canvas) return null;
+  const errors = [];
+  try {
+    const psdBase64 = psdPage.canvas.toDataURL("image/png");
+    const refBboxes = (mokuroPage?.blocks ?? []).map((b) => ({
+      left: b.box[0], top: b.box[1], right: b.box[2], bottom: b.box[3],
+    }));
+    const psdBboxes = (psdPage.textLayers ?? []).map((l) => ({
+      left: l.left, top: l.top, right: l.right, bottom: l.bottom,
+    }));
+    const { invoke } = await import("@tauri-apps/api/core");
+    const invokeAlignment = (referenceImageDataBase64) => invoke("compute_alignment", {
+      referencePath,
+      referencePdfPageIndex: pdfPageIndex,
+      referenceImageDataBase64,
+      psdImageDataBase64: psdBase64,
+      referenceTextBboxes: refBboxes,
+      psdTextBboxes: psdBboxes,
+      psdWidth: psdPage.width,
+      psdHeight: psdPage.height,
+      mode,
+      // mokuro OCR の入力画像サイズを Rust に渡し、
+      // alignment.offset を mokuro 単位 (= bbox 座標と同単位) で計算させる
+      mokuroImgWidth: mokuroPage?.img_width ?? null,
+      mokuroImgHeight: mokuroPage?.img_height ?? null,
+    });
+
+    if (/\.(jpe?g|png|pdf)$/i.test(referencePath)) {
+      try {
+        const result = await invokeAlignment(null);
+        lastAlignmentError = "";
+        return result;
+      } catch (e) {
+        errors.push(`file: ${String(e?.message ?? e)}`);
+      }
+    }
+
+    const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, mokuroPage?.img_width ?? null);
+    const refBase64 = refCanvas ? refCanvas.toDataURL("image/png") : null;
+    if (refBase64) {
+      try {
+        const result = await invokeAlignment(refBase64);
+        lastAlignmentError = "";
+        return result;
+      } catch (e) {
+        errors.push(`canvas: ${String(e?.message ?? e)}`);
+      }
+    } else {
+      errors.push("canvas: 見本ページをCanvas化できませんでした");
+    }
+  } catch (e) {
+    errors.push(`unexpected: ${String(e?.message ?? e)}`);
+  }
+  lastAlignmentError = errors.join(" / ");
+  console.warn(`[ai-place] compute_alignment 失敗 (${referencePath}): ${lastAlignmentError}`);
+  return null;
+}
+
+function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef, groupInfo, alignment) {
   const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
   const sy = psdPage.height / Math.max(mokuroPage.img_height, 1);
   const direction = block.vertical ? "vertical" : "horizontal";
   // bubble bbox の中心を PSD 座標に変換 → "ユーザーがクリックした位置" と等価。
-  const cx = ((block.box[0] + block.box[2]) / 2) * sx;
-  const cy = ((block.box[1] + block.box[3]) / 2) * sy;
+  // 【v1.28.0 移植】alignment があれば Rust 計算済みの scale + offset で逆変換、
+  // なければ従来通り見本 / PSD のフルサイズ比率で単純スケール。
+  let cx, cy;
+  if (alignment && Number.isFinite(alignment.scale) && alignment.scale > 0) {
+    const refCx = (block.box[0] + block.box[2]) / 2;
+    const refCy = (block.box[1] + block.box[3]) / 2;
+    cx = (refCx - alignment.offset_x) / alignment.scale;
+    cy = (refCy - alignment.offset_y) / alignment.scale;
+  } else {
+    cx = ((block.box[0] + block.box[2]) / 2) * sx;
+    cy = ((block.box[1] + block.box[3]) / 2) * sy;
+  }
   // 縦書きレイヤーは設定 verticalHalfToFullEnabled (default true) に従い、
   // 半角英数字 (0-9 / A-Z / a-z) を全角に自動変換する。
   // bbox 推定は変換後テキストで行うため、文字幅差は影響しない（char count ベース）。
@@ -921,4 +1001,704 @@ export function bindAiPlaceButton() {
   // TXT 編集 → 自動配置済みレイヤー contents を追従。
   // 編集はサイドパネル dblclick 編集 / エディタ textarea / undo/redo 経由で発生する。
   onTxtSourceChange(syncPlacedFromTxt);
+}
+
+// ============================================================
+// 【v1.28.0 移植 (PsDesign-main v1.25.0)】
+// 位置調整 (alignment 適用) フロー — 3 モード対応
+// ============================================================
+// 自動配置で生成済みのレイヤーに対して、各 PSD ページごとに見本画像との
+// alignment (scale + offset) を計算し、配置済みレイヤーの座標を一括変換する。
+//
+// 3 モード:
+//   mode1 (PSDに余分余白): scale=1, offset=(mokuro - psd)/2 の確定式
+//     ref < psd → 絵柄領域中心へシフト集約
+//   mode2 (見本に余分余白): KENBAN 流の画像差分 grid search (Rust)
+//     scale + offset を画像から自動検出 + per-layer サイズ補正
+//   mode3 (重ね調整): 全画面オーバーレイで見本/PSD を半透明で重ね、
+//     ドラッグ・ホイールで手動位置/スケール調整
+//
+// sourceTxtRef ベースで idempotent (累積バグなし、複数回押しても同じ結果)。
+// 範囲外飛び出しガード付き (PSD ±30% 超えるレイヤーは補正スキップ)。
+async function runPositionAdjust(mode = "mode1", options = {}) {
+  if (runningAdjust) return;
+  runningAdjust = true;
+  const modeLabel = mode === "mode2"
+    ? "位置調整2 (見本に余分余白あり、画像差分)"
+    : "位置調整1 (PSDに余分余白あり、確定式)";
+  try {
+    const psdPages = getPages();
+    if (!psdPages || psdPages.length === 0) {
+      await notifyDialog({ title: `${modeLabel} できません`, message: "PSD が読み込まれていません。" });
+      return;
+    }
+    const referencePaths = getPdfPaths();
+    if (!referencePaths || referencePaths.length === 0) {
+      await notifyDialog({ title: `${modeLabel} できません`, message: "見本画像が読み込まれていません。" });
+      return;
+    }
+    const newLayers = getNewLayers();
+    if (!newLayers || newLayers.length === 0) {
+      await notifyDialog({ title: `${modeLabel} できません`, message: "配置済みのテキストレイヤーがありません。" });
+      return;
+    }
+    const pathToIndex = new Map();
+    psdPages.forEach((p, i) => { if (p?.path) pathToIndex.set(p.path, i); });
+    const cache = getAiOcrDoc();
+    const mokuroDoc = cache?.doc;
+
+    showProgress({ detail: `${modeLabel} 中…`, icon: PLACE_ICON_SVG, label: modeLabel });
+
+    const alignmentByPath = new Map();
+    const isSinglePdfMultiPsd = referencePaths.length === 1
+      && /\.pdf$/i.test(referencePaths[0])
+      && psdPages.length > 1;
+    const N = isSinglePdfMultiPsd
+      ? psdPages.length
+      : Math.min(psdPages.length, referencePaths.length);
+    for (let i = 0; i < N; i++) {
+      const psd = psdPages[i];
+      const refPath = isSinglePdfMultiPsd ? referencePaths[0] : referencePaths[i];
+      const pdfPageIdx = isSinglePdfMultiPsd ? i : 0;
+      const mokuro = mokuroDoc?.pages?.[i] ?? { blocks: [] };
+      updateProgress({ current: i, total: N, detail: `${modeLabel} ${i + 1}/${N}`, showCount: false });
+      console.info(
+        `[ai-adjust] page=${i + 1} mode=${mode} ref=${refPath}`,
+      );
+      const alignment = await computeAlignmentSafe(refPath, psd, mokuro, pdfPageIdx, mode);
+      if (alignment) {
+        alignmentByPath.set(psd.path, alignment);
+        const expectedSign = mode === "mode2" ? "+" : "-";
+        const actualSign = alignment.offset_x === 0
+          ? "0" : alignment.offset_x > 0 ? "+" : "-";
+        const modeMatches = (mode === "mode2" && alignment.offset_x > 0)
+          || (mode === "mode1" && alignment.offset_x < 0)
+          || alignment.offset_x === 0;
+        console.info(
+          `[ai-adjust] page=${i + 1} mode=${mode} scale=${alignment.scale.toFixed(3)} offset=(${alignment.offset_x.toFixed(0)}, ${alignment.offset_y.toFixed(0)}) ${modeMatches ? "✓" : `⚠ 期待符号=${expectedSign}, 実符号=${actualSign}`}`,
+        );
+      }
+    }
+
+    if (alignmentByPath.size === 0) {
+      await hideProgress();
+      await notifyDialog({
+        title: "位置調整できません",
+        message: `見本画像から alignment が計算できませんでした。見本ページの表示状態と、PSD/見本のページ対応を確認してください。${lastAlignmentError ? `\n\n詳細: ${lastAlignmentError}` : ""}`,
+      });
+      return;
+    }
+
+    beginHistoryTransient();
+    let movedCount = 0;
+    let skippedOutOfRange = 0, skippedNaN = 0;
+    let transientCommitted = false;
+    try {
+      for (const layer of newLayers) {
+        if (!layer || !layer.psdPath) continue;
+        const alignment = alignmentByPath.get(layer.psdPath);
+        if (!alignment) continue;
+        if (!Number.isFinite(alignment.scale) || alignment.scale <= 0) continue;
+        const idx = pathToIndex.get(layer.psdPath);
+        const psd = psdPages[idx];
+        const mokuroPage = mokuroDoc?.pages?.[idx];
+        if (!psd || !mokuroPage) continue;
+        const sx = psd.width / Math.max(mokuroPage.img_width, 1);
+        const sy = psd.height / Math.max(mokuroPage.img_height, 1);
+        if (!Number.isFinite(sx) || sx <= 0 || !Number.isFinite(sy) || sy <= 0) continue;
+
+        const halfW = getApproxLayerCenterDelta(layer, psd, "x");
+        const halfH = getApproxLayerCenterDelta(layer, psd, "y");
+
+        // mokuro 元 bbox から refCx を取得 (idempotent)
+        let refCx, refCy;
+        const txtRef = layer.sourceTxtRef;
+        const block = (txtRef && Number.isInteger(txtRef.paragraphIndex))
+          ? mokuroPage?.blocks?.[txtRef.paragraphIndex]
+          : null;
+        if (block?.box && block.box.length >= 4) {
+          refCx = (block.box[0] + block.box[2]) / 2;
+          refCy = (block.box[1] + block.box[3]) / 2;
+        } else {
+          // sourceTxtRef がない (手動配置等) → 現在位置から逆算
+          const psdCx = (layer.x ?? 0) + halfW;
+          const psdCy = (layer.y ?? 0) + halfH;
+          refCx = psdCx / sx;
+          refCy = psdCy / sy;
+        }
+
+        // 補正後位置: newPsdCx = (refCx - offset_x) / scale
+        const newPsdCx = (refCx - alignment.offset_x) / alignment.scale;
+        const newPsdCy = (refCy - alignment.offset_y) / alignment.scale;
+
+        // 範囲外飛び出しガード (PSD 寸法から ±30% 超え)
+        const safetyMargin = 0.3;
+        const cxOOR = newPsdCx < -psd.width * safetyMargin
+          || newPsdCx > psd.width * (1 + safetyMargin);
+        const cyOOR = newPsdCy < -psd.height * safetyMargin
+          || newPsdCy > psd.height * (1 + safetyMargin);
+        if (cxOOR || cyOOR) {
+          console.warn(
+            `[ai-adjust]   layer "${(layer.contents ?? "").slice(0, 12)}" 補正後位置が PSD 範囲外 → skip`,
+          );
+          skippedOutOfRange++;
+          continue;
+        }
+
+        // 中心固定で top-left を再算出
+        const newX = newPsdCx - halfW;
+        const newY = newPsdCy - halfH;
+        if (!Number.isFinite(newX) || !Number.isFinite(newY)) { skippedNaN++; continue; }
+
+        // sizePt スナップ (mode2 のみ、idempotent な sizePtBasis ベースで計算)
+        const snapHalfOrFull = (pt) => {
+          const intPart = Math.floor(pt);
+          const frac = pt - intPart;
+          if (frac < 0.25) return intPart;
+          if (frac < 0.75) return intPart + 0.5;
+          return intPart + 1;
+        };
+
+        const changes = { x: newX, y: newY };
+        if (mode === "mode2") {
+          const autoSx = psd.width / Math.max(mokuroPage.img_width, 1);
+          const sizeCorrectionFactor = 1.0 / (autoSx * alignment.scale);
+          if (Number.isFinite(sizeCorrectionFactor) && sizeCorrectionFactor > 0
+              && Math.abs(sizeCorrectionFactor - 1.0) > 0.02) {
+            const basis = Number.isFinite(layer.sizePtBasis) && layer.sizePtBasis > 0
+              ? layer.sizePtBasis
+              : (layer.sizePt ?? 12);
+            const rawSizePt = basis * sizeCorrectionFactor;
+            const snappedSizePt = snapHalfOrFull(rawSizePt);
+            if (Number.isFinite(snappedSizePt) && snappedSizePt >= 6 && snappedSizePt <= 999) {
+              changes.sizePt = snappedSizePt;
+            }
+          }
+        }
+        updateNewLayer(layer.tempId, changes);
+        movedCount++;
+      }
+      if (movedCount > 0) {
+        commitHistoryTransient();
+        transientCommitted = true;
+      }
+    } finally {
+      if (!transientCommitted) abortHistoryTransient();
+    }
+    console.info(
+      `[ai-adjust] 完了: ${movedCount}/${newLayers.length} 件のレイヤーを移動 (skipped: outOfRange=${skippedOutOfRange}, NaN=${skippedNaN})`,
+    );
+    if (movedCount > 0) {
+      try { renderAllSpreads(); } catch (_) {}
+      try { rebuildLayerList(); } catch (_) {}
+    }
+    await hideProgress({ success: true });
+    await notifyDialog({
+      title: `${modeLabel} 完了`,
+      message: `${movedCount} 件のレイヤーを調整しました。`,
+      kind: "success",
+    });
+  } catch (e) {
+    console.error(e);
+    await hideProgress();
+    await notifyDialog({ title: `${modeLabel} エラー`, message: String(e?.message ?? e ?? "不明なエラー") });
+  } finally {
+    runningAdjust = false;
+  }
+}
+
+// レイヤーの幅・高さの半分を返す簡易ヘルパー
+function getApproxLayerCenterDelta(layer, psdPage, axis) {
+  const sizePt = layer.sizePt ?? 24;
+  const direction = layer.direction ?? "vertical";
+  const leadingPct = layer.leadingPct ?? 125;
+  const { width, height } = estimateLayerSize(psdPage, sizePt, layer.contents ?? "", leadingPct, direction);
+  return axis === "x" ? width / 2 : height / 2;
+}
+
+// ============================================================
+// 【v1.28.0 移植 mode3】重ね調整: 見本 + PSD を半透明で重ねて手動位置/スケール調整
+// ============================================================
+
+async function renderReferencePageToCanvas(pageIdx, preferredWidth = null) {
+  const doc = getPdfDoc();
+  if (!doc || typeof doc.getPage !== "function") return null;
+  try {
+    const total = doc.numPages ?? 0;
+    const idx = Math.min(Math.max(pageIdx, 0), total - 1);
+    const page = await doc.getPage(idx + 1);
+    const baseViewport = page.getViewport({ scale: 1 });
+    const targetW = Number.isFinite(preferredWidth) && preferredWidth > 0
+      ? preferredWidth
+      : Math.min(2000, baseViewport.width);
+    const scale = targetW / baseViewport.width;
+    const viewport = page.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(viewport.width);
+    canvas.height = Math.round(viewport.height);
+    const ctx = canvas.getContext("2d");
+    await page.render({ canvasContext: ctx, viewport }).promise;
+    return canvas;
+  } catch (e) {
+    console.warn("[ai-place] renderReferencePageToCanvas failed:", e);
+    return null;
+  }
+}
+
+// オーバーレイ調整モーダル: { scale_in_ref, offset_x_in_ref, offset_y_in_ref, ref_natural_w, ref_natural_h } を返す
+function showOverlayAlignModal(refCanvas, psdCanvas) {
+  return new Promise((resolve) => {
+    const modal = $("overlay-align-modal");
+    const stage = $("overlay-align-stage");
+    const zoomLabel = $("overlay-align-zoom-label");
+    const zoomInBtn = $("overlay-align-zoom-in");
+    const zoomOutBtn = $("overlay-align-zoom-out");
+    const swapBtn = $("overlay-align-swap");
+    const resetBtn = $("overlay-align-reset");
+    const cancelBtn = $("overlay-align-cancel");
+    const okBtn = $("overlay-align-ok");
+    if (!modal || !stage) { resolve(null); return; }
+
+    stage.innerHTML = "";
+    stage.classList.remove("dragging");
+
+    modal.hidden = false;
+    const stageRect = stage.getBoundingClientRect();
+    const stageW = stageRect.width;
+    const stageH = stageRect.height;
+    if (stageW <= 0 || stageH <= 0) {
+      modal.hidden = true;
+      resolve(null);
+      return;
+    }
+
+    const VIEW_FIT_RATIO = 0.8;
+    const refW = refCanvas.width;
+    const refH = refCanvas.height;
+    const psdW = psdCanvas.width;
+    const psdH = psdCanvas.height;
+    const fitW = stageW * VIEW_FIT_RATIO;
+    const fitH = stageH * VIEW_FIT_RATIO;
+    const refBaseStageScale = Math.min(fitW / refW, fitH / refH);
+    const psdBaseStageScale = Math.min(fitW / psdW, fitH / psdH);
+
+    const refImg = document.createElement("canvas");
+    refImg.className = "overlay-align-ref-img";
+    refImg.width = refCanvas.width;
+    refImg.height = refCanvas.height;
+    stage.appendChild(refImg);
+
+    const psdEl = document.createElement("canvas");
+    psdEl.className = "overlay-align-psd-canvas";
+    psdEl.width = psdCanvas.width;
+    psdEl.height = psdCanvas.height;
+    stage.appendChild(psdEl);
+
+    const makeCyanInkCanvas = (sourceCanvas) => {
+      const out = document.createElement("canvas");
+      out.width = sourceCanvas.width;
+      out.height = sourceCanvas.height;
+      const src = document.createElement("canvas");
+      src.width = sourceCanvas.width;
+      src.height = sourceCanvas.height;
+      const srcCtx = src.getContext("2d");
+      srcCtx.drawImage(sourceCanvas, 0, 0);
+      const image = srcCtx.getImageData(0, 0, src.width, src.height);
+      const data = image.data;
+      for (let i = 0; i < data.length; i += 4) {
+        const lum = data[i] * 0.299 + data[i + 1] * 0.587 + data[i + 2] * 0.114;
+        const ink = Math.max(0, Math.min(255, 255 - lum));
+        data[i] = 56;
+        data[i + 1] = 202;
+        data[i + 2] = 255;
+        data[i + 3] = Math.round(ink * (data[i + 3] / 255));
+      }
+      out.getContext("2d").putImageData(image, 0, 0);
+      return out;
+    };
+    const refCyanCanvas = makeCyanInkCanvas(refCanvas);
+    const psdCyanCanvas = makeCyanInkCanvas(psdCanvas);
+    const drawDisplayCanvas = (el, sourceCanvas, cyanCanvas, moving) => {
+      const ctx = el.getContext("2d");
+      ctx.clearRect(0, 0, el.width, el.height);
+      ctx.drawImage(moving ? cyanCanvas : sourceCanvas, 0, 0);
+    };
+
+    let movingSide = "psd";
+    let manualScale = 1.0;
+    let moveOffsetX = 0;
+    let moveOffsetY = 0;
+    let refLeft = 0;
+    let refTop = 0;
+    let refStageScale = refBaseStageScale;
+    let psdLeft = 0;
+    let psdTop = 0;
+    let psdStageScale = psdBaseStageScale;
+
+    const centerLeft = (w, scale) => (stageW - w * scale) / 2;
+    const centerTop = (h, scale) => (stageH - h * scale) / 2;
+    const movingBaseScale = () => (
+      movingSide === "psd"
+        ? (refW * refBaseStageScale) / psdW
+        : (psdW * psdBaseStageScale) / refW
+    );
+
+    const applyElementRect = (el, left, top, w, h, scale) => {
+      el.style.left = `${left}px`;
+      el.style.top = `${top}px`;
+      el.style.width = `${w * scale}px`;
+      el.style.height = `${h * scale}px`;
+    };
+
+    const getCurrentTransform = () => {
+      if (movingSide === "psd") {
+        const psdMovingScale = movingBaseScale() * manualScale;
+        return {
+          scale: psdMovingScale / refStageScale,
+          offsetX: (moveOffsetX - refLeft) / refStageScale,
+          offsetY: (moveOffsetY - refTop) / refStageScale,
+        };
+      }
+      const refMovingScale = movingBaseScale() * manualScale;
+      return {
+        scale: psdStageScale / refMovingScale,
+        offsetX: (psdLeft - moveOffsetX) / refMovingScale,
+        offsetY: (psdTop - moveOffsetY) / refMovingScale,
+      };
+    };
+
+    const setMovingStateFromTransform = (transform) => {
+      const baseScale = movingBaseScale();
+      if (movingSide === "psd") {
+        const targetScale = refStageScale * transform.scale;
+        manualScale = Math.max(0.1, Math.min(10, targetScale / baseScale));
+        moveOffsetX = refLeft + refStageScale * transform.offsetX;
+        moveOffsetY = refTop + refStageScale * transform.offsetY;
+      } else {
+        const targetScale = psdStageScale / Math.max(transform.scale, 0.000001);
+        manualScale = Math.max(0.1, Math.min(10, targetScale / baseScale));
+        const refMovingScale = baseScale * manualScale;
+        moveOffsetX = psdLeft - refMovingScale * transform.offsetX;
+        moveOffsetY = psdTop - refMovingScale * transform.offsetY;
+      }
+    };
+
+    const updateLayout = () => {
+      drawDisplayCanvas(refImg, refCanvas, refCyanCanvas, movingSide === "ref");
+      drawDisplayCanvas(psdEl, psdCanvas, psdCyanCanvas, movingSide === "psd");
+      refImg.classList.toggle("overlay-align-layer-moving", movingSide === "ref");
+      refImg.classList.toggle("overlay-align-layer-base", movingSide !== "ref");
+      psdEl.classList.toggle("overlay-align-layer-moving", movingSide === "psd");
+      psdEl.classList.toggle("overlay-align-layer-base", movingSide !== "psd");
+      if (swapBtn) swapBtn.textContent = movingSide === "psd" ? "見本を動かす" : "PSDを動かす";
+
+      if (movingSide === "psd") {
+        refStageScale = refBaseStageScale;
+        refLeft = centerLeft(refW, refStageScale);
+        refTop = centerTop(refH, refStageScale);
+        applyElementRect(refImg, refLeft, refTop, refW, refH, refStageScale);
+
+        const psdMovingScale = movingBaseScale() * manualScale;
+        psdStageScale = psdMovingScale;
+        psdLeft = moveOffsetX;
+        psdTop = moveOffsetY;
+        applyElementRect(psdEl, moveOffsetX, moveOffsetY, psdW, psdH, psdMovingScale);
+      } else {
+        psdStageScale = psdBaseStageScale;
+        psdLeft = centerLeft(psdW, psdStageScale);
+        psdTop = centerTop(psdH, psdStageScale);
+        applyElementRect(psdEl, psdLeft, psdTop, psdW, psdH, psdStageScale);
+
+        const refMovingScale = movingBaseScale() * manualScale;
+        refStageScale = refMovingScale;
+        refLeft = moveOffsetX;
+        refTop = moveOffsetY;
+        applyElementRect(refImg, moveOffsetX, moveOffsetY, refW, refH, refMovingScale);
+      }
+      if (zoomLabel) zoomLabel.textContent = `${(manualScale * 100).toFixed(0)}%`;
+    };
+
+    const resetMoving = () => {
+      manualScale = 1.0;
+      const baseScale = movingBaseScale();
+      const w = movingSide === "psd" ? psdW : refW;
+      const h = movingSide === "psd" ? psdH : refH;
+      moveOffsetX = centerLeft(w, baseScale);
+      moveOffsetY = centerTop(h, baseScale);
+      updateLayout();
+    };
+    resetMoving();
+
+    let dragging = false;
+    let dragStartX = 0, dragStartY = 0;
+    let dragStartOffsetX = 0, dragStartOffsetY = 0;
+    const onStageMouseDown = (e) => {
+      if (e.button !== 0) return;
+      dragging = true;
+      dragStartX = e.clientX; dragStartY = e.clientY;
+      dragStartOffsetX = moveOffsetX; dragStartOffsetY = moveOffsetY;
+      stage.classList.add("dragging");
+      e.preventDefault();
+    };
+    const onStageMouseMove = (e) => {
+      if (!dragging) return;
+      moveOffsetX = dragStartOffsetX + (e.clientX - dragStartX);
+      moveOffsetY = dragStartOffsetY + (e.clientY - dragStartY);
+      updateLayout();
+    };
+    const onStageMouseUp = () => {
+      if (!dragging) return;
+      dragging = false;
+      stage.classList.remove("dragging");
+    };
+
+    const zoomAt = (cx, cy, factor) => {
+      const oldScale = manualScale;
+      const newScale = Math.max(0.1, Math.min(10, oldScale * factor));
+      const baseScale = movingBaseScale();
+      const localX = (cx - moveOffsetX) / (baseScale * oldScale);
+      const localY = (cy - moveOffsetY) / (baseScale * oldScale);
+      manualScale = newScale;
+      moveOffsetX = cx - localX * (baseScale * newScale);
+      moveOffsetY = cy - localY * (baseScale * newScale);
+      updateLayout();
+    };
+
+    const onStageWheel = (e) => {
+      e.preventDefault();
+      const stageRect2 = stage.getBoundingClientRect();
+      zoomAt(
+        e.clientX - stageRect2.left,
+        e.clientY - stageRect2.top,
+        e.deltaY < 0 ? 1.05 : (1 / 1.05),
+      );
+    };
+
+    const zoomBy = (factor) => zoomAt(stageW / 2, stageH / 2, factor);
+    const onZoomIn = () => zoomBy(1.1);
+    const onZoomOut = () => zoomBy(1 / 1.1);
+    const onReset = () => resetMoving();
+    const onSwap = () => {
+      const transform = getCurrentTransform();
+      movingSide = movingSide === "psd" ? "ref" : "psd";
+      updateLayout();
+      setMovingStateFromTransform(transform);
+      updateLayout();
+    };
+
+    const cleanup = (result) => {
+      stage.removeEventListener("mousedown", onStageMouseDown);
+      window.removeEventListener("mousemove", onStageMouseMove);
+      window.removeEventListener("mouseup", onStageMouseUp);
+      stage.removeEventListener("wheel", onStageWheel);
+      zoomInBtn?.removeEventListener("click", onZoomIn);
+      zoomOutBtn?.removeEventListener("click", onZoomOut);
+      swapBtn?.removeEventListener("click", onSwap);
+      resetBtn?.removeEventListener("click", onReset);
+      cancelBtn?.removeEventListener("click", onCancel);
+      okBtn?.removeEventListener("click", onOk);
+      document.removeEventListener("keydown", onKey);
+      modal.hidden = true;
+      stage.innerHTML = "";
+      resolve(result);
+    };
+
+    const onCancel = () => cleanup(null);
+    const onOk = () => {
+      const transform = getCurrentTransform();
+      cleanup({
+        scale_in_ref: transform.scale,
+        offset_x_in_ref: transform.offsetX,
+        offset_y_in_ref: transform.offsetY,
+        ref_natural_w: refW,
+        ref_natural_h: refH,
+      });
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") onCancel();
+      else if (e.key === "Enter") onOk();
+    };
+
+    stage.addEventListener("mousedown", onStageMouseDown);
+    window.addEventListener("mousemove", onStageMouseMove);
+    window.addEventListener("mouseup", onStageMouseUp);
+    stage.addEventListener("wheel", onStageWheel, { passive: false });
+    zoomInBtn?.addEventListener("click", onZoomIn);
+    zoomOutBtn?.addEventListener("click", onZoomOut);
+    swapBtn?.addEventListener("click", onSwap);
+    resetBtn?.addEventListener("click", onReset);
+    cancelBtn?.addEventListener("click", onCancel);
+    okBtn?.addEventListener("click", onOk);
+    document.addEventListener("keydown", onKey);
+  });
+}
+
+async function runOverlayAlign() {
+  if (runningAdjust) return;
+  const psdPages = getPages();
+  if (!psdPages || psdPages.length === 0) {
+    await notifyDialog({ title: "重ね調整できません", message: "PSD が読み込まれていません。" });
+    return;
+  }
+  const referencePaths = getPdfPaths();
+  if (!referencePaths || referencePaths.length === 0) {
+    await notifyDialog({ title: "重ね調整できません", message: "見本画像が読み込まれていません。" });
+    return;
+  }
+  const newLayers = getNewLayers();
+  if (!newLayers || newLayers.length === 0) {
+    await notifyDialog({ title: "重ね調整できません", message: "配置済みのテキストレイヤーがありません。" });
+    return;
+  }
+
+  const psd0 = psdPages[0];
+  if (!psd0?.canvas) {
+    await notifyDialog({ title: "重ね調整できません", message: "PSD canvas が取得できませんでした。" });
+    return;
+  }
+  const refCanvas = await renderReferencePageToCanvas(0);
+  if (!refCanvas) {
+    await notifyDialog({ title: "見本の取得失敗", message: "見本画像が描画できませんでした。" });
+    return;
+  }
+
+  const result = await showOverlayAlignModal(refCanvas, psd0.canvas);
+  if (!result) return;
+
+  const mokuroDoc = getAiOcrDoc()?.doc;
+
+  runningAdjust = true;
+  showProgress({ detail: "重ね調整 中…", icon: PLACE_ICON_SVG, label: "重ね調整" });
+
+  beginHistoryTransient();
+  let movedCount = 0;
+  let transientCommitted = false;
+  try {
+    for (const layer of newLayers) {
+      if (!layer || !layer.psdPath) continue;
+      const idx = psdPages.findIndex((p) => p?.path === layer.psdPath);
+      if (idx < 0) continue;
+      const psd = psdPages[idx];
+      const mokuroPage = mokuroDoc?.pages?.[idx];
+      if (!psd || !mokuroPage) continue;
+      const mokuroW = Math.max(mokuroPage.img_width, 1);
+      const mokuroH = Math.max(mokuroPage.img_height, 1);
+      const sx = psd.width / mokuroW;
+      const sy = psd.height / mokuroH;
+      if (!Number.isFinite(sx) || sx <= 0) continue;
+
+      const mokuroPerRefX = mokuroW / result.ref_natural_w;
+      const mokuroPerRefY = mokuroH / result.ref_natural_h;
+      const alignScaleX = result.scale_in_ref * mokuroPerRefX;
+      const alignScaleY = result.scale_in_ref * mokuroPerRefY;
+      const alignScale = (alignScaleX + alignScaleY) / 2;
+      const alignOffsetX = result.offset_x_in_ref * mokuroPerRefX;
+      const alignOffsetY = result.offset_y_in_ref * mokuroPerRefY;
+
+      let refCx, refCy;
+      const txtRef = layer.sourceTxtRef;
+      const block = (txtRef && Number.isInteger(txtRef.paragraphIndex))
+        ? mokuroPage?.blocks?.[txtRef.paragraphIndex]
+        : null;
+      if (block?.box && block.box.length >= 4) {
+        refCx = (block.box[0] + block.box[2]) / 2;
+        refCy = (block.box[1] + block.box[3]) / 2;
+      } else {
+        const halfW0 = getApproxLayerCenterDelta(layer, psd, "x");
+        const halfH0 = getApproxLayerCenterDelta(layer, psd, "y");
+        const psdCx = (layer.x ?? 0) + halfW0;
+        const psdCy = (layer.y ?? 0) + halfH0;
+        refCx = psdCx / sx;
+        refCy = psdCy / sy;
+      }
+
+      const newPsdCx = (refCx - alignOffsetX) / alignScale;
+      const newPsdCy = (refCy - alignOffsetY) / alignScale;
+
+      const autoSx = sx;
+      const sizeCorrectionFactor = 1.0 / (autoSx * alignScale);
+      const snapHalfOrFull = (pt) => {
+        const intPart = Math.floor(pt);
+        const frac = pt - intPart;
+        if (frac < 0.25) return intPart;
+        if (frac < 0.75) return intPart + 0.5;
+        return intPart + 1;
+      };
+
+      const halfW = getApproxLayerCenterDelta(layer, psd, "x");
+      const halfH = getApproxLayerCenterDelta(layer, psd, "y");
+      const newX = newPsdCx - halfW;
+      const newY = newPsdCy - halfH;
+      if (!Number.isFinite(newX) || !Number.isFinite(newY)) continue;
+
+      const changes = { x: newX, y: newY };
+      if (Number.isFinite(sizeCorrectionFactor) && sizeCorrectionFactor > 0
+          && Math.abs(sizeCorrectionFactor - 1.0) > 0.02) {
+        const basis = Number.isFinite(layer.sizePtBasis) && layer.sizePtBasis > 0
+          ? layer.sizePtBasis
+          : (layer.sizePt ?? 12);
+        const rawSize = basis * sizeCorrectionFactor;
+        const snapped = snapHalfOrFull(rawSize);
+        if (Number.isFinite(snapped) && snapped >= 6 && snapped <= 999) {
+          changes.sizePt = snapped;
+        }
+      }
+      updateNewLayer(layer.tempId, changes);
+      movedCount++;
+    }
+    if (movedCount > 0) {
+      commitHistoryTransient();
+      transientCommitted = true;
+    }
+  } finally {
+    if (!transientCommitted) abortHistoryTransient();
+    runningAdjust = false;
+  }
+
+  console.info(`[ai-adjust mode3] alignScale=${result.scale_in_ref.toFixed(4)}, offset_in_ref=(${result.offset_x_in_ref.toFixed(0)}, ${result.offset_y_in_ref.toFixed(0)}), ${movedCount} 件移動`);
+  if (movedCount > 0) {
+    try { renderAllSpreads(); } catch (_) {}
+    try { rebuildLayerList(); } catch (_) {}
+  }
+  await hideProgress({ success: true });
+  await notifyDialog({
+    title: "重ね調整 完了",
+    message: `${movedCount} 件のレイヤーを調整しました。`,
+    kind: "success",
+  });
+}
+
+export function bindPositionAdjustButton() {
+  const btn1 = $("ai-adjust-btn");
+  const btn2 = $("ai-adjust2-btn");
+  const btn3 = $("ai-adjust3-btn");
+  if (!btn1 && !btn2 && !btn3) return;
+  if (btn1) btn1.addEventListener("click", () => { void runPositionAdjust("mode1"); });
+  if (btn2) btn2.addEventListener("click", () => { void runPositionAdjust("mode2"); });
+  if (btn3) btn3.addEventListener("click", () => { void runOverlayAlign(); });
+  const sync = () => {
+    const has = getNewLayers().some((l) => l && l.tempId);
+    if (btn1) {
+      btn1.disabled = !has;
+      btn1.title = has
+        ? "位置調整1: PSDに余分余白あり (確定式)"
+        : "先に自動配置を実行してください";
+    }
+    if (btn2) {
+      btn2.disabled = !has;
+      btn2.title = has
+        ? "位置調整2: 見本に余分余白あり (画像差分 grid search)"
+        : "先に自動配置を実行してください";
+    }
+    if (btn3) {
+      btn3.disabled = !has;
+      btn3.title = has
+        ? "重ね調整: 見本に PSD を半透明で重ねて手動調整"
+        : "先に自動配置を実行してください";
+    }
+  };
+  sync();
+  onAiOcrDocChange(sync);
+  onTxtSourceChange(sync);
+  setInterval(sync, 1000);
 }

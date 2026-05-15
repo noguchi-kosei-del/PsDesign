@@ -6,13 +6,15 @@
 // 「どのショートカットに該当するか」を一発で問い合わせる。
 
 const STORAGE_KEY = "psdesign_settings";
+const LEGACY_SYMBOL_FONT_PS = "KozGoPr6N-Regular";
+const DEFAULT_SYMBOL_FONT_PS = "KozGoPro-Heavy";
 
 // デフォルト設定。バージョン番号を持ち、将来の項目追加時に migrate() で穴埋め。
 export const DEFAULT_SETTINGS = {
   // v8: 中丸ゴシック自動切替の閾値を 0.5 (50%) に設定 + UI 側で 10% 刻みの
   //     6 段階バケット (50-59 / 60-69 / 70-79 / 80-89 / 90-99 / 100) で色分け。
   //     旧 v7 以前 (デフォルト閾値 0.9 だった想定) の保存値を破棄して新デフォルト 0.5 を強制反映。
-  version: 8,
+  version: 14,
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
   pageDirectionInverted: false,
   // 新規テキストレイヤーの初期値 / レイアウト設定。
@@ -36,6 +38,23 @@ export const DEFAULT_SETTINGS = {
     textSizeStep: 0.1,
     // %（autoLeadingAmount）。scope: creation-only
     leadingPct: 125,
+    // 【v1.29.0】ルビ適用時、自動でその行の行間を上書きする % 値。
+    //   ユーザーが文字選択 → ルビ適用すると、対象 range が乗る行の
+    //   lineLeadings[lineIndex] が rubyLeadingPct で書き換わる。
+    //   またプレビューのルビ位置 (--ruby-row-leading-pct CSS variable) もこの値で
+    //   駆動され、「親文字行と前の行のちょうど中間」にルビが配置される。
+    //   scope: render-all (CSS variable 経由でルビ位置が即時更新) + ルビ適用時に lineLeadings 上書き
+    rubyLeadingPct: 150,
+    // 【v1.29.x】ルビ位置の微調整値。ビューアー (UI) と Photoshop 書き出し時の位置を別々に
+    // 制御できる。ユーザーの好みで紙面写植に近い位置にチューニング可能。
+    //   rubyParentOffsetEm  : UI 上のルビを行間中央から動かす em 量
+    //   rubyPhotoshopOffsetEm: Photoshop 書き出し時の追加 em 補正
+    //   rubyPhotoshopBiasPx : Photoshop 書き出し時の追加 px 補正
+    //   デフォルトはいずれも 0。親文字行と前の行のちょうど中間を基準にする。
+    //   scope: render-all (CSS) + save (JSX 経由で Photoshop 反映)
+    rubyParentOffsetEm: 0,
+    rubyPhotoshopOffsetEm: 0,
+    rubyPhotoshopBiasPx: 0,
     // px（フチの太さ）。scope: creation-only
     strokeWidthPx: 20,
     // 空文字 = 指定なし（system default）。scope: creation-only
@@ -46,8 +65,11 @@ export const DEFAULT_SETTINGS = {
     // ‰（千分率）。連続記号のツメ量を group 別に保持。0 = OFF、負値（または絶対値）で詰まる。
     // 連続ランの最後の 1 文字は常に 0 のまま（後続文字との字間が詰まりすぎないように）。
     // scope: render-all + save（プレビューと Photoshop 保存両方に反映）
-    dashTrackingMille: -100,   // ダッシュ系（— ― – ‒ ‐ ‑ ー －）の連続詰め
-    tildeTrackingMille: -300,  // チルダ系（〜 ～）の連続詰め
+    dashTrackingMille: -100,   // legacy: old UI key; no longer used by preview/save paths.
+    tildeTrackingMille: -300,  // legacy: old UI key; no longer used by preview/save paths.
+    dashRunTrackingMille: -100,   // ダッシュ系（— ― – ‒ ‐ ‑ ー －）の連続詰め
+    tildeRunTrackingMille: -300,  // legacy: old tilde tracking key.
+    tildeRunKerningMille: -300,  // チルダ系（〜 ～）の連続カーニング
     // 縦書きの新規レイヤーで半角 !! / !? を自動的に「縦中横」(text-combine-upright) に
     // するか。Photoshop 書き戻しでも textStyleRange の tcy 属性を立てる。
     // scope: render-all + save
@@ -57,7 +79,7 @@ export const DEFAULT_SETTINGS = {
     // ユーザーが per-char で手動指定したフォントは尊重（自動置換 skip）。
     // scope: render-all + save
     symbolFontReplaceEnabled: true,
-    symbolFontPostScriptName: "KozGoPr6N-Regular", // 小塚ゴシック Pr6N R / scope: render-all + save
+    symbolFontPostScriptName: DEFAULT_SYMBOL_FONT_PS, // 小塚ゴシック Pro H / scope: render-all + save
     // 句読点「、」(U+3001) と「。」(U+3002) を Photoshop 保存時にツメ N% で組む。
     // 0 で OFF。v1.24.0 でプレビュー / bbox / 自動配置にも反映済み（render-all + save）。
     // scope: render-all + save
@@ -144,6 +166,24 @@ function migrate(old) {
     if (typeof d.leadingPct === "number" && Number.isFinite(d.leadingPct)) {
       out.defaults.leadingPct = d.leadingPct;
     }
+    // 【v1.29.0】ルビあり行間（50-500% にクランプ）
+    if (typeof d.rubyLeadingPct === "number" && Number.isFinite(d.rubyLeadingPct)) {
+      out.defaults.rubyLeadingPct = Math.max(50, Math.min(500, d.rubyLeadingPct));
+    }
+    // 【v1.31.1】ルビ位置は行間中央をデフォルトに戻す。version 11 以前の親寄せ補正は
+    // 自動移行で破棄し、version 12 以降にユーザーが明示保存した値だけ尊重する。
+    const oldVersionForRubyOffset = Number.isFinite(old.version) ? old.version : 0;
+    if (oldVersionForRubyOffset >= 12) {
+      if (typeof d.rubyParentOffsetEm === "number" && Number.isFinite(d.rubyParentOffsetEm)) {
+        out.defaults.rubyParentOffsetEm = Math.max(-2, Math.min(2, d.rubyParentOffsetEm));
+      }
+      if (typeof d.rubyPhotoshopOffsetEm === "number" && Number.isFinite(d.rubyPhotoshopOffsetEm)) {
+        out.defaults.rubyPhotoshopOffsetEm = Math.max(-2, Math.min(2, d.rubyPhotoshopOffsetEm));
+      }
+      if (typeof d.rubyPhotoshopBiasPx === "number" && Number.isFinite(d.rubyPhotoshopBiasPx)) {
+        out.defaults.rubyPhotoshopBiasPx = Math.max(-100, Math.min(100, d.rubyPhotoshopBiasPx));
+      }
+    }
     if (typeof d.strokeWidthPx === "number" && Number.isFinite(d.strokeWidthPx)) {
       out.defaults.strokeWidthPx = d.strokeWidthPx;
     }
@@ -153,12 +193,30 @@ function migrate(old) {
     if (typeof d.showBadge === "boolean") {
       out.defaults.showBadge = d.showBadge;
     }
-    if (typeof d.dashTrackingMille === "number" && Number.isFinite(d.dashTrackingMille)) {
-      out.defaults.dashTrackingMille = d.dashTrackingMille;
+    // 【v1.30.2 リセット】version 9 以前で保存された dashTrackingMille / tildeTrackingMille は
+    // バグで両方が同じ値 (例: 両方 -300) になっているケースがあるため強制リセット。
+    // version 10 以降の保存値のみ尊重する (= ユーザーが意図的に変えた値は保持)。
+    const oldVer = Number.isFinite(old.version) ? old.version : 0;
+    if (oldVer >= 10) {
+      if (typeof d.dashTrackingMille === "number" && Number.isFinite(d.dashTrackingMille)) {
+        out.defaults.dashTrackingMille = d.dashTrackingMille;
+      }
+      if (typeof d.tildeTrackingMille === "number" && Number.isFinite(d.tildeTrackingMille)) {
+        out.defaults.tildeTrackingMille = d.tildeTrackingMille;
+      }
     }
-    if (typeof d.tildeTrackingMille === "number" && Number.isFinite(d.tildeTrackingMille)) {
-      out.defaults.tildeTrackingMille = d.tildeTrackingMille;
+    if (typeof d.dashRunTrackingMille === "number" && Number.isFinite(d.dashRunTrackingMille)) {
+      out.defaults.dashRunTrackingMille = d.dashRunTrackingMille;
     }
+    if (typeof d.tildeRunTrackingMille === "number" && Number.isFinite(d.tildeRunTrackingMille)) {
+      out.defaults.tildeRunTrackingMille = d.tildeRunTrackingMille;
+      out.defaults.tildeRunKerningMille = d.tildeRunTrackingMille;
+    }
+    if (typeof d.tildeRunKerningMille === "number" && Number.isFinite(d.tildeRunKerningMille)) {
+      out.defaults.tildeRunKerningMille = d.tildeRunKerningMille;
+    }
+    // version 9 以前: dashTrackingMille / tildeTrackingMille は DEFAULT_SETTINGS の値
+    // (-100 / -300) のまま (== ここで何もしないので out.defaults の初期値が維持される)
     if (typeof d.tateChuYokoEnabled === "boolean") {
       out.defaults.tateChuYokoEnabled = d.tateChuYokoEnabled;
     }
@@ -166,7 +224,9 @@ function migrate(old) {
       out.defaults.symbolFontReplaceEnabled = d.symbolFontReplaceEnabled;
     }
     if (typeof d.symbolFontPostScriptName === "string") {
-      out.defaults.symbolFontPostScriptName = d.symbolFontPostScriptName;
+      out.defaults.symbolFontPostScriptName = d.symbolFontPostScriptName === LEGACY_SYMBOL_FONT_PS
+        ? DEFAULT_SYMBOL_FONT_PS
+        : d.symbolFontPostScriptName;
     }
     if (typeof d.punctuationTsumePercent === "number" && Number.isFinite(d.punctuationTsumePercent)) {
       // 0-100 にクランプ

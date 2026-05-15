@@ -32,7 +32,7 @@ import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTx
 import { bindAiInstallMenu } from "./ai-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
 import { bindAiOcrButton } from "./ai-ocr.js";
-import { bindAiPlaceButton } from "./ai-place.js";
+import { bindAiPlaceButton, bindPositionAdjustButton } from "./ai-place.js";
 import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread } from "./proofread.js";
@@ -1551,6 +1551,9 @@ function bindRubyTool() {
     return "group";
   };
 
+  // 【v1.29.x】親文字選択時に行 index を表示するためのラベル
+  const lineHintEl = document.getElementById("ruby-line-hint");
+
   // 文字選択変化で親文字表示と入力欄の有効化を切替
   const updateSelection = (sel) => {
     if (sel && sel.end > sel.start) {
@@ -1561,6 +1564,16 @@ function bindRubyTool() {
       parentEl.textContent = parentText || "（選択範囲）";
       inputEl.disabled = false;
       applyBtn.disabled = false;
+      // 【v1.29.x】親文字が乗る行 index を計算 (0-based) → ユーザーには 1-based で表示
+      const startLine = (contents.substring(0, sel.start).match(/\n/g) ?? []).length;
+      const endLine = (contents.substring(0, sel.end).match(/\n/g) ?? []).length;
+      if (lineHintEl) {
+        const lineLabel = startLine === endLine
+          ? `${startLine + 1} 行目`
+          : `${startLine + 1}〜${endLine + 1} 行目`;
+        lineHintEl.textContent = lineLabel;
+        lineHintEl.hidden = false;
+      }
       // 既存ルビがあれば入力欄に reload
       const existing = getCharRubyAt(sel.psdPath, targetId, sel.start);
       if (existing && existing.end === sel.end) {
@@ -1574,6 +1587,7 @@ function bindRubyTool() {
       }
     } else {
       parentEl.innerHTML = '<span class="ruby-parent-empty">文字を選択</span>';
+      if (lineHintEl) { lineHintEl.textContent = ""; lineHintEl.hidden = true; }
       inputEl.disabled = true;
       applyBtn.disabled = true;
       removeBtn.disabled = true;
@@ -1593,9 +1607,38 @@ function bindRubyTool() {
     const parentText = parentEl.textContent || "";
     const scale = clampRubyScale(scaleEl.value);
     const type = decideRubyType(currentMode, text, parentText);
+    // 【v1.29.0】ルビ適用と同時に、ルビが乗る行の lineLeading を rubyLeadingPct
+    // (デフォルト 150%) に上書き。同一 history snapshot にまとめ Ctrl+Z 一発で
+    // ルビ + leading 両方戻る。
+    // 行 index = 親文字 range の手前にある改行数。複数行に跨ぐ ruby は range 開始行のみ更新。
+    const ec = getEditingContext();
+    const contents = ec?.contents ?? "";
+    const startLine = (contents.substring(0, sel.start).match(/\n/g) ?? []).length;
+    const endLine = (contents.substring(0, sel.end).match(/\n/g) ?? []).length;
+    const rubyLeadingPct = Number(getDefault("rubyLeadingPct")) || 150;
+    console.info(
+      `[ruby-apply] 親文字 range=[${sel.start}, ${sel.end}) → ${startLine + 1}〜${endLine + 1} 行目 / lineLeading=${rubyLeadingPct}%`,
+    );
     withHistoryTransient(() => {
       setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, text, type, scale);
+      // 親文字 range が跨ぐすべての行に rubyLeadingPct を当てる。
+      for (let li = startLine; li <= endLine; li++) {
+        setLineLeading(sel.psdPath, targetId, li, rubyLeadingPct);
+      }
     });
+    // 【v1.29.x】編集中レイヤー DOM への即時 line-height 反映。
+    //   renderOverlay は .editing レイヤーをスキップする (caret 保護のため)。
+    //   state.lineLeadings の変更を画面に反映するには、編集中 inner の style を直接更新する必要がある。
+    //   ここでは簡易的に inner 全体の line-height を rubyLeadingPct に上書きする
+    //   (per-line ではなく per-layer の簡易適用)。編集モードを抜けると renderOverlay が
+    //   per-line lineLeadings を正確に反映するので、その時点でズレが解消される。
+    const editingBox = document.querySelector(".layer-box.editing");
+    if (editingBox) {
+      const inner = editingBox.querySelector(".existing-layer-text, .new-layer-text");
+      if (inner) {
+        inner.style.lineHeight = String(rubyLeadingPct / 100);
+      }
+    }
     // 編集中 DOM への即時反映（実 DOM ルビ wrap を inner に挿入）。
     applyEditModeRubyToRange(sel.start, sel.end, text, type, scale);
     refreshAllOverlays();
@@ -2078,6 +2121,7 @@ function init() {
   bindFirstRunSetup();
   bindAiOcrButton();
   bindAiPlaceButton();
+  bindPositionAdjustButton();
   bindProofreadUi();
   bindAutoUpdater();
   bindPageNav();
@@ -2107,6 +2151,26 @@ function init() {
   initSettingsUi();
   // 環境設定の「デフォルト」（文字サイズ・行間・フチ太さ・フォント）をツール初期値に反映。
   applyToolDefaults();
+  // 【v1.29.0】ルビあり行間 (%) を CSS variable で全体に伝達。
+  //   styles.css の .ruby-text transform で「親文字行と前の行のちょうど中間」位置を計算する。
+  //   設定 (写植設定タブ → ルビあり行間) を変えると即時更新。
+  // 【v1.29.x】さらに --ruby-parent-offset-em (UI 親寄せ em) も同期する。
+  //   これにより設定値の変更がビューアー上のルビ位置に即時反映される。
+  //   Photoshop 側の親寄せ em / 親離し px は exportEdits 経由で payload に乗る (後段)。
+  const applyRubyCssVars = () => {
+    const pct = Number(getDefault("rubyLeadingPct")) || 150;
+    document.documentElement.style.setProperty("--ruby-row-leading-pct", String(pct));
+    const uiOffsetEm = Number(getDefault("rubyParentOffsetEm"));
+    document.documentElement.style.setProperty(
+      "--ruby-parent-offset-em",
+      Number.isFinite(uiOffsetEm) ? String(uiOffsetEm) : "0",
+    );
+    // 既存レイヤーの ruby-text 位置を即時再描画 (CSS variable 更新だけでは
+    // 一部のブラウザで親要素の inline-block ボックス計算が遅延するため明示的に再描画)。
+    try { refreshAllOverlays(); } catch (_) {}
+  };
+  applyRubyCssVars();
+  onSettingsChange(applyRubyCssVars);
   renderAllSpreads();
   loadFontsFromBackend();
   // フォントが非同期で登録されるたびにオーバーレイを再描画して反映。

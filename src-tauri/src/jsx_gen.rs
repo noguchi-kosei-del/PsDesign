@@ -208,14 +208,31 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str) -> Stri
         } else {
             String::from("\"\"")
         };
+        let page_width = psd
+            .page_width
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(0.0);
+        let page_height = psd
+            .page_height
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(0.0);
         out.push_str(&format!(
-            "], {}, {}, {}, {}, {}, {});\n",
+            "], {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {});\n",
             js_string(&save_path),
             payload.dash_tracking_mille,
             payload.tilde_tracking_mille,
             if payload.tate_chu_yoko_enabled { "true" } else { "false" },
             symbol_font_ps_js,
-            payload.punctuation_tsume_percent
+            payload.punctuation_tsume_percent,
+            // 【v1.29.x】ルビあり行間 (%)。applyToPsd 内で「ルビありレイヤーの親文字行間」を
+            // autoLeadingAmount として設定するために使う (useAutoLeading=true、ジャスティ
+            // フィケーションのみ rubyLeadingPct)。
+            payload.ruby_leading_pct,
+            // 【v1.29.x】ルビ位置 Photoshop 微調整: 親寄せ em (親 fontSize 単位)、親離し px
+            payload.ruby_photoshop_offset_em,
+            payload.ruby_photoshop_bias_px,
+            page_width,
+            page_height
         ));
         out.push_str("    __saveOk++;\n");
         out.push_str("  } catch (eFile) {\n");
@@ -295,17 +312,42 @@ fn emit_char_bolds(out: &mut String, m: &std::collections::HashMap<String, bool>
 }
 
 // 【v1.26.0】per-char ルビ map を JSX のオブジェクトリテラルとして emit。
-// 値は {end: N, text: "...", rubyType: "mono"|"group", scale: N}。
+// 値は {end: N, text: "...", rubyType: "mono"|"group", scale: N, offsetX?: N, offsetY?: N}。
 // JSX 側でキー `type` は ExtendScript の予約語ではないが、わかりやすさのため `rubyType` に rename。
+// 【v1.29.x UI-coord】offsetX / offsetY (PSD px、親レイヤー基準) があれば JSX 側はこれを
+// ルビ中心として配置 (createRubyLayer)。無ければ従来の幾何計算 fallback。
 fn emit_char_rubies(out: &mut String, m: &std::collections::HashMap<String, crate::RubyEntry>) {
     emit_sorted_map_by_int_key(out, m, |v| {
-        format!(
-            "{{end: {}, text: {}, rubyType: {}, scale: {}}}",
+        let mut s = String::with_capacity(64);
+        s.push_str(&format!(
+            "{{end: {}, text: {}, rubyType: {}, scale: {}",
             v.end,
             js_string(&v.text),
             js_string(&v.ruby_type),
             v.scale
-        )
+        ));
+        if let Some(ox) = v.offset_x {
+            if ox.is_finite() {
+                s.push_str(&format!(", offsetX: {}", ox));
+            }
+        }
+        if let Some(oy) = v.offset_y {
+            if oy.is_finite() {
+                s.push_str(&format!(", offsetY: {}", oy));
+            }
+        }
+        if let Some(ax) = v.abs_x {
+            if ax.is_finite() {
+                s.push_str(&format!(", absX: {}", ax));
+            }
+        }
+        if let Some(ay) = v.abs_y {
+            if ay.is_finite() {
+                s.push_str(&format!(", absY: {}", ay));
+            }
+        }
+        s.push('}');
+        s
     });
 }
 
@@ -562,6 +604,25 @@ function isObjEmpty(o) {
   if (!o) return true;
   for (var k in o) if (o.hasOwnProperty(k)) return false;
   return true;
+}
+
+function scaleRubyAbsoluteCoords(charRubies, sx, sy) {
+  if (!charRubies || isObjEmpty(charRubies)) return charRubies;
+  if (!(typeof sx === "number" && isFinite(sx) && sx > 0)) sx = 1;
+  if (!(typeof sy === "number" && isFinite(sy) && sy > 0)) sy = 1;
+  if (Math.abs(sx - 1) < 0.000001 && Math.abs(sy - 1) < 0.000001) return charRubies;
+  var out = {};
+  for (var k in charRubies) {
+    if (!charRubies.hasOwnProperty(k)) continue;
+    var e = charRubies[k];
+    if (!e) continue;
+    var c = {};
+    for (var p in e) if (e.hasOwnProperty(p)) c[p] = e[p];
+    if (typeof c.absX === "number" && isFinite(c.absX)) c.absX = c.absX * sx;
+    if (typeof c.absY === "number" && isFinite(c.absY)) c.absY = c.absY * sy;
+    out[k] = c;
+  }
+  return out;
 }
 
 function copyDescKey(src, dst, key) {
@@ -842,6 +903,251 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
+// 【v1.29.x】===== ルビあり行の autoLeadingPercentage 上書き =====
+// 参考: 共有プラグイン (panels/ruby/index.js) の runApplyLeadingScript / paragraphStyleRange 分割実装。
+//
+// 「自動行送りのまま、ジャスティフィケーション値だけ行ごとに変える」を実現するには、
+// paragraphStyleRange を行ごとに分割し、各 paragraphStyle に
+// `stringIDToTypeID("autoLeadingPercentage")` を put する必要がある。
+// 値は倍率 (1.5 = 150%) で putDouble。
+//
+// 引数:
+//   layer: 対象テキストレイヤー (artLayer)
+//   contents: 親レイヤーの contents (textItem.contents の改行は \r)
+//   rubyLineIndices: ルビが乗る行の 0-based index の配列 (例: [1, 3])
+//   multiplier: 倍率 (1.5 = 150%)
+//   defaultMultiplier: 他の行に当てる元の倍率 (例: 1.25 = 125%、e.leadingPct/100 でいい)
+function applyRubyAutoLeadingPercentage(layer, contents, rubyLineIndices, multiplier, defaultMultiplier) {
+  if (!rubyLineIndices || rubyLineIndices.length === 0) return;
+  if (typeof multiplier !== "number" || !isFinite(multiplier) || multiplier <= 0) return;
+
+  // 【v1.29.x 修正】「変更前 bounds 保存 → 変更後復元」処理は撤廃。autoLeadingPercentage で
+  // 生まれた行間余白 (ルビ用空間) も translate で打ち消してしまい、結果ルビが親文字に重なる
+  // 事故が起きていた。autoLeadingPercentage の効果は Photoshop に任せ、親文字位置は
+  // 自然に下 (横書き) / 左 (縦書き) にシフトさせる。
+
+  // 対象レイヤーを active に
+  try {
+    var sRef = new ActionReference();
+    sRef.putIdentifier(charIDToTypeID("Lyr "), layer.id);
+    var sDesc = new ActionDescriptor();
+    sDesc.putReference(charIDToTypeID("null"), sRef);
+    executeAction(charIDToTypeID("slct"), sDesc, DialogModes.NO);
+  } catch (eSel) { return; }
+
+  // textKey 取得
+  var getRef = new ActionReference();
+  getRef.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+  var layerDesc = executeActionGet(getRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  if (!textKey.hasKey(sID("paragraphStyleRange"))) return;
+
+  // contents の行分解。Photoshop の contents は \r 区切り (JS の split で対応)。
+  var normContents = String(contents || "");
+  var lines = normContents.split(/\r\n|\n|\r/);
+  if (lines.length === 0) return;
+
+  // 各行の char [start, end) 範囲を計算 (改行を含む末端まで、最終行は除く)。
+  var lineRanges = [];
+  var cumCh = 0;
+  for (var li = 0; li < lines.length; li++) {
+    var lstart = cumCh;
+    var lend = cumCh + lines[li].length;
+    if (li < lines.length - 1) lend += 1; // 改行 (\r) 1 文字
+    lineRanges.push({ from: lstart, to: lend });
+    cumCh = lend;
+  }
+
+  // ルビが乗る行の (from, to) リスト
+  var rubyRanges = [];
+  for (var ri = 0; ri < rubyLineIndices.length; ri++) {
+    var idx = rubyLineIndices[ri];
+    if (idx < 0 || idx >= lineRanges.length) continue;
+    rubyRanges.push(lineRanges[idx]);
+  }
+  if (rubyRanges.length === 0) return;
+
+  // ある [from, to) がルビ行に重なるか
+  function overlapsRuby(from, to) {
+    for (var rj = 0; rj < rubyRanges.length; rj++) {
+      var r = rubyRanges[rj];
+      if (from < r.to && to > r.from) return true;
+    }
+    return false;
+  }
+
+  // paragraphStyle をコピー (参考プラグイン互換)
+  function copyParaStyle(srcStyle, applyRubyLeading) {
+    var newParaStyle = new ActionDescriptor();
+    var paraKeys = ["styleSheetHasParent", "justification", "hyphenate", "directionType", "leadingType",
+                    "justificationWordMinimum", "justificationWordDesired", "justificationWordMaximum",
+                    "justificationLetterMinimum", "justificationLetterDesired", "justificationLetterMaximum",
+                    "justificationGlyphMinimum", "justificationGlyphDesired", "justificationGlyphMaximum",
+                    "burasagari", "textEveryLineComposer", "textComposerEngine"];
+    for (var pk = 0; pk < paraKeys.length; pk++) {
+      var pKey = sID(paraKeys[pk]);
+      if (srcStyle.hasKey(pKey)) {
+        try {
+          var pType = srcStyle.getType(pKey);
+          if (pType === DescValueType.BOOLEANTYPE) {
+            newParaStyle.putBoolean(pKey, srcStyle.getBoolean(pKey));
+          } else if (pType === DescValueType.ENUMERATEDTYPE) {
+            newParaStyle.putEnumerated(pKey, srcStyle.getEnumerationType(pKey), srcStyle.getEnumerationValue(pKey));
+          } else if (pType === DescValueType.DOUBLETYPE) {
+            newParaStyle.putDouble(pKey, srcStyle.getDouble(pKey));
+          }
+        } catch (e2) {}
+      }
+    }
+    // Algn (charID)
+    var algnKey = charIDToTypeID("Algn");
+    if (srcStyle.hasKey(algnKey)) {
+      try { newParaStyle.putEnumerated(algnKey, srcStyle.getEnumerationType(algnKey), srcStyle.getEnumerationValue(algnKey)); } catch (e3) {}
+    }
+    // autoLeadingPercentage: 対象行は multiplier、それ以外は元の値 (なければ defaultMultiplier)
+    var alpKey = sID("autoLeadingPercentage");
+    if (applyRubyLeading) {
+      newParaStyle.putDouble(alpKey, multiplier);
+    } else {
+      if (srcStyle.hasKey(alpKey)) {
+        try { newParaStyle.putDouble(alpKey, srcStyle.getDouble(alpKey)); }
+        catch (eDef) {
+          if (typeof defaultMultiplier === "number" && isFinite(defaultMultiplier) && defaultMultiplier > 0) {
+            newParaStyle.putDouble(alpKey, defaultMultiplier);
+          }
+        }
+      } else if (typeof defaultMultiplier === "number" && isFinite(defaultMultiplier) && defaultMultiplier > 0) {
+        newParaStyle.putDouble(alpKey, defaultMultiplier);
+      }
+    }
+    return newParaStyle;
+  }
+
+  function addParaRange(list, fromIdx, toIdx, srcStyle, applyRubyLeading) {
+    if (fromIdx >= toIdx) return;
+    var newParaRange = new ActionDescriptor();
+    newParaRange.putInteger(charIDToTypeID("From"), fromIdx);
+    newParaRange.putInteger(charIDToTypeID("T   "), toIdx);
+    newParaRange.putObject(sID("paragraphStyle"), sID("paragraphStyle"), copyParaStyle(srcStyle, applyRubyLeading));
+    list.putObject(sID("paragraphStyleRange"), newParaRange);
+  }
+
+  // 既存の paragraphStyleRange を rubyRanges の境界で分割しながらコピー
+  var origParaList = textKey.getList(sID("paragraphStyleRange"));
+  var newParaList = new ActionList();
+  for (var pi = 0; pi < origParaList.count; pi++) {
+    var origParaRange = origParaList.getObjectValue(pi);
+    var pFrom = origParaRange.getInteger(charIDToTypeID("From"));
+    var pTo = origParaRange.getInteger(charIDToTypeID("T   "));
+    var srcParaStyle = origParaRange.getObjectValue(sID("paragraphStyle"));
+    // [pFrom, pTo) を rubyRanges の境界で分割
+    var borders = [pFrom, pTo];
+    for (var rk = 0; rk < rubyRanges.length; rk++) {
+      var r = rubyRanges[rk];
+      if (r.from > pFrom && r.from < pTo) borders.push(r.from);
+      if (r.to > pFrom && r.to < pTo) borders.push(r.to);
+    }
+    borders.sort(function (a, b) { return a - b; });
+    // ユニーク化
+    var uniq = [];
+    for (var bi = 0; bi < borders.length; bi++) {
+      if (bi === 0 || borders[bi] !== borders[bi - 1]) uniq.push(borders[bi]);
+    }
+    // 各セグメントを追加
+    for (var si = 0; si < uniq.length - 1; si++) {
+      var segFrom = uniq[si];
+      var segTo = uniq[si + 1];
+      addParaRange(newParaList, segFrom, segTo, srcParaStyle, overlapsRuby(segFrom, segTo));
+    }
+  }
+
+  // textKey を再構築 (paragraphStyleRange のみ差し替え、それ以外は元のまま)
+  var newTextKey = new ActionDescriptor();
+  // 元の textKey の全 key をコピー (paragraphStyleRange だけ後で上書き)
+  var copyTextKeyAllExcept = function (paraKey) {
+    var keyList = [
+      "textStyleRange", "textShape", "orientation", "antiAlias", "antiAliasSharp",
+      "textGridding", "warp"
+    ];
+    for (var ki = 0; ki < keyList.length; ki++) {
+      var k = sID(keyList[ki]);
+      if (!textKey.hasKey(k)) continue;
+      try {
+        var t = textKey.getType(k);
+        if (t === DescValueType.LISTTYPE) {
+          newTextKey.putList(k, textKey.getList(k));
+        } else if (t === DescValueType.OBJECTTYPE) {
+          newTextKey.putObject(k, textKey.getObjectType(k), textKey.getObjectValue(k));
+        } else if (t === DescValueType.ENUMERATEDTYPE) {
+          newTextKey.putEnumerated(k, textKey.getEnumerationType(k), textKey.getEnumerationValue(k));
+        } else if (t === DescValueType.BOOLEANTYPE) {
+          newTextKey.putBoolean(k, textKey.getBoolean(k));
+        } else if (t === DescValueType.DOUBLETYPE) {
+          newTextKey.putDouble(k, textKey.getDouble(k));
+        } else if (t === DescValueType.INTEGERTYPE) {
+          newTextKey.putInteger(k, textKey.getInteger(k));
+        } else if (t === DescValueType.STRINGTYPE) {
+          newTextKey.putString(k, textKey.getString(k));
+        }
+      } catch (eCp) {}
+    }
+  };
+  copyTextKeyAllExcept();
+  newTextKey.putList(sID("paragraphStyleRange"), newParaList);
+
+  // 書き戻し。class は "textLayer" (sID) で set。
+  var setRef = new ActionReference();
+  setRef.putEnumerated(charIDToTypeID("Lyr "), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+  var setDesc2 = new ActionDescriptor();
+  setDesc2.putReference(charIDToTypeID("null"), setRef);
+  setDesc2.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc2, DialogModes.NO);
+}
+
+// 【v1.29.x 修正】contents (\n or \r 区切り) と charRubies から
+// 「autoLeadingPercentage の対象行 = **親文字行の一つ前の行 (i-1)**」の 0-based index を抽出。
+//
+// ユーザー要望: 縦書き / 横書き ともに「**前の行 (i-1)**」の autoLeadingPercentage 値を
+// 変更する。これにより Photoshop の文字パネルで「前の行に 150%」と表示される。
+//
+// 親文字が 0 行目 (= 先頭行) の場合、前の行が存在しないのでスキップ。
+// (direction 引数は将来の拡張用に残すが、現状は両方向とも同じ挙動)
+function computeRubyLineIndices(contents, charRubies, direction) {
+  var out = [];
+  if (!charRubies) return out;
+  var normContents = String(contents || "");
+  var lineStarts = [0];
+  for (var ci = 0; ci < normContents.length; ci++) {
+    if (normContents.charAt(ci) === "\n" || normContents.charAt(ci) === "\r") {
+      lineStarts.push(ci + 1);
+    }
+  }
+  function charIndexToLine(idx) {
+    var lo = 0, hi = lineStarts.length - 1;
+    while (lo < hi) {
+      var mid = (lo + hi + 1) >> 1;
+      if (lineStarts[mid] <= idx) lo = mid; else hi = mid - 1;
+    }
+    return lo;
+  }
+  var seen = {};
+  for (var k in charRubies) {
+    if (!charRubies.hasOwnProperty(k)) continue;
+    var start = parseInt(k, 10);
+    if (isNaN(start)) continue;
+    var parentLine = charIndexToLine(start);
+    // 縦書き・横書きとも「親文字行の一つ前 (i-1)」を target。0 行目スキップ。
+    var targetLine = parentLine - 1;
+    if (targetLine < 0) continue;
+    if (!seen[String(targetLine)]) {
+      seen[String(targetLine)] = true;
+      out.push(targetLine);
+    }
+  }
+  return out;
+}
+
 // 【v1.26.0】===== ルビ =====
 // charRubies: { "<start>": {end, text, rubyType, scale}, ... }
 // 親レイヤーは保持。各ルビごとに新規テキストレイヤーを親の直前に追加する。
@@ -852,7 +1158,13 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
 //   おおまかな位置を計算する。ルビは親レイヤーの **外側**（縦書きなら親 bounds.right の外、
 //   横書きなら親 bounds.top の上）に必ず出るよう余白付きで配置するため、親テキストと重ならない。
 //   ユーザーは PS 側で必要に応じて微調整できる。
-function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirection, parentFontPS, parentFillColor) {
+// 【v1.29.x】parentTopLeftOverride: applyRubyAutoLeadingPercentage で親レイヤーがシフトしても、
+// その**変更前**の top-left (= UI 上の親フレーム top-left に等しい) をルビ配置の基準として使う。
+// これにより、uiOffsetX/Y で計算したルビ位置が「ビューアー上の見た目と完全一致」する。
+// null のときは現在の親 bounds をそのまま使う (旧挙動)。
+// 【v1.29.x】rubyPhotoshopOffsetEm / rubyPhotoshopBiasPx: ルビ位置 Photoshop 微調整値。
+// settings (写植設定) で変更可能。デフォルト 0 / 0。
+function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirection, parentFontPS, parentFillColor, parentTopLeftOverride, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx) {
   if (!charRubies || isObjEmpty(charRubies)) return;
 
   for (var key in charRubies) {
@@ -878,12 +1190,33 @@ function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirect
       if (parts.length === parentText.length) monoSegments = parts;
     }
 
+    // 【v1.29.x UI-coord】ビューアー実描画位置 (PSD px、親レイヤー基準) があれば
+    // 計算式 fallback ではなくこの位置を使う。CSS / JSX の式不一致による位置ズレが消える。
+    // monoSegments モードでは entry.offsetX/Y は「最初の文字 (= entry.start) の wrap」を
+    // 指すので、複数モノルビ wrap の各位置までは個別に取れない。Phase A 改良として:
+    //   - グループルビ: offsetX/Y をルビ中心として使用 (完璧一致)
+    //   - モノルビ: offsetX/Y を最初の wrap 位置として、後続は char 間隔で線形配置 (近似)
+    var hasUiOffset = (typeof entry.offsetX === "number" && typeof entry.offsetY === "number"
+                      && isFinite(entry.offsetX) && isFinite(entry.offsetY));
+    var uiOffsetX = hasUiOffset ? entry.offsetX : null;
+    var uiOffsetY = hasUiOffset ? entry.offsetY : null;
+    var hasUiAbs = (typeof entry.absX === "number" && typeof entry.absY === "number"
+                    && isFinite(entry.absX) && isFinite(entry.absY));
+    var uiAbsX = hasUiAbs ? entry.absX : null;
+    var uiAbsY = hasUiAbs ? entry.absY : null;
+
     if (monoSegments) {
       for (var mi = 0; mi < parentText.length; mi++) {
         try {
           createRubyLayer(parentLayer, contents, startChar + mi, startChar + mi + 1,
                           parentText.charAt(mi), monoSegments[mi],
-                          rubySizePt, parentDirection, parentFontPS, parentFillColor);
+                          rubySizePt, parentDirection, parentFontPS, parentFillColor,
+                          // モノルビは最初の文字 (mi=0) のみ UI offset を使う。
+                          // 残りの文字は計算式 fallback (= 各 char range の中心で配置)。
+                          mi === 0 ? uiOffsetX : null, mi === 0 ? uiOffsetY : null,
+                          mi === 0 ? uiAbsX : null, mi === 0 ? uiAbsY : null,
+                          parentTopLeftOverride,
+                          rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
         } catch (eMono) {
           addWarning("モノルビ「" + parentText.charAt(mi) + "（" + monoSegments[mi] + "）」適用失敗: " + eMono);
         }
@@ -892,7 +1225,10 @@ function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirect
       try {
         createRubyLayer(parentLayer, contents, startChar, endChar,
                         parentText, rubyText,
-                        rubySizePt, parentDirection, parentFontPS, parentFillColor);
+                        rubySizePt, parentDirection, parentFontPS, parentFillColor,
+                        uiOffsetX, uiOffsetY, uiAbsX, uiAbsY,
+                        parentTopLeftOverride,
+                        rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
       } catch (eGroup) {
         addWarning("グループルビ「" + parentText + "（" + rubyText + "）」適用失敗: " + eGroup);
       }
@@ -901,15 +1237,43 @@ function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirect
 }
 
 // 1 個のルビレイヤーを生成して親の直前に挿入。
+// 【v1.29.x UI-coord】uiOffsetX / uiOffsetY: ビューアー上の `.ruby-text` 中心位置を
+// 親レイヤー top-left からの相対座標 (PSD px) で渡す。null なら計算式 fallback。
+// 【v1.29.x】parentTopLeftOverride: applyRubyAutoLeadingPercentage で親レイヤーが
+// シフトしてしまった後でも、変更前の top-left (UI 上の親フレーム top-left と一致) を
+// 使ってルビを配置するための上書き値 {left, top}。null なら現在の親 bounds を使う。
 function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rubyText,
-                          rubySizePt, parentDirection, parentFontPS, parentFillColor) {
+                          rubySizePt, parentDirection, parentFontPS, parentFillColor,
+                          uiOffsetX, uiOffsetY, uiAbsX, uiAbsY, parentTopLeftOverride,
+                          rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx) {
   var doc = app.activeDocument;
   // 親レイヤーの bounds を再評価（layer 効果や前段の per-char 編集後の最新値）。
   try {
     parentLayer.translate(new UnitValue(0, "px"), new UnitValue(0, "px"));
   } catch (eParentRf) {}
-  var parentBounds = getLayerBoundsPx(parentLayer);
-  if (!parentBounds) return;
+  var currentParentBounds = getLayerBoundsPx(parentLayer);
+  if (!currentParentBounds) return;
+  // 【v1.29.x】parentTopLeftOverride: applyRubyAutoLeadingPercentage で親レイヤーがシフトした
+  // 場合に、変更前 (= UI 上の親フレーム top-left に等しい) の top-left を「ルビ配置の基準」
+  // として使う。これにより uiOffsetX/Y で計算したルビ位置がビューアー上の見た目と一致する。
+  // 縦書き/横書き共通で、bounds の幅・高さは現在値、top-left のみ override 値に差し替える。
+  var parentBounds;
+  if (parentTopLeftOverride
+      && typeof parentTopLeftOverride.left === "number"
+      && typeof parentTopLeftOverride.top === "number"
+      && isFinite(parentTopLeftOverride.left)
+      && isFinite(parentTopLeftOverride.top)) {
+    var w = currentParentBounds.right - currentParentBounds.left;
+    var h = currentParentBounds.bottom - currentParentBounds.top;
+    parentBounds = {
+      left: parentTopLeftOverride.left,
+      top: parentTopLeftOverride.top,
+      right: parentTopLeftOverride.left + w,
+      bottom: parentTopLeftOverride.top + h
+    };
+  } else {
+    parentBounds = currentParentBounds;
+  }
   // char range の推定 bounds（contents の改行ベース）。layer 全体 bounds を行/列で均等分割して
   // char range の位置をおおまかに割り当てる。
   var rangeBounds = estimateCharRangeBounds(parentBounds, contents, fromCh, toCh, parentDirection);
@@ -950,29 +1314,109 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
     var actualBottom = rbObj.bottom;
     var rubyWidth = actualRight - actualLeft;
     var rubyHeight = actualBottom - actualTop;
-    // ルビと親の隙間（px）。0 にすると密着、大きくすると離れる。実用上 2〜4 px が良い。
-    var gap = 2;
     var targetLeft, targetTop;
-    if (parentDirection === "vertical") {
-      // 縦書き: ルビは親 char range の **右** に配置（vertical-rl で「次の列」は左だが、ルビは
-      // 慣習的に親文字の右側に書く。親レイヤーの外側に置くため、parentBounds.right を基準にする）。
-      // ただし複数列の親レイヤーで char range が左の列にある場合、parentBounds.right ではなく
-      // rangeBounds.right を使うことで、その列のすぐ右隣に配置できる。
-      targetLeft = rangeBounds.right + gap;
-      // 縦位置: char range の縦中心 = ruby 縦中心
-      var rangeMidV = (rangeBounds.top + rangeBounds.bottom) / 2;
-      targetTop = rangeMidV - rubyHeight / 2;
+
+    // 【v1.29.x UI-coord】ビューアー実描画位置 (uiOffsetX/Y) があれば、これを「ルビ中心」として
+    // 扱い、計算式 fallback を使わない。uiOffset は親レイヤー top-left からの相対 PSD 座標。
+    var hasUiOffset = (typeof uiOffsetX === "number" && typeof uiOffsetY === "number"
+                      && isFinite(uiOffsetX) && isFinite(uiOffsetY));
+    var hasUiAbs = (typeof uiAbsX === "number" && typeof uiAbsY === "number"
+                    && isFinite(uiAbsX) && isFinite(uiAbsY));
+    if (hasUiAbs || hasUiOffset) {
+      // ルビ中心:
+      //   縦書き: UI 側も Photoshop 側も、親テキスト右端基準の offsetX として扱う。
+      //   横書き: 左上基準。
+      var rubyCenterX = hasUiAbs
+        ? uiAbsX
+        : ((parentDirection === "vertical") ? parentBounds.right + uiOffsetX : parentBounds.left + uiOffsetX);
+      var rubyCenterY = hasUiAbs ? uiAbsY : parentBounds.top + uiOffsetY;
+      // ビューアーは「親文字と前の行の中間」(行間中央) を基準にルビを表示する。
+      // Photoshop でも同じ中心を使い、写植設定で明示された補正値だけ追加する。
+      //  - PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM: 親 font em 単位で親側にシフト (em 依存)
+      //  - PHOTOSHOP_RUBY_PARENT_BIAS_PX:      親から離す方向の微小固定 PSD px (font 非依存)
+      // 縦書き: 親の **右** にルビ
+      //   rubyCenterX -= em シフト (親側 = 左)
+      //   rubyCenterX += 固定 (親から離す方向 = 右)
+      // 横書き: 親の **上** にルビ
+      //   rubyCenterY += em シフト (親側 = 下)
+      //   rubyCenterY -= 固定 (親から離す方向 = 上)
+      // ビューアー側の CSS `--ruby-parent-offset-em` (現在 0.15em) と合算して
+      // 「合計 1.0em ぶん親寄せ」を維持する。CSS を変えたら、ここを (1.0 - CSS 値) に調整する。
+      // settings.js (写植設定) で変更可能。デフォルトは applyToPsd 呼び出し側で
+      // payload.ruby_photoshop_offset_em / ruby_photoshop_bias_px が渡される。
+      var PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM =
+        (typeof rubyPhotoshopOffsetEm === "number" && isFinite(rubyPhotoshopOffsetEm))
+          ? rubyPhotoshopOffsetEm : 0;
+      // rubyPhotoshopBiasPx は「**13pt フォント前提**」の px 値として扱い、
+      // 実際の親文字 fontSize に比例して拡縮する。
+      //   実際の bias = 設定値 × (parentFontSizePt / 13)
+      // 例: 設定値 7.5 なら、24pt で 7.5 × (24/13) ≈ 13.8px。
+      var PHOTOSHOP_RUBY_PARENT_BIAS_REF_PT = 13;  // 設定値の基準フォントサイズ
+      var __biasPxBase = (typeof rubyPhotoshopBiasPx === "number" && isFinite(rubyPhotoshopBiasPx))
+        ? rubyPhotoshopBiasPx : 0;
+      var __parentSizePtForBias = 13;
+      try {
+        var __pSizePt2 = parentLayer.textItem.size.value;
+        if (typeof __pSizePt2 === "number" && __pSizePt2 > 0) __parentSizePtForBias = __pSizePt2;
+      } catch (ePtBias) {}
+      var PHOTOSHOP_RUBY_PARENT_BIAS_PX = __biasPxBase * (__parentSizePtForBias / PHOTOSHOP_RUBY_PARENT_BIAS_REF_PT);
+      // 親 1em の PSD px 値を取得 (親 fontSize * dpi/72)
+      var parentEmPx = 200; // フォールバック (24pt × 600/72)
+      try {
+        var pSizePt = parentLayer.textItem.size.value;
+        var dpiVal = doc.resolution;
+        if (typeof pSizePt === "number" && pSizePt > 0
+            && typeof dpiVal === "number" && dpiVal > 0) {
+          parentEmPx = pSizePt * (dpiVal / 72);
+        }
+      } catch (eEm) {}
+      if (!hasUiAbs) {
+        if (parentDirection === "vertical") {
+          rubyCenterX -= parentEmPx * PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM;
+          rubyCenterX += PHOTOSHOP_RUBY_PARENT_BIAS_PX;
+        } else {
+          rubyCenterY += parentEmPx * PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM;
+          rubyCenterY -= PHOTOSHOP_RUBY_PARENT_BIAS_PX;
+        }
+      }
+      // ルビの top-left は中心からルビ寸法の半分引いた値。
+      targetLeft = rubyCenterX - rubyWidth / 2;
+      targetTop = rubyCenterY - rubyHeight / 2;
     } else {
-      // 横書き: ルビは親 char range の **上** に配置。
-      var rangeMidH = (rangeBounds.left + rangeBounds.right) / 2;
-      targetLeft = rangeMidH - rubyWidth / 2;
-      targetTop = rangeBounds.top - rubyHeight - gap;
+      // 計算式 fallback (旧挙動): char range bounds の指定エッジに揃える。
+      // ルビと親の隙間（px）。0 にすると密着、大きくすると離れる。実用上 2〜4 px が良い。
+      var gap = 2;
+      if (parentDirection === "vertical") {
+        // 縦書き: ルビは親 char range の **右** に配置。
+        targetLeft = rangeBounds.right + gap;
+        var rangeMidV = (rangeBounds.top + rangeBounds.bottom) / 2;
+        targetTop = rangeMidV - rubyHeight / 2;
+      } else {
+        // 横書き: ルビは親 char range の **上** に配置。
+        var rangeMidH = (rangeBounds.left + rangeBounds.right) / 2;
+        targetLeft = rangeMidH - rubyWidth / 2;
+        targetTop = rangeBounds.top - rubyHeight - gap;
+      }
     }
     var dx = targetLeft - actualLeft;
     var dy = targetTop - actualTop;
     if (dx !== 0 || dy !== 0) {
       rubyLayer.translate(new UnitValue(dx, "px"), new UnitValue(dy, "px"));
     }
+    try {
+      var rbCheck = getLayerBoundsPx(rubyLayer);
+      if (rbCheck) {
+        var checkCenterX = (rbCheck.left + rbCheck.right) / 2;
+        var checkCenterY = (rbCheck.top + rbCheck.bottom) / 2;
+        var wantedCenterX = targetLeft + rubyWidth / 2;
+        var wantedCenterY = targetTop + rubyHeight / 2;
+        var fixCenterDx = wantedCenterX - checkCenterX;
+        var fixCenterDy = wantedCenterY - checkCenterY;
+        if (Math.abs(fixCenterDx) > 0.01 || Math.abs(fixCenterDy) > 0.01) {
+          rubyLayer.translate(new UnitValue(fixCenterDx, "px"), new UnitValue(fixCenterDy, "px"));
+        }
+      }
+    } catch (eCenterFix) {}
   } catch (ePlace) {}
 
   // 親の直前に move（順序: 元の親 layer の真上）
@@ -1100,7 +1544,7 @@ function applySymbolFont(layer, contents, symbolFontPS, charFonts) {
   function isSymbolChar(s) {
     var c = s.charCodeAt(0);
     return (
-      c === 0x2661 || c === 0x2665 ||                                       // hearts
+      c === 0x2661 || c === 0x2665 || c === 0x2764 ||                       // hearts
       c === 0x2605 || c === 0x2606 ||                                       // stars
       c === 0x266A || c === 0x266B || c === 0x266C || c === 0x2669 ||       // music notes
       c === 0x266F || c === 0x266D ||                                       // sharp / flat
@@ -1313,51 +1757,67 @@ function applyPunctuationTsume(layer, contents, tsumePct) {
 // 既に textStyleRange が複数あれば（例：applyLineLeadings 後）、各範囲ごとに baseStyle を
 // 引き継いで tracking を上書きするため、行ごとの行間と併用しても情報を失わない。
 function applyRepeatedDashTracking(layer, contents, dashMille, tildeMille) {
-  var dashTrack = -Math.abs(dashMille || 0);
-  var tildeTrack = -Math.abs(tildeMille || 0);
-  if (dashTrack === 0 && tildeTrack === 0) return;
+  var dashTrack = (typeof dashMille === "number" && isFinite(dashMille)) ? dashMille : 0;
+  var tildeKern = (typeof tildeMille === "number" && isFinite(tildeMille)) ? tildeMille : 0;
   // 対象文字を char code で判定。regex の Unicode リテラルは ExtendScript のファイル
   // エンコーディング（既定 Shift_JIS / Win JP）に左右されるため、char code 直接指定で安全に。
   // dash:  — U+2014 / ― U+2015 / – U+2013 / ‒ U+2012 / ‐ U+2010 / ‑ U+2011 / ー U+30FC / － U+FF0D
   // tilde: 〜 U+301C / ～ U+FF5E
   function charGroup(s) {
     var c = s.charCodeAt(0);
+    // dash 系: ハイフン・ダッシュ・長音記号・全角ハイフン・罫線素片・マイナス記号・各種ダッシュ系類似文字
     if (c === 0x2014 || c === 0x2015 || c === 0x2013 || c === 0x2012 ||
-        c === 0x2010 || c === 0x2011 || c === 0x30FC || c === 0xFF0D) return "dash";
-    if (c === 0x301C || c === 0xFF5E) return "tilde";
+        c === 0x2010 || c === 0x2011 || c === 0x30FC || c === 0xFF0D ||
+        // 【v1.30.x】罫線素片 / マイナス記号 / 小書きダッシュも dash として扱う
+        c === 0x2500 || c === 0x2501 || c === 0x2212 || c === 0x2043 ||
+        c === 0xFE58 || c === 0xFE63) return "dash";
+    // tilde 系: WAVE DASH, FULLWIDTH TILDE, ASCII TILDE, SMALL TILDE
+    if (c === 0x301C || c === 0xFF5E || c === 0x007E || c === 0x02DC) return "tilde";
     return null;
   }
-  function isTargetChar(s) { return charGroup(s) !== null; }
-
   var fullText = String(contents);
   if (fullText.length === 0) return;
+  function putTrackingValue(styleDesc, value) {
+    try { styleDesc.putInteger(sID("tracking"), value); } catch (eTrackA) {}
+    try { styleDesc.putInteger(cID("Trck"), value); } catch (eTrackB) {}
+  }
 
   // 各 char に当てる tracking 値（0 = ツメなし）。連続ランの最後の 1 文字は常に 0。
+  // dash は textStyleRange の tracking、tilde は textLayer の kerningRange として別属性に書く。
+  // 値が 0 のグループも textStyleRange を再構築して明示的に tracking=0 を書く。
+  // これにより、以前の保存で PSD 側に残った「～～」等の tracking を確実に解除できる。
   var trackingPerChar = [];
+  var groupPerChar = [];
+  var tildeKerningRanges = [];
   for (var p0 = 0; p0 < fullText.length; p0++) trackingPerChar[p0] = 0;
+  for (var g0 = 0; g0 < fullText.length; g0++) groupPerChar[g0] = "";
   var i = 0;
-  var anyTracked = false;
+  var anyRepeatedRun = false;
   while (i < fullText.length) {
-    if (isTargetChar(fullText.charAt(i))) {
+    var runGroup = charGroup(fullText.charAt(i));
+    if (runGroup !== null) {
       var j = i;
-      while (j < fullText.length && isTargetChar(fullText.charAt(j))) j++;
+      while (j < fullText.length && charGroup(fullText.charAt(j)) === runGroup) j++;
       // ラン長 N >= 2 のとき、最初の N-1 文字に group 別の tracking を当てる
       if (j - i >= 2) {
+        anyRepeatedRun = true;
         for (var k = i; k < j - 1; k++) {
-          var grp = charGroup(fullText.charAt(k));
-          var v = grp === "dash" ? dashTrack : grp === "tilde" ? tildeTrack : 0;
-          if (v !== 0) {
-            trackingPerChar[k] = v;
-            anyTracked = true;
+          if (runGroup === "dash") {
+            trackingPerChar[k] = dashTrack;
+          } else if (runGroup === "tilde") {
+            trackingPerChar[k] = 0;
+            tildeKerningRanges.push({ from: k, to: k + 1, kerning: tildeKern });
           }
+          groupPerChar[k] = runGroup;
         }
+        groupPerChar[j - 1] = runGroup + "-tail";
       }
       i = j;
     } else {
       i++;
     }
   }
-  if (!anyTracked) return;
+  if (!anyRepeatedRun) return;
 
   app.activeDocument.activeLayer = layer;
   var layerRef = new ActionReference();
@@ -1380,31 +1840,34 @@ function applyRepeatedDashTracking(layer, contents, dashMille, tildeMille) {
   }
   if (totalChars === 0) return;
 
-  // (srcRangeIndex, trackingValue) が連続している区間に圧縮し、textStyleRange を再構築
+  // (srcRangeIndex, trackingValue, groupKind) が連続している区間に圧縮し、textStyleRange を再構築。
+  // groupKind も boundary に含めることで、dash と tilde が同じ 0 値を持つ境界でも
+  // Photoshop 側に別レンジとして渡し、後段のレンジ畳み込みで片方の値だけが残る状況を避ける。
   var newRangeList = new ActionList();
   if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
   var curStart = 0;
   var curSrc = srcRangeIndex[0];
   var curTrack = trackingPerChar[0] || 0;
+  var curGroup = groupPerChar[0] || "";
 
   for (var p = 1; p <= totalChars; p++) {
-    var nextSrc, nextTrack, boundary;
+    var nextSrc, nextTrack, nextGroup, boundary;
     if (p === totalChars) {
       boundary = true;
       nextSrc = curSrc;
       nextTrack = curTrack;
+      nextGroup = curGroup;
     } else {
       nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
       nextTrack = trackingPerChar[p] || 0;
-      boundary = (nextSrc !== curSrc) || (nextTrack !== curTrack);
+      nextGroup = groupPerChar[p] || "";
+      boundary = (nextSrc !== curSrc) || (nextTrack !== curTrack) || (nextGroup !== curGroup);
     }
     if (boundary) {
       var srcRange = oldRanges.getObjectValue(curSrc);
       var srcStyle = srcRange.getObjectValue(sID("textStyle"));
       var styleClone = cloneActionDescriptor(srcStyle);
-      try {
-        styleClone.putInteger(sID("tracking"), curTrack);
-      } catch (eTrack) {}
+      putTrackingValue(styleClone, curTrack);
       var newRangeDesc = new ActionDescriptor();
       newRangeDesc.putInteger(sID("from"), curStart);
       newRangeDesc.putInteger(sID("to"), p);
@@ -1413,11 +1876,27 @@ function applyRepeatedDashTracking(layer, contents, dashMille, tildeMille) {
       curStart = p;
       curSrc = nextSrc;
       curTrack = nextTrack;
+      curGroup = nextGroup;
     }
   }
 
   var newTextKey = cloneActionDescriptor(textKey);
   newTextKey.putList(sID("textStyleRange"), newRangeList);
+  if (tildeKerningRanges.length > 0) {
+    // Photoshop の kerningRange は前方順で複数渡すと最後だけ効くバージョンがあるため、
+    // 終端側から並べる。
+    tildeKerningRanges.sort(function (a, b) { return b.from - a.from; });
+    var kernList = new ActionList();
+    for (var kr = 0; kr < tildeKerningRanges.length; kr++) {
+      var item = tildeKerningRanges[kr];
+      var kernDesc = new ActionDescriptor();
+      kernDesc.putInteger(sID("from"), item.from);
+      kernDesc.putInteger(sID("to"), item.to);
+      kernDesc.putInteger(sID("kerning"), item.kerning);
+      kernList.putObject(sID("kerningRange"), kernDesc);
+    }
+    newTextKey.putList(sID("kerningRange"), kernList);
+  }
   var setDesc = new ActionDescriptor();
   setDesc.putReference(sID("null"), layerRef);
   // class は "textLayer" (charID "TxtL") を指定。"textKey" を指定すると Photoshop が
@@ -1625,6 +2104,29 @@ function reapplyPunctuationTsumeForAllLayers(doc, tsumePct) {
   visit(doc);
 }
 
+// 【v1.31.x】applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定後に、
+// 連続記号ツメ (dash / tilde) を全テキストレイヤーへ再適用する safety net。
+function reapplyRepeatedTrackingForAllLayers(doc, dashMille, tildeMille) {
+  var dashTrack = (typeof dashMille === "number" && isFinite(dashMille)) ? dashMille : 0;
+  var tildeTrack = (typeof tildeMille === "number" && isFinite(tildeMille)) ? tildeMille : 0;
+  function visit(parent) {
+    for (var i = 0; i < parent.layers.length; i++) {
+      var l = parent.layers[i];
+      if (l.typename === "LayerSet") {
+        visit(l);
+      } else if (l.kind === LayerKind.TEXT) {
+        try {
+          var ct = l.textItem.contents;
+          if (typeof ct === "string" && ct.length > 0) {
+            applyRepeatedDashTracking(l, ct, dashTrack, tildeTrack);
+          }
+        } catch (eR) {}
+      }
+    }
+  }
+  visit(doc);
+}
+
 // 【v1.22.0】記号フォント置換の Phase B safety net。新規・既存・未編集を問わず全テキスト
 // レイヤーに再適用。charFonts は null（未編集レイヤーには manual override 情報が無いため、
 // 全シンボル char を置換対象とする）。
@@ -1648,7 +2150,7 @@ function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
   visit(doc);
 }
 
-function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent) {
+function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent, rubyLeadingPct, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx, uiPageWidth, uiPageHeight) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[PsDesign] skip missing: " + psdPath); return; }
   var prevUnits = app.preferences.rulerUnits;
@@ -1657,6 +2159,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
   app.preferences.typeUnits = TypeUnits.POINTS;
   var doc = app.open(file);
   try {
+    var __rubyAbsScaleX = 1;
+    var __rubyAbsScaleY = 1;
+    try {
+      var __docW = doc.width.as("px");
+      var __docH = doc.height.as("px");
+      if (typeof uiPageWidth === "number" && isFinite(uiPageWidth) && uiPageWidth > 0
+          && typeof __docW === "number" && isFinite(__docW) && __docW > 0) {
+        __rubyAbsScaleX = __docW / uiPageWidth;
+      }
+      if (typeof uiPageHeight === "number" && isFinite(uiPageHeight) && uiPageHeight > 0
+          && typeof __docH === "number" && isFinite(__docH) && __docH > 0) {
+        __rubyAbsScaleY = __docH / uiPageHeight;
+      }
+    } catch (eRubyAbsScale) {}
     for (var i = 0; i < edits.length; i++) {
       var e = edits[i];
       var layer = findLayerById(doc, e.id);
@@ -1697,6 +2213,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           }
         }
       }
+      // autoLeadingAmount は段落全体属性なので、これは元の leadingPct のまま設定する
+      // (= デフォルトの「自動行送り」)。ルビあり行は後で paragraphStyleRange を分割して
+      // autoLeadingPercentage を上書きする方式で per-line に変える。
       if (typeof e.leadingPct === "number") {
         try {
           ti.autoLeadingAmount = e.leadingPct;
@@ -1705,7 +2224,12 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           addWarning("行間の適用に失敗 (layer " + e.id + "): " + eLead);
         }
       }
-      if (e.lineLeadings && !isObjEmpty(e.lineLeadings)) {
+      // 【v1.29.x】ルビあり時は applyLineLeadings (textStyleRange に Ldng pt 固定) を呼ばず、
+      // 代わりに applyRubyAutoLeadingPercentage で paragraphStyleRange に
+      // autoLeadingPercentage を行ごとに当てる (参考: 共有プラグイン ruby/index.js)。
+      // ルビなしのときは従来通り applyLineLeadings (ユーザー手動の per-line override)。
+      var __hasRubyE = (e.charRubies && !isObjEmpty(e.charRubies));
+      if (!__hasRubyE && e.lineLeadings && !isObjEmpty(e.lineLeadings)) {
         try {
           var __sz = ti.size.value;
           applyLineLeadings(layer, e.lineLeadings, ti.contents, __sz);
@@ -1736,6 +2260,21 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       // 【v1.26.0】ルビ。親レイヤーは保持しつつ、ルビごとに新規テキストレイヤーを
       // 親の直前に追加する（Photoshop ruby プラグインと同じ方針）。
       if (e.charRubies && !isObjEmpty(e.charRubies)) {
+        // ルビあり行 (= main.js doApply で setLineLeading 済みの行) の
+        // paragraphStyle.autoLeadingPercentage を rubyLeadingPct/100 に上書き。
+        // 【v1.29.x】direction で対象行を分岐 (縦書き=当該行 / 横書き=前の行)。
+        if (typeof rubyLeadingPct === "number" && rubyLeadingPct > 0) {
+          try {
+            var __dirRubyLP = (typeof e.direction === "string") ? e.direction
+                              : (ti.direction === Direction.VERTICAL ? "vertical" : "horizontal");
+            var __rubyLines = computeRubyLineIndices(ti.contents, e.charRubies, __dirRubyLP);
+            var __defMult = (typeof e.leadingPct === "number" && e.leadingPct > 0)
+              ? (e.leadingPct / 100) : 1.0;
+            applyRubyAutoLeadingPercentage(layer, ti.contents, __rubyLines, rubyLeadingPct / 100, __defMult);
+          } catch (eRubyLP) {
+            addWarning("ルビあり行間 (autoLeadingPercentage) の適用に失敗 (layer " + e.id + "): " + eRubyLP);
+          }
+        }
         try {
           var __szR = ti.size.value;
           var __dirR = (typeof e.direction === "string") ? e.direction
@@ -1743,7 +2282,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var __fontR = (typeof e.font === "string" && e.font.length > 0) ? e.font : ti.font;
           var __colR = null;
           try { __colR = ti.color; } catch (eCol0) {}
-          applyRubies(layer, ti.contents, e.charRubies, __szR, __dirR, __fontR, __colR);
+          // 【v1.29.x 修正】parentTopLeftOverride は null で渡す。autoLeadingPercentage で
+          // 親レイヤーがシフトしても、ルビは「現在の親 bounds + uiOffsetX/Y」を基準に置く
+          // ことで、親-ルビ間の相対距離 (ビューアーで見ていた値) が維持される。
+          // override を渡すとシフト分ルビが前の行寄りに離れすぎる事故が起きる。
+          var __rubiesScaled = scaleRubyAbsoluteCoords(e.charRubies, __rubyAbsScaleX, __rubyAbsScaleY);
+          applyRubies(layer, ti.contents, __rubiesScaled, __szR, __dirR, __fontR, __colR, null,
+                      rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
         } catch (eRuby) {
           addWarning("ルビの適用に失敗 (layer " + e.id + "): " + eRuby);
         }
@@ -1765,6 +2310,14 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         } catch (eTsume) {
           addWarning("句読点ツメの適用に失敗 (layer " + e.id + "): " + eTsume);
         }
+      }
+      // 【v1.31.x】連続記号のツメ。既存レイヤーにも新規レイヤーと同じ dash / tilde 別値を適用する。
+      // これを省くと PSD 側に残っていた tracking が見た目に残り、「――」が「～～」側の値に
+      // 引っ張られて見えるケースがある。
+      try {
+        applyRepeatedDashTracking(layer, ti.contents, dashTrackingMille, tildeTrackingMille);
+      } catch (eDashTrackExisting) {
+        addWarning("連続記号のツメ適用に失敗 (layer " + e.id + "): " + eDashTrackExisting);
       }
       // 【v1.26.0】縦中横（!! / !? の自動 tcy）。既存レイヤーにも適用（PSD 内に全角 ！！ で
       // 組まれているテキストを保存時に半角化 + 縦中横 cross 属性を当てる）。
@@ -1810,6 +2363,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           try { nti.font = nl.font; } catch (eFont) {}
         }
         nti.size = new UnitValue((typeof nl.size === "number") ? nl.size : 24, "pt");
+        // 【v1.29.x 修正】autoLeadingAmount は段落全体属性。ルビあり行のみ 150% にしたい
+        // なら applyLineLeadings 経路で per-line 固定 leading を当てる方式に統一する。
+        // ここでは元の leadingPct (or 125 default) のまま、自動行送りで設定する。
         var __lpNew = (typeof nl.leadingPct === "number") ? nl.leadingPct : 125;
         try { nti.autoLeadingAmount = __lpNew; } catch (eAutoLeadPct) {}
         try { nti.useAutoLeading = true; } catch (eAutoLead) {}
@@ -1850,6 +2406,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var _padInsetV = 0.3 * _ptInPx;
           var _fixDx, _fixDy;
           if (nl.direction === "vertical") {
+            // 【v1.29.x 修正】autoLeadingAmount を rubyLeadingPct で上書きしなくなったため、
+            // bbox の縦書き thick 計算も元の leadingPct (or 125 default) のままで OK。
+            // ルビあり行は applyLineLeadings の per-line 固定 leading で個別に処理される。
             var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
             var _contentsForCount = String(nl.contents || "");
             var _lc = _contentsForCount.split(/\r?\n/).length;
@@ -1887,7 +2446,11 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         } catch (eStrokeNew) {
           addWarning("新規レイヤーへの境界線効果適用に失敗: " + eStrokeNew);
         }
-        if (nl.lineLeadings && !isObjEmpty(nl.lineLeadings)) {
+        // 【v1.29.x】ルビあり時は applyLineLeadings (Ldng pt 固定) を呼ばず、
+        // 代わりに後段の applyRubyAutoLeadingPercentage で paragraphStyleRange を分割する。
+        // ルビなしのときだけユーザーの手動 per-line override を当てる。
+        var __hasRubyNL = (nl.charRubies && !isObjEmpty(nl.charRubies));
+        if (!__hasRubyNL && nl.lineLeadings && !isObjEmpty(nl.lineLeadings)) {
           try {
             var __szNew = nti.size.value;
             applyLineLeadings(layerRef, nl.lineLeadings, nti.contents, __szNew);
@@ -1917,13 +2480,32 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         // 【v1.26.0】ルビ（新規レイヤー）。親 layer の textKey 上書きが完了してから呼ぶ。
         // ルビレイヤーは親の直前に追加され、新規 text グループ (__textGroup) 内に居る。
         if (nl.charRubies && !isObjEmpty(nl.charRubies)) {
+          // ルビあり行 (= main.js doApply で setLineLeading 済みの行) の
+          // paragraphStyle.autoLeadingPercentage を rubyLeadingPct/100 に上書き。
+          // 【v1.29.x】direction で対象行を分岐 (縦書き=当該行 / 横書き=前の行)。
+          if (typeof rubyLeadingPct === "number" && rubyLeadingPct > 0) {
+            try {
+              var __dirRubyLPN = nl.direction || "vertical";
+              var __rubyLinesN = computeRubyLineIndices(nti.contents, nl.charRubies, __dirRubyLPN);
+              var __defMultN = (typeof nl.leadingPct === "number" && nl.leadingPct > 0)
+                ? (nl.leadingPct / 100) : 1.25;
+              applyRubyAutoLeadingPercentage(layerRef, nti.contents, __rubyLinesN, rubyLeadingPct / 100, __defMultN);
+            } catch (eRubyLPN) {
+              addWarning("新規レイヤーのルビあり行間 (autoLeadingPercentage) 適用に失敗: " + eRubyLPN);
+            }
+          }
           try {
             var __szRN = nti.size.value;
             var __dirRN = nl.direction || "vertical";
             var __fontRN = (typeof nl.font === "string" && nl.font.length > 0) ? nl.font : nti.font;
             var __colRN = null;
             try { __colRN = nti.color; } catch (eCol1) {}
-            applyRubies(layerRef, nti.contents, nl.charRubies, __szRN, __dirRN, __fontRN, __colRN);
+            // 【v1.29.x 修正】parentTopLeftOverride は null。autoLeadingPercentage で親が
+            // シフトしても、ルビは「現在の親 bounds + uiOffsetX/Y」基準で配置することで、
+            // ビューアー上で見ていた「親-ルビの相対位置」を維持する。
+            var __rubiesScaledN = scaleRubyAbsoluteCoords(nl.charRubies, __rubyAbsScaleX, __rubyAbsScaleY);
+            applyRubies(layerRef, nti.contents, __rubiesScaledN, __szRN, __dirRN, __fontRN, __colRN, null,
+                        rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
           } catch (eRubyN) {
             addWarning("新規レイヤーのルビ適用に失敗: " + eRubyN);
           }
@@ -1946,21 +2528,11 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           }
         }
         // 連続記号のツメ（環境設定の global 値）。新規レイヤーのみ。
-        // 負値・正値どちらでも「絶対値ぶん詰める」セマンティクスに統一（ユーザー混乱を吸収）。
-        // dash 系と tilde 系で別々の値を per-char に当てる。
-        var __hasDashTrack = typeof dashTrackingMille === "number" && dashTrackingMille !== 0;
-        var __hasTildeTrack = typeof tildeTrackingMille === "number" && tildeTrackingMille !== 0;
-        if (__hasDashTrack || __hasTildeTrack) {
-          try {
-            applyRepeatedDashTracking(
-              layerRef,
-              nti.contents,
-              __hasDashTrack ? dashTrackingMille : 0,
-              __hasTildeTrack ? tildeTrackingMille : 0
-            );
-          } catch (eDashTrack) {
-            addWarning("連続記号のツメ適用に失敗: " + eDashTrack);
-          }
+        // dash 系と tilde 系で別々に、写植設定の tracking 値をそのまま per-char に当てる。
+        try {
+          applyRepeatedDashTracking(layerRef, nti.contents, dashTrackingMille, tildeTrackingMille);
+        } catch (eDashTrack) {
+          addWarning("連続記号のツメ適用に失敗: " + eDashTrack);
         }
         // 縦中横（!! / !? の自動 tcy）。設定 ON かつ縦書きレイヤーのみ。
         // applyRepeatedDashTracking の後に呼ぶことで、tracking で再構築された textStyleRange
@@ -2012,6 +2584,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       try { reapplyPunctuationTsumeForAllLayers(doc, punctuationTsumePercent); }
       catch (eRTs) { addWarning("句読点ツメ再適用に失敗: " + eRTs); }
     }
+    try { reapplyRepeatedTrackingForAllLayers(doc, dashTrackingMille, tildeTrackingMille); }
+    catch (eRTr) { addWarning("連続記号のツメ再適用に失敗: " + eRTr); }
     if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
       try { reapplySymbolFontForAllLayers(doc, symbolFontPostScriptName); }
       catch (eRSym) { addWarning("記号フォント置換再適用に失敗: " + eRSym); }

@@ -34,6 +34,8 @@ import {
   toDisplaySizePt,
   toggleLayerSelected,
   updateNewLayer,
+  // 【v1.29.x UI-coord】ルビ wrap の実描画位置を PSD 座標で state に書き戻すため
+  setCharRubyOffset,
 } from "./state.js";
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
@@ -43,6 +45,7 @@ import { cascadeRemoveTxtForLayers, syncTxtSelectionToLayer } from "./txt-source
 const mounts = new Map();
 const resizeObservers = new Set();
 let toolListenerBound = false;
+const RUBY_TOWARD_PARENT_RATIO = 1.60;
 
 // 【v1.16.0】in-place 編集 textarea 上の文字選択範囲のキャッシュ。
 // reportCursor の発火点で必ずモジュール変数に保存しておくことで、focus 変動の影響を回避。
@@ -251,6 +254,9 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
   // ガード（applyConversionToInner 内）と互換性を保つため。
   const wrap = document.createElement("span");
   wrap.className = "ruby-wrap ruby-edit-pending";
+  // 【v1.29.x UI-coord】後段の measureRubyOffsets が「どの charRubies エントリに対応するか」
+  // 特定できるように、絶対 char start を data 属性で持たせる。
+  wrap.dataset.rubyStart = String(start);
   if (rubyType === "mono" || rubyType === "group") {
     wrap.setAttribute("data-ruby-type", rubyType);
   }
@@ -278,6 +284,12 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
   } catch { return false; }
   // 親 inner の overflow:hidden が .ruby-text の絶対配置を切り取らないように has-ruby クラスを付ける。
   inner.classList.add("has-ruby");
+  if (typeof requestAnimationFrame === "function") {
+    requestAnimationFrame(() => {
+      const overlay = inner.closest(".page-overlay");
+      if (overlay) placeRubyAtLineMidpointsForOverlay(overlay, { towardParentRatio: 0 });
+    });
+  }
   return true;
 }
 
@@ -869,8 +881,8 @@ function renderOverlay(ctx) {
     }
     // 新規レイヤーには環境設定の連続記号ツメ（dash/tilde グループ別）を適用。PS 保存にも同じ値を書き戻す。
     // tcy（縦中横）も新規かつ縦書きレイヤーに適用、PS 保存でも textStyleRange の tcy 属性を立てる。
-    const dashMille = Number(getDefault("dashTrackingMille")) || 0;
-    const tildeMille = Number(getDefault("tildeTrackingMille")) || 0;
+    const dashMille = Number(getDefault("dashRunTrackingMille")) || 0;
+    const tildeMille = Number(getDefault("tildeRunKerningMille")) || 0;
     const tcyEnabledNew = getDefault("tateChuYokoEnabled") !== false;
     // 【v1.22.0】記号フォント置換（♡♥★☆♪ 等）。新規 + 既存両方に適用、ユーザー手動指定は尊重。
     const symbolReplaceOnNew = getDefault("symbolFontReplaceEnabled") !== false;
@@ -925,6 +937,360 @@ function renderOverlay(ctx) {
   // 【v1.x.0】複数選択時のバッジ重なり解決。近接する選択フレームの青バッジ同士が
   // 縦に重なるケースがあるため、後で重なりを検出して該当バッジを上向き反転する。
   scheduleBadgeOverlapResolution(ctx);
+
+  // ルビを、属する行と前の行の実測中点へ配置してから PSD 座標で state に書き戻す。
+  // これにより Photoshop 保存時 (jsx_gen.rs createRubyLayer) が「ビューアーで見えている位置」を
+  // そのまま使え、CSS/JSX の計算ズレが排除される。rAF で layout 確定後に測定する。
+  scheduleRubyOffsetMeasure(ctx);
+}
+
+function rubyFallbackAdvancePx(box, rt) {
+  const rootStyle = getComputedStyle(document.documentElement);
+  const pct = Number(rootStyle.getPropertyValue("--ruby-row-leading-pct")) || Number(getDefault("rubyLeadingPct")) || 150;
+  const wrap = rt?.closest?.(".ruby-wrap");
+  const base = wrap?.querySelector?.(".ruby-base");
+  const basis = base || wrap || rt;
+  const st = basis ? getComputedStyle(basis) : null;
+  const fontPx = st ? Number.parseFloat(st.fontSize) : 0;
+  const boxStyle = box ? getComputedStyle(box) : null;
+  const boxFontPx = boxStyle ? Number.parseFloat(boxStyle.fontSize) : 0;
+  const px = Number.isFinite(fontPx) && fontPx > 0 ? fontPx : boxFontPx;
+  return (Number.isFinite(px) && px > 0 ? px : 16) * (pct / 100);
+}
+
+function centerOfRect(rect) {
+  return {
+    x: rect.left + rect.width / 2,
+    y: rect.top + rect.height / 2,
+  };
+}
+
+function unionDomRects(rects) {
+  let left = Infinity;
+  let top = Infinity;
+  let right = -Infinity;
+  let bottom = -Infinity;
+  for (const rect of rects) {
+    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
+    left = Math.min(left, rect.left);
+    top = Math.min(top, rect.top);
+    right = Math.max(right, rect.right);
+    bottom = Math.max(bottom, rect.bottom);
+  }
+  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom)) {
+    return null;
+  }
+  return {
+    left,
+    top,
+    right,
+    bottom,
+    width: right - left,
+    height: bottom - top,
+  };
+}
+
+function isInsideRubyText(node) {
+  const el = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  return !!el?.closest?.(".ruby-text");
+}
+
+function textContentRectWithoutRuby(element) {
+  if (!element) return null;
+  const rects = [];
+  const walker = document.createTreeWalker(
+    element,
+    NodeFilter.SHOW_TEXT,
+    {
+      acceptNode(node) {
+        if (!node.nodeValue || node.nodeValue.trim() === "") return NodeFilter.FILTER_REJECT;
+        if (isInsideRubyText(node)) return NodeFilter.FILTER_REJECT;
+        return NodeFilter.FILTER_ACCEPT;
+      },
+    },
+  );
+  const range = document.createRange();
+  try {
+    while (walker.nextNode()) {
+      range.selectNodeContents(walker.currentNode);
+      rects.push(...Array.from(range.getClientRects()));
+    }
+  } finally {
+    range.detach?.();
+  }
+  return unionDomRects(rects);
+}
+
+function layoutRectWithoutRuby(element) {
+  if (!element?.getBoundingClientRect) return null;
+  const rubyTexts = Array.from(element.querySelectorAll?.(".ruby-text") ?? []);
+  const prevDisplays = rubyTexts.map((rt) => rt.style.display);
+  try {
+    for (const rt of rubyTexts) rt.style.display = "none";
+    const rect = element.getBoundingClientRect();
+    return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+  } finally {
+    rubyTexts.forEach((rt, i) => { rt.style.display = prevDisplays[i]; });
+  }
+}
+
+function rubyBaseRect(wrap) {
+  const base = wrap?.querySelector?.(":scope > .ruby-base");
+  const rect = layoutRectWithoutRuby(base || wrap) || (base || wrap)?.getBoundingClientRect?.();
+  return rect && rect.width > 0 && rect.height > 0 ? rect : null;
+}
+
+function rubyPlacementBaseRect(wrap, box, vertical) {
+  const baseRect = rubyBaseRect(wrap);
+  if (!baseRect) return null;
+  const lineEl = lineElementForRubyWrap(wrap, box);
+  const lineRect = layoutRectWithoutRuby(lineEl);
+  if (!lineRect) return baseRect;
+  if (vertical) {
+    return {
+      left: lineRect.left,
+      right: lineRect.right,
+      top: baseRect.top,
+      bottom: baseRect.bottom,
+      width: lineRect.width,
+      height: baseRect.height,
+    };
+  }
+  return {
+    left: baseRect.left,
+    right: baseRect.right,
+    top: lineRect.top,
+    bottom: lineRect.bottom,
+    width: baseRect.width,
+    height: lineRect.height,
+  };
+}
+
+function screenPointToPsd(canvasRect, page, screenX, screenY) {
+  const rotation = getPsdRotation();
+  const rotated90 = rotation === 90 || rotation === 270;
+  const visualW = rotated90 ? canvasRect.height : canvasRect.width;
+  const visualH = rotated90 ? canvasRect.width : canvasRect.height;
+  const cx = canvasRect.left + canvasRect.width / 2;
+  const cy = canvasRect.top + canvasRect.height / 2;
+  const { dx: dxLocal, dy: dyLocal } = inverseRotateDelta(screenX - cx, screenY - cy, rotation);
+  const scaleX = page.width / visualW;
+  const scaleY = page.height / visualH;
+  return {
+    x: (visualW / 2 + dxLocal) * scaleX,
+    y: (visualH / 2 + dyLocal) * scaleY,
+  };
+}
+
+function lineElementForRubyWrap(wrap, box) {
+  const parent = wrap?.parentElement;
+  if (!parent || parent === box) return null;
+  const inner = box?.querySelector?.(".new-layer-text, .existing-layer-text");
+  if (parent === inner) return null;
+  return parent instanceof HTMLElement ? parent : null;
+}
+
+function rectsOverlapOnCrossAxis(a, b, vertical) {
+  if (vertical) {
+    const overlap = Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top);
+    return overlap > Math.min(a.height, b.height) * 0.2;
+  }
+  const overlap = Math.min(a.right, b.right) - Math.max(a.left, b.left);
+  return overlap > Math.min(a.width, b.width) * 0.2;
+}
+
+function findNeighborLineRect(overlay, box, wrap, baseRect, vertical) {
+  const wrapCenter = centerOfRect(baseRect);
+  let best = null;
+  const candidates = [];
+  for (const otherBox of overlay.querySelectorAll(".layer-box")) {
+    const inner = otherBox.querySelector(".new-layer-text, .existing-layer-text");
+    if (!inner) continue;
+    const lineChildren = Array.from(inner.children).filter((el) => el instanceof HTMLElement);
+    if (lineChildren.length > 0) {
+      for (const child of lineChildren) candidates.push(child);
+    } else {
+      candidates.push(inner);
+    }
+  }
+  for (const el of candidates) {
+    if (el.contains(wrap)) continue;
+    const rect = layoutRectWithoutRuby(el) || el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) continue;
+    if (!rectsOverlapOnCrossAxis(baseRect, rect, vertical)) continue;
+    const center = centerOfRect(rect);
+    // vertical-rl の「前の行」は右側。横書きは上側。
+    const forward = vertical ? center.x > wrapCenter.x : center.y < wrapCenter.y;
+    if (!forward) continue;
+    const distance = vertical ? (center.x - wrapCenter.x) : (wrapCenter.y - center.y);
+    if (distance <= 0) continue;
+    if (!best || distance < best.distance) best = { rect, distance };
+  }
+  return best?.rect ?? null;
+}
+
+function placeRubyAtLineMidpointsForOverlay(overlay, options = {}) {
+  if (!overlay) return;
+  const towardParentRatio = Number.isFinite(Number(options.towardParentRatio))
+    ? Number(options.towardParentRatio)
+    : RUBY_TOWARD_PARENT_RATIO;
+  const boxes = overlay.querySelectorAll(".layer-box");
+  for (const box of boxes) {
+    const vertical = box.dataset.direction === "vertical";
+    const wraps = box.querySelectorAll(".ruby-wrap");
+    for (const wrap of wraps) {
+      const rt = wrap.querySelector(".ruby-text");
+      if (!rt) continue;
+      const anchorRect = rubyBaseRect(wrap);
+      const baseRect = rubyPlacementBaseRect(wrap, box, vertical);
+      if (!anchorRect || !baseRect) continue;
+      const anchorCenter = centerOfRect(anchorRect);
+      const baseCenter = centerOfRect(baseRect);
+      let targetX = baseCenter.x;
+      let targetY = baseCenter.y;
+      const neighbor = findNeighborLineRect(overlay, box, wrap, baseRect, vertical);
+      if (neighbor) {
+        if (vertical) {
+          const middleX = (baseRect.right + neighbor.left) / 2;
+          targetX = middleX + (baseRect.right - middleX) * towardParentRatio;
+          targetY = baseCenter.y;
+        } else {
+          targetX = baseCenter.x;
+          const middleY = (baseRect.top + neighbor.bottom) / 2;
+          targetY = middleY + (baseRect.top - middleY) * towardParentRatio;
+        }
+      } else {
+        const advance = rubyFallbackAdvancePx(box, rt);
+        if (vertical) {
+          const gap = Math.max(advance - baseRect.width, advance * 0.25, 1);
+          targetX = baseRect.right + gap * ((1 - towardParentRatio) / 2);
+          targetY = baseCenter.y;
+        } else {
+          targetX = baseCenter.x;
+          const gap = Math.max(advance - baseRect.height, advance * 0.25, 1);
+          targetY = baseRect.top - gap * ((1 - towardParentRatio) / 2);
+        }
+      }
+      const dx = targetX - anchorCenter.x;
+      const dy = targetY - anchorCenter.y;
+      rt.style.left = "50%";
+      rt.style.top = "50%";
+      rt.style.bottom = "auto";
+      rt.style.transform = `translate(calc(-50% + ${dx.toFixed(3)}px), calc(-50% + ${dy.toFixed(3)}px))`;
+    }
+  }
+}
+
+function uiTextBasisRectForBox(box) {
+  const inner = box?.querySelector?.(".new-layer-text, .existing-layer-text");
+  if (!inner) return box?.getBoundingClientRect?.() ?? null;
+  const rect = inner.getBoundingClientRect();
+  const st = getComputedStyle(inner);
+  const pl = Number.parseFloat(st.paddingLeft) || 0;
+  const pr = Number.parseFloat(st.paddingRight) || 0;
+  const pt = Number.parseFloat(st.paddingTop) || 0;
+  const pb = Number.parseFloat(st.paddingBottom) || 0;
+  return {
+    left: rect.left + pl,
+    top: rect.top + pt,
+    right: rect.right - pr,
+    bottom: rect.bottom - pb,
+    width: Math.max(0, rect.width - pl - pr),
+    height: Math.max(0, rect.height - pt - pb),
+  };
+}
+
+// 1 ctx 分の ruby 位置測定 (同期、副作用は state 書き戻しのみ)。
+// rAF 版と save-time 同期版から共有する内部実装。
+function measureRubyOffsetsForOverlay(overlay, canvas, page) {
+  if (!overlay || !canvas || !page) return;
+  const canvasRect = canvas.getBoundingClientRect();
+  if (canvasRect.width <= 0 || canvasRect.height <= 0) return;
+  const pxPerPsd = canvasRect.width / page.width;
+  if (!Number.isFinite(pxPerPsd) || pxPerPsd <= 0) return;
+  // overlay 内の全 layer-box (.editing 含む) を走査。
+  const boxes = overlay.querySelectorAll(".layer-box");
+  for (const box of boxes) {
+    const wraps = box.querySelectorAll(".ruby-wrap[data-ruby-start]");
+    if (wraps.length === 0) continue;
+    const basisRect = uiTextBasisRectForBox(box);
+    if (!basisRect || basisRect.width <= 0 || basisRect.height <= 0) continue;
+    const psdPath = page.path;
+    const isNew = box.classList.contains("layer-box-new");
+    const layerKey = isNew ? box.dataset.tempId : Number(box.dataset.layerId);
+    if (!psdPath || layerKey === null || layerKey === undefined || layerKey === "" || (typeof layerKey === "number" && !Number.isFinite(layerKey))) continue;
+    // 同じ data-ruby-start を持つ wrap が複数あれば (モノルビ)、最初の wrap だけ測る。
+    const seenStarts = new Set();
+    for (const wrap of wraps) {
+      const startStr = wrap.dataset.rubyStart;
+      if (!startStr) continue;
+      if (seenStarts.has(startStr)) continue;
+      seenStarts.add(startStr);
+      const start = Number(startStr);
+      if (!Number.isInteger(start)) continue;
+      const rt = wrap.querySelector(".ruby-text");
+      if (!rt) continue;
+      const rtRect = rt.getBoundingClientRect();
+      if (rtRect.width <= 0 || rtRect.height <= 0) continue;
+      // .ruby-text のスクリーン中心 → UI 上の実テキスト領域からの screen 相対座標 → PSD 座標に換算。
+      // 縦書きは親文字の右側が前行側なので、UI/Photoshop ともに右端基準の offsetX にする。
+      // 横書きは従来通り左上基準。
+      const rtCenterScreenX = rtRect.left + rtRect.width / 2;
+      const rtCenterScreenY = rtRect.top + rtRect.height / 2;
+      const vertical = box.dataset.direction === "vertical";
+      const offsetX = vertical
+        ? (rtCenterScreenX - basisRect.right) / pxPerPsd
+        : (rtCenterScreenX - basisRect.left) / pxPerPsd;
+      const offsetY = (rtCenterScreenY - basisRect.top) / pxPerPsd;
+      const abs = screenPointToPsd(canvasRect, page, rtCenterScreenX, rtCenterScreenY);
+      const absX = abs.x;
+      const absY = abs.y;
+      if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY) || !Number.isFinite(absX) || !Number.isFinite(absY)) continue;
+      try {
+        setCharRubyOffset(psdPath, layerKey, start, offsetX, offsetY, absX, absY);
+      } catch (_) { /* state 未整合の場合は無視 */ }
+    }
+  }
+}
+
+// rAF で 1 フレーム遅延させて layout 確定後に走る (renderOverlay 末尾から呼ばれる)。
+function scheduleRubyOffsetMeasure(ctx) {
+  if (typeof requestAnimationFrame !== "function") return;
+  if (ctx._rubyOffsetScheduled) return;
+  ctx._rubyOffsetScheduled = true;
+  requestAnimationFrame(() => {
+    ctx._rubyOffsetScheduled = false;
+    placeRubyAtLineMidpointsForOverlay(ctx.overlay);
+    measureRubyOffsetsForOverlay(ctx.overlay, ctx.canvas, ctx.page);
+    placeRubyAtLineMidpointsForOverlay(ctx.overlay, { towardParentRatio: 0 });
+  });
+}
+
+// 【v1.29.x UI-coord 保存時同期】保存ボタン押下の瞬間に全 page の overlay を DOM から
+// 拾って同期測定する。これにより rAF 遅延を待たずに最新のルビ位置を state に書き戻せる。
+// exportEdits を呼ぶ前にこの関数を呼ぶ運用 (bind/save.js の runSaveWithMode で利用)。
+//
+// DOM 構造: spread-view.js が各ページを以下のように構築する:
+//   .canvas-wrap > canvas[data-page-index="N"] + .page-overlay
+// これを利用して overlay の親 (.canvas-wrap) から canvas を辿り、data-page-index で page を引く。
+export function measureAllRubyOffsetsSync() {
+  const pages = getPages();
+  if (!pages || pages.length === 0) return;
+  const overlays = document.querySelectorAll(".page-overlay");
+  for (const overlay of overlays) {
+    // overlay の兄弟に canvas (data-page-index 付き) があるはず。
+    const parent = overlay.parentElement;
+    if (!parent) continue;
+    const canvas = parent.querySelector("canvas[data-page-index]");
+    if (!canvas) continue;
+    const pageIndex = Number(canvas.dataset.pageIndex);
+    if (!Number.isInteger(pageIndex) || pageIndex < 0 || pageIndex >= pages.length) continue;
+    const page = pages[pageIndex];
+    if (!page) continue;
+    placeRubyAtLineMidpointsForOverlay(overlay);
+    measureRubyOffsetsForOverlay(overlay, canvas, page);
+    placeRubyAtLineMidpointsForOverlay(overlay, { towardParentRatio: 0 });
+  }
 }
 
 // バッジ重なり解決パス。rAF で 1 フレーム遅延させて DOM レイアウトが確定してから走る。
@@ -1223,16 +1589,19 @@ function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, ch
 // dash:  — U+2014 EM DASH / ― U+2015 HORIZONTAL BAR / – U+2013 EN DASH / ‒ U+2012 FIGURE DASH /
 //        ‐ U+2010 HYPHEN / ‑ U+2011 NON-BREAKING HYPHEN / ー U+30FC 長音記号 / － U+FF0D 全角ハイフン
 // tilde: 〜 U+301C WAVE DASH / ～ U+FF5E FULLWIDTH TILDE
-const DASH_CHARS = new Set(["—", "―", "–", "‒", "‐", "‑", "ー", "－"]);
-const TILDE_CHARS = new Set(["〜", "～"]);
-const REPEATED_TARGET_REGEX = /[—―–‒‐‑ー－〜～]/;
+// 【v1.30.x】罫線素片 (─ U+2500 / ━ U+2501) や hyphen-bullet (⁃) など、Photoshop で
+// ダッシュ風に使われる文字も dash 系として扱う。tilde 系は ASCII チルダ (~) と
+// SMALL TILDE (˜) を追加。jsx_gen.rs charGroup と同期。
+const DASH_CHARS = new Set(["—", "―", "–", "‒", "‐", "‑", "ー", "－", "─", "━", "−", "⁃", "﹘", "﹣"]);
+const TILDE_CHARS = new Set(["〜", "～", "~", "˜"]);
+const REPEATED_TARGET_REGEX = /[—―–‒‐‑ー－─━−⁃﹘﹣〜～~˜]/;
 
 // 【v1.22.0】記号フォント置換の対象 char code 集合（プレビュー / Photoshop 両側で同一定義）。
 // ハードコード固定セット。漫画写植慣例の「写植本体フォントが対応していない記号類」をカバー。
 // ハート ♡♥ / 星 ★☆ / 音符 ♪♫♬♩♯♭ / 矢印 →←↑↓ / 丸 ○●〇◎ /
 // 三角 △▲▽▼ / 四角 □■ / 菱形 ◇◆ / トランプ ♠♣♦
 const SYMBOL_CHAR_CODES = new Set([
-  0x2661, 0x2665,                   // ♡ ♥
+  0x2661, 0x2665, 0x2764,           // ♡ ♥ ❤
   0x2605, 0x2606,                   // ★ ☆
   0x266A, 0x266B, 0x266C, 0x2669,   // ♪ ♫ ♬ ♩
   0x266F, 0x266D,                   // ♯ ♭
@@ -1288,17 +1657,17 @@ function isRepeatedTargetChar(ch) {
   return repeatedTargetGroup(ch) !== null;
 }
 
-// 1 行を [{text, isTargetRun}] のセグメント列に分解する。
-// 例: "あ―――い" → [{あ, false}, {―――, true}, {い, false}]
-// 例: "―〜―あ" → [{―〜―, true}, {あ, false}]（混在連続も同じラン扱い）
+// 1 行を [{text, group}] のセグメント列に分解する。
+// 例: "あ―――い" → [{text:"あ", group:null}, {text:"―――", group:"dash"}, {text:"い", group:null}]
+// 例: "―〜―あ" → dash / tilde / dash を別ラン扱い。
 function findRepeatedTargetRuns(line) {
   const out = [];
   let i = 0;
   while (i < line.length) {
-    const inRun = isRepeatedTargetChar(line[i]);
+    const group = repeatedTargetGroup(line[i]);
     let j = i;
-    while (j < line.length && isRepeatedTargetChar(line[j]) === inRun) j++;
-    out.push({ text: line.slice(i, j), isTargetRun: inRun });
+    while (j < line.length && repeatedTargetGroup(line[j]) === group) j++;
+    out.push({ text: line.slice(i, j), group });
     i = j;
   }
   return out;
@@ -1334,7 +1703,7 @@ function findTcyPairs(line) {
 // - charFonts: 絶対 index をキーとする PostScript 名。inner の font-family を上書きする。
 //
 // lineStartIdx: この行が full contents 文字列のどの位置から始まるか（0-based）。
-// dashMille / tildeMille は正負どちらの符号でも「絶対値ぶん詰める」セマンティクスに統一。
+// dashMille / tildeMille は写植設定の tracking 値をそのまま使う（例: -100 → -0.1em）。
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
 //
 // 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
@@ -1344,13 +1713,13 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
     parentEl.appendChild(document.createTextNode("​"));
     return;
   }
-  const dashMag = Math.abs(Number(dashMille) || 0);
-  const tildeMag = Math.abs(Number(tildeMille) || 0);
+  const dashTrack = Number.isFinite(Number(dashMille)) ? Number(dashMille) : 0;
+  const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
   let tcyPairs = tcyOn ? findTcyPairs(line) : [];
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
-  const trackingActive = (dashMag > 0 || tildeMag > 0) && REPEATED_TARGET_REGEX.test(line);
+  const trackingActive = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(line);
   const symbolActive = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(line);
   // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。0..1 の em 量。
   const tsumeMag = Number.isFinite(punctTsumeMag) && punctTsumeMag > 0 ? punctTsumeMag : 0;
@@ -1392,11 +1761,10 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
     const segments = findRepeatedTargetRuns(line);
     let pos = 0;
     for (const seg of segments) {
-      if (seg.isTargetRun && seg.text.length >= 2) {
+      if (seg.group && seg.text.length >= 2) {
         for (let k = 0; k < seg.text.length - 1; k++) {
-          const grp = repeatedTargetGroup(seg.text[k]);
-          const mag = grp === "dash" ? dashMag : grp === "tilde" ? tildeMag : 0;
-          if (mag > 0) trackings[pos + k] = -mag / 1000;
+          const value = seg.group === "dash" ? dashTrack : seg.group === "tilde" ? tildeTrack : 0;
+          if (value !== 0) trackings[pos + k] = value / 1000;
         }
       }
       pos += seg.text.length;
@@ -1481,12 +1849,18 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     && /[ 　]/.test(entry.text)
     && entry.text.split(/[ 　]+/).length === parentText.length;
   const scale = (Number.isFinite(entry.scale) && entry.scale > 0) ? entry.scale : 50;
+  // 【v1.29.x UI-coord】絶対 char start = 行頭 + 行内 offset。
+  // wrap に `data-ruby-start` を付与しておくと、後段の measureRubyOffsets が
+  // この wrap がどの charRubies エントリに対応するか特定でき、ルビ実描画位置を
+  // PSD 座標に換算して state に保存できる。
+  const absRubyStart = lineStartIdx + parentLocalStart;
 
   // 1 ペア（親 1 セグメント + ルビ 1 個）を ruby-wrap span として生成。
-  const makePair = (segText, segLocalStart, rubyText) => {
+  const makePair = (segText, segLocalStart, rubyText, absStartForThisPair) => {
     const wrap = document.createElement("span");
     wrap.className = "ruby-wrap";
     wrap.style.setProperty("--ruby-scale", `${scale / 100}em`);
+    wrap.dataset.rubyStart = String(absStartForThisPair);
     const base = document.createElement("span");
     base.className = "ruby-base";
     appendStyledSegment(base, segText,
@@ -1501,12 +1875,15 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
   };
 
   if (isMono) {
+    // モノルビ: 各文字ごとに wrap を分けるが、すべて同じ entry に属するため
+    // data-ruby-start には常に entry の絶対 start を入れる。これにより後段の
+    // measure 処理が「最初の wrap だけ測る」or「全 wrap をまとめて測る」を選べる。
     const parts = entry.text.split(/[ 　]+/);
     for (let i = 0; i < parentText.length; i++) {
-      parentEl.appendChild(makePair(parentText[i], parentLocalStart + i, parts[i]));
+      parentEl.appendChild(makePair(parentText[i], parentLocalStart + i, parts[i], absRubyStart));
     }
   } else {
-    parentEl.appendChild(makePair(parentText, parentLocalStart, entry.text));
+    parentEl.appendChild(makePair(parentText, parentLocalStart, entry.text, absRubyStart));
   }
 }
 
@@ -1612,10 +1989,10 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   // <rt> 部分を切り取ってしまうため、ruby ある時は `.has-ruby` クラスを付けて overflow: visible に。
   inner.classList.toggle("has-ruby", hasCharRubies);
   const fallback = String((defaultLeadingPct ?? 125) / 100);
-  const dashMag = Math.abs(Number(dashMille) || 0);
-  const tildeMag = Math.abs(Number(tildeMille) || 0);
+  const dashTrack = Number.isFinite(Number(dashMille)) ? Number(dashMille) : 0;
+  const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
   const fullText = String(text ?? "");
-  const trackingHits = (dashMag > 0 || tildeMag > 0) && REPEATED_TARGET_REGEX.test(fullText);
+  const trackingHits = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(fullText);
   const tcyHits = !!tcyOn && TCY_PAIR_REGEX.test(fullText);
   // 【v1.22.0】記号フォント置換: symbolFontPS が指定されており、対象記号が contents に含まれるとき適用。
   const symbolHits = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(fullText);
@@ -1631,7 +2008,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const lines = fullText.split(/\r?\n/);
   const lineStarts = getLineStartOffsets(fullText);
   inner.style.lineHeight = fallback;
-  if (overrides) {
+  if (overrides || hasCharRubies) {
     const layerFactor = (defaultLeadingPct ?? 125) / 100;
     for (let i = 0; i < lines.length; i++) {
       const lineEl = document.createElement("div");
@@ -1666,7 +2043,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
           lineEl.style.marginBlockStart = `${extra}em`;
         }
       }
-      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
       inner.appendChild(lineEl);
     }
   } else {
@@ -1680,7 +2057,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // charRubies を渡すように修正。
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createTextNode("\n"));
-      appendLineWithTracking(inner, lines[i], lineStarts[i], dashMag, tildeMag, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
     }
   }
 }

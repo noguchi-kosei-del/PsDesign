@@ -218,7 +218,7 @@ impl Drop for TempDirGuard {
     }
 }
 
-fn make_pdfium(app: &AppHandle) -> Result<Pdfium, String> {
+pub(crate) fn make_pdfium(app: &AppHandle) -> Result<Pdfium, String> {
     let dll_path = resolve_pdfium_dll(app)?;
     let bindings = Pdfium::bind_to_library(dll_path)
         .map_err(|e| format!("pdfium DLL読み込み失敗: {:?}", e))?;
