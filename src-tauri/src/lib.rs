@@ -212,6 +212,11 @@ async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
     std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))
 }
 
+#[tauri::command]
+async fn read_text_file(path: String) -> Result<String, String> {
+    std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path, e))
+}
+
 fn script_output_text_dir() -> Result<PathBuf, String> {
     let desktop = dirs::desktop_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
@@ -689,6 +694,7 @@ pub fn run() {
             apply_edits_via_photoshop,
             list_fonts,
             read_binary_file,
+            read_text_file,
             save_editor_text_to_script_output,
             launch_progen_with_text,
             read_font_face_bytes,

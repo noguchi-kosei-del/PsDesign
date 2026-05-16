@@ -59,7 +59,7 @@ export function bindViewerMode() {
     '<line x1="18" y1="6" x2="6" y2="18"/>' +
     '<line x1="6" y1="6" x2="18" y2="18"/>' +
     "</svg>";
-  document.body.appendChild(closeBtn);
+  mountCloseBtn();
 
   boundHandlers.btnClick = () => toggle();
   boundHandlers.closeClick = () => exit();
@@ -121,10 +121,11 @@ function enter() {
   if (viewerBtn) viewerBtn.setAttribute("aria-pressed", "true");
 
   showNavHint();
-  showCloseBtn();
 
   // CSS で psd-area が full-window に拡張されるので zoom=1 で fit する。
   setPsdZoom(1);
+
+  showCloseBtn();
 
   setupEventListeners();
 }
@@ -162,7 +163,7 @@ function setupEventListeners() {
   boundHandlers.mousemove = (e) => {
     if (!isActive) return;
     // 右上 150px 圏内に入ったら閉じるボタンを再フェードイン。
-    if (e.clientX > window.innerWidth - 150 && e.clientY < 150) {
+    if (e.clientX < 150 && e.clientY < 150) {
       showCloseBtn();
     }
   };
@@ -191,11 +192,26 @@ function showNavHint() {
 
 function showCloseBtn() {
   if (!closeBtn) return;
+  mountCloseBtn();
   closeBtn.classList.add("show");
+  requestAnimationFrame(() => {
+    if (!closeBtn) return;
+    mountCloseBtn();
+    closeBtn.classList.add("show");
+  });
   clearTimeout(closeBtnHideTimer);
   closeBtnHideTimer = setTimeout(() => {
     if (closeBtn) closeBtn.classList.remove("show");
   }, CLOSE_BTN_FADE_DELAY);
+}
+
+function mountCloseBtn() {
+  if (!closeBtn) return;
+  const stage = document.getElementById("psd-stage");
+  const parent = stage || document.body;
+  if (closeBtn.parentElement !== parent) {
+    parent.appendChild(closeBtn);
+  }
 }
 
 function hideCloseBtn() {

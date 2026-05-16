@@ -82,8 +82,10 @@ let activeGroup = null;
 let groupState = {}; // { base: "pending"|"active"|"done", ... }
 let listeners = []; // 解除関数の配列
 let runningInstall = false;
+let runningUninstall = false;
 let userCancelled = false; // ユーザーがインストール中に「中止」ボタンを押した
 let lastDownload = null; // { current, total, speedBps, ts }
+let uninstallProgressTimer = null;
 
 // ヘッダー右上のボタン (#ai-install-close-btn) を「完了」⇔「中止」で切替。
 // インストール中のみ赤い中止ボタンに変身させる。
@@ -108,6 +110,7 @@ function resetGroupState() {
   groupState = {};
   for (const g of PHASE_GROUPS) groupState[g] = "pending";
   renderPhaseUI();
+  updateLogProgressForPhase();
 }
 
 function setGroupState(group, state) {
@@ -125,6 +128,7 @@ function setGroupState(group, state) {
     }
   }
   renderPhaseUI();
+  updateLogProgressForPhase();
 }
 
 function renderPhaseUI() {
@@ -151,7 +155,7 @@ function renderPhaseUI() {
   }
 }
 
-function renderDownloadUI() {
+function renderDownloadUILegacy() {
   const progressBox = $("ai-install-progress");
   if (!progressBox) return;
   if (!lastDownload) {
@@ -174,7 +178,7 @@ function renderDownloadUI() {
   }
 }
 
-function appendLogLine(line, stream) {
+function appendLogLineLegacy(line, stream) {
   const viewer = $("ai-log-viewer");
   if (!viewer) return;
   const div = document.createElement("div");
@@ -189,10 +193,151 @@ function appendLogLine(line, stream) {
   viewer.scrollTop = viewer.scrollHeight;
 }
 
-function clearLog() {
+function clearLogLegacy() {
   const viewer = $("ai-log-viewer");
   if (viewer) viewer.innerHTML = "";
 }
+
+// ai-log-viewer 内にもインストール状況の進捗バーを表示する。
+// 既存の上部プログレスはダウンロード行が来た時だけ使い、ログ内はフェーズ進行中も表示する。
+function setProgressElements(prefix, { pct, label, count, speed, eta }) {
+  const isMain = prefix === "ai-install";
+  const fill = $(isMain ? "ai-install-progress-fill" : `${prefix}-fill`);
+  const countEl = $(isMain ? "ai-install-progress-count" : `${prefix}-count`);
+  const labelEl = $(isMain ? "ai-install-active-label" : `${prefix}-label`);
+  const speedEl = $(isMain ? "ai-install-speed" : `${prefix}-speed`);
+  const etaEl = $(isMain ? "ai-install-eta" : `${prefix}-eta`);
+  if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct || 0)).toFixed(1)}%`;
+  if (countEl) countEl.textContent = count || "";
+  if (labelEl) labelEl.textContent = label || "";
+  if (speedEl) speedEl.textContent = speed || "";
+  if (etaEl) etaEl.textContent = eta || "";
+}
+
+function renderLogProgressFallback() {
+  const box = $("ai-log-progress");
+  if (!box) return;
+  if (!runningInstall && !runningUninstall) {
+    box.hidden = true;
+    setProgressElements("ai-log-progress", { pct: 0, label: "", count: "", speed: "", eta: "" });
+    return;
+  }
+  if (runningUninstall) {
+    box.hidden = false;
+    return;
+  }
+  box.hidden = false;
+  let done = 0;
+  let activeBonus = 0;
+  for (const group of PHASE_GROUPS) {
+    if (groupState[group] === "done") done += 1;
+    else if (groupState[group] === "active") activeBonus = 0.5;
+  }
+  const pct = ((done + activeBonus) / PHASE_GROUPS.length) * 100;
+  const label = activeGroup ? PHASE_LABEL_BY_GROUP[activeGroup] : "インストール準備中";
+  const current = Math.min(PHASE_GROUPS.length, Math.max(0, Math.floor(done + activeBonus)));
+  setProgressElements("ai-log-progress", {
+    pct,
+    label,
+    count: `${current} / ${PHASE_GROUPS.length} フェーズ`,
+    speed: "",
+    eta: "",
+  });
+}
+
+function updateLogProgressForPhase() {
+  if (!lastDownload) renderLogProgressFallback();
+}
+
+function renderDownloadUI() {
+  const progressBox = $("ai-install-progress");
+  const logProgressBox = $("ai-log-progress");
+  if (!lastDownload) {
+    if (progressBox) progressBox.hidden = true;
+    renderLogProgressFallback();
+    return;
+  }
+  if (progressBox) progressBox.hidden = false;
+  if (logProgressBox) logProgressBox.hidden = false;
+  const { current, total, speedBps } = lastDownload;
+  const pct = total > 0 ? Math.max(0, Math.min(100, (current / total) * 100)) : 0;
+  const countText = `${formatBytes(current)} / ${formatBytes(total)}`;
+  const speedText = speedBps > 0 ? formatSpeed(speedBps) : "";
+  const remain = total - current;
+  const eta = (speedBps > 0 && remain > 0) ? remain / speedBps : NaN;
+  const etaText = isFinite(eta) ? `残り ${formatDuration(eta)}` : "";
+  const label = activeGroup ? PHASE_LABEL_BY_GROUP[activeGroup] : "インストール中";
+  setProgressElements("ai-install", { pct, label, count: countText, speed: speedText, eta: etaText });
+  setProgressElements("ai-log-progress", { pct, label, count: countText, speed: speedText, eta: etaText });
+}
+
+function appendLogLine(line, stream) {
+  const viewer = $("ai-log-viewer");
+  const lines = $("ai-log-lines") || viewer;
+  if (!viewer || !lines) return;
+  const div = document.createElement("div");
+  div.className = "ai-log-line" + (stream === "stderr" ? " stderr" : "");
+  div.textContent = line;
+  lines.appendChild(div);
+  while (lines.childElementCount > 1500) {
+    lines.removeChild(lines.firstChild);
+  }
+  viewer.scrollTop = viewer.scrollHeight;
+}
+
+function clearLog() {
+  const lines = $("ai-log-lines");
+  if (lines) lines.innerHTML = "";
+}
+
+function setUninstallProgress(pct, label, count) {
+  const box = $("ai-log-progress");
+  if (box) box.hidden = false;
+  setProgressElements("ai-log-progress", {
+    pct,
+    label,
+    count,
+    speed: "",
+    eta: "",
+  });
+}
+
+function startUninstallProgress() {
+  if (uninstallProgressTimer) clearInterval(uninstallProgressTimer);
+  let pct = 3;
+  setUninstallProgress(pct, "アンインストール準備中", "0 / 3 ステップ");
+  uninstallProgressTimer = setInterval(() => {
+    if (!runningUninstall) return;
+    const step = pct < 35 ? 6 : pct < 70 ? 3 : 1.2;
+    pct = Math.min(92, pct + step);
+    const count = pct < 35 ? "1 / 3 ステップ" : pct < 70 ? "2 / 3 ステップ" : "3 / 3 ステップ";
+    setUninstallProgress(pct, "アンインストール中", count);
+  }, 350);
+}
+
+function finishUninstallProgress(success, countText) {
+  if (uninstallProgressTimer) {
+    clearInterval(uninstallProgressTimer);
+    uninstallProgressTimer = null;
+  }
+  setUninstallProgress(success ? 100 : 100, success ? "アンインストール完了" : "アンインストール失敗", countText);
+}
+
+function finishInstallProgress() {
+  lastDownload = null;
+  setProgressElements("ai-log-progress", {
+    pct: 100,
+    label: "インストール完了",
+    count: `${PHASE_GROUPS.length} / ${PHASE_GROUPS.length} フェーズ`,
+    speed: "",
+    eta: "",
+  });
+  const box = $("ai-log-progress");
+  if (box) box.hidden = false;
+  const mainBox = $("ai-install-progress");
+  if (mainBox) mainBox.hidden = true;
+}
+
 
 async function refreshStatusBadge() {
   try {
@@ -213,15 +358,18 @@ async function refreshStatusBadge() {
     }
     const startBtn = $("ai-install-start-btn");
     if (startBtn) {
-      startBtn.disabled = !!runningInstall;
+      startBtn.disabled = !!runningInstall || !!runningUninstall;
       startBtn.textContent = status?.available ? "再インストール" : "インストール開始";
     }
     // アンインストールボタンはインストール済み + インストール処理中でない時のみ表示。
     const uninstallBtn = $("ai-uninstall-btn");
     if (uninstallBtn) {
       uninstallBtn.hidden = !status?.available || !!runningInstall;
-      uninstallBtn.disabled = !!runningInstall;
+      uninstallBtn.disabled = !!runningInstall || !!runningUninstall;
     }
+    window.dispatchEvent(new CustomEvent("psdesign:ai-model-status", {
+      detail: { available: !!status?.available, status },
+    }));
     return status;
   } catch (e) {
     console.error(e);
@@ -236,7 +384,7 @@ export async function checkAiModelsStatus() {
 }
 
 async function runInstall() {
-  if (runningInstall) return;
+  if (runningInstall || runningUninstall) return;
   runningInstall = true;
   userCancelled = false;
   resetGroupState();
@@ -283,6 +431,7 @@ async function runInstall() {
     }
     activeGroup = null;
     renderPhaseUI();
+    finishInstallProgress();
   });
   listeners = [unsubLog, unsubDone];
 
@@ -293,14 +442,18 @@ async function runInstall() {
 
   try {
     await invoke("install_ai_models");
-    toast("AIインストール完了", { kind: "info", duration: 2400 });
+    for (const g of PHASE_GROUPS) groupState[g] = "done";
+    activeGroup = null;
+    renderPhaseUI();
+    finishInstallProgress();
+    toast("スキャンエンジンインストール完了", { kind: "info", duration: 2400 });
     await refreshStatusBadge();
   } catch (e) {
     console.error(e);
     if (!userCancelled) {
-      toast(`AIインストール失敗: ${e?.message ?? e}`, { kind: "error", duration: 6000 });
+      toast(`スキャンエンジンインストール失敗: ${e?.message ?? e}`, { kind: "error", duration: 6000 });
       await notifyDialog({
-        title: "AIインストール失敗",
+        title: "スキャンエンジンインストール失敗",
         message: String(e?.message ?? e ?? "不明なエラー"),
       });
     }
@@ -340,7 +493,7 @@ async function cancelInstall() {
 // インストール処理中は呼ばない。confirmDialog (kind: danger) で明示確認、
 // 成功で notifyDialog (success) → ステータス再評価で UI を未インストール状態に戻す。
 async function runUninstall() {
-  if (runningInstall) return;
+  if (runningInstall || runningUninstall) return;
   // 念のため再確認: 既にアンインストール済みなら通知だけ。
   let pre;
   try { pre = await checkAiModelsStatus(); } catch (_) { pre = null; }
@@ -365,6 +518,14 @@ async function runUninstall() {
   });
   if (!ok) return;
 
+  runningUninstall = true;
+  lastDownload = null;
+  clearLog();
+  renderDownloadUI();
+  appendLogLine("アンインストールを開始しました。", "stdout");
+  startUninstallProgress();
+  await refreshStatusBadge();
+
   // 進捗モーダル (current/total を渡さないので automatically indeterminate モード)。
   // ファイル削除は通常数秒〜十数秒で終わるが 5GB の filesystem 削除なので環境次第。
   showProgress({ title: "画像スキャンエンジン", detail: "アンインストール中…" });
@@ -383,6 +544,10 @@ async function runUninstall() {
   await refreshStatusBadge();
 
   if (error) {
+    appendLogLine(String(error?.message ?? error ?? "不明なエラー"), "stderr");
+    finishUninstallProgress(false, "削除に失敗しました");
+    runningUninstall = false;
+    await refreshStatusBadge();
     await notifyDialog({
       title: "アンインストール失敗",
       message:
@@ -395,6 +560,12 @@ async function runUninstall() {
   // 部分成功: deleted は 1 件以上、errors も 0 件以上の混在 → warning ダイアログ。
   const deletedCount = Array.isArray(result?.deleted) ? result.deleted.length : 0;
   const errorList = Array.isArray(result?.errors) ? result.errors : [];
+  appendLogLine(`${deletedCount} 件の項目を削除しました。`, "stdout");
+  for (const item of result?.deleted ?? []) appendLogLine(`削除: ${item}`, "stdout");
+  for (const item of errorList) appendLogLine(`削除失敗: ${item}`, "stderr");
+  finishUninstallProgress(true, errorList.length > 0 ? `${deletedCount} 件削除 / ${errorList.length} 件失敗` : `${deletedCount} 件削除`);
+  runningUninstall = false;
+  await refreshStatusBadge();
 
   if (errorList.length > 0) {
     await notifyDialog({
@@ -426,7 +597,7 @@ export async function openAiInstallModal() {
 }
 
 function closeAiInstallModal() {
-  if (runningInstall) return; // 実行中はクローズしない (中止は cancelInstall で別経路)
+  if (runningInstall || runningUninstall) return; // 実行中はクローズしない (中止は cancelInstall で別経路)
   const modal = $("ai-install-modal");
   if (modal) modal.hidden = true;
 }

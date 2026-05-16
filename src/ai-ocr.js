@@ -29,6 +29,15 @@ const $ = (id) => document.getElementById(id);
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"];
 
 let runningOcr = false;
+const AI_ACTION_BUTTON_IDS = [
+  "ai-ocr-btn",
+  "ai-place-btn",
+  "ai-adjust-menu-btn",
+  "ai-adjust-btn",
+  "ai-adjust2-btn",
+  "ai-adjust3-btn",
+];
+const AI_ENGINE_LOCK_TITLE = "画像スキャンエンジンが未インストールです。左下メニューの「スキャンエンジンインストール」からインストールしてください。";
 
 function baseName(p) {
   const m = p && p.match(/[\\/]([^\\/]+)$/);
@@ -37,6 +46,44 @@ function baseName(p) {
 
 function stripExt(s) {
   return (s || "").replace(/\.[^.]+$/, "");
+}
+
+function isAiActionsLocked() {
+  return $("ai-actions-row")?.classList.contains("ai-actions-row-locked") ?? false;
+}
+
+function setAiActionsEngineLock(locked) {
+  const row = $("ai-actions-row");
+  if (!row) return;
+  row.classList.toggle("ai-actions-row-locked", locked);
+  row.setAttribute("aria-disabled", locked ? "true" : "false");
+  row.title = locked ? AI_ENGINE_LOCK_TITLE : "";
+  for (const id of AI_ACTION_BUTTON_IDS) {
+    const btn = $(id);
+    if (!btn) continue;
+    if (locked) {
+      btn.dataset.aiEngineLocked = "true";
+      btn.disabled = true;
+      btn.title = AI_ENGINE_LOCK_TITLE;
+    } else if (btn.dataset.aiEngineLocked === "true") {
+      delete btn.dataset.aiEngineLocked;
+    }
+  }
+  const ocrBtn = $("ai-ocr-btn");
+  if (ocrBtn && !locked) {
+    ocrBtn.disabled = false;
+    ocrBtn.title = "見本画像を AI で画像スキャン（未読込ならファイル選択ダイアログを表示）";
+  }
+  window.dispatchEvent(new CustomEvent("psdesign:ai-actions-lock-change", { detail: { locked } }));
+}
+
+async function refreshAiActionsEngineLock() {
+  try {
+    const status = await checkAiModelsStatus();
+    setAiActionsEngineLock(!status?.available);
+  } catch (_) {
+    setAiActionsEngineLock(true);
+  }
 }
 
 async function pickInputFiles() {
@@ -104,7 +151,7 @@ async function runAiOcr(files, {
   if (!status?.available) {
     await notifyDialog({
       title: "AIモデル未インストール",
-      message: "画像スキャンには「画像スキャンエンジン」のインストールが必要です。\n左下メニューの「AIインストール」から実行してください。",
+      message: "画像スキャンには「画像スキャンエンジン」のインストールが必要です。\n左下メニューの「スキャンエンジンインストール」から実行してください。",
     });
     return;
   }
@@ -341,7 +388,21 @@ export async function runAiOcrForFiles(files) {
 export function bindAiOcrButton() {
   const btn = $("ai-ocr-btn");
   if (!btn) return;
+  const row = $("ai-actions-row");
+  if (row && row.dataset.aiEngineLockBound !== "true") {
+    row.dataset.aiEngineLockBound = "true";
+    row.addEventListener("click", (e) => {
+      if (!isAiActionsLocked()) return;
+      e.preventDefault();
+      e.stopPropagation();
+    }, true);
+  }
+  window.addEventListener("psdesign:ai-model-status", (e) => {
+    setAiActionsEngineLock(!e.detail?.available);
+  });
+  void refreshAiActionsEngineLock();
   btn.addEventListener("click", async () => {
+    if (isAiActionsLocked()) return;
     if (runningOcr) return;
     // テキストが既に読み込まれている場合は OCR 結果で上書きする旨を事前に警告する。
     // ファイル選択や OCR 実行のコストが発生する前にキャンセル可能にするため、最初に確認する。
@@ -384,6 +445,8 @@ export function bindAiOcrButton() {
     await runAiOcr(files, { notifyOnComplete: true });
   });
 
-  btn.disabled = false;
-  btn.title = "見本画像を AI で画像スキャン（未読込ならファイル選択ダイアログを表示）";
+  if (!isAiActionsLocked()) {
+    btn.disabled = false;
+    btn.title = "見本画像を AI で画像スキャン（未読込ならファイル選択ダイアログを表示）";
+  }
 }

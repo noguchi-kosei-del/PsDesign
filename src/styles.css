@@ -1022,6 +1022,13 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   min-width: 32px;
 }
 
+.side-tool-btn.locked,
+.side-tool-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+
 .side-tool-btn.active {
   background: var(--accent);
   border: none;
@@ -1283,6 +1290,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   min-width: 0;
   min-height: 0;
   width: 100%;
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: safe center;
@@ -2049,15 +2057,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 【v1.26.0 移植 (PsDesign-main v1.24.0)】
    自動配置で背景/ウニ判定によりフォント自動切替されたレイヤーの強調表示 (要件④)。
    合成スコアを 10% 刻みのバケットに分けて、信号風の色分けで確信度を可視化する。
-   50%以上 青 → 60% 緑 → 70% 黄 → 80% 橙 → 90% 赤 → 100% 濃赤
+   50%以上 紫 → 60% 赤 → 70% 橙 → 80% 黄 → 90% 青 → 100% 緑
    CSS variable --auto-font-color を bucket クラスから設定し、各表示箇所
    (layer-box / layer-list / txt-block) で同じ変数を参照する。 */
-.auto-font-bucket-0 { --auto-font-color: #3b82f6; }   /* 50-59% 青 */
-.auto-font-bucket-1 { --auto-font-color: #22c55e; }   /* 60-69% 緑 */
-.auto-font-bucket-2 { --auto-font-color: #eab308; }   /* 70-79% 黄 */
-.auto-font-bucket-3 { --auto-font-color: #f97316; }   /* 80-89% 橙 */
-.auto-font-bucket-4 { --auto-font-color: #ef4444; }   /* 90-99% 赤 */
-.auto-font-bucket-5 { --auto-font-color: #dc2626; }   /* 100% 濃赤 */
+.auto-font-bucket-0 { --auto-font-color: #9400d3; }   /* 50-59% 紫 */
+.auto-font-bucket-1 { --auto-font-color: #ef4444; }   /* 60-69% 赤 */
+.auto-font-bucket-2 { --auto-font-color: #f97316; }   /* 70-79% 橙 */
+.auto-font-bucket-3 { --auto-font-color: #eab308; }   /* 80-89% 黄 */
+.auto-font-bucket-4 { --auto-font-color: #3b82f6; }   /* 90-99% 青 */
+.auto-font-bucket-5 { --auto-font-color: #32cd32; }   /* 100% 緑 */
 
 .layer-box-new.auto-font-switched {
   box-shadow: 0 0 0 2px var(--auto-font-color, #ef4444);
@@ -2207,6 +2215,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layer-size-badge-font,
 .layer-size-badge-size {
   line-height: 1.25;
+  color: #fff;
+  text-shadow: none;
+}
+
+.layer-size-badge-size {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  font-weight: 800;
 }
 
 .layer-rotate-handle {
@@ -3154,7 +3175,391 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text);
   border-bottom-color: var(--accent);
 }
+.side-panel-tab:disabled,
+.side-panel-tab.locked {
+  color: var(--text-muted);
+  opacity: 0.38;
+  cursor: not-allowed;
+  filter: grayscale(1);
+}
+.side-panel-tab:disabled:hover,
+.side-panel-tab.locked:hover {
+  color: var(--text-muted);
+}
 .side-panel .panel-section[hidden] { display: none; }
+
+.font-book-panel {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.font-book-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  flex: 0 0 auto;
+}
+
+.font-book-open-btn {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--button-bg);
+  color: var(--text);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.font-book-open-btn:hover {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.font-book-meta {
+  padding: 7px 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 0 auto;
+}
+
+.font-book-filters {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px 6px;
+  flex: 0 0 auto;
+}
+
+.font-book-search {
+  min-width: 0;
+  flex: 1 1 auto;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--input-bg);
+  color: var(--text);
+  padding: 0 10px;
+  font-size: 12px;
+  outline: none;
+}
+
+.font-book-search:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.font-book-filter-btn,
+.font-book-size-btn,
+.font-book-category-btn {
+  border: 1px solid var(--border);
+  background: var(--button-bg);
+  color: var(--text-muted);
+  border-radius: 999px;
+  cursor: pointer;
+  font: inherit;
+}
+
+.font-book-filter-btn {
+  flex: 0 0 auto;
+  height: 28px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.font-book-filter-btn.active,
+.font-book-size-btn.active,
+.font-book-category-btn.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, var(--button-bg));
+}
+
+.font-book-size-toggle {
+  display: flex;
+  gap: 4px;
+  padding: 0 10px 8px;
+  flex: 0 0 auto;
+}
+
+.font-book-size-btn {
+  width: 32px;
+  height: 24px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.font-book-categories {
+  display: flex;
+  gap: 5px;
+  padding: 0 10px 8px;
+  overflow-x: auto;
+  flex: 0 0 auto;
+}
+
+.font-book-category-btn {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 8px;
+  font-size: 10px;
+}
+
+.font-book-panel .font-book-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 0 10px 12px;
+}
+
+.font-book-group {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--panel);
+  overflow: hidden;
+  margin-bottom: 10px;
+}
+
+.font-book-group-header {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.font-book-name-wrap {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.font-book-name,
+.font-book-ps {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.font-book-name {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.font-book-ps {
+  color: var(--text-muted);
+  font-size: 9px;
+  margin-top: 1px;
+}
+
+.font-book-subname {
+  flex: 0 0 auto;
+  max-width: 72px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border-radius: 999px;
+  padding: 2px 6px;
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.font-book-count {
+  flex: 0 0 auto;
+  min-width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--panel-hover);
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.font-book-sample {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 20px;
+  line-height: 1.35;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
+.font-book-list[data-size="S"] .font-book-sample { font-size: 16px; }
+.font-book-list[data-size="L"] .font-book-sample { font-size: 26px; }
+
+.font-book-shots {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  padding: 7px;
+}
+
+.font-book-list[data-size="S"] .font-book-shots {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.font-book-shot {
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--panel-body);
+  color: var(--text);
+  text-align: left;
+  cursor: zoom-in;
+}
+
+.font-book-shot:hover {
+  border-color: var(--accent);
+}
+
+.font-book-shot img {
+  display: block;
+  width: 100%;
+  max-height: 260px;
+  object-fit: contain;
+  background: #fff;
+}
+
+.font-book-list[data-size="S"] .font-book-shot img { max-height: 130px; }
+.font-book-list[data-size="L"] .font-book-shot img { max-height: 380px; }
+
+.font-book-shot-caption,
+.font-book-note {
+  display: block;
+  padding: 5px 6px;
+  font-size: 10px;
+  line-height: 1.35;
+}
+
+.font-book-shot-caption {
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.font-book-note {
+  border-top: 1px solid var(--border);
+  color: var(--text);
+  background: var(--panel-hover);
+}
+
+.font-book-no-shot,
+.font-book-empty {
+  padding: 18px 8px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 11px;
+}
+
+.font-book-empty-icon {
+  width: 42px;
+  height: 42px;
+  margin: 0 auto 8px;
+  border-radius: 12px;
+  border: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-muted);
+  font-size: 18px;
+  font-weight: 800;
+}
+
+.font-book-modal[hidden] { display: none; }
+
+.font-book-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.font-book-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.72);
+}
+
+.font-book-modal-card {
+  position: relative;
+  z-index: 1;
+  max-width: min(86vw, 980px);
+  max-height: 86vh;
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
+}
+
+.font-book-modal-card img {
+  display: block;
+  max-width: 100%;
+  max-height: 70vh;
+  object-fit: contain;
+  background: #fff;
+}
+
+.font-book-modal-close {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: rgba(0, 0, 0, 0.65);
+  color: #fff;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.font-book-modal-info {
+  padding: 10px 12px;
+  display: grid;
+  gap: 4px;
+}
+
+.font-book-modal-info strong {
+  color: var(--text);
+  font-size: 13px;
+}
+
+.font-book-modal-info span,
+.font-book-modal-info small,
+.font-book-modal-info p {
+  color: var(--text-muted);
+  font-size: 11px;
+  margin: 0;
+}
 
 .txt-source-actions {
   display: flex;
@@ -5033,16 +5438,61 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .ai-actions-row {
   display: flex;
   gap: 6px;
-  padding: 6px 8px 8px;
+  padding: 7px 8px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: #2b2b2b;
+  position: relative;
+  overflow: visible;
+}
+.ai-actions-row.ai-actions-row-locked {
+  background: #2f3135;
+}
+.ai-actions-row.ai-actions-row-locked > .ai-ocr-btn,
+.ai-actions-row.ai-actions-row-locked > .ai-place-btn,
+.ai-actions-row.ai-actions-row-locked > .ai-adjust-dropdown {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+.ai-actions-row.ai-actions-row-locked::after {
+  content: "画像スキャンエンジン未インストール";
+  position: absolute;
+  inset: 7px 8px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed rgba(239, 68, 68, 0.8);
+  border-radius: 7px;
+  background: rgba(31, 33, 37, 0.78);
+  color: #f87171;
+  font-size: 12px;
+  font-weight: 800;
+  pointer-events: none;
+  z-index: 2;
 }
 .ai-actions-row > .ai-ocr-btn,
-.ai-actions-row > .ai-place-btn {
+.ai-actions-row > .ai-place-btn,
+.ai-actions-row > .ai-adjust-dropdown {
   flex: 1 1 0;
   min-width: 0;
   margin-top: 0;
+}
+.ai-actions-row > .ai-ocr-btn,
+.ai-actions-row > .ai-place-btn,
+.ai-actions-row .ai-adjust-menu-btn {
+  height: 32px;
+  padding: 0 6px;
   justify-content: center;
+  border-width: 2px;
+  border-radius: 7px;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+  letter-spacing: 0;
+}
+.ai-actions-row > .ai-ocr-btn svg,
+.ai-actions-row > .ai-place-btn svg {
+  display: none;
 }
 
 /* MojiQ Pro の .panel-load-btn (校正チェックを読み込み) と同デザインの青アクセント枠。
@@ -5090,6 +5540,17 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: rgba(25, 118, 210, 0.1);
   border-color: #1565c0;
   color: #1565c0;
+}
+
+.ai-actions-row > .ai-ocr-btn {
+  border-color: #1295ff;
+  color: #1295ff;
+}
+
+.ai-actions-row > .ai-ocr-btn:hover:not(:disabled) {
+  background: rgba(18, 149, 255, 0.14);
+  border-color: #38a8ff;
+  color: #38a8ff;
 }
 
 /* ハンバーガーメニュー footer の AIインストール ボタンに小バッジ */
@@ -5329,7 +5790,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .ai-log-viewer {
   flex: 1;
   margin: 0 16px;
-  padding: 8px 10px;
+  padding: 0;
   font-family: ui-monospace, "Consolas", "Menlo", monospace;
   font-size: 11px;
   background: var(--bg);
@@ -5341,6 +5802,23 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   line-height: 1.5;
   color: var(--text);
   min-height: 0;
+}
+.ai-log-progress {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  margin: 0;
+  padding: 9px 10px 8px;
+  background: color-mix(in srgb, var(--panel-body) 92%, var(--bg));
+  border-bottom: 1px solid var(--border);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  white-space: normal;
+}
+.ai-log-progress[hidden] { display: none; }
+.ai-log-lines {
+  padding: 8px 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 .ai-log-line { margin: 0; }
 .ai-log-line.stderr { color: var(--danger); }
@@ -5397,6 +5875,199 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 
 /* 自動配置 — 確認モーダル */
+.ai-actions-row > .ai-place-btn {
+  border-color: #00890f;
+  color: #00890f;
+}
+
+.ai-actions-row > .ai-place-btn:hover:not(:disabled) {
+  background: rgba(0, 137, 15, 0.16);
+  border-color: #0aa31c;
+  color: #0aa31c;
+}
+
+.ai-adjust-dropdown {
+  position: relative;
+}
+
+.ai-adjust-menu-btn {
+  width: 100%;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 2px solid #f97316;
+  color: #f97316;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.ai-adjust-menu-btn:hover:not(:disabled),
+.ai-adjust-dropdown:focus-within .ai-adjust-menu-btn {
+  background: rgba(249, 115, 22, 0.14);
+  border-color: #fb923c;
+  color: #fb923c;
+}
+
+.ai-adjust-menu-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.ai-adjust-caret {
+  font-size: 11px;
+  line-height: 1;
+}
+
+.ai-adjust-menu {
+  position: absolute;
+  top: calc(100% + 12px);
+  right: 0;
+  width: 170px;
+  padding: 12px 14px;
+  background: #000;
+  border-radius: 6px;
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.42);
+  z-index: 40;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease, visibility 0s linear 0.12s;
+}
+
+.ai-adjust-menu::before {
+  content: "";
+  position: absolute;
+  top: -18px;
+  right: 44px;
+  border-left: 12px solid transparent;
+  border-right: 12px solid transparent;
+  border-bottom: 20px solid #000;
+}
+
+.ai-adjust-menu::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -14px;
+  height: 14px;
+}
+
+.ai-adjust-dropdown:hover .ai-adjust-menu,
+.ai-adjust-dropdown:focus-within .ai-adjust-menu {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transform: translateY(0);
+  transition-delay: 0s;
+}
+
+.ai-adjust-menu-btn:disabled + .ai-adjust-menu {
+  display: none;
+}
+
+.ai-adjust-menu-item {
+  width: 100%;
+  height: 52px;
+  border: 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.72);
+  background: transparent;
+  color: #fff;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 18px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.ai-adjust-menu-item:last-child {
+  border-bottom: 0;
+}
+
+.ai-adjust-menu-item:hover:not(:disabled),
+.ai-adjust-menu-item:focus-visible {
+  color: #ff6a2a;
+  outline: none;
+}
+
+.ai-adjust-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+:root[data-theme="light"] .ai-actions-row {
+  background: #f7f8fb;
+  border-bottom-color: #d7dce5;
+}
+
+:root[data-theme="light"] .ai-actions-row.ai-actions-row-locked {
+  background: #eef1f5;
+}
+
+:root[data-theme="light"] .ai-actions-row.ai-actions-row-locked::after {
+  border-color: rgba(220, 38, 38, 0.75);
+  background: rgba(241, 245, 249, 0.84);
+  color: #dc2626;
+}
+
+:root[data-theme="light"] .ai-actions-row > .ai-ocr-btn {
+  border-color: #0b84e5;
+  color: #0b84e5;
+}
+
+:root[data-theme="light"] .ai-actions-row > .ai-ocr-btn:hover:not(:disabled) {
+  background: rgba(11, 132, 229, 0.1);
+  border-color: #006fc7;
+  color: #006fc7;
+}
+
+:root[data-theme="light"] .ai-actions-row > .ai-place-btn {
+  border-color: #168a22;
+  color: #168a22;
+}
+
+:root[data-theme="light"] .ai-actions-row > .ai-place-btn:hover:not(:disabled) {
+  background: rgba(22, 138, 34, 0.1);
+  border-color: #0f7619;
+  color: #0f7619;
+}
+
+:root[data-theme="light"] .ai-adjust-menu-btn {
+  border-color: #ea580c;
+  color: #ea580c;
+}
+
+:root[data-theme="light"] .ai-adjust-menu-btn:hover:not(:disabled),
+:root[data-theme="light"] .ai-adjust-dropdown:focus-within .ai-adjust-menu-btn {
+  background: rgba(234, 88, 12, 0.1);
+  border-color: #c2410c;
+  color: #c2410c;
+}
+
+:root[data-theme="light"] .ai-adjust-menu {
+  background: #ffffff;
+  border: 1px solid #d7dce5;
+  box-shadow: 0 14px 34px rgba(30, 41, 59, 0.18);
+}
+
+:root[data-theme="light"] .ai-adjust-menu::before {
+  border-bottom-color: #ffffff;
+  filter: drop-shadow(0 -1px 0 #d7dce5);
+}
+
+:root[data-theme="light"] .ai-adjust-menu-item {
+  color: #1f2937;
+  border-bottom-color: #d7dce5;
+}
+
+:root[data-theme="light"] .ai-adjust-menu-item:hover:not(:disabled),
+:root[data-theme="light"] .ai-adjust-menu-item:focus-visible {
+  color: #ca4610;
+  background: rgba(231, 90, 26, 0.08);
+}
+
 .ai-place-review-modal {
   position: fixed;
   inset: 0;
@@ -5979,6 +6650,18 @@ body.viewer-mode #viewer-mode-btn {
 }
 body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
 
+body.viewer-mode .toolbar {
+  opacity: 0 !important;
+  transform: translateY(-12px);
+  visibility: hidden !important;
+  pointer-events: none !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  border: none !important;
+  overflow: hidden !important;
+}
+
 /* ヘッダー / サイドバー / 他ペインを fade out / fade in。
    仕様（v1.13.0 でなめらかさ強化、PSD 中央移動のラグ解消版）:
      - opacity は 0.3s でなめらかにフェード
@@ -5989,9 +6672,6 @@ body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
        0.3s 限定の連続 reflow も体感的に問題ない（v1.9.0 で見送った理由は per-frame redraw
        の累積コストだったが、rAF 合流により実害は無視できるレベルに収束）。
      - visibility / overflow は離散プロパティなのでフェード完了後に snap (delay 0.3s)。 */
-.toolbar,
-.side-toolbar,
-.side-panel,
 .spreads-pdf-area,
 .spreads-proofread-area,
 .spreads-editor-area {
@@ -6010,41 +6690,6 @@ body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
     visibility 0s linear 0.3s,
     overflow 0s linear 0.3s;
 }
-body.viewer-mode .toolbar {
-  opacity: 0 !important;
-  transform: translateY(-12px);
-  visibility: hidden !important;
-  pointer-events: none !important;
-  height: 0 !important;
-  min-height: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  overflow: hidden !important;
-}
-body.viewer-mode .side-toolbar {
-  opacity: 0 !important;
-  transform: translateX(-16px);
-  visibility: hidden !important;
-  pointer-events: none !important;
-  width: 0 !important;
-  min-width: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  overflow: hidden !important;
-  box-shadow: none !important;
-}
-body.viewer-mode .side-panel {
-  opacity: 0 !important;
-  transform: translateX(16px);
-  visibility: hidden !important;
-  pointer-events: none !important;
-  width: 0 !important;
-  min-width: 0 !important;
-  padding: 0 !important;
-  border: none !important;
-  overflow: hidden !important;
-  box-shadow: none !important;
-}
 body.viewer-mode .spreads-pdf-area,
 body.viewer-mode .spreads-proofread-area,
 body.viewer-mode .spreads-editor-area {
@@ -6061,9 +6706,6 @@ body.viewer-mode .spreads-editor-area {
 /* 退場時: レイアウトと opacity を同時にフェードインしながら復元（PSD が左右に縮みつつ
    サイドが伸びる動きが visually 同期して逆再生される）。
    visibility / overflow は離散プロパティなので即座に元に戻す（delay 0s）。 */
-body:not(.viewer-mode) .toolbar,
-body:not(.viewer-mode) .side-toolbar,
-body:not(.viewer-mode) .side-panel,
 body:not(.viewer-mode) .spreads-pdf-area,
 body:not(.viewer-mode) .spreads-proofread-area,
 body:not(.viewer-mode) .spreads-editor-area {
@@ -6148,9 +6790,9 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 
 /* 閉じるボタン（右上角、マウス移動でフェードイン → 一定時間でフェードアウト） */
 .viewer-close-btn {
-  position: fixed;
-  top: 20px;
-  right: 20px;
+  position: absolute;
+  top: 16px;
+  left: 16px;
   z-index: 10001;
   width: 44px;
   height: 44px;

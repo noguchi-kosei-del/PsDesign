@@ -38,6 +38,7 @@ import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import { bindStylePalette } from "./style-palette.js";
+import { initFontBookPanel } from "./font-book.js";
 import {
   confirmDialog,
   hideModalAnimated,
@@ -104,6 +105,7 @@ import {
   getPsdZoom,
   getTextSize,
   getTool,
+  getTxtSource,
   hasEdits,
   getEditorLeftPaneMode,
   setEditorLeftPaneMode,
@@ -387,6 +389,7 @@ async function loadFontsFromBackend() {
     const { invoke } = await import("@tauri-apps/api/core");
     const fonts = await invoke("list_fonts");
     setFonts(fonts);
+    window.dispatchEvent(new CustomEvent("psdesign:fonts-loaded"));
   } catch (e) {
     console.warn("フォント一覧の取得に失敗:", e);
   }
@@ -797,11 +800,39 @@ const SIDE_PANEL_TAB_KEY = "psdesign_side_panel_tab";
 function loadSidePanelTab() {
   try {
     const v = localStorage.getItem(SIDE_PANEL_TAB_KEY);
-    if (v === "txt" || v === "editor") return v;
+    if (v === "txt" || v === "editor" || v === "font-book") return v;
   } catch (_) {}
   return "txt";
 }
+function hasTextForEditorTab() {
+  const source = getTxtSource();
+  return !!String(source?.content ?? "").trim();
+}
+function syncTextEditorTabLock() {
+  const locked = !hasTextForEditorTab();
+  const tab = document.getElementById("side-panel-tab-editor");
+  if (tab) {
+    tab.disabled = locked;
+    tab.classList.toggle("locked", locked);
+    tab.setAttribute("aria-disabled", locked ? "true" : "false");
+    tab.title = locked ? "テキスト生成後に編集できます" : "";
+    if (locked && tab.classList.contains("active")) setSidePanelTab("txt");
+  }
+  for (const btn of [
+    document.getElementById("select-all-btn"),
+    document.getElementById("layers-toggle-btn"),
+  ]) {
+    if (!btn) continue;
+    if (!btn.dataset.unlockedTitle) btn.dataset.unlockedTitle = btn.title || "";
+    btn.disabled = locked;
+    btn.classList.toggle("locked", locked);
+    btn.setAttribute("aria-disabled", locked ? "true" : "false");
+    btn.title = locked ? "テキスト生成後に使用できます" : btn.dataset.unlockedTitle;
+  }
+  if (locked) closeLayersDrawer();
+}
 function setSidePanelTab(tab) {
+  if (tab === "editor" && !hasTextForEditorTab()) tab = "txt";
   for (const btn of document.querySelectorAll(".side-panel-tab")) {
     const isActive = btn.dataset.tab === tab;
     btn.classList.toggle("active", isActive);
@@ -817,8 +848,13 @@ function bindSidePanelTabs() {
   if (!tabs.length) return;
   for (const btn of tabs) {
     btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => setSidePanelTab(btn.dataset.tab));
+    btn.addEventListener("click", () => {
+      if (btn.disabled) return;
+      setSidePanelTab(btn.dataset.tab);
+    });
   }
+  onTxtSourceChange(syncTextEditorTabLock);
+  syncTextEditorTabLock();
   setSidePanelTab(loadSidePanelTab());
 }
 
@@ -2113,6 +2149,7 @@ function init() {
   bindZoomTool();
   bindPageChange();
   bindStylePalette();
+  initFontBookPanel();
   bindEditorEvents();
   bindWindowControls();
   bindPageJumpDialog();

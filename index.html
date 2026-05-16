@@ -461,7 +461,7 @@
               </svg>
             </button>
           </div>
-          <div class="ai-actions-row">
+          <div id="ai-actions-row" class="ai-actions-row">
             <button id="ai-ocr-btn" class="ai-ocr-btn" type="button" title="開いている PDF / 画像から AI でセリフを抽出" aria-label="画像スキャン" disabled>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
@@ -485,31 +485,22 @@
               </svg>
               <span>自動配置</span>
             </button>
-            <button id="ai-adjust-btn" class="ai-place-btn" type="button" title="位置調整1: PSDに余分余白あり (確定式)" aria-label="位置調整1" disabled>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="1"/>
-                <rect x="8" y="8" width="8" height="8" rx="0.5" fill="currentColor" fill-opacity="0.25"/>
-              </svg>
-              <span>位置調整1</span>
-            </button>
-            <button id="ai-adjust2-btn" class="ai-place-btn" type="button" title="位置調整2: 見本に余分余白あり (画像差分 grid search)" aria-label="位置調整2" disabled>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="18" height="18" rx="1" fill="currentColor" fill-opacity="0.25"/>
-                <rect x="8" y="8" width="8" height="8" rx="0.5"/>
-              </svg>
-              <span>位置調整2</span>
-            </button>
-            <button id="ai-adjust3-btn" class="ai-place-btn" type="button" title="重ね調整: 見本に PSD を半透明で重ねて手動調整" aria-label="重ね調整" disabled>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="3" width="14" height="14" rx="1"/>
-                <rect x="7" y="7" width="14" height="14" rx="1" fill="currentColor" fill-opacity="0.35"/>
-              </svg>
-              <span>重ね調整</span>
-            </button>
+            <div class="ai-adjust-dropdown">
+              <button id="ai-adjust-menu-btn" class="ai-adjust-menu-btn" type="button" title="位置調整メニュー" aria-label="位置調整メニュー" aria-haspopup="true" aria-expanded="false" disabled>
+                <span>位置調整</span>
+                <span class="ai-adjust-caret" aria-hidden="true">▼</span>
+              </button>
+              <div class="ai-adjust-menu" role="menu" aria-label="位置調整メニュー">
+                <button id="ai-adjust-btn" class="ai-adjust-menu-item" type="button" title="位置調整1: PSDに余分余白あり (確定式)" role="menuitem" disabled>位置調整1</button>
+                <button id="ai-adjust2-btn" class="ai-adjust-menu-item" type="button" title="位置調整2: 見本に余分余白あり (画像差分 grid search)" role="menuitem" disabled>位置調整2</button>
+                <button id="ai-adjust3-btn" class="ai-adjust-menu-item" type="button" title="重ね調整: 見本に PSD を半透明で重ねて手動調整" role="menuitem" disabled>重ね調整</button>
+              </div>
+            </div>
           </div>
           <div class="side-panel-tabs" role="tablist">
             <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
             <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">テキスト編集</button>
+            <button id="side-panel-tab-font-book" class="side-panel-tab" data-tab="font-book" type="button" role="tab" aria-selected="false">フォント帳</button>
           </div>
           <section class="panel-section txt-source" id="txt-source" data-section="txt">
             <div id="txt-source-actions" class="txt-source-actions">
@@ -673,6 +664,34 @@
             </div>
           </div>
           </section>
+          <section class="panel-section font-book-panel" data-section="font-book" hidden>
+            <div class="font-book-toolbar">
+              <button id="font-book-open-btn" class="font-book-open-btn" type="button">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
+                </svg>
+                <span>フォント帳を開く</span>
+              </button>
+              <button id="font-book-refresh-btn" class="icon-btn" type="button" title="フォント帳を再読み込み" aria-label="フォント帳を再読み込み">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
+                  <path d="M21 3v5h-5"/>
+                </svg>
+              </button>
+            </div>
+            <div class="font-book-meta" id="font-book-meta">fontbook.json が入っている「フォント帳」フォルダを選択してください。</div>
+            <div class="font-book-filters">
+              <input id="font-book-search" class="font-book-search" type="search" placeholder="フォント名で検索..." autocomplete="off" />
+              <button id="font-book-hide-empty-btn" class="font-book-filter-btn" type="button" aria-pressed="false">使用あり</button>
+            </div>
+            <div class="font-book-size-toggle" role="group" aria-label="プレビューサイズ">
+              <button class="font-book-size-btn" type="button" data-size="S">S</button>
+              <button class="font-book-size-btn active" type="button" data-size="M">M</button>
+              <button class="font-book-size-btn" type="button" data-size="L">L</button>
+            </div>
+            <div id="font-book-categories" class="font-book-categories" hidden></div>
+            <div id="font-book-list" class="font-book-list"></div>
+          </section>
         </aside>
       </main>
     </div>
@@ -737,15 +756,11 @@
             <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2h-4a1 1 0 0 1-1-1v-6h-4v6a1 1 0 0 1-1 1H5a2 2 0 0 1-2-2z"/>
           </svg>
         </button>
-        <button id="ai-install-btn" class="menu-icon-btn ai-install-menu-btn" type="button" title="AIインストール (画像スキャンエンジン)" aria-label="AIインストール">
+        <button id="ai-install-btn" class="menu-icon-btn ai-install-menu-btn" type="button" title="スキャンエンジンインストール" aria-label="スキャンエンジンインストール">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <rect x="4" y="6" width="16" height="12" rx="2"/>
-            <path d="M8 10h.01"/>
-            <path d="M16 10h.01"/>
-            <path d="M9 14c.667.667 1.333 1 3 1s2.333-.333 3-1"/>
-            <path d="M12 2v4"/>
-            <path d="M3 10h2"/>
-            <path d="M19 10h2"/>
+            <path d="M12 3v11"/>
+            <polyline points="7 10 12 15 17 10"/>
+            <path d="M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>
           </svg>
           <span class="ai-install-menu-badge" id="ai-install-menu-badge" hidden></span>
         </button>
@@ -969,12 +984,12 @@
     <div class="ai-install-modal" id="ai-install-modal" data-tauri-drag-region hidden>
       <div class="ai-install-card" role="dialog" aria-modal="true" aria-labelledby="ai-install-title" data-tauri-drag-region>
         <div class="ai-install-header" data-tauri-drag-region>
-          <span class="ai-install-title" id="ai-install-title" data-tauri-drag-region>AIインストール</span>
+          <span class="ai-install-title" id="ai-install-title" data-tauri-drag-region>スキャンエンジンインストール</span>
           <button type="button" id="ai-install-close-btn" class="settings-done-btn" title="閉じる" aria-label="閉じる">完了</button>
         </div>
         <div class="ai-install-intro" data-tauri-drag-region>
           <p class="ai-install-intro-text" data-tauri-drag-region>
-            漫画のセリフを自動抽出するために、以下の AI モデルを <code>%LOCALAPPDATA%\PsDesign\ai-runtime</code> にインストールします（合計 約 3〜5 GB / 10〜30 分）。
+            漫画のセリフを自動抽出するために、以下のスキャンエンジンを <code>%LOCALAPPDATA%\PsDesign\ai-runtime</code> にインストールします（合計 約 3〜5 GB / 10〜30 分）。
           </p>
         </div>
         <div class="ai-install-status">
@@ -1029,7 +1044,22 @@
           </div>
           <div class="ai-install-progress-count" id="ai-install-progress-count"></div>
         </div>
-        <div class="ai-log-viewer" id="ai-log-viewer" aria-live="polite" data-tauri-drag-region="false"></div>
+        <div class="ai-log-viewer" id="ai-log-viewer" aria-live="polite" data-tauri-drag-region="false">
+          <div class="ai-log-progress" id="ai-log-progress" hidden>
+            <div class="ai-install-progress-meta">
+              <span class="ai-install-active-label" id="ai-log-progress-label">準備中</span>
+              <span class="ai-install-meta-right">
+                <span id="ai-log-progress-speed" class="ai-meta-badge"></span>
+                <span id="ai-log-progress-eta" class="ai-meta-badge"></span>
+              </span>
+            </div>
+            <div class="ai-install-progress-track">
+              <div class="ai-install-progress-fill" id="ai-log-progress-fill"></div>
+            </div>
+            <div class="ai-install-progress-count" id="ai-log-progress-count"></div>
+          </div>
+          <div class="ai-log-lines" id="ai-log-lines"></div>
+        </div>
         <div class="ai-install-actions">
           <button type="button" id="ai-uninstall-btn" class="page-jump-btn page-jump-btn-danger" hidden>アンインストール</button>
           <button type="button" id="ai-install-start-btn" class="page-jump-btn page-jump-btn-primary">インストール開始</button>

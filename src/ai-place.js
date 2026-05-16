@@ -47,6 +47,10 @@ let runningAdjust = false;
 // 同一テキストで連続して自動配置するときに確認ダイアログを出すために使う。
 let lastPlacedFingerprint = null;
 
+function isAiActionsLocked() {
+  return $("ai-actions-row")?.classList.contains("ai-actions-row-locked") ?? false;
+}
+
 // ホームに戻る等のタイミングで自動配置の状態をリセットする。
 // (lastPlacedFingerprint が残っていると次の自動配置で「同一テキスト警告」が誤発火する)
 export function resetAutoPlaceState() {
@@ -983,6 +987,7 @@ export function bindAiPlaceButton() {
   btn.addEventListener("click", () => { void runAutoPlace(); });
   // OCR 結果が無いうちはグレーアウト。setAiOcrDoc / clearAiOcrDoc に追従。
   const sync = () => {
+    const locked = isAiActionsLocked();
     const cache = getAiOcrDoc();
     const hasOcr = !!(
       cache &&
@@ -990,12 +995,15 @@ export function bindAiPlaceButton() {
       Array.isArray(cache.doc.pages) &&
       cache.doc.pages.length > 0
     );
-    btn.disabled = !hasOcr;
-    btn.title = hasOcr
+    btn.disabled = locked || !hasOcr;
+    btn.title = locked
+      ? "画像スキャンエンジンが未インストールです。"
+      : hasOcr
       ? "OCR 結果と原稿テキストを吹き出し位置に自動配置"
       : "先に画像スキャンを実行してください";
   };
   onAiOcrDocChange(sync);
+  window.addEventListener("psdesign:ai-actions-lock-change", sync);
   sync();
 
   // TXT 編集 → 自動配置済みレイヤー contents を追従。
@@ -1669,36 +1677,59 @@ async function runOverlayAlign() {
 }
 
 export function bindPositionAdjustButton() {
+  const menuBtn = $("ai-adjust-menu-btn");
   const btn1 = $("ai-adjust-btn");
   const btn2 = $("ai-adjust2-btn");
   const btn3 = $("ai-adjust3-btn");
-  if (!btn1 && !btn2 && !btn3) return;
+  const dropdown = menuBtn?.closest?.(".ai-adjust-dropdown");
+  if (!menuBtn && !btn1 && !btn2 && !btn3) return;
   if (btn1) btn1.addEventListener("click", () => { void runPositionAdjust("mode1"); });
   if (btn2) btn2.addEventListener("click", () => { void runPositionAdjust("mode2"); });
   if (btn3) btn3.addEventListener("click", () => { void runOverlayAlign(); });
+  if (dropdown && menuBtn) {
+    dropdown.addEventListener("mouseenter", () => {
+      if (!menuBtn.disabled) menuBtn.setAttribute("aria-expanded", "true");
+    });
+    dropdown.addEventListener("mouseleave", () => {
+      menuBtn.setAttribute("aria-expanded", "false");
+    });
+  }
   const sync = () => {
+    const locked = isAiActionsLocked();
     const has = getNewLayers().some((l) => l && l.tempId);
+    const disabled = locked || !has;
+    const titleWhenDisabled = locked
+      ? "画像スキャンエンジンが未インストールです。"
+      : "先に自動配置を実行してください";
+    if (menuBtn) {
+      menuBtn.disabled = disabled;
+      menuBtn.title = !disabled
+        ? "位置調整メニュー"
+        : titleWhenDisabled;
+      menuBtn.setAttribute("aria-expanded", !disabled ? menuBtn.getAttribute("aria-expanded") || "false" : "false");
+    }
     if (btn1) {
-      btn1.disabled = !has;
-      btn1.title = has
+      btn1.disabled = disabled;
+      btn1.title = !disabled
         ? "位置調整1: PSDに余分余白あり (確定式)"
-        : "先に自動配置を実行してください";
+        : titleWhenDisabled;
     }
     if (btn2) {
-      btn2.disabled = !has;
-      btn2.title = has
+      btn2.disabled = disabled;
+      btn2.title = !disabled
         ? "位置調整2: 見本に余分余白あり (画像差分 grid search)"
-        : "先に自動配置を実行してください";
+        : titleWhenDisabled;
     }
     if (btn3) {
-      btn3.disabled = !has;
-      btn3.title = has
+      btn3.disabled = disabled;
+      btn3.title = !disabled
         ? "重ね調整: 見本に PSD を半透明で重ねて手動調整"
-        : "先に自動配置を実行してください";
+        : titleWhenDisabled;
     }
   };
   sync();
   onAiOcrDocChange(sync);
   onTxtSourceChange(sync);
+  window.addEventListener("psdesign:ai-actions-lock-change", sync);
   setInterval(sync, 1000);
 }
