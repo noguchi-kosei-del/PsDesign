@@ -16,9 +16,18 @@
   --scrollbar-thumb-hover: #5a5a5e;
   --section-fade: rgba(0, 0, 0, 0.28);
   --panel-body: #2c2c2d;
+  --home-bg: #2d2d2f;
+  --home-hero-bg: #242424;
+  --home-text: #ffffff;
+  --home-muted: rgba(255, 255, 255, 0.94);
+  --home-line: #cfcfcf;
+  --home-border: rgba(255, 255, 255, 0.94);
+  --home-button-hover: rgba(255, 255, 255, 0.13);
+  --home-card-bg: #242426;
+  --home-logo-shadow: drop-shadow(0 16px 26px rgba(0, 0, 0, 0.52));
+  --home-title-shadow: 0 12px 24px rgba(0, 0, 0, 0.52);
   color-scheme: dark;
 }
-
 :root[data-theme="light"] {
   --bg: #f5f5f5;
   --panel: #ededed;
@@ -36,14 +45,22 @@
   --scrollbar-thumb-hover: #a0a0a0;
   --section-fade: rgba(0, 0, 0, 0.10);
   --panel-body: #f4f4f4;
+  --home-bg: #f5f6f8;
+  --home-hero-bg: #d8dbe0;
+  --home-text: #202124;
+  --home-muted: rgba(32, 33, 36, 0.82);
+  --home-line: #cfcfcf;
+  --home-border: rgba(32, 33, 36, 0.64);
+  --home-button-hover: rgba(0, 120, 212, 0.10);
+  --home-card-bg: #e6e8ec;
+  --home-logo-shadow: drop-shadow(0 16px 26px rgba(255, 255, 255, 0.72));
+  --home-title-shadow: 0 12px 24px rgba(255, 255, 255, 0.86);
   color-scheme: light;
 }
-
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
 }
-
 ::-webkit-scrollbar {
   width: 12px;
   height: 12px;
@@ -62,7 +79,6 @@
 ::-webkit-scrollbar-corner {
   background: var(--scrollbar-track);
 }
-
 :root {
   /* MojiQ と同じフォントスタックに揃える。Noto Sans JP は Google Fonts から
      index.html の <link> 経由で読み込み。オフラインでも fallback で表示は維持される。 */
@@ -75,9 +91,7 @@
      instant に切り替わるが致命的な見た目崩れはしないため安全に使える。 */
   interpolate-size: allow-keywords;
 }
-
 * { box-sizing: border-box; }
-
 /* MojiQ 互換: フォーム要素は明示的に Noto Sans JP を指定。
    既存の `font-family: inherit` ルールは :root を経由して同じフォントになるが、
    ここで stack を直接指定しておくことで、サードパーティ CSS の介入があっても
@@ -85,23 +99,20 @@
 input, button, textarea, select {
   font-family: "Noto Sans JP", sans-serif;
 }
-
 html, body, #app {
   margin: 0;
   height: 100vh;
   width: 100vw;
   overflow: hidden;
 }
-
 #app {
   display: grid;
   grid-template-rows: auto 1fr;
 }
-
 .toolbar {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 6px;
   padding: 4px 0 4px 12px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
@@ -111,7 +122,6 @@ html, body, #app {
      引き続きツールバーの上に表示される。 */
   z-index: 110;
 }
-
 /* progress-modal 表示中はツールバーをグレーアウト（ウインドウコントロールのみ操作可）。
    pointer-events: none でクリック・hover も封じる。toolbar 自体は z-index 110 で
    blur 背景の上に残るため、ユーザーには「処理中で操作できない」状態が視認できる。 */
@@ -123,7 +133,18 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
 .toolbar > *:not(.window-controls) {
   transition: opacity 0.22s ease;
 }
-
+body.home-mode .toolbar > *:not(.app-logo):not(.hamburger-btn):not(.settings-toolbar-btn):not(.toolbar-actions):not(.window-controls),
+body.home-mode .toolbar .toolbar-actions > * {
+  opacity: 0.28;
+  pointer-events: none;
+  filter: grayscale(1);
+}
+body.home-mode .toolbar .app-logo,
+body.home-mode .toolbar .hamburger-btn,
+body.home-mode .toolbar .settings-toolbar-btn {
+  opacity: 1;
+  filter: none;
+}
 /* ヘッダーバー下端の立体グラデーション。
    border-bottom 直上の 10px に透明 → --section-fade のグラデを重ねて、
    下のワークスペースから浮いて見えるようにする。pointer-events: none で操作を妨げない。 */
@@ -137,14 +158,12 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   pointer-events: none;
   background: linear-gradient(180deg, transparent 0%, var(--section-fade) 100%);
 }
-
 .toolbar h1 {
   margin: 0;
   font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.5px;
 }
-
 .app-logo {
   display: inline-flex;
   align-items: center;
@@ -160,14 +179,11 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   -webkit-user-select: none;
   pointer-events: none;
 }
-
-.toolbar-actions { display: flex; gap: 8px; }
-
+.toolbar-actions { display: flex; gap: 4px; }
 .save-container {
   position: relative;
   display: inline-flex;
 }
-
 .save-menu {
   position: absolute;
   top: calc(100% + 8px);
@@ -189,7 +205,6 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
     opacity 0.15s ease,
     visibility 0s linear 0s;
 }
-
 .save-menu[hidden] {
   display: block;
   transform: translateX(-50%) scale(0.85);
@@ -201,7 +216,6 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
     opacity 0.15s ease,
     visibility 0s linear 0.18s;
 }
-
 .save-menu::before {
   content: "";
   position: absolute;
@@ -214,7 +228,6 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   border-top: 1px solid var(--border);
   transform: translateX(-50%) rotate(45deg);
 }
-
 .save-menu-header {
   padding: 4px 14px 6px;
   font-size: 11px;
@@ -222,7 +235,6 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   border-bottom: 1px solid var(--border);
   margin-bottom: 4px;
 }
-
 .save-menu-item {
   display: flex;
   align-items: center;
@@ -235,35 +247,29 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   font-size: 13px;
   text-align: left;
   cursor: pointer;
-  transition: background-color 0.12s ease;
+  transition: background-color 0.12s ease, color 0.22s ease;
 }
-
 .save-menu-item:hover:not(:disabled) {
-  background: var(--panel-hover);
+  color: var(--accent);
 }
-
 .save-menu-item:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
-
 .save-menu-item svg {
   width: 16px;
   height: 16px;
   flex-shrink: 0;
   color: var(--text);
 }
-
 .save-menu-label {
   flex: 1;
 }
-
 .save-menu-shortcut {
   font-size: 11px;
   color: var(--text-muted);
   font-family: ui-monospace, Menlo, Consolas, monospace;
 }
-
 .toolbar-history {
   display: flex;
   align-items: center;
@@ -275,7 +281,7 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
      toolbar の gap (12px) を半分だけ打ち消して 6px の breathing room を確保する。
      右側の border-right は toolbar の gap (12px) がそのまま空くので、ややアシメ
      になるが、左隣のトグルスイッチと隣接しすぎる事故を優先して回避する。 */
-  margin-left: -6px;
+  margin-left: 4px;
 }
 .history-btn {
   width: 28px;
@@ -287,9 +293,7 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
 }
 .history-btn.clear-all-btn:not(:disabled):hover {
   color: var(--danger);
-  background: var(--panel-hover);
 }
-
 .toolbar-viewmode {
   display: flex;
   align-items: center;
@@ -316,7 +320,7 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   white-space: nowrap;
 }
 .skip-blank-btn:hover {
-  color: var(--text);
+  color: var(--accent);
 }
 .skip-blank-box {
   position: relative;
@@ -347,7 +351,6 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   vertical-align: middle;
   flex-shrink: 0;
 }
-
 .sync-segment {
   display: inline-flex;
   align-items: center;
@@ -374,23 +377,21 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   stroke: currentColor;
 }
 .sync-seg-btn:hover:not(.active) {
-  color: var(--text);
+  color: var(--accent);
 }
 .sync-seg-btn.active {
   background: var(--accent);
   color: #fff;
 }
 .sync-seg-btn.active:hover {
-  background: var(--accent-hover);
+  background: var(--accent);
 }
-
 .window-controls {
   display: flex;
   gap: 2px;
   margin-left: auto;
   -webkit-app-region: no-drag;
 }
-
 .window-ctrl-btn {
   width: 36px;
   height: 28px;
@@ -405,22 +406,16 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   color: var(--text);
   cursor: pointer;
 }
-
-/* 最小化・最大化ボタンの hover：グローバルの `button:hover` (青塗り) を打ち消し、
-   現在の背景色から少し濃くなる半透明黒オーバーレイにする。selector は
-   .window-controls > .window-ctrl-btn まで含めて specificity を上げる。 */
 .window-controls .window-ctrl-btn:hover:not(:disabled) {
-  background: rgba(0, 0, 0, 0.18);
+  background: transparent;
   border-color: transparent;
-  color: var(--text);
+  color: var(--accent);
 }
-
 .window-controls .window-ctrl-btn.window-ctrl-close:hover:not(:disabled) {
   background: #e81123;
   border-color: #e81123;
   color: #fff;
 }
-
 .tool-group {
   display: flex;
   gap: 4px;
@@ -428,11 +423,9 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   padding-left: 16px;
   border-left: 1px solid var(--border);
 }
-
 .tool-btn {
   min-width: 72px;
 }
-
 .icon-btn {
   display: inline-flex;
   align-items: center;
@@ -445,13 +438,11 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   background: transparent;
   border: none;
 }
-
 .icon-btn svg {
   width: 18px;
   height: 18px;
   flex-shrink: 0;
 }
-
 /* PDF / PSD / TXT を開くボタンは識別性を優先して一回り大きめに表示 */
 .icon-btn.file-open-btn {
   width: 38px;
@@ -462,25 +453,22 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   width: 22px;
   height: 22px;
 }
-
 .tool-btn.icon-btn {
   min-width: 32px;
 }
-
 .icon-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  background: transparent;
   border-color: transparent;
+  color: var(--accent);
 }
 .icon-btn:hover:not(:disabled) svg {
-  color: #fff;
+  color: var(--accent);
 }
-
 .size-group {
   display: flex;
   align-items: center;
   gap: 4px;
 }
-
 .size-btn {
   min-width: 28px;
   padding: 4px 8px;
@@ -491,11 +479,10 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   color: var(--text);
 }
 .size-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  background: transparent;
   border-color: var(--border);
-  color: var(--text);
+  color: var(--accent);
 }
-
 .size-input {
   width: 44px;
   padding: 4px 6px;
@@ -508,28 +495,23 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   font-family: inherit;
   font-variant-numeric: tabular-nums;
 }
-
 .size-input::-webkit-outer-spin-button,
 .size-input::-webkit-inner-spin-button {
   -webkit-appearance: none;
   margin: 0;
 }
-
 .size-input[type="number"] { -moz-appearance: textfield; }
-
 .size-unit {
   color: var(--text-muted);
   font-size: 11px;
   margin-left: 2px;
 }
-
 .size-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
 }
-
 /* 【v1.26.0】ルビ panel：行間 panel の下に配置。
    親文字 display / ふりがな input / mode 切替 + scale / 適用・削除ボタンの 4 行構成。 */
 .ruby-row {
@@ -600,13 +582,13 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   line-height: 1.2;
   cursor: pointer;
   white-space: nowrap;
-  transition: background 0.1s;
+  transition: background-color 0.1s, color 0.22s ease;
   display: inline-flex;
   align-items: center;
   justify-content: center;
 }
 .ruby-mode-btn + .ruby-mode-btn { border-left: 1px solid var(--border); }
-.ruby-mode-btn:hover:not(.active) { background: var(--panel-hover); }
+.ruby-mode-btn:hover:not(.active) { color: var(--accent); }
 .ruby-mode-btn.active { background: var(--accent); color: #fff; }
 .ruby-scale-group {
   display: inline-flex;
@@ -638,13 +620,12 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   font-size: 12px;
   line-height: 1.2;
   cursor: pointer;
-  transition: background 0.1s, border-color 0.1s;
+  transition: background-color 0.1s, border-color 0.1s, color 0.22s ease;
 }
-.ruby-apply-btn:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); color: #fff; }
-.ruby-remove-btn:hover:not(:disabled) { background: rgba(231, 76, 60, 0.18); border-color: var(--danger); color: var(--danger); }
+.ruby-apply-btn:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.ruby-remove-btn:hover:not(:disabled) { border-color: var(--danger); color: var(--danger); }
 .ruby-apply-btn:disabled,
 .ruby-remove-btn:disabled { opacity: 0.4; cursor: not-allowed; }
-
 /* 【v1.26.0】in-app プレビューのルビ表示（編集後 / 非編集状態）。
    <ruby> タグや ::after 疑似要素ではなく本物の <span> 要素を使ってルビを描画する。
    構造: <span class="ruby-wrap"><span class="ruby-base">親</span><span class="ruby-text">ルビ</span></span>
@@ -689,7 +670,6 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   margin-left: 0;
   writing-mode: vertical-rl;
 }
-
 /* 【v1.27.0】in-place 編集中の「ルビプレビュー」。
    旧 v1.26.0 では `<span class="ruby-edit-pending" data-ruby-text="rt">` + `::after { content: attr(...) }`
    の疑似要素方式だったが、contenteditable 内で caret 移動 / 文字選択解除のたびに Chromium が
@@ -701,14 +681,12 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   background: rgba(0, 120, 212, 0.12);
   border-radius: 2px;
 }
-
 /* フチのサムネ（なし / 白 / 黒）：3 つの丸スウォッチを横並び表示。 */
 .stroke-toggle {
   display: inline-flex;
   align-items: center;
   gap: 8px;
 }
-
 .stroke-dot {
   position: relative;
   width: 20px;
@@ -724,18 +702,14 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   font-size: 0;
   color: transparent;
 }
-
 .stroke-dot:hover {
   transform: scale(1.08);
 }
-
 .stroke-dot.active {
   box-shadow: 0 0 0 2px var(--accent), 0 1px 2px rgba(0, 0, 0, 0.3);
 }
-
 .stroke-dot-white { background: #fff; }
 .stroke-dot-black { background: #000; }
-
 /* 「なし」は白地に赤い斜線（Photoshop の "No Color" スウォッチと同じ視覚記号） */
 .stroke-dot-none {
   background: var(--panel);
@@ -754,13 +728,11 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   transform: translate(-50%, -50%) rotate(-45deg);
   pointer-events: none;
 }
-
 .stroke-width-group {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
-
 /* 文字色トグルとフチトグルを横並びに並べるためのクラスタ */
 .toggle-cluster {
   display: inline-flex;
@@ -779,13 +751,11 @@ body:has(.progress-modal.visible) .toolbar > *:not(.window-controls) {
   font-size: 11px;
   color: var(--text-muted);
 }
-
 .tool-btn.active {
   background: var(--accent);
   border: none;
   color: #fff;
 }
-
 button {
   background: var(--panel-hover);
   color: var(--text);
@@ -794,11 +764,108 @@ button {
   border-radius: 3px;
   cursor: pointer;
   font-size: 12px;
+  transition:
+    background-color 0.28s ease,
+    color 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+button:hover:not(:disabled) { color: var(--accent); }
+button:hover:not(:disabled) svg { color: var(--accent); stroke: currentColor; }
+button.sync-seg-btn.active:hover:not(:disabled),
+button.tool-btn.active:hover:not(:disabled),
+button.side-tool-btn.active:hover:not(:disabled),
+button.layer-dir-btn.active:hover:not(:disabled),
+button.bold-toggle-btn[aria-pressed="true"]:hover:not(:disabled),
+button.font-weight-btn[aria-pressed="true"]:hover:not(:disabled),
+button.font-weight-btn.active:hover:not(:disabled),
+button.page-jump-btn-primary:hover:not(:disabled),
+button.settings-done-btn:hover:not(:disabled),
+button.file-picker-confirm-btn:hover:not(:disabled),
+button.home-start-btn:hover:not(:disabled),
+button.update-modal-primary:hover:not(:disabled),
+button.overlay-align-btn-primary:hover:not(:disabled) {
+  color: #fff;
+}
+button.sync-seg-btn.active:hover:not(:disabled) svg,
+button.tool-btn.active:hover:not(:disabled) svg,
+button.side-tool-btn.active:hover:not(:disabled) svg,
+button.layer-dir-btn.active:hover:not(:disabled) svg,
+button.bold-toggle-btn[aria-pressed="true"]:hover:not(:disabled) svg,
+button.font-weight-btn[aria-pressed="true"]:hover:not(:disabled) svg,
+button.font-weight-btn.active:hover:not(:disabled) svg,
+button.page-jump-btn-primary:hover:not(:disabled) svg,
+button.settings-done-btn:hover:not(:disabled) svg,
+button.file-picker-confirm-btn:hover:not(:disabled) svg,
+button.home-start-btn:hover:not(:disabled) svg,
+button.update-modal-primary:hover:not(:disabled) svg,
+button.overlay-align-btn-primary:hover:not(:disabled) svg {
+  color: #fff;
+  stroke: currentColor;
 }
 
-button:hover:not(:disabled) { background: var(--accent); border-color: var(--accent); }
-button:disabled { opacity: 0.5; cursor: not-allowed; }
+button#confirm-modal-cancel:hover:not(:disabled),
+button#resync-cancel:hover:not(:disabled),
+button#page-jump-cancel:hover:not(:disabled),
+button#guides-apply-cancel:hover:not(:disabled),
+button#key-capture-cancel:hover:not(:disabled),
+button#ai-place-review-cancel:hover:not(:disabled),
+button#overlay-align-cancel:hover:not(:disabled),
+button#file-picker-cancel-btn:hover:not(:disabled),
+button.proofread-browser-cancel:hover:not(:disabled),
+button.style-palette-nav-cancel:hover:not(:disabled),
+button.page-jump-btn-danger:hover:not(:disabled) {
+  background: var(--danger);
+  border-color: var(--danger);
+  color: #fff;
+  filter: none;
+}
 
+button#confirm-modal-cancel:hover:not(:disabled) svg,
+button#resync-cancel:hover:not(:disabled) svg,
+button#page-jump-cancel:hover:not(:disabled) svg,
+button#guides-apply-cancel:hover:not(:disabled) svg,
+button#key-capture-cancel:hover:not(:disabled) svg,
+button#ai-place-review-cancel:hover:not(:disabled) svg,
+button#overlay-align-cancel:hover:not(:disabled) svg,
+button#file-picker-cancel-btn:hover:not(:disabled) svg,
+button.proofread-browser-cancel:hover:not(:disabled) svg,
+button.style-palette-nav-cancel:hover:not(:disabled) svg,
+button.page-jump-btn-danger:hover:not(:disabled) svg {
+  color: #fff;
+  stroke: currentColor;
+}
+button svg,
+button svg *,
+button .home-start-arrow,
+button .ai-adjust-caret {
+  transition:
+    color 0.22s ease,
+    stroke 0.22s ease,
+    fill 0.22s ease;
+}
+button:disabled { opacity: 0.5; cursor: not-allowed; }
+.sync-seg-btn,
+.editor-page-mode-btn,
+.editor-left-pane-btn,
+.proofread-tab,
+.side-panel-tab,
+.font-source-tab,
+.settings-tab,
+.ruby-mode-btn,
+.layer-dir-btn,
+.font-weight-btn,
+.font-book-filter-btn,
+.font-book-open-btn,
+.font-book-size-btn,
+.font-book-category-btn,
+.file-picker-drive-btn {
+  transition:
+    background-color 0.28s ease,
+    color 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
 .workspace {
   display: grid;
   /* side-toolbar / side-panel の列は要素の実 width で決まるよう auto。
@@ -813,7 +880,179 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   min-height: 0;
   overflow: hidden;
 }
-
+body.home-mode .workspace {
+  display: none;
+}
+body.home-returning .workspace {
+  pointer-events: none;
+  transform-origin: center center;
+  animation: home-return-fade-out 360ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+@keyframes home-return-fade-out {
+  0% {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.92) translateY(14px);
+    filter: blur(3px);
+  }
+}
+.home-screen {
+  display: none;
+  min-height: 0;
+  background: linear-gradient(
+    180deg,
+    var(--home-hero-bg) 0%,
+    var(--home-hero-bg) 47%,
+    var(--home-bg) 47%,
+    var(--home-bg) 100%
+  );
+  color: var(--home-text);
+  overflow: auto;
+}
+body.home-mode .home-screen {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+body.home-starting .home-screen {
+  pointer-events: none;
+  animation: home-start-fade-out 360ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
+}
+@keyframes home-start-fade-out {
+  0% {
+    opacity: 1;
+    transform: scale(1);
+    filter: blur(0);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.985);
+    filter: blur(2px);
+  }
+}
+.home-screen-inner {
+  width: min(1080px, calc(100vw - 64px));
+  min-height: min(680px, calc(100vh - 92px));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 38px 0 56px;
+}
+.home-logo-icon {
+  width: 112px;
+  height: 112px;
+  object-fit: contain;
+  margin-bottom: 28px;
+  filter: var(--home-logo-shadow);
+}
+.home-title {
+  margin: 0 0 96px;
+  color: var(--home-text);
+  font-size: 64px;
+  line-height: 1;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-shadow: var(--home-title-shadow);
+}
+.home-start-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(260px, 1fr));
+  gap: 60px;
+  width: min(760px, 100%);
+}
+.home-start-card {
+  min-height: 252px;
+  border: none;
+  border-radius: 18px;
+  padding: 22px 24px 24px;
+  box-sizing: border-box;
+  background: var(--home-card-bg);
+}
+.home-start-card h3 {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  margin: 0;
+  color: var(--home-text);
+  font-size: 29px;
+  line-height: 1.2;
+  text-align: center;
+  font-weight: 800;
+  letter-spacing: 0;
+}
+.home-card-icon {
+  width: 31px;
+  height: 31px;
+  flex: 0 0 auto;
+  color: var(--home-text);
+  stroke: currentColor;
+}
+.home-card-rule {
+  height: 1px;
+  background: var(--home-line);
+  margin: 16px 0 20px;
+}
+.home-start-card p {
+  margin: 0 0 28px;
+  color: var(--home-muted);
+  font-size: 20px;
+  line-height: 1.45;
+  font-weight: 400;
+}
+.home-start-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  width: min(228px, 100%);
+  height: 54px;
+  margin: 0 auto;
+  border: 2px solid var(--accent);
+  border-radius: 999px;
+  background: transparent;
+  color: #fff;
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1;
+}
+.home-start-btn:hover:not(:disabled),
+.home-start-btn:focus-visible {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+:root[data-theme="light"] .home-start-btn {
+  color: #111;
+}
+:root[data-theme="light"] .home-start-btn:hover:not(:disabled),
+:root[data-theme="light"] .home-start-btn:focus-visible {
+  color: #fff;
+}
+.home-start-arrow {
+  font-size: 22px;
+  transform: translateY(1px);
+}
+@media (max-width: 840px) {
+  .home-screen-inner {
+    justify-content: flex-start;
+    padding-top: 40px;
+  }
+  .home-title {
+    font-size: 48px;
+    margin-bottom: 44px;
+  }
+  .home-start-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+    width: min(420px, 100%);
+  }
+}
 .workspace.flipped {
   grid-template-columns: auto auto 1fr;
   grid-template-rows: 1fr;
@@ -821,13 +1060,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .workspace.flipped > .spreads-container { grid-column: 3; grid-row: 1; }
 .workspace.flipped > .side-toolbar { grid-column: 2; grid-row: 1; }
 .workspace.flipped > .side-panel { grid-column: 1; grid-row: 1; }
-
 /* ワークスペース反転ボタンの矢印：非反転時は左塗り、反転時は右塗り */
 #workspace-flip-btn.flipped .flip-left-arrow { fill: none; }
 #workspace-flip-btn.flipped .flip-right-arrow { fill: currentColor; }
 #workspace-flip-btn:not(.flipped) .flip-left-arrow { fill: currentColor; }
 #workspace-flip-btn:not(.flipped) .flip-right-arrow { fill: none; }
-
 .hamburger-overlay {
   position: fixed;
   inset: 0;
@@ -842,7 +1079,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: auto;
 }
 .hamburger-overlay[hidden] { display: block; }
-
 .hamburger-menu {
   position: fixed;
   top: 0;
@@ -864,7 +1100,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .hamburger-menu[hidden] {
   display: flex;
 }
-
 .hamburger-menu-header {
   display: flex;
   align-items: center;
@@ -902,24 +1137,22 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--panel-hover);
   color: var(--text);
   cursor: pointer;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.22s ease;
 }
 .menu-icon-btn:hover {
-  background: var(--accent);
-  color: #fff;
+  background: var(--panel-hover);
+  color: var(--accent);
 }
 .menu-icon-btn.active {
   background: var(--accent);
   color: #fff;
 }
-
 :root[data-theme="dark"] .theme-icon-sun,
 .theme-icon-sun { display: none; }
 :root[data-theme="dark"] .theme-icon-moon,
 .theme-icon-moon { display: block; }
 :root[data-theme="light"] .theme-icon-sun { display: block; }
 :root[data-theme="light"] .theme-icon-moon { display: none; }
-
 .side-toolbar {
   width: 44px;
   display: flex;
@@ -939,7 +1172,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
      として使うが、他の絶対要素の fallback 用に position: relative を残す。 */
   position: relative;
 }
-
 .side-toolbar.collapsed {
   width: 24px;
   padding: 0;
@@ -952,7 +1184,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   visibility: hidden;
   transition: opacity 0.18s ease, visibility 0s linear 0.18s;
 }
-
 /* 折り畳み用ヘッダ：パネル先頭の 24px 帯にトグルボタン（>>）を配置 */
 .panel-header {
   width: 100%;
@@ -1007,34 +1238,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
 }
 .panel-toggle-btn:hover {
-  background: var(--panel-hover);
+  background: transparent;
   border-color: var(--border);
-  color: var(--text);
+  color: var(--accent);
 }
 .panel-toggle-btn .icon-expand { display: none; }
 .panel-toggle-btn .icon-collapse { display: block; }
 .collapsed > .panel-header .panel-toggle-btn .icon-expand { display: block; }
 .collapsed > .panel-header .panel-toggle-btn .icon-collapse { display: none; }
-
 .side-tool-btn {
   width: 32px;
   height: 32px;
   min-width: 32px;
 }
-
 .side-tool-btn.locked,
 .side-tool-btn:disabled {
   opacity: 0.38;
   cursor: not-allowed;
   filter: grayscale(1);
 }
-
 .side-tool-btn.active {
   background: var(--accent);
   border: none;
   color: #fff;
 }
-
 /* 選択ツール直上の「新規テキスト方向」スイッチ（横型トグル）。
    1 つのトラック内を左右にスライドする thumb で 縦↔横 を切替える iOS 風スイッチ。
    サイドツールバー content 幅 (44px - padding 12px = 32px) に収まるサイズに合わせる。
@@ -1051,7 +1278,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 9px;
   cursor: pointer;
   align-self: center;
-  transition: border-color 0.12s, background 0.12s;
+  transition: border-color 0.12s, background-color 0.12s;
   /* 子要素の変形を確実に切り取り */
   overflow: hidden;
   /* flex 子としては最小幅を尊重して縮まないように */
@@ -1087,7 +1314,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--text-muted);
   z-index: 1;
   pointer-events: none;
-  transition: color 0.18s;
+  transition: color 0.22s ease;
 }
 .new-text-dir-switch-icon-left { left: 3px; }
 .new-text-dir-switch-icon-right { right: 3px; }
@@ -1103,7 +1330,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .new-text-dir-switch[aria-checked="false"] .new-text-dir-switch-icon-right {
   color: #fff;
 }
-
 /* レイヤートグルボタン：margin-top: auto でサイドツールバー底辺へ押し下げ、
    自身以下の zoom / page-nav / fill-color-picker もボトムアンカー位置に収まる。
    ドロワー本体は .side-toolbar 直下に配置されており、サイドツールバーの
@@ -1112,7 +1338,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--accent);
   color: #fff;
 }
-
 /* レイヤーボタンとドロワーを束ねるラッパ。ドロワーの絶対配置基準（top: 0）を
    ボタンの位置に合わせるための anchor 役。flex 子としてはボタンと同じ content
    サイズで並ぶ（ドロワーは absolute なので寸法に影響しない）。 */
@@ -1123,7 +1348,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   justify-content: center;
 }
-
 /* ズーム群はサイドツールバー底辺にアンカーする（ボトムアンカー役を担う）。
    layers-toggle-btn は #tool-pan の直下に content 高で並ぶ。 */
 .side-page-zoom {
@@ -1162,10 +1386,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-align: center;
 }
 .page-zoom-level-btn:hover {
-  background: var(--panel-hover);
-  border-color: var(--border);
+  border-color: var(--accent);
+  color: var(--accent);
 }
-
 /* ページ移動ボタン（上下）：サイドツールバーの末尾近く、ズーム群の真下に配置。
    ボトムアンカーは .side-page-zoom が担うため、ここでは margin-top / border-top を持たない。 */
 .page-nav {
@@ -1196,7 +1419,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding: 1px 0;
   white-space: nowrap;
 }
-
 /* Photoshop 風の文字色ピッカー：白/黒の 2 枚をオーバーラップさせて下部に配置。 */
 .fill-color-picker {
   padding: 8px 0 4px;
@@ -1207,13 +1429,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   align-items: center;
   gap: 6px;
 }
-
 .fill-swatch-stack {
   position: relative;
   width: 28px;
   height: 28px;
 }
-
 .fill-swatch {
   position: absolute;
   width: 18px;
@@ -1225,30 +1445,25 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
   transition: transform 0.08s ease;
 }
-
 .fill-swatch:hover {
   transform: scale(1.08);
 }
-
 .fill-swatch-white {
   background: #fff;
   top: 0;
   left: 0;
   z-index: 1;
 }
-
 .fill-swatch-black {
   background: #000;
   bottom: 0;
   right: 0;
   z-index: 2;
 }
-
 .fill-swatch.active {
   box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0, 0, 0, 0.4);
   z-index: 3;
 }
-
 .spreads-container {
   display: flex;
   flex-direction: column;
@@ -1256,7 +1471,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--canvas-bg);
   min-height: 0;
 }
-
 .spreads-stage {
   flex: 1;
   min-width: 0;
@@ -1268,7 +1482,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .workspace.flipped .spreads-stage {
   flex-direction: row-reverse;
 }
-
 .spreads-pdf-area,
 .spreads-psd-area {
   flex: 1;
@@ -1283,7 +1496,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
      スクロールは内側の #pdf-stage / #psd-stage に閉じる。 */
   overflow: hidden;
 }
-
 /* PSD ステージ：ズーム拡大でページが溢れるため、ここでスクロール。 */
 .psd-stage {
   flex: 1;
@@ -1297,7 +1509,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   justify-content: safe center;
   overflow: auto;
 }
-
 .spreads-pdf-area {
   position: relative;
   border-right: 1px solid var(--border);
@@ -1308,14 +1519,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-right: none;
   border-left: 1px solid var(--border);
 }
-
 .spreads-psd-area {
   position: relative;
 }
 /* shared base ルールが display: flex を当てているため、user-agent の `[hidden]`
    既定 (display: none) を上書きしてしまう。明示的に [hidden] を効かせる。 */
 .spreads-psd-area[hidden] { display: none; }
-
 /* ===== テキストエディタペイン =====
    editor モード時に表示される右半分のドロワー。proofread-area と同じく absolute
    レイヤーで PSD area の上に重なる。.spreads-stage.editor-visible が付くと左から
@@ -1341,11 +1550,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   opacity: 1;
   pointer-events: auto;
 }
-
 /* proofread モードは parallel と同じレイアウト（PDF + PSD）。校正パネルが
    spreads-proofread-area として PDF 上にスライドオーバーレイ表示される。
    サイドバー類は parallel と同じく表示。
-
    editor モード: 校正パネル（左）+ editor-area（右）の 2 ドロワーが PDF/PSD を
    完全に覆う。サイドツールバー / サイドパネルは編集に集中するため display:none。
    PDF/PSD area はドロワーが完全に被っているので display:none せず、スライド時の
@@ -1354,7 +1561,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .workspace.editor-mode .side-panel {
   display: none !important;
 }
-
 .editor-toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -1364,7 +1570,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--panel);
   flex-shrink: 0;
 }
-
 .editor-toolbar-btn {
   display: inline-flex;
   align-items: center;
@@ -1377,10 +1582,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 11px;
   font-family: inherit;
   cursor: pointer;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.22s ease;
 }
 .editor-toolbar-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  background: transparent;
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -1393,7 +1598,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-color: var(--danger);
   color: var(--danger);
 }
-
 /* editor-toolbar-row2 の右側に寄せるページ移動グループ。
    margin-left: auto で左の編集ボタン群と分離する。 */
 .editor-page-nav {
@@ -1415,7 +1619,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--text-muted);
   user-select: none;
 }
-
 .editor-page-mode-tabs {
   display: inline-flex;
   align-items: center;
@@ -1436,17 +1639,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 600;
   font-family: inherit;
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background-color 0.15s, color 0.22s ease;
 }
 .editor-page-mode-btn:hover:not(.active) {
-  color: var(--text);
+  color: var(--accent);
 }
 .editor-page-mode-btn.active {
   background: var(--bg);
   color: var(--text);
   box-shadow: 0 1px 3px rgba(0, 0, 0, 0.16);
 }
-
 .editor-filename-row {
   display: flex;
   align-items: center;
@@ -1479,7 +1681,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--accent);
 }
 .editor-dirty-dot[hidden] { display: none; }
-
 /* ページ別 viewer + empty placeholder を重ねるラッパー。empty は absolute overlay で
    pointer-events:none → 下の viewer が常にクリック/スクロールを受ける。 */
 .editor-pages-viewer-wrap {
@@ -1557,7 +1758,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: text;
   color: var(--text);
   outline: none;
-  transition: border-color 0.1s ease, background 0.1s ease, box-shadow 0.1s ease;
+  transition: border-color 0.1s ease, background-color 0.1s ease, box-shadow 0.1s ease, color 0.22s ease;
 }
 /* × ボタンの右側に縦の区切り線。ボタン領域 (left: 4px + width: 18px = 22px) と
    テキスト領域 (padding-left: 32px) の間に 1px の細い罫線を入れて視覚的に分離する。
@@ -1601,7 +1802,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--bg);
   box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.16);
 }
-
 /* 各段落の左端に表示する × 削除ボタン。クリックで deleteTxtBlockByIndex を即発火。
    contentEditable 子要素からフォーカスが外れて blur → commit が走るのを防ぐため、
    renderViewer 側で mousedown.preventDefault してフォーカス移動を抑止する。 */
@@ -1620,11 +1820,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--text-muted);
   border-radius: 3px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background-color 0.15s ease, color 0.22s ease;
 }
-/* 親セレクタ込みで specificity 0,3,1 に上げ、global button:hover:not(:disabled) を上書き。 */
 .editor-page-paragraph .editor-page-paragraph-delete-btn:hover:not(:disabled) {
-  background: rgba(231, 76, 60, 0.12);
+  background: transparent;
   border-color: transparent;
   color: var(--danger);
 }
@@ -1636,7 +1835,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--bg);
 }
 .editor-empty[hidden] { display: none; }
-
 /* エディタ上部の新規テキスト入力欄。サイドパネルの .txt-source-new-input と同じ
    レイアウト原則だが、エディタは横幅が広いので padding を強めに取る。
    入力欄を上部に配置するため、下のビューアと区切る border-bottom を持つ。 */
@@ -1657,7 +1855,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-shrink: 0;
   min-width: 64px;
 }
-
 /* promptDialog 用に confirm-modal 内へ動的挿入される `<input>`。 */
 .prompt-modal-input {
   display: block;
@@ -1675,12 +1872,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .prompt-modal-input:focus {
   border-color: var(--accent);
 }
-
 /* ===== ルーラー / ガイド =====
    ペイン直下に固定配置。rulers-on のとき #psd-stage を ruler 厚ぶん押し出して
    ステージのコンテンツが目盛りで隠れないようにする。 */
 :root { --ruler-thick: 18px; }
-
 /* ルーラー有効時の配置：
    - 上端 24px: ステージラベルバー（`.stage-label-bar`）
    - その下 18px (`--ruler-thick`): ルーラー帯（top）
@@ -1703,7 +1898,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   top: 24px;
   height: calc(100% - 24px);
 }
-
 .psd-rulers {
   position: absolute;
   top: 0;
@@ -1714,7 +1908,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   z-index: 3;
 }
 .psd-rulers[hidden] { display: none; }
-
 .psd-ruler {
   position: absolute;
   pointer-events: auto;
@@ -1750,7 +1943,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-bottom: 1px solid var(--border);
   box-sizing: border-box;
 }
-
 /* ガイド層：ルーラー帯の下にある canvas エリアに重なる。透過 + 個別ガイドのみ捕捉。 */
 .psd-guides-layer {
   position: absolute;
@@ -1768,7 +1960,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: auto;
   background: #00d2ff;
   opacity: 0.85;
-  transition: background 0.1s, opacity 0.1s;
+  transition: background-color 0.1s, opacity 0.1s;
 }
 .psd-guide[data-axis="h"] { height: 1px; cursor: ns-resize; }
 .psd-guide[data-axis="v"] { width: 1px;  cursor: ew-resize; }
@@ -1777,7 +1969,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: var(--accent);
   opacity: 1;
 }
-
 /* ガイドロック中、縦横 2 本以上のガイドで囲まれた矩形の外側を薄暗くするオーバーレイ。
    .psd-guides-layer は z-index:2 / pointer-events:none。dim 自身も pointer-events を奪わない。
    DOM 順で個別ガイド線より先に挿入されるため、ガイド線が常に上に表示される。
@@ -1794,14 +1985,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* 透明 div の周囲を 9999px の spread で一気に塗る。clipper の overflow:hidden で切り落とされる。 */
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
 }
-
 /* 非同期モード時のアクティブペイン強調（キーボード/ホイールの操作対象側） */
 .spreads-pdf-area.active-pane,
 .spreads-psd-area.active-pane {
   box-shadow: inset 0 0 0 2px var(--accent);
   transition: box-shadow 0.15s ease;
 }
-
 /* これらのボタンは旧仕様ではペイン右下に absolute 配置していたが、
    `.stage-label-bar > .stage-label-actions` の flex 子としてバー右端に並ぶ
    方式に変更。バー高さ 24px に収めるため 22px 角・SVG 15px に揃える。 */
@@ -1831,18 +2020,15 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   width: 15px;
   height: 15px;
 }
-
 .pdf-rotate-btn:hover:not(:disabled),
 .psd-rotate-btn:hover:not(:disabled),
 .psd-guides-lock-btn:hover:not(:disabled),
 .psd-guides-apply-btn:hover:not(:disabled),
 .psd-rulers-toggle-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  background: transparent;
   border-color: var(--border);
-  color: var(--text);
+  color: var(--accent);
 }
-
-
 /* ロックボタンの状態に応じたアイコン切替（押下＝ロック中） */
 .psd-guides-lock-btn .lock-icon-locked { display: none; }
 .psd-guides-lock-btn .lock-icon-unlocked { display: block; }
@@ -1853,14 +2039,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: #fff;
   border-color: var(--accent, #3b82f6);
 }
-
 /* ガイドロック中：
    - ガイド線そのものは非表示（dim マスクで囲んだ枠を確認する用途を優先）。
    - ルーラー帯のドラッグ用 cursor も変更して新規作成不可を示す。 */
 .spreads-psd-area.guides-locked .psd-guide { display: none; }
 .spreads-psd-area.guides-locked .psd-ruler-top { cursor: default; }
 .spreads-psd-area.guides-locked .psd-ruler-left { cursor: default; }
-
 /* ガイドを複数反映モーダル */
 .guides-apply-card {
   min-width: 380px;
@@ -1909,7 +2093,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
 .pdf-stage {
   flex: 1;
   min-width: 0;
@@ -1922,14 +2105,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   /* ズームで拡大した PDF はここでスクロール（ペインは overflow:hidden で回転ボタンを固定）。 */
   overflow: auto;
 }
-
 .pdf-canvas {
   display: block;
   background: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.25);
 }
 .pdf-canvas[hidden] { display: none; }
-
 .pdf-empty {
   display: flex;
   flex-direction: column;
@@ -1942,19 +2123,16 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   max-width: 320px;
 }
 .pdf-empty[hidden] { display: none; }
-
 .pdf-empty-icon {
   width: 48px;
   height: 48px;
   opacity: 0.6;
 }
-
 .pdf-empty-text {
   margin: 0;
   font-size: 13px;
   line-height: 1.5;
 }
-
 .spreads-empty {
   display: flex;
   flex-direction: column;
@@ -1966,23 +2144,19 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding: 32px;
   text-align: center;
 }
-
 .spreads-empty-icon {
   width: 56px;
   height: 56px;
   opacity: 0.6;
 }
-
 .spreads-empty-text {
   margin: 0;
 }
-
 .page {
   position: relative;
   background: var(--page-bg);
   border: 1px solid var(--border);
 }
-
 .canvas-wrap {
   display: inline-grid;
   grid-template-columns: auto;
@@ -1990,14 +2164,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   line-height: 0;
   vertical-align: top;
 }
-
 .canvas-wrap > canvas {
   grid-row: 1;
   grid-column: 1;
   display: block;
   image-rendering: auto;
 }
-
 .page-overlay {
   grid-row: 1;
   grid-column: 1;
@@ -2006,7 +2178,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   height: 100%;
   pointer-events: none;
 }
-
 /* Photoshop ポイントテキスト風: 未選択時はテキストのみ可視で、枠装飾は出さない。
    bbox は寸法を持ったまま絶対配置され、クリック判定 / マーキー / wheel サイズ /
    回転ハンドル / サイズバッジの配置基準として機能継続する。 */
@@ -2022,7 +2193,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   will-change: transform, left, top;
   backface-visibility: hidden;
 }
-
 /* 単一選択時: 青の実線 outline (--accent)。既存 / 新規どちらも同じ青で統一。
    outline はレイアウトに影響しないので layer-box のサイズを変えず安全に枠線を引ける。 */
 .layer-box.selected,
@@ -2031,7 +2201,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   outline: 2px solid var(--accent);
   outline-offset: 0;
 }
-
 /* 複数選択 (2 件以上) のとき: 枠を水色 (cyan) の点線に切替。バッジ色は単一選択と同じ青。
    .layer-box-new / .layer-box-existing 両方に同じスタイルを適用する。 */
 .layer-box.multi-selected,
@@ -2053,7 +2222,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   margin-top: 0;
   margin-bottom: 10px;
 }
-
 /* 【v1.26.0 移植 (PsDesign-main v1.24.0)】
    自動配置で背景/ウニ判定によりフォント自動切替されたレイヤーの強調表示 (要件④)。
    合成スコアを 10% 刻みのバケットに分けて、信号風の色分けで確信度を可視化する。
@@ -2066,7 +2234,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .auto-font-bucket-3 { --auto-font-color: #eab308; }   /* 80-89% 黄 */
 .auto-font-bucket-4 { --auto-font-color: #3b82f6; }   /* 90-99% 青 */
 .auto-font-bucket-5 { --auto-font-color: #32cd32; }   /* 100% 緑 */
-
 .layer-box-new.auto-font-switched {
   box-shadow: 0 0 0 2px var(--auto-font-color, #ef4444);
 }
@@ -2078,7 +2245,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layer-box-new.auto-font-switched .new-layer-text {
   color: var(--auto-font-color, #ef4444);
 }
-
 /* V ツール swap 中、入れ替え対象 B（A の元位置に移動するフレーム）を緑で強調。
    A 側はそのまま通常の選択枠を維持し、B と点線 ghost のみ緑で操作意図を示す。 */
 .layer-box.swap-target,
@@ -2087,7 +2253,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-shadow: 0 0 0 3px #10b981, 0 0 0 5px rgba(255, 255, 255, 0.6);
   background: rgba(16, 185, 129, 0.28);
 }
-
 /* B が入れ替え後に着地する位置（A の元中心 + B のサイズ）の点線プレビュー。
    4 本の linear-gradient で四辺の dash を構成し、各辺の background-position を
    右回りに animate して marching ants 風に流す。 */
@@ -2107,7 +2272,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
   animation: swap-ghost-march 0.6s linear infinite;
 }
-
 @keyframes swap-ghost-march {
   to {
     background-position:
@@ -2117,7 +2281,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
       100% 8px;   /* 右辺：下へ */
   }
 }
-
 .new-layer-text,
 .existing-layer-text {
   color: #000;
@@ -2132,7 +2295,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-weight: 500;
   pointer-events: none;
 }
-
 /* 【v1.26.0】ルビが含まれる layer は overflow を visible に切り替えて、<ruby> の <rt> や
    in-edit プレビューの ::after 疑似要素を bbox 外側まで表示できるようにする。
    renderInnerText / applyEditModeRubyToRange が has-ruby クラスを付け外しする。 */
@@ -2140,15 +2302,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .existing-layer-text.has-ruby {
   overflow: visible;
 }
-
 .existing-layer-text {
   opacity: 0.35;
 }
-
 .layer-box-existing.selected .existing-layer-text {
   opacity: 0.85;
 }
-
 /* 【v1.26.0】既存レイヤーにルビが付いている場合、選択解除時の opacity:0.35 ではルビが
    ほぼ見えなくなるため、has-ruby 時は選択状態に関係なく高 opacity に保つ。PSD canvas の
    ベース文字と多少重なって見えるが、ルビが見えないよりは許容される視認性。 */
@@ -2156,13 +2315,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layer-box-existing.selected .existing-layer-text.has-ruby {
   opacity: 1;
 }
-
 .layer-box-new[data-direction="vertical"] .new-layer-text,
 .layer-box-existing[data-direction="vertical"] .existing-layer-text {
   writing-mode: vertical-rl;
   text-orientation: mixed;
 }
-
 /* 縦中横 (tate-chu-yoko): 半角 !! / !? を 1 文字幅に詰めて縦書き 1 セルに収める。
    canvas-tools.js の appendLineWithTracking が <span class="tcy-span">!!</span> 等で
    ラップしたものを WebView2 (Chromium) が標準サポートする text-combine-upright で描画。
@@ -2171,7 +2328,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   text-combine-upright: all;
   -webkit-text-combine: horizontal;
 }
-
 /* layerRectFor* の THICK_SAFETY (= 0.4em) と対応する内側 padding。
    bbox が広がった分だけ padding を入れ、テキスト本体を bbox 中央に視覚配置する。
    これにより bbox サイズ変更でテキスト位置がずれない。
@@ -2187,7 +2343,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   padding-top: 0.2em;
   padding-bottom: 0.2em;
 }
-
 .layer-size-badge {
   position: absolute;
   top: 100%;
@@ -2218,7 +2373,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: #fff;
   text-shadow: none;
 }
-
 .layer-size-badge-size {
   display: inline-flex;
   align-items: center;
@@ -2229,7 +2383,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   background: rgba(255, 255, 255, 0.16);
   font-weight: 800;
 }
-
 .layer-rotate-handle {
   position: absolute;
   bottom: 100%;
@@ -2246,7 +2399,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: auto;
   z-index: 4;
 }
-
 /* 【v1.21.0】回転ドラッグ中の角度表示インジケータ。マウスカーソル右下に追従し、
    現在の回転角（normalized: -180..180、Shift スナップ中は 15° 単位）を表示。 */
 .rotate-degree-indicator {
@@ -2276,12 +2428,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   transform: translateX(-50%);
   pointer-events: none;
 }
-
 .page-overlay[data-tool="pan"] .layer-box {
   pointer-events: none;
   cursor: grab;
 }
-
 .marquee-rect {
   position: absolute;
   border: 1px dashed var(--accent);
@@ -2290,7 +2440,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   box-sizing: border-box;
   z-index: 5;
 }
-
 /* 【v1.21.0】contenteditable in-place 編集中のレイヤー：枠線・回転ハンドル・選択リングは
    表示せず、テキスト本体に caret だけが入る Photoshop 風の見た目にする。
    floating textarea は廃止し、レイヤー DOM の text element を直接編集する方式へ移行。 */
@@ -2301,14 +2450,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   pointer-events: auto;
   z-index: 4;
 }
-
 /* 編集中レイヤーの回転ハンドル・サイズバッジ（フォント名・pt 表示）は非表示。
    テキスト本体への入力に集中できるよう装飾を排除する。 */
 .layer-box.editing .layer-rotate-handle,
 .layer-box.editing .layer-size-badge {
   display: none !important;
 }
-
 .layer-box.editing .new-layer-text,
 .layer-box.editing .existing-layer-text {
   pointer-events: auto;
@@ -2320,7 +2467,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   overflow: visible;
   caret-color: var(--accent);
 }
-
 /* 既存レイヤーは通常 opacity 0.35 で canvas-baked 上の薄い重ね。
    編集中だけ opacity 1.0 に上げて、編集テキストが見やすくする。
    さらに白背景を被せて canvas に焼き込まれた旧テキストを隠す
@@ -2331,11 +2477,9 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .layer-box-existing.editing .existing-layer-text {
   opacity: 1;
 }
-
 /* 旧 .page-label（.page 要素直下に absolute 配置していたフロートラベル）は廃止。
    見本画像 / PSD ともにペイン上部の `.stage-label-bar` に表示先を移行。 */
 .page-label { display: none; }
-
 /* ステージ上部のラベルバー：見本画像 / PSD ペインそれぞれの最上部に貼り付き、
    ペインの padding (16px) を負マージンで打ち消して左右端まで広げる。
    左にファイル名ラベル、右に回転 / ガイド系ボタンを配置する flex 構成。
@@ -2375,7 +2519,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   gap: 4px;
 }
 /* バー自体は読込前でも常時表示し、ラベルは空・ボタンは disabled でグレーアウトさせる。 */
-
 .side-panel {
   width: 280px;
   background: var(--panel);
@@ -2391,7 +2534,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   min-height: 0;
   height: 100%;
 }
-
 .side-panel.collapsed {
   width: 24px;
 }
@@ -2403,7 +2545,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   visibility: hidden;
   transition: opacity 0.18s ease, visibility 0s linear 0.18s;
 }
-
 .side-panel h2, .side-panel h3 {
   margin: 0;
   padding: 10px 12px;
@@ -2414,14 +2555,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   color: var(--text);
   border-bottom: 1px solid var(--border);
 }
-
 /* セクションの本体（h2 以外）をトグルバーよりやや明るい色にして段差を強調。
    side-panel が var(--panel) なので、panel-section に var(--panel-body) を当てると
    h2 だけ var(--panel) に戻せば自然にコントラストがつく。 */
 .panel-section {
   background: var(--panel-body);
 }
-
 /* セクション折りたたみ：h2 を flex 行にして右端にトグルボタン。collapsed クラスで
    h2 以外の子要素を隠し、chevron を上向きに反転する。 */
 .panel-section-h2 {
@@ -2461,14 +2600,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   flex-shrink: 0;
 }
 .section-toggle-btn:hover {
-  background: var(--panel-hover);
-  color: var(--text);
+  color: var(--accent);
 }
 .section-chevron {
   transition: transform 0.15s ease;
 }
 .panel-section.collapsed .section-chevron { transform: rotate(180deg); }
-
 /* セクション折り畳みアニメーション。h2 以外の子要素の高さを auto ↔ 0 に
    トランジションさせる（interpolate-size: allow-keywords が前提）。
    padding / margin / border-width も同時に 0 へ縮めて違和感のない収束に。
@@ -2514,7 +2651,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
     border-bottom-width 0.25s ease,
     visibility 0s linear 0.25s;
 }
-
 /* 校正パネル開閉ボタン（txt-source-actions の左端、TXT 保存ボタンの隣）。
    24×24 アイコンのみ。TXT 未読込時の save/reload グレーアウトとは独立に常時アクティブな
    見た目を保つため、デフォルト色を muted ではなく通常 text 色にしている。
@@ -2534,7 +2670,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   overflow: hidden;
 }
 .proofread-panel[hidden] { display: none; }
-
 /* 校正パネル ドロワー（左半分、PDF area の上に重なる absolute レイヤー）。
    proofread モード / editor モードのどちらでも左半分に表示される。
    .spreads-stage に .proofread-visible / .editor-visible が付くと
@@ -2614,13 +2749,12 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
   line-height: 1.4;
 }
-.editor-left-pane-btn:hover { color: var(--text); }
+.editor-left-pane-btn:hover { color: var(--accent); }
 .editor-left-pane-btn.active {
   background: rgba(72, 118, 255, 0.15);
   color: var(--accent);
   border-color: var(--accent);
 }
-
 /* editor モード + 「見本」サブ状態（.left-pdf）時の挙動:
    - 校正パネルのヘッダー（トグル含む）は表示維持
    - 校正パネルのボディ系（tabs / actions / meta / body / browser-nav）は display:none
@@ -2665,7 +2799,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   left: 0;
   right: var(--left-pdf-width, 50%);
 }
-
 .proofread-tabs { display: flex; gap: 2px; flex: 0 0 auto; }
 .proofread-tab {
   font-size: 11px;
@@ -2700,7 +2833,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   cursor: pointer;
   line-height: 1.4;
 }
-.proofread-load-btn:hover { background: var(--accent-hover); }
+.proofread-load-btn:hover { color: var(--accent); }
 .proofread-close-btn {
   width: 24px;
   height: 24px;
@@ -2713,7 +2846,7 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 3px;
   padding: 0;
 }
-.proofread-close-btn:hover { color: var(--text); background: var(--panel-hover); }
+.proofread-close-btn:hover { color: var(--accent); }
 .proofread-body {
   flex: 1;
   min-height: 0;
@@ -2744,13 +2877,11 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   display: block;
   opacity: 0.6;
 }
-
 .proofread-list {
   flex: 1;
   min-height: 0;
   overflow: auto;
 }
-
 /* MojiQ 風 カテゴリ折り畳みグループ。proofread-cat-badge を廃止した代わりに、
    カテゴリを 1 単位として header (▼ + 名前 + 件数) + body (項目群) を作る。
    header クリックで .collapsed トグル → body 非表示。
@@ -2796,7 +2927,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   font-size: 11px;
   flex-shrink: 0;
 }
-
 /* カテゴリ ヘッダー右端の「済」バッジ。
    - カテゴリ チェックボックスがチェック済み
    - もしくはカテゴリ内の全項目チェックボックスがチェック済み
@@ -2820,7 +2950,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 .proofread-category.collapsed .proofread-category-body {
   display: none;
 }
-
 /* MojiQ 風 確認済みチェックボックス: hidden input + 装飾 span。
    カテゴリ用は 11×11、項目用は 14×14。チェック時は緑塗り + 白チェックマーク。 */
 .proofread-category-checkbox,
@@ -2833,12 +2962,10 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
 }
 .proofread-category-checkbox { margin-right: 4px; }
 .proofread-item-checkbox { margin-right: 8px; margin-top: 2px; }
-
 .proofread-category-checkbox input[type="checkbox"],
 .proofread-item-checkbox input[type="checkbox"] {
   display: none;
 }
-
 .proofread-checkbox-icon {
   width: 11px;
   height: 11px;
@@ -2889,7 +3016,6 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
-
 /* 確認済み状態の見た目（opacity ではなく文字色を薄くする MojiQ 流）。 */
 .proofread-category.checked .proofread-category-name,
 .proofread-category.checked .proofread-category-count {
@@ -2996,7 +3122,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
   font-size: 11px;
 }
-
 /* 校正パネル：MojiQ 風のフォルダブラウザ */
 /* ブラウザモード時、共通ヘッダー (.proofread-panel-header) 内に表示する
    戻る/進む/パンくずグループ。tabs と同じ位置で flex 1 で伸ばし、breadcrumb が
@@ -3024,13 +3149,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 0;
 }
 .proofread-nav-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  color: var(--accent);
 }
 .proofread-nav-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
-
 .proofread-browser {
   flex: 1;
   min-height: 0;
@@ -3061,7 +3185,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex-shrink: 0;
 }
 .proofread-browser-up-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  color: var(--accent);
 }
 .proofread-browser-up-btn:disabled {
   opacity: 0.4;
@@ -3130,7 +3254,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   max-height: none;
   flex: 0 0 auto;
 }
-
 /* テキスト編集セクションが折り畳まれているときは、原稿テキストが残余高を吸収する
    （max-height 34vh の上限を解除して flex:1 で残り全部を埋める）。
    原稿テキスト自身も折り畳まれている場合は上の collapsed.txt-source ルールを優先。 */
@@ -3138,7 +3261,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   max-height: none;
   flex: 1 1 auto;
 }
-
 .txt-source {
   display: flex;
   flex-direction: column;
@@ -3147,7 +3269,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex: 1 1 auto;
   min-height: 0;
 }
-
 /* ========== サイドパネル タブバー ==========
    原稿テキスト / テキスト編集 を排他表示。tab 選択は localStorage に永続化。 */
 .side-panel-tabs {
@@ -3168,10 +3289,14 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
-  transition: color 0.1s, border-color 0.1s;
+  transition:
+    background-color 0.28s ease,
+    color 0.22s ease,
+    border-color 0.22s ease;
 }
 .side-panel-tab:hover:not(.active) { color: var(--text); }
 .side-panel-tab.active {
+  background: var(--panel-hover);
   color: var(--text);
   border-bottom-color: var(--accent);
 }
@@ -3187,7 +3312,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
 }
 .side-panel .panel-section[hidden] { display: none; }
-
 .font-book-panel {
   flex: 1 1 auto;
   min-height: 0;
@@ -3195,7 +3319,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex-direction: column;
   overflow: hidden;
 }
-
 .font-book-toolbar {
   display: flex;
   align-items: center;
@@ -3205,7 +3328,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: var(--panel);
   flex: 0 0 auto;
 }
-
 .font-book-open-btn {
   min-width: 0;
   flex: 1 1 auto;
@@ -3222,12 +3344,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-weight: 700;
   cursor: pointer;
 }
-
 .font-book-open-btn:hover {
+  background: transparent;
   border-color: var(--accent);
   color: var(--accent);
 }
-
 .font-book-meta {
   padding: 7px 10px;
   border-bottom: 1px solid var(--border);
@@ -3239,7 +3360,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-overflow: ellipsis;
   flex: 0 0 auto;
 }
-
 .font-book-filters {
   display: flex;
   align-items: center;
@@ -3247,7 +3367,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 8px 10px 6px;
   flex: 0 0 auto;
 }
-
 .font-book-search {
   min-width: 0;
   flex: 1 1 auto;
@@ -3260,12 +3379,10 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 12px;
   outline: none;
 }
-
 .font-book-search:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
 }
-
 .font-book-filter-btn,
 .font-book-size-btn,
 .font-book-category-btn {
@@ -3276,14 +3393,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
   font: inherit;
 }
-
 .font-book-filter-btn {
   flex: 0 0 auto;
   height: 28px;
   padding: 0 9px;
   font-size: 11px;
 }
-
 .font-book-filter-btn.active,
 .font-book-size-btn.active,
 .font-book-category-btn.active {
@@ -3291,21 +3406,25 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--accent);
   background: color-mix(in srgb, var(--accent) 10%, var(--button-bg));
 }
-
+.font-book-filter-btn:hover,
+.font-book-size-btn:hover,
+.font-book-category-btn:hover {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+}
 .font-book-size-toggle {
   display: flex;
   gap: 4px;
   padding: 0 10px 8px;
   flex: 0 0 auto;
 }
-
 .font-book-size-btn {
   width: 32px;
   height: 24px;
   font-size: 10px;
   font-weight: 700;
 }
-
 .font-book-categories {
   display: flex;
   gap: 5px;
@@ -3313,21 +3432,18 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow-x: auto;
   flex: 0 0 auto;
 }
-
 .font-book-category-btn {
   flex: 0 0 auto;
   height: 22px;
   padding: 0 8px;
   font-size: 10px;
 }
-
 .font-book-panel .font-book-list {
   flex: 1 1 auto;
   min-height: 0;
   overflow-y: auto;
   padding: 0 10px 12px;
 }
-
 .font-book-group {
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -3335,7 +3451,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow: hidden;
   margin-bottom: 10px;
 }
-
 .font-book-group-header {
   min-height: 36px;
   display: flex;
@@ -3344,31 +3459,26 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 7px 8px;
   border-bottom: 1px solid var(--border);
 }
-
 .font-book-name-wrap {
   min-width: 0;
   flex: 1 1 auto;
 }
-
 .font-book-name,
 .font-book-ps {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .font-book-name {
   color: var(--text);
   font-size: 12px;
   font-weight: 800;
 }
-
 .font-book-ps {
   color: var(--text-muted);
   font-size: 9px;
   margin-top: 1px;
 }
-
 .font-book-subname {
   flex: 0 0 auto;
   max-width: 72px;
@@ -3382,7 +3492,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 9px;
   font-weight: 700;
 }
-
 .font-book-count {
   flex: 0 0 auto;
   min-width: 18px;
@@ -3395,7 +3504,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
   font-size: 10px;
 }
-
 .font-book-sample {
   padding: 10px 8px;
   border-bottom: 1px solid var(--border);
@@ -3406,21 +3514,17 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   word-break: keep-all;
   overflow-wrap: anywhere;
 }
-
 .font-book-list[data-size="S"] .font-book-sample { font-size: 16px; }
 .font-book-list[data-size="L"] .font-book-sample { font-size: 26px; }
-
 .font-book-shots {
   display: grid;
   grid-template-columns: 1fr;
   gap: 6px;
   padding: 7px;
 }
-
 .font-book-list[data-size="S"] .font-book-shots {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
-
 .font-book-shot {
   padding: 0;
   border: 1px solid var(--border);
@@ -3431,11 +3535,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-align: left;
   cursor: zoom-in;
 }
-
 .font-book-shot:hover {
   border-color: var(--accent);
 }
-
 .font-book-shot img {
   display: block;
   width: 100%;
@@ -3443,10 +3545,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   object-fit: contain;
   background: #fff;
 }
-
 .font-book-list[data-size="S"] .font-book-shot img { max-height: 130px; }
 .font-book-list[data-size="L"] .font-book-shot img { max-height: 380px; }
-
 .font-book-shot-caption,
 .font-book-note {
   display: block;
@@ -3454,20 +3554,17 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 10px;
   line-height: 1.35;
 }
-
 .font-book-shot-caption {
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .font-book-note {
   border-top: 1px solid var(--border);
   color: var(--text);
   background: var(--panel-hover);
 }
-
 .font-book-no-shot,
 .font-book-empty {
   padding: 18px 8px;
@@ -3475,7 +3572,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-align: center;
   font-size: 11px;
 }
-
 .font-book-empty-icon {
   width: 42px;
   height: 42px;
@@ -3489,9 +3585,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 18px;
   font-weight: 800;
 }
-
 .font-book-modal[hidden] { display: none; }
-
 .font-book-modal {
   position: fixed;
   inset: 0;
@@ -3500,13 +3594,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   align-items: center;
   justify-content: center;
 }
-
 .font-book-modal-backdrop {
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.72);
 }
-
 .font-book-modal-card {
   position: relative;
   z-index: 1;
@@ -3518,7 +3610,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border: 1px solid var(--border);
   box-shadow: 0 18px 60px rgba(0, 0, 0, 0.45);
 }
-
 .font-book-modal-card img {
   display: block;
   max-width: 100%;
@@ -3526,7 +3617,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   object-fit: contain;
   background: #fff;
 }
-
 .font-book-modal-close {
   position: absolute;
   right: 8px;
@@ -3541,18 +3631,15 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   line-height: 1;
   cursor: pointer;
 }
-
 .font-book-modal-info {
   padding: 10px 12px;
   display: grid;
   gap: 4px;
 }
-
 .font-book-modal-info strong {
   color: var(--text);
   font-size: 13px;
 }
-
 .font-book-modal-info span,
 .font-book-modal-info small,
 .font-book-modal-info p {
@@ -3560,7 +3647,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 11px;
   margin: 0;
 }
-
 .txt-source-actions {
   display: flex;
   align-items: center;
@@ -3568,9 +3654,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 6px 12px;
   border-bottom: 1px solid var(--border);
 }
-
 .txt-source-actions[hidden] { display: none; }
-
 .txt-source-name {
   font-size: 11px;
   color: var(--text-muted);
@@ -3579,7 +3663,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   white-space: nowrap;
   flex: 1;
 }
-
 .txt-source-dropzone {
   position: relative;
   flex: 1;
@@ -3588,13 +3671,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   flex-direction: column;
 }
-
 .txt-source-dropzone.dragover {
   outline: 2px dashed var(--accent);
   outline-offset: -4px;
   background: rgba(0, 120, 212, 0.08);
 }
-
 .txt-source-viewer {
   flex: 1;
   margin: 0;
@@ -3606,9 +3687,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text);
   background: var(--bg);
 }
-
 .txt-source-viewer[hidden] { display: none; }
-
 .txt-block {
   padding: 4px 8px;
   margin: 2px 0;
@@ -3619,7 +3698,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   user-select: none;
   border: 1px solid transparent;
 }
-
 /* 奇数番目の段落にうっすら背景色を付けてストライプ表示にする。
    :hover (.txt-block:hover) / 選択 (.txt-block.selected) / 編集中 (.txt-block.editing) は
    同 specificity (0,2,0) で後勝ちになるので、ストライプ色を上書きしてくれる。
@@ -3627,7 +3705,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .txt-block:nth-child(odd) {
   background: rgba(128, 128, 128, 0.08);
 }
-
 .txt-block:hover {
   background: var(--panel-hover);
   border-color: var(--border);
@@ -3641,13 +3718,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-color: var(--accent);
   outline: none;
 }
-
 .txt-block.selected {
   background: rgba(0, 120, 212, 0.25);
   border-color: var(--accent);
   color: #fff;
 }
-
 /* 【v1.26.0 移植 (PsDesign-main v1.24.0)】
    自動配置で背景/ウニ判定によりフォント切替された段落の強調表示 (要件④)。
    bucket 0..5 の 10% 刻みで色グラデ。CSS variable --auto-font-color を参照。
@@ -3660,11 +3735,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .txt-block.auto-font-switched.selected {
   color: #f3f4f6;
 }
-
 .txt-block-spacer {
   height: 6px;
 }
-
 .txt-block-empty-hint {
   padding: 12px 8px;
   color: var(--text-muted);
@@ -3672,7 +3745,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-align: center;
   font-style: italic;
 }
-
 .txt-source-empty {
   flex: 1;
   display: flex;
@@ -3687,7 +3759,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   /* style-palette-item と同じ背景に揃える（list 背景の var(--bg)） */
   background: var(--bg);
 }
-
 /* 原稿テキストパネル下部に常駐する新規テキスト入力欄 (中央配置のショートカット)。
    PSD 未読込時は disabled。Ctrl+Enter / 配置ボタンで現在ページの中央にレイヤー作成。 */
 .txt-source-new-input {
@@ -3730,28 +3801,24 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border: 1px solid var(--border);
   border-radius: 3px;
   cursor: pointer;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
+  transition: background-color 0.12s, border-color 0.12s, color 0.22s ease;
 }
 .txt-new-input-btn:hover:not(:disabled) {
-  background: var(--accent);
+  background: transparent;
   border-color: var(--accent);
-  color: #fff;
+  color: var(--accent);
 }
 .txt-new-input-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
 }
-
 .txt-source-empty-icon {
   width: 40px;
   height: 40px;
   opacity: 0.6;
 }
-
 .txt-source-empty-text { margin: 0; }
-
 .txt-source-empty[hidden] { display: none; }
-
 .txt-source-save-btn {
   width: 24px;
   height: 24px;
@@ -3761,7 +3828,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .txt-source-save-btn:hover {
   color: var(--accent);
 }
-
 .txt-source-clear-btn {
   width: 24px;
   height: 24px;
@@ -3771,7 +3837,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .txt-source-clear-btn:hover {
   color: var(--accent);
 }
-
 /* 原稿テキスト全体を削除するボタン（保存と再読み込みの間に配置）。 */
 .txt-source-delete-btn {
   width: 24px;
@@ -3782,7 +3847,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .txt-source-delete-btn:hover {
   color: var(--danger);
 }
-
 .layer-list {
   list-style: none;
   margin: 0;
@@ -3821,7 +3885,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .layer-list::-webkit-scrollbar-thumb:hover {
   background: var(--scrollbar-thumb-hover);
 }
-
 .layer-list li {
   padding: 8px 12px;
   border-bottom: 1px solid var(--border);
@@ -3838,7 +3901,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: block;
   background: var(--panel);
 }
-
 /* 【v1.26.0 移植 (PsDesign-main v1.24.0)】
    自動配置で背景/ウニ判定によりフォント自動切替されたレイヤーの行強調 (要件④)。
    bucket 0..5 の 10% 刻みで色グラデ。CSS variable --auto-font-color を参照。
@@ -3853,7 +3915,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .layer-list li.auto-font-switched.selected .layer-text {
   color: #f3f4f6;
 }
-
 .layer-list .layer-item-body {
   flex: 1 1 auto;
   min-width: 0;
@@ -3863,11 +3924,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 .layer-list li:hover { background: var(--panel-hover); }
 .layer-list li.selected { background: var(--accent); }
 .layer-list .layer-meta { color: var(--text-muted); font-size: 11px; margin-top: 2px; }
-
 /* レイヤー行右端の縦／横トグル（per-layer 組方向）。
    旧サイドバーの .direction-toggle と同じ見た目だが、行に収まるよう小さめ。 */
 .layer-dir-toggle {
@@ -3889,7 +3948,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  transition: background 0.1s;
+  transition: background-color 0.1s, color 0.22s ease;
   flex-shrink: 0;
 }
 .layer-dir-btn svg { display: block; }
@@ -3897,7 +3956,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-left: 1px solid var(--border);
 }
 .layer-dir-btn:hover:not(.active) {
-  background: var(--panel-hover);
+  background: transparent;
+  color: var(--accent);
 }
 .layer-dir-btn.active {
   background: var(--accent);
@@ -3918,7 +3978,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: #fff;
   color: var(--accent);
 }
-
 .editor {
   padding: 12px;
   border-bottom: 1px solid var(--border);
@@ -3935,7 +3994,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
    上書きしてしまう。選択 0 件のときに padding/border ぶんの空き高が残って
    layer-list の表示範囲を圧迫するのを防ぐため、明示的に non-display 化する。 */
 .editor[hidden] { display: none; }
-
 /* editor 内の各項目（フォント / サイズ・組方向 / フチ）を区切り線で分ける。
    :not([hidden]) ペアのみに適用することで、単独選択で一部項目が hidden の場合でも
    先頭要素に不要な線が入らない。 */
@@ -3944,7 +4002,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding-top: 10px;
   border-top: 1px solid var(--border);
 }
-
 .editor label,
 .editor .size-field {
   display: flex;
@@ -3955,7 +4012,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
-
 /* サイズ / 行間 / フチ を縦に全表示。フォントの下、editor の中で 1 ブロック扱い。
    v1.4.0 でタブ化 → v1.22.0 でタブ撤去（縦並び全表示）。3 panel 間は border-top で
    .editor 内の他項目と同じ separator スタイルに揃える。 */
@@ -3983,7 +4039,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .editor-tab-panel .size-btn { padding-top: 0; padding-bottom: 0; line-height: 1.2; }
 .editor-tab-panel .size-input { padding-top: 1px; padding-bottom: 1px; }
 .editor-tab-panel .stroke-dot { width: 16px; height: 16px; min-width: 16px; }
-
 /* 【v1.22.0】合成太字（faux bold）トグルボタン。size-row 右側に配置。
    ラベル「太字」(2 文字) と他のトグルボタン（ruby-mode-btn 等）と視覚的に揃えるため
    font-size は 11px、min-width は 36px。aria-pressed で active 表示を切替。 */
@@ -4000,7 +4055,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-radius: 3px;
 }
 .bold-toggle-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  color: var(--accent);
 }
 .bold-toggle-btn[aria-pressed="true"] {
   background: var(--accent);
@@ -4011,7 +4066,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   opacity: 0.4;
   cursor: not-allowed;
 }
-
 /* ========== フォントソース切替タブ ==========
    edit-font-combobox（インストール済み全フォント検索）と style-palette（社内プリセット）を
    2 択タブで切替表示。片方を選ぶと他方は閉じる排他トグル。 */
@@ -4032,7 +4086,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
   border-bottom: 2px solid transparent;
   margin-bottom: -1px;
-  transition: color 0.1s, border-color 0.1s;
+  transition: color 0.22s ease, border-color 0.1s;
 }
 .font-source-tab:hover:not(.active) { color: var(--text); }
 .font-source-tab.active {
@@ -4050,7 +4104,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex: 1 1 auto;
   min-height: 0;
 }
-
 .editor textarea, .editor input, .editor select,
 .font-combobox-label input, .font-combobox-label select, .font-combobox-label textarea {
   background: var(--bg);
@@ -4061,9 +4114,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-radius: 3px;
   font-family: inherit;
 }
-
 .editor textarea { resize: vertical; }
-
 /* ========== フォント検索コンボボックス ==========
    editor-tabs-section の上に配置されるフォント全件検索 UI。スタイルパレット (curated) の
    下にあるが、こちらはインストール済み全フォントを検索できる代替経路。 */
@@ -4100,7 +4151,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 0;
 }
 .font-combobox-toggle:hover { color: var(--text); }
-
 /* フォント太さ (W) セレクタ — segmented toggle スタイル。
    現在選択中のフォントが W 番号付き (新ゴ Pro W3 など) のとき、同ファミリーで
    利用可能な W 番号をボタン化。連結された pill 型トグル群で、現在の選択は accent 塗り + 内側影。
@@ -4133,13 +4183,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
   font-variant-numeric: tabular-nums;
   text-align: center;
-  transition: background 0.12s, color 0.12s;
+  transition: background-color 0.12s, color 0.22s ease;
 }
 /* 先頭ボタンは左の仕切り線を持たない（左端は外側 container 枠で十分）。 */
 .font-weight-btn:first-child { border-left: none; }
 .font-weight-btn:hover:not([aria-pressed="true"]):not(:disabled) {
-  background: var(--panel-hover);
-  color: var(--text);
+  background: transparent;
+  color: var(--accent);
 }
 .font-weight-btn:disabled {
   opacity: 0.4;
@@ -4194,7 +4244,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-
 /* ========== Style Palette ==========
    テキスト編集セクション内のフォントピッカー領域。stylepallet UXP プラグインの UI を
    PsDesign に移植。「現在のフォント」表示 / 検索 + JSON 読込ボタン / カテゴリドロップダウン
@@ -4228,7 +4277,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   align-items: center;
   justify-content: center;
 }
-.style-palette-load-btn:hover { color: var(--text); border-color: var(--accent); }
+.style-palette-load-btn:hover { color: var(--accent); border-color: var(--accent); }
 .style-palette-filename {
   padding: 4px 8px;
   border: 1px solid var(--border);
@@ -4314,12 +4363,10 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   text-overflow: ellipsis;
 }
 .style-palette-item.selected .style-palette-item-sub { color: rgba(255, 255, 255, 0.8); }
-
 /* 「デフォルト」option を太字で強調（OS により効かない場合あり、許容）。 */
 #style-palette-category option[value="__default__"] {
   font-weight: 600;
 }
-
 /* optgroup 見出し（「テンプレート」「レーベルテンプレ」）の背景を薄くして可読性を上げる。
    Chromium / WebView2 は optgroup label に limited な CSS しか効かないが、
    background-color と color は追従するので panel-hover 系の柔らかい配色に揃える。 */
@@ -4334,7 +4381,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text);
   font-weight: normal;
 }
-
 /* PostScript 名が解決できなかった (フォント未インストール) エントリは灰色化 + クリック無反応。
    :not(.selected) は念のため。loadDefaults では未解決項目に selected が付くことはない。 */
 .style-palette-item--unresolved {
@@ -4345,7 +4391,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .style-palette-item--unresolved:hover {
   background: transparent;
 }
-
 /* スタイルパレット用フォルダブラウザモーダル。校正パネルの browser と同じ視覚言語。 */
 #style-palette-browser-modal .style-palette-browser-card {
   width: min(90vw, 520px);
@@ -4430,7 +4475,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 11px;
 }
 .style-palette-browser-error { color: var(--danger); }
-
 /* テキスト編集セクション。サイドバータブで排他表示されるので、active 時はサイドバー残余高を
    全部吸収する（min-height: 0 で内側 flex の縮小を許可）。 */
 .panel-section[data-section="editor"] {
@@ -4439,7 +4483,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex: 1 1 auto;
   min-height: 0;
 }
-
 .layer-list-footer {
   display: flex;
   justify-content: flex-end;
@@ -4454,14 +4497,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
 }
 .layer-delete-btn:hover:not(:disabled) {
-  background: rgba(231, 76, 60, 0.12);
   color: var(--danger);
 }
 .layer-delete-btn:disabled {
   opacity: 0.35;
   cursor: not-allowed;
 }
-
 .progress-modal {
   position: fixed;
   inset: 0;
@@ -4480,13 +4521,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
      初期値 50% は画面縦中央（fallback）。 */
   --bar-top: 50%;
 }
-
 .progress-modal[hidden] { display: none; }
 .progress-modal.visible {
   opacity: 1;
   pointer-events: auto;
 }
-
 /* blur は単一の ::before レイヤーに統合（背景 backdrop-filter を 2 帯に分けると
    各 blur kernel が境界で独立計算され視覚的な seam が発生するため）。
    bg-top / bg-bottom は dim カラーのスライド演出専用にする。 */
@@ -4505,7 +4544,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   opacity: 0;
   transition: opacity 0.3s ease 0.15s;
 }
-
 /* dim を 2 つの帯に分割。境界をバー中心 (--bar-top) に揃える。
    開く時 / 閉じる時とも transform: translateY を common transition で animate するため、
    .progress-bg 自体に transition を常時設定する。
@@ -4536,7 +4574,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .progress-modal.visible .progress-bg-bottom {
   transform: translateY(0);
 }
-
 /* 完了時の閉じアニメ:
    - 上帯: transform translateY(-100%) で画面上端から外へ
    - 下帯: transform translateY(100%) で画面下端から外へ
@@ -4556,11 +4593,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   transition: opacity 0.3s ease 0.1s;
   opacity: 0;
 }
-
 /* 確認ダイアログはハンバーガーメニュー (z-index 151) から呼ばれることがあるので、
    必ずその上に表示させる。 */
 #confirm-modal { z-index: 300; }
-
 .progress-card {
   min-width: 360px;
   max-width: 520px;
@@ -4578,7 +4613,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .progress-modal.visible .progress-card {
   transform: scale(1);
 }
-
 .progress-title {
   font-size: 13px;
   font-weight: 600;
@@ -4607,14 +4641,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex: 0 0 auto;
   color: #d97706;
 }
-
 .confirm-modal-message {
   font-size: 12px;
   color: var(--text);
   line-height: 1.6;
   white-space: pre-wrap;
 }
-
 .page-jump-input {
   width: 100%;
   padding: 8px 10px;
@@ -4659,37 +4691,34 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-color: var(--accent);
   color: #fff;
 }
-.page-jump-btn-primary:hover {
-  background: #1385e3;
-  border-color: #1385e3;
+.page-jump-btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
-
 /* confirmDialog の OK ボタンに「サイドバーの自動配置 (.ai-place-btn) と同じ緑枠デザイン」を当てる
    ためのバリアント。confirmKind: "place" で primary の代わりに付与される。
-   global の `button:hover:not(:disabled) { background: var(--accent) }` (specificity 0,2,1) に
-   勝つため hover 側は :not(:disabled) を付けて 0,3,0 にしておく。 */
+   hover 時は背景を変えず、文字色・アイコン色だけを変える。
+   :not(:disabled) は disabled 時の色変化を防ぐために付けておく。 */
 .page-jump-btn-place {
   background: transparent;
   border: 1px solid #4caf50;
   color: #4caf50;
   font-weight: 600;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.22s ease;
 }
 .page-jump-btn-place:hover:not(:disabled) {
-  background: #2e7d32;
-  border-color: #81c784;
-  color: #c8e6c9;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 :root[data-theme="light"] .page-jump-btn-place {
   border-color: #2e7d32;
   color: #2e7d32;
 }
 :root[data-theme="light"] .page-jump-btn-place:hover:not(:disabled) {
-  background: #a5d6a7;
-  border-color: #1b5e20;
-  color: #1b5e20;
+  border-color: var(--accent);
+  color: var(--accent);
 }
-
 /* AI アンインストール等の破壊的操作向け赤系ボタン。
    page-jump-btn-place と同じ pattern (透明背景 + 同色枠 + 同色文字、hover で塗り反転) */
 .page-jump-btn-danger {
@@ -4697,14 +4726,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border: 1px solid var(--danger);
   color: var(--danger);
   font-weight: 600;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.22s ease;
 }
 .page-jump-btn-danger:hover:not(:disabled) {
-  background: var(--danger);
   border-color: var(--danger);
-  color: #fff;
+  color: var(--danger);
 }
-
 .progress-detail {
   font-size: 11px;
   color: var(--text-muted);
@@ -4714,7 +4741,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   white-space: nowrap;
   min-height: 14px;
 }
-
 /* #progress-modal だけは「背景全体をぼかし、進捗バーを画面端から端まで展開」する
    表示形式。共有 .progress-card を直接いじると confirm/resync/page-jump など他モーダル
    まで巻き込むため ID スコープで限定。
@@ -4727,7 +4753,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 #progress-modal .progress-bg {
   background: rgba(0, 0, 0, 0.4);
 }
-
 #progress-modal .progress-card {
   /* card 自体は透明・枠なし・余白なし。アイコンと進捗バーだけが画面に浮く構造。
      画面横幅 100vw の透明コンテナとして機能し、子要素 (.progress-icon /
@@ -4743,7 +4768,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   gap: 14px;
   align-items: stretch;
 }
-
 /* 詳細・カウントは「メッセージウインドウ」撤去で非表示。タイトルだけはアイコン直下の
    ラベル（"画像スキャン中…" / "自動配置中…" など）として残す。要素は残して JS の
    textContent 操作の互換性は保ったまま。 */
@@ -4760,7 +4784,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   letter-spacing: 0.04em;
   pointer-events: none;
 }
-
 /* 進捗バーの上に表示するアイコン（画像スキャン / 自動配置 等）。
    親が透明背景なので、アイコンを目立たせるため drop-shadow で輪郭を立たせる。
    未指定時 (空) は領域取らない。 */
@@ -4780,7 +4803,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   height: 64px;
   stroke-width: 2;
 }
-
 /* ===== 完了時の成功チェックマークアニメーション =====
    hideProgress({ success: true }) のとき、close アニメに入る前に
    このアイコンに差し替えて再生する（Tachimi 流：放射バースト + リング描画 + チェック描画）。
@@ -4805,7 +4827,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   0%   { transform: scale(0.7); opacity: 0; }
   100% { transform: scale(1);   opacity: 1; }
 }
-
 /* 放射状の光バースト（リングの外周から広がる緑のグロー） */
 .success-check-burst {
   position: absolute;
@@ -4826,7 +4847,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   30%  { opacity: 1; }
   100% { opacity: 0; transform: scale(2.5); }
 }
-
 /* リング：周囲を時計回りに描く緑の円。stroke-dasharray=138 (≒ 2πr, r=22)。 */
 .success-check-ring {
   fill: none;
@@ -4848,7 +4868,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   50%  { stroke: #4ade80; filter: drop-shadow(0 0 20px rgba(74, 222, 128, 0.95)); }
   100% { stroke: rgba(34, 197, 94, 0.55); filter: drop-shadow(0 0 6px rgba(34, 197, 94, 0.3)); }
 }
-
 /* チェックマーク：リング描画から少し遅れて鉤型を描き、ピーク時に輝く緑。 */
 .success-check-path {
   stroke: #22c55e;
@@ -4871,7 +4890,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   50%  { stroke: #bbf7d0; filter: drop-shadow(0 0 24px rgba(74, 222, 128, 1)); }
   100% { stroke: #22c55e; filter: drop-shadow(0 0 14px rgba(34, 197, 94, 0.7)); }
 }
-
 /* 画像スキャンアイコン: 「手前から奥にフェードアウト」を無限ループ。
    scale 1 → 0.4 + opacity 1 → 0 で奥へ消えた後、瞬時に元に戻り再フェードアウト。 */
 #progress-modal .progress-icon .scan-icon {
@@ -4885,7 +4903,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   61%  { transform: scale(1);   opacity: 0; }
   100% { transform: scale(1);   opacity: 1; }
 }
-
 /* デフォルト spinner (showProgress({ icon: undefined }) 時のフォールバック)。
    12 個の dot を中心から半径 22px の円周上に等角配置し、fade-out animation の
    delay を 0s, -0.1s, ..., -1.1s で振って「濃淡が回転する」古典 spinner。 */
@@ -4921,7 +4938,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   0%   { opacity: 1; }
   100% { opacity: 0.15; }
 }
-
 /* 自動配置アイコン: ステッキ本体は静止、周りの sparkle 6 本だけが順番に点滅。
    nth-of-type で各 sparkle に少しずつ遅延を付け、キラキラ感を出す。 */
 #progress-modal .progress-icon .place-icon .sparkle {
@@ -4938,7 +4954,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   0%, 100% { opacity: 0.25; }
   50%      { opacity: 1; }
 }
-
 /* 進捗テキスト（残り N ページ ・ P %）はバーの上に単独表示。
    バー内の reveal 効果は廃止し、白文字で読みやすく中央寄せ。 */
 #progress-modal .progress-loading-text {
@@ -4955,14 +4970,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   pointer-events: none;
   user-select: none;
 }
-
 /* progress-track は card 全幅 = 画面全幅。border-radius 撤去で端まで連続感、
    高さは旧 44px から半分の 22px に。 */
 #progress-modal .progress-track {
   height: 22px;
   border-radius: 0;
 }
-
 .progress-track {
   position: relative;
   width: 100%;
@@ -4971,7 +4984,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-radius: 4px;
   overflow: hidden;
 }
-
 .progress-fill {
   position: absolute;
   top: 0;
@@ -4982,7 +4994,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: linear-gradient(90deg, #6fb1ff 0%, #1d4f9e 100%);
   transition: width 0.3s ease-out;
 }
-
 /* track 背景と同色で初期は透明。青いバーが下を通過した部分だけ
    「青背景 × グレー文字」のコントラストで自然に浮き上がる。 */
 .progress-loading-text {
@@ -4999,14 +5010,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   pointer-events: none;
   user-select: none;
 }
-
 /* バー幅は JS の updateProgress 経由で fill.style.width に反映される。
    現在/総数が無いケース（Photoshop 反映中など）は .indeterminate を付けてバー満タン表示。
    進捗テキスト「●●中…」と loading-text の文言更新で動作中であることを伝える。 */
 .progress-fill.indeterminate {
   width: 100%;
 }
-
 .toast-container {
   position: fixed;
   top: 56px;
@@ -5017,7 +5026,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   z-index: 200;
   pointer-events: none;
 }
-
 .toast {
   pointer-events: auto;
   min-width: 220px;
@@ -5036,16 +5044,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
   word-break: break-word;
 }
-
 .toast.visible {
   opacity: 1;
   transform: translateX(0);
 }
-
 .toast-success { border-left-color: #3ca86b; }
 .toast-error { border-left-color: var(--danger); }
 .toast-info { border-left-color: var(--accent); }
-
 /* ドラッグ中に表示する全画面の枠オーバーレイ。Tauri の drag-enter/over イベント
    で .active が付き、drag-leave/drop で外れる。pointer-events: none なので
    下の UI はブロックしない。 */
@@ -5060,12 +5065,10 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   transition: opacity 0.18s ease;
   z-index: 400;
 }
-
 .drag-overlay.active {
   opacity: 1;
   animation: drag-overlay-pulse 1.2s ease-in-out infinite;
 }
-
 @keyframes drag-overlay-pulse {
   0%, 100% {
     box-shadow: inset 0 0 24px rgba(0, 120, 212, 0.25);
@@ -5076,7 +5079,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
     border-color: var(--accent-hover);
   }
 }
-
 /* 投下成功時の一瞬のフラッシュ */
 .drag-overlay.flash {
   animation: drag-overlay-flash 0.35s ease-out;
@@ -5091,7 +5093,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
     box-shadow: inset 0 0 24px rgba(0, 120, 212, 0);
   }
 }
-
 /* ===== 環境設定モーダル ===== */
 /* ハンバーガー (z-index 151) より手前。キャプチャモーダルはさらに上。 */
 .settings-modal {
@@ -5113,7 +5114,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   pointer-events: auto;
 }
 #key-capture-modal { z-index: 320; }
-
 .settings-card {
   width: 560px;
   max-width: 92vw;
@@ -5137,7 +5137,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .settings-modal.visible .key-capture-card {
   transform: scale(1);
 }
-
 .settings-header {
   display: flex;
   align-items: center;
@@ -5163,10 +5162,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-weight: 600;
 }
 .settings-done-btn:hover {
-  background: #1385e3;
-  border-color: #1385e3;
+  background: var(--accent);
+  border-color: var(--accent);
 }
-
 .settings-tabs {
   display: flex;
   border-bottom: 1px solid var(--border);
@@ -5186,14 +5184,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-weight: 600;
   text-align: center;
   white-space: nowrap;
-  transition: color 0.15s, border-color 0.15s;
+  transition: color 0.22s ease, border-color 0.15s;
 }
 .settings-tab:hover { color: var(--text); }
 .settings-tab.active {
   color: var(--accent);
   border-bottom-color: var(--accent);
 }
-
 .settings-tab-panel {
   display: none;
   flex: 1;
@@ -5206,7 +5203,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex-direction: column;
   gap: 10px;
 }
-
 .settings-section-header {
   display: flex;
   justify-content: space-between;
@@ -5226,7 +5222,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
   line-height: 1.5;
 }
-
 .settings-reset-btn {
   padding: 4px 10px;
   background: var(--panel-hover);
@@ -5238,7 +5233,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-family: inherit;
 }
 .settings-reset-btn:hover { border-color: var(--accent); }
-
 /* ショートカット一覧 */
 .shortcut-list {
   flex: 1;
@@ -5276,9 +5270,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .shortcut-key-btn:hover {
   border-color: var(--accent);
-  background: var(--panel);
+  color: var(--accent);
 }
-
 /* デフォルト値（新規テキストの初期値）入力欄 */
 .settings-defaults-list {
   display: flex;
@@ -5312,7 +5305,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   outline: none;
   border-color: var(--accent);
 }
-
 /* ラジオオプション（ページ送り反転） */
 .settings-radio-list {
   display: flex;
@@ -5328,7 +5320,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-radius: 4px;
   cursor: pointer;
   background: var(--bg);
-  transition: border-color 0.15s, background 0.15s;
+  transition: border-color 0.15s, background-color 0.15s, color 0.22s ease;
 }
 .settings-radio-option:hover { border-color: var(--accent); }
 .settings-radio-option.selected {
@@ -5354,7 +5346,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
   line-height: 1.4;
 }
-
 /* キーキャプチャモーダル */
 .key-capture-card {
   width: 360px;
@@ -5427,11 +5418,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .key-capture-card .page-jump-actions {
   margin: 0 16px;
 }
-
 /* ===========================================================================
  * AI セリフ自動抽出 (mokuro 統合)
  * =========================================================================== */
-
 /* TXT パネル下の「AIで読み取り」ボタン */
 /* サイドパネル先頭の AI ボタン群 (画像スキャン + 自動配置)。panel-header の直下に
    配置し、2 ボタンが等幅でサイドバーいっぱいに広がる。*/
@@ -5482,7 +5471,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   height: 32px;
   padding: 0 6px;
   justify-content: center;
-  border-width: 2px;
+  border-width: 1px;
   border-radius: 7px;
   background: transparent;
   font-size: 12px;
@@ -5494,7 +5483,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .ai-actions-row > .ai-place-btn svg {
   display: none;
 }
-
 /* MojiQ Pro の .panel-load-btn (校正チェックを読み込み) と同デザインの青アクセント枠。
    ダーク既定: #64b5f6 系 / ライト: #1976d2 系。
    .ai-actions-row > .ai-ocr-btn は flex: 1 1 0 + justify-content: center で row 内に等幅展開される。 */
@@ -5516,12 +5504,11 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
   font-size: 12px;
   font-family: inherit;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.22s ease;
 }
 .ai-ocr-btn:hover:not(:disabled) {
-  background: rgba(100, 181, 246, 0.15);
-  border-color: #90caf9;
-  color: #90caf9;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .ai-ocr-btn:disabled {
   opacity: 0.5;
@@ -5531,28 +5518,23 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex-shrink: 0;
   stroke: currentColor;
 }
-
 :root[data-theme="light"] .ai-ocr-btn {
   border-color: #1976d2;
   color: #1976d2;
 }
 :root[data-theme="light"] .ai-ocr-btn:hover:not(:disabled) {
-  background: rgba(25, 118, 210, 0.1);
-  border-color: #1565c0;
-  color: #1565c0;
+  border-color: var(--accent);
+  color: var(--accent);
 }
-
 .ai-actions-row > .ai-ocr-btn {
   border-color: #1295ff;
   color: #1295ff;
 }
-
 .ai-actions-row > .ai-ocr-btn:hover:not(:disabled) {
-  background: rgba(18, 149, 255, 0.14);
-  border-color: #38a8ff;
-  color: #38a8ff;
+  border-color: #1295ff;
+  background: #1295ff;
+  color: #fff;
 }
-
 /* ハンバーガーメニュー footer の AIインストール ボタンに小バッジ */
 .ai-install-menu-btn {
   position: relative;
@@ -5569,7 +5551,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   pointer-events: none;
 }
 .ai-install-menu-badge[hidden] { display: none; }
-
 /* AIインストール モーダル */
 .ai-install-modal {
   position: fixed;
@@ -5582,7 +5563,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   backdrop-filter: blur(2px);
 }
 .ai-install-modal[hidden] { display: none; }
-
 .ai-install-card {
   width: 640px;
   max-width: 95vw;
@@ -5596,7 +5576,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   flex-direction: column;
 }
-
 .ai-install-header {
   display: flex;
   align-items: center;
@@ -5610,7 +5589,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-weight: 700;
   color: var(--text);
 }
-
 .ai-install-intro {
   padding: 12px 16px 4px;
 }
@@ -5629,7 +5607,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text);
   border: 1px solid var(--border);
 }
-
 .ai-install-status {
   padding: 6px 16px 8px;
 }
@@ -5660,7 +5637,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .ai-status-value {
   font-weight: 600;
 }
-
 .ai-phase-list {
   list-style: none;
   margin: 4px 16px 8px;
@@ -5680,7 +5656,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: var(--panel-body);
 }
 .ai-phase-item:last-child { border-bottom: none; }
-
 .ai-phase-tick {
   width: 14px;
   height: 14px;
@@ -5711,12 +5686,10 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-width: 0 2px 2px 0;
   transform: rotate(45deg);
 }
-
 @keyframes ai-phase-pulse {
   0%, 100% { box-shadow: 0 0 0 2px rgba(0, 120, 212, 0.18); }
   50%      { box-shadow: 0 0 0 6px rgba(0, 120, 212, 0.05); }
 }
-
 .ai-phase-label {
   flex: 1;
   font-weight: 500;
@@ -5728,7 +5701,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .ai-phase-item.active .ai-phase-state { color: var(--accent); font-weight: 600; }
 .ai-phase-item.done .ai-phase-state { color: #2ea043; font-weight: 600; }
-
 .ai-install-progress {
   margin: 0 16px 8px;
   padding: 10px 12px;
@@ -5737,7 +5709,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-radius: 4px;
 }
 .ai-install-progress[hidden] { display: none; }
-
 .ai-install-progress-meta {
   display: flex;
   justify-content: space-between;
@@ -5764,7 +5735,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-variant-numeric: tabular-nums;
 }
 .ai-meta-badge:empty { display: none; }
-
 .ai-install-progress-track {
   height: 6px;
   background: var(--bg);
@@ -5786,7 +5756,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-variant-numeric: tabular-nums;
 }
 .ai-install-progress-count:empty { display: none; }
-
 .ai-log-viewer {
   flex: 1;
   margin: 0 16px;
@@ -5822,7 +5791,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .ai-log-line { margin: 0; }
 .ai-log-line.stderr { color: var(--danger); }
-
 .ai-install-actions {
   display: flex;
   justify-content: flex-end;
@@ -5831,7 +5799,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-top: 1px solid var(--border);
   flex-shrink: 0;
 }
-
 /* TXT パネル下の「自動配置」ボタン (画像スキャンの直下)。
    配色は MojiQ Pro の「作品仕様を読み込み」ボタンに統一（緑系パレット）。
    背景は透過、border + 文字色だけ緑。ダークがデフォルト、ライトは下で切替。 */
@@ -5851,74 +5818,63 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 12px;
   font-family: inherit;
   font-weight: 600;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.22s ease;
 }
 .ai-place-btn:hover:not(:disabled) {
-  background: #2e7d32;
-  border-color: #81c784;
-  color: #c8e6c9;
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .ai-place-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 .ai-place-btn svg { flex-shrink: 0; stroke: currentColor; }
-
 :root[data-theme="light"] .ai-place-btn {
   border-color: #2e7d32;
   color: #2e7d32;
 }
 :root[data-theme="light"] .ai-place-btn:hover:not(:disabled) {
-  background: #a5d6a7;
-  border-color: #1b5e20;
-  color: #1b5e20;
+  border-color: var(--accent);
+  color: var(--accent);
 }
-
 /* 自動配置 — 確認モーダル */
 .ai-actions-row > .ai-place-btn {
   border-color: #00890f;
   color: #00890f;
 }
-
 .ai-actions-row > .ai-place-btn:hover:not(:disabled) {
-  background: rgba(0, 137, 15, 0.16);
-  border-color: #0aa31c;
-  color: #0aa31c;
+  border-color: #00890f;
+  background: #00890f;
+  color: #fff;
 }
-
 .ai-adjust-dropdown {
   position: relative;
 }
-
 .ai-adjust-menu-btn {
   width: 100%;
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  border: 2px solid #f97316;
+  border: 1px solid #f97316;
   color: #f97316;
   cursor: pointer;
   font-family: inherit;
-  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  transition: background-color 0.15s, border-color 0.15s, color 0.22s ease;
 }
-
 .ai-adjust-menu-btn:hover:not(:disabled),
 .ai-adjust-dropdown:focus-within .ai-adjust-menu-btn {
-  background: rgba(249, 115, 22, 0.14);
-  border-color: #fb923c;
-  color: #fb923c;
+  border-color: #f97316;
+  background: #f97316;
+  color: #fff;
 }
-
 .ai-adjust-menu-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
-
 .ai-adjust-caret {
   font-size: 11px;
   line-height: 1;
 }
-
 .ai-adjust-menu {
   position: absolute;
   top: calc(100% + 12px);
@@ -5935,7 +5891,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   transform: translateY(-4px);
   transition: opacity 0.12s ease, transform 0.12s ease, visibility 0s linear 0.12s;
 }
-
 .ai-adjust-menu::before {
   content: "";
   position: absolute;
@@ -5945,7 +5900,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-right: 12px solid transparent;
   border-bottom: 20px solid #000;
 }
-
 .ai-adjust-menu::after {
   content: "";
   position: absolute;
@@ -5954,7 +5908,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   top: -14px;
   height: 14px;
 }
-
 .ai-adjust-dropdown:hover .ai-adjust-menu,
 .ai-adjust-dropdown:focus-within .ai-adjust-menu {
   opacity: 1;
@@ -5963,11 +5916,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   transform: translateY(0);
   transition-delay: 0s;
 }
-
 .ai-adjust-menu-btn:disabled + .ai-adjust-menu {
   display: none;
 }
-
 .ai-adjust-menu-item {
   width: 100%;
   height: 52px;
@@ -5981,93 +5932,76 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-weight: 800;
   text-align: center;
 }
-
 .ai-adjust-menu-item:last-child {
   border-bottom: 0;
 }
-
 .ai-adjust-menu-item:hover:not(:disabled),
 .ai-adjust-menu-item:focus-visible {
   color: #ff6a2a;
   outline: none;
 }
-
 .ai-adjust-menu-item:disabled {
   opacity: 0.45;
   cursor: not-allowed;
 }
-
 :root[data-theme="light"] .ai-actions-row {
   background: #f7f8fb;
   border-bottom-color: #d7dce5;
 }
-
 :root[data-theme="light"] .ai-actions-row.ai-actions-row-locked {
   background: #eef1f5;
 }
-
 :root[data-theme="light"] .ai-actions-row.ai-actions-row-locked::after {
   border-color: rgba(220, 38, 38, 0.75);
   background: rgba(241, 245, 249, 0.84);
   color: #dc2626;
 }
-
 :root[data-theme="light"] .ai-actions-row > .ai-ocr-btn {
   border-color: #0b84e5;
   color: #0b84e5;
 }
-
 :root[data-theme="light"] .ai-actions-row > .ai-ocr-btn:hover:not(:disabled) {
-  background: rgba(11, 132, 229, 0.1);
-  border-color: #006fc7;
-  color: #006fc7;
+  border-color: #0b84e5;
+  background: #0b84e5;
+  color: #fff;
 }
-
 :root[data-theme="light"] .ai-actions-row > .ai-place-btn {
   border-color: #168a22;
   color: #168a22;
 }
-
 :root[data-theme="light"] .ai-actions-row > .ai-place-btn:hover:not(:disabled) {
-  background: rgba(22, 138, 34, 0.1);
-  border-color: #0f7619;
-  color: #0f7619;
+  border-color: #168a22;
+  background: #168a22;
+  color: #fff;
 }
-
 :root[data-theme="light"] .ai-adjust-menu-btn {
   border-color: #ea580c;
   color: #ea580c;
 }
-
 :root[data-theme="light"] .ai-adjust-menu-btn:hover:not(:disabled),
 :root[data-theme="light"] .ai-adjust-dropdown:focus-within .ai-adjust-menu-btn {
-  background: rgba(234, 88, 12, 0.1);
-  border-color: #c2410c;
-  color: #c2410c;
+  border-color: #ea580c;
+  background: #ea580c;
+  color: #fff;
 }
-
 :root[data-theme="light"] .ai-adjust-menu {
   background: #ffffff;
   border: 1px solid #d7dce5;
   box-shadow: 0 14px 34px rgba(30, 41, 59, 0.18);
 }
-
 :root[data-theme="light"] .ai-adjust-menu::before {
   border-bottom-color: #ffffff;
   filter: drop-shadow(0 -1px 0 #d7dce5);
 }
-
 :root[data-theme="light"] .ai-adjust-menu-item {
   color: #1f2937;
   border-bottom-color: #d7dce5;
 }
-
 :root[data-theme="light"] .ai-adjust-menu-item:hover:not(:disabled),
 :root[data-theme="light"] .ai-adjust-menu-item:focus-visible {
   color: #ca4610;
   background: rgba(231, 90, 26, 0.08);
 }
-
 .ai-place-review-modal {
   position: fixed;
   inset: 0;
@@ -6079,7 +6013,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   backdrop-filter: blur(2px);
 }
 .ai-place-review-modal[hidden] { display: none; }
-
 .ai-place-review-card {
   width: 720px;
   max-width: 95vw;
@@ -6091,7 +6024,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   flex-direction: column;
 }
-
 .ai-place-review-header {
   padding: 12px 16px;
   border-bottom: 1px solid var(--border);
@@ -6102,7 +6034,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-weight: 700;
   color: var(--text);
 }
-
 .ai-place-review-warning {
   display: flex;
   align-items: flex-start;
@@ -6119,7 +6050,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .ai-place-review-warning-body { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .ai-place-review-warning-title { font-size: 13px; font-weight: 700; color: #d97706; }
 .ai-place-review-warning-detail { font-size: 12px; line-height: 1.5; color: var(--text-muted); }
-
 .ai-place-review-actions {
   display: flex;
   justify-content: flex-end;
@@ -6127,7 +6057,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 12px 16px;
   flex-shrink: 0;
 }
-
 /* インストール実行中はヘッダ右上の「完了」ボタンを赤い「中止」に切替。
    .settings-done-btn の青を打ち消して --danger を当てる。 */
 .ai-install-cancel-btn,
@@ -6138,10 +6067,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .ai-install-cancel-btn:hover,
 .settings-done-btn.ai-install-cancel-btn:hover {
-  background: #c0392b;
-  border-color: #c0392b;
+  background: var(--danger);
+  border-color: var(--danger);
 }
-
 /* ---- AI install timing & phase ETA ---- */
 .ai-install-timing {
   display: flex;
@@ -6178,7 +6106,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .ai-phase-item.active .ai-phase-eta {
   color: var(--accent);
 }
-
 /* ---- Auto-update modal dialog ---- */
 .update-modal {
   position: fixed;
@@ -6199,7 +6126,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   opacity: 1;
   pointer-events: auto;
 }
-
 .update-modal-card {
   background: var(--panel);
   border: 1px solid var(--border);
@@ -6215,7 +6141,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .update-modal.visible .update-modal-card {
   transform: scale(1);
 }
-
 .update-modal-icon {
   width: 56px;
   height: 56px;
@@ -6226,7 +6151,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   justify-content: center;
   background: rgba(64, 130, 220, 0.15);
   color: var(--accent);
-  transition: background 0.2s ease, color 0.2s ease;
+  transition: background-color 0.2s ease, color 0.22s ease;
 }
 .update-modal-icon-spin svg {
   animation: update-modal-spin 1s linear infinite;
@@ -6242,7 +6167,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 @keyframes update-modal-spin {
   to { transform: rotate(360deg); }
 }
-
 .update-modal-title {
   font-size: 16px;
   font-weight: 700;
@@ -6267,7 +6191,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   margin: 0 0 22px;
   white-space: pre-wrap;
 }
-
 .update-modal-buttons {
   display: flex;
   gap: 10px;
@@ -6276,7 +6199,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .update-modal-buttons[hidden] {
   display: none;
 }
-
 .update-modal-secondary {
   padding: 8px 20px;
   background: transparent;
@@ -6285,7 +6207,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text-muted);
   font-size: 13px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: color 0.22s ease, border-color 0.15s ease, background-color 0.15s ease;
 }
 .update-modal .update-modal-secondary:hover:not(:disabled) {
   background: rgba(255, 255, 255, 0.04);
@@ -6311,7 +6233,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   opacity: 0.6;
   cursor: not-allowed;
 }
-
 /* ===== Custom file picker modal ===== */
 .file-picker-modal {
   position: fixed;
@@ -6387,8 +6308,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
 }
 .file-picker-close-btn:hover {
-  background: var(--panel-hover);
-  color: var(--text);
+  background: transparent;
+  color: var(--accent);
   border-color: var(--border);
 }
 .file-picker-toolbar {
@@ -6418,7 +6339,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
 }
 .file-picker-drive-btn:hover {
-  background: var(--panel-hover);
+  color: var(--accent);
 }
 .file-picker-drive-btn.active {
   background: rgba(0, 120, 212, 0.15);
@@ -6464,7 +6385,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   padding: 0;
 }
 .file-picker-nav-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
+  color: var(--accent);
 }
 .file-picker-nav-btn:disabled {
   opacity: 0.4;
@@ -6622,7 +6543,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text);
 }
 .file-picker-cancel-btn:hover {
-  background: var(--panel-hover);
+  color: var(--accent);
 }
 .file-picker-confirm-btn {
   background: var(--accent);
@@ -6637,19 +6558,16 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   opacity: 0.45;
   cursor: not-allowed;
 }
-
 /* =========================================
    閲覧モード — PSD をウインドウいっぱいに表示
    MojiQ ver_2.24 viewer-mode を移植。body.viewer-mode で activate。
    ========================================= */
-
 /* ボタン アクティブ状態 */
 body.viewer-mode #viewer-mode-btn {
   background: var(--accent);
   color: #fff;
 }
 body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
-
 body.viewer-mode .toolbar {
   opacity: 0 !important;
   transform: translateY(-12px);
@@ -6661,7 +6579,6 @@ body.viewer-mode .toolbar {
   border: none !important;
   overflow: hidden !important;
 }
-
 /* ヘッダー / サイドバー / 他ペインを fade out / fade in。
    仕様（v1.13.0 でなめらかさ強化、PSD 中央移動のラグ解消版）:
      - opacity は 0.3s でなめらかにフェード
@@ -6724,7 +6641,6 @@ body:not(.viewer-mode) .spreads-editor-area {
     visibility 0s linear 0s,
     overflow 0s linear 0s;
 }
-
 /* PSD ペイン上のオーバーレイ（回転ボタン / ガイドロック / ガイド反映 / ルーラー / ガイド）。
    ボタン群は `.stage-label-bar` 内に移行したため、バー自体も viewer-mode で隠す。 */
 body.viewer-mode #pdf-stage-label-bar,
@@ -6735,7 +6651,6 @@ body.viewer-mode #psd-guides-layer {
   visibility: hidden !important;
   pointer-events: none !important;
 }
-
 /* PSD エリアを全画面に拡張。padding/border を消して content 領域を最大化。
    editor-mode の `.workspace.editor-mode .spreads-psd-area { display: none }` は
    特異度 (0,3,0)。viewer-mode 側も `.workspace` を介して特異度 (0,3,1) に揃え、
@@ -6768,7 +6683,6 @@ body.viewer-mode .workspace .psd-stage {
     opacity: 1;
   }
 }
-
 /* ナビゲーションヒント（入った直後に 3 秒間表示） */
 .viewer-nav-hint {
   position: fixed;
@@ -6787,7 +6701,6 @@ body.viewer-mode .workspace .psd-stage {
   pointer-events: none;
 }
 body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
-
 /* 閉じるボタン（右上角、マウス移動でフェードイン → 一定時間でフェードアウト） */
 .viewer-close-btn {
   position: absolute;
@@ -6821,10 +6734,9 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   pointer-events: auto;
 }
 .viewer-close-btn:hover {
-  background: rgba(255, 80, 80, 0.9);
+  color: var(--accent);
   transform: scale(1.1);
 }
-
 /* ===== 初回起動ウェルカムモーダル =====
    起動時に AI インストールへ誘導する 1 段目のダイアログ。z-index は既存 .ai-install-modal (200)
    より上に置き、.file-picker-modal (250) より下にする。フェード+スケールは
@@ -6898,7 +6810,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   padding: 8px 18px;
   font-size: 13px;
 }
-
 /* ========== Layers Drawer ==========
    レイヤートグルボタンから横（左方向）にスライドして出てくるパネル。
    MojiQ の「指示ツール / 文字サイズ」ドロップダウンと同じパターン:
@@ -6954,7 +6865,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
     opacity 0.2s linear,
     transform 0.22s cubic-bezier(0, 0, 0.2, 1);
 }
-
 .layers-drawer-header {
   display: flex;
   align-items: center;
@@ -6978,10 +6888,9 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   color: var(--text-muted);
 }
 .layers-drawer-close-btn:hover:not(:disabled) {
-  background: var(--panel-hover);
-  color: var(--text);
+  background: transparent;
+  color: var(--accent);
 }
-
 /* drawer 内の layer-list は flex column 構造で残余高を吸収する。
    既存 .layer-list の flex / overflow 設定がそのまま動く。 */
 .layers-drawer #layer-list { flex: 1 1 0; min-height: 0; }
@@ -6989,7 +6898,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   flex-shrink: 0;
   border-radius: 0 0 8px 8px;
 }
-
 /* ワークスペース反転時はサイドツールバーが左側に来るため、ドロワーは右側に展開する。
    anchor / 初期 translateX を鏡映反転。 */
 .workspace.flipped .layers-drawer {
@@ -7002,7 +6910,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 .workspace.flipped .layers-drawer.open {
   transform: translateX(0);
 }
-
 /* ===== 【v1.16.0】per-char 編集の文字選択インジケータ ===== */
 /* in-place 編集中、textarea で文字選択があるときだけ「選択中: N 文字」を表示。
    サイドバーから per-char 操作対象が認識できているかをユーザーに視認させる。 */
@@ -7016,7 +6923,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   margin-bottom: 6px;
 }
 .char-selection-indicator[hidden] { display: none; }
-
 /* ========================================================================
    【v1.28.0 移植 (PsDesign-main v1.25.0)】
    重ね調整 (mode3) モーダル: 見本に PSD を半透明で重ねる UI
@@ -7031,7 +6937,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   z-index: 350;
 }
 .overlay-align-modal[hidden] { display: none; }
-
 .overlay-align-card {
   background: var(--bg);
   color: var(--text);
@@ -7043,7 +6948,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
   overflow: hidden;
 }
-
 .overlay-align-header {
   display: flex;
   justify-content: space-between;
@@ -7054,7 +6958,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 }
 .overlay-align-title { font-size: 14px; font-weight: 700; }
 .overlay-align-help { font-size: 12px; color: var(--text-muted); }
-
 .overlay-align-stage {
   flex: 1;
   position: relative;
@@ -7070,7 +6973,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   cursor: grab;
 }
 .overlay-align-stage.dragging { cursor: grabbing; }
-
 .overlay-align-ref-img {
   position: absolute;
   pointer-events: none;
@@ -7079,7 +6981,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   -webkit-user-drag: none;
   z-index: 1;
 }
-
 .overlay-align-psd-canvas {
   position: absolute;
   pointer-events: none;
@@ -7088,12 +6989,10 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   -webkit-user-drag: none;
   z-index: 1;
 }
-
 .overlay-align-layer-base {
   opacity: 0.45;
   outline: 1px solid rgba(255, 255, 255, 0.22);
 }
-
 .overlay-align-layer-moving {
   opacity: 0.74;
   z-index: 2;
@@ -7104,7 +7003,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
     0 0 34px rgba(56, 202, 255, 0.32);
   filter: drop-shadow(0 0 4px rgba(56, 202, 255, 0.85));
 }
-
 .overlay-align-controls {
   display: flex;
   align-items: center;
@@ -7120,7 +7018,6 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
-
 .overlay-align-btn {
   padding: 6px 14px;
   font-size: 13px;
@@ -7131,9 +7028,8 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   cursor: pointer;
 }
 .overlay-align-btn:hover:not(:disabled) {
-  background: var(--accent);
-  color: #fff;
   border-color: var(--accent);
+  color: var(--accent);
 }
 .overlay-align-btn-primary {
   background: var(--accent);
@@ -7142,5 +7038,57 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   font-weight: 700;
 }
 .overlay-align-btn-primary:hover:not(:disabled) {
-  background: var(--accent-hover, var(--accent));
+  background: var(--accent);
+}
+
+/* Primary blue buttons: outline by default, fill on hover. */
+button.page-jump-btn-primary,
+button.settings-done-btn:not(.ai-install-cancel-btn),
+button.file-picker-confirm-btn,
+button.proofread-load-btn,
+button.update-modal-primary,
+button.overlay-align-btn-primary {
+  background: transparent;
+  border-color: var(--accent);
+  color: var(--accent);
+  transition:
+    background-color 0.28s ease,
+    color 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease,
+    filter 0.22s ease;
+}
+
+button.home-start-btn {
+  background: transparent;
+  border-color: var(--accent);
+  transition:
+    background-color 0.28s ease,
+    color 0.22s ease,
+    border-color 0.22s ease,
+    box-shadow 0.22s ease;
+}
+
+button.page-jump-btn-primary:hover:not(:disabled),
+button.settings-done-btn:not(.ai-install-cancel-btn):hover:not(:disabled),
+button.file-picker-confirm-btn:hover:not(:disabled),
+button.home-start-btn:hover:not(:disabled),
+button.proofread-load-btn:hover,
+button.update-modal-primary:hover:not(:disabled),
+button.overlay-align-btn-primary:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  filter: none;
+}
+
+button.page-jump-btn-primary:hover:not(:disabled) svg,
+button.settings-done-btn:not(.ai-install-cancel-btn):hover:not(:disabled) svg,
+button.file-picker-confirm-btn:hover:not(:disabled) svg,
+button.home-start-btn:hover:not(:disabled) svg,
+button.proofread-load-btn:hover svg,
+button.update-modal-primary:hover:not(:disabled) svg,
+button.overlay-align-btn-primary:hover:not(:disabled) svg {
+  color: #fff;
+  stroke: currentColor;
 }

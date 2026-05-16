@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::Manager;
 
 // 【v1.26.0】ルビ 1 件分のエントリ。state.js の charRubies スキーマと対応。
 // 【v1.29.x UI-coord】offset_x / offset_y: ビューアー上のルビ wrap の実描画位置を
@@ -683,6 +684,38 @@ async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
+fn update_splash_progress(app: &tauri::AppHandle, value: u32) {
+    if let Some(splash_window) = app.get_webview_window("splash") {
+        let _ = splash_window.eval(&format!(
+            "if(window.__splashSetProgress)window.__splashSetProgress({});",
+            value
+        ));
+    }
+}
+
+#[tauri::command]
+async fn close_splash(window: tauri::Window) -> Result<(), String> {
+    let app = window.app_handle();
+
+    update_splash_progress(&app, 72);
+    std::thread::sleep(std::time::Duration::from_millis(180));
+    update_splash_progress(&app, 88);
+    std::thread::sleep(std::time::Duration::from_millis(160));
+    update_splash_progress(&app, 100);
+    std::thread::sleep(std::time::Duration::from_millis(420));
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        main_window.show().map_err(|e| e.to_string())?;
+        let _ = main_window.set_focus();
+    }
+
+    if let Some(splash_window) = app.get_webview_window("splash") {
+        splash_window.close().map_err(|e| e.to_string())?;
+    }
+
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -690,7 +723,24 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
+        .setup(|app| {
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "splash",
+                tauri::WebviewUrl::App("splash.html".into()),
+            )
+            .title("PsDesign")
+            .inner_size(870.0, 600.0)
+            .resizable(false)
+            .decorations(false)
+            .center()
+            .always_on_top(true)
+            .skip_taskbar(true)
+            .build()?;
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
+            close_splash,
             apply_edits_via_photoshop,
             list_fonts,
             read_binary_file,

@@ -31,7 +31,7 @@ import {
 import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath } from "./txt-source.js";
 import { bindAiInstallMenu } from "./ai-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
-import { bindAiOcrButton } from "./ai-ocr.js";
+import { bindAiOcrButton, openAiOcrDialog } from "./ai-ocr.js";
 import { bindAiPlaceButton, bindPositionAdjustButton } from "./ai-place.js";
 import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
@@ -2135,6 +2135,39 @@ function bindWindowControls() {
   close.addEventListener("click", async () => { (await getWin()).close(); });
 }
 
+function showHomeScreen() {
+  document.body.classList.add("home-mode");
+}
+
+function hideHomeScreen() {
+  document.body.classList.remove("home-mode");
+}
+
+function bindHomeScreen() {
+  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const start = async () => {
+    document.body.classList.add("home-starting");
+    await wait(360);
+    hideHomeScreen();
+    document.body.classList.remove("home-starting");
+    await new Promise((resolve) => requestAnimationFrame(resolve));
+    await openAiOcrDialog({ force: true });
+  };
+  document.getElementById("home-transcribe-start-btn")?.addEventListener("click", start);
+  document.getElementById("home-typeset-start-btn")?.addEventListener("click", start);
+  showHomeScreen();
+}
+
+async function closeStartupSplash() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("close_splash");
+  } catch (e) {
+    // Browser-only dev and already-visible windows do not have the splash command.
+    console.debug("close_splash skipped:", e);
+  }
+}
+
 function init() {
   document.getElementById("open-folder-btn").addEventListener("click", handleOpenFiles);
   document.getElementById("open-pdf-btn")?.addEventListener("click", handleOpenPdf);
@@ -2152,6 +2185,7 @@ function init() {
   initFontBookPanel();
   bindEditorEvents();
   bindWindowControls();
+  bindHomeScreen();
   bindPageJumpDialog();
   initTxtSource();
   bindAiInstallMenu();
@@ -2230,6 +2264,7 @@ function init() {
   // 初回起動セットアップ画面: AI 未インストール かつ 未スキップの初回のみ表示。
   // await しない: 内部の checkAiModelsStatus は非同期だが他の起動処理を遅らせない。
   maybeShowFirstRunSetup();
+  void closeStartupSplash();
 }
 
 // INPUT/TEXTAREA/contenteditable 以外をクリックしたら、現在フォーカス中のテキスト入力から

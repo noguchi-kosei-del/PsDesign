@@ -385,6 +385,42 @@ export async function runAiOcrForFiles(files) {
   await runAiOcr(files, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
 }
 
+export async function openAiOcrDialog({ force = false } = {}) {
+  if (!force && isAiActionsLocked()) return;
+  if (runningOcr) return;
+  if (getTxtSource()) {
+    const ok = await confirmDialog({
+      title: "画像スキャン",
+      message: "現在のテキストは破棄されます。よろしいですか？",
+      confirmLabel: "実行",
+      kind: "danger",
+    });
+    if (!ok) return;
+  }
+  let files = getPdfPaths();
+  let needLoadReference = false;
+  if (!files || files.length === 0) {
+    try {
+      files = await pickInputFiles();
+    } catch (e) {
+      console.error(e);
+      toast(`ファイル選択失敗: ${e?.message ?? e}`, { kind: "error" });
+      return;
+    }
+    if (!files || files.length === 0) return;
+    needLoadReference = true;
+  }
+  if (needLoadReference) {
+    try {
+      await loadReferenceFiles(files);
+    } catch (e) {
+      console.error("loadReferenceFiles failed:", e);
+      toast(`見本表示に失敗: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
+    }
+  }
+  await runAiOcr(files, { notifyOnComplete: true });
+}
+
 export function bindAiOcrButton() {
   const btn = $("ai-ocr-btn");
   if (!btn) return;
@@ -402,6 +438,8 @@ export function bindAiOcrButton() {
   });
   void refreshAiActionsEngineLock();
   btn.addEventListener("click", async () => {
+    await openAiOcrDialog();
+    return;
     if (isAiActionsLocked()) return;
     if (runningOcr) return;
     // テキストが既に読み込まれている場合は OCR 結果で上書きする旨を事前に警告する。

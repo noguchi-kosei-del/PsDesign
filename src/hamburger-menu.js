@@ -26,10 +26,15 @@ import { resetStylePaletteState } from "./style-palette.js";
 
 const THEME_KEY = "psdesign_theme";
 const FLIPPED_KEY = "psdesign_layout_flipped";
+const HOME_RETURN_ANIMATION_MS = 360;
 
 const $ = (id) => document.getElementById(id);
 
 let menuOpen = false;
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function applyTheme(theme) {
   document.documentElement.setAttribute("data-theme", theme);
@@ -141,6 +146,10 @@ async function goHome() {
   }
   const saveMenu = document.getElementById("save-menu");
   if (saveMenu) saveMenu.hidden = true;
+  document.body.classList.add("home-returning");
+  await wait(HOME_RETURN_ANIMATION_MS);
+  document.body.classList.add("home-mode");
+  document.body.classList.remove("home-returning");
   closeMenu();
 }
 
