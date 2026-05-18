@@ -693,6 +693,16 @@ fn update_splash_progress(app: &tauri::AppHandle, value: u32) {
     }
 }
 
+fn apply_app_icon(window: &tauri::WebviewWindow) {
+    let Ok(img) = image::load_from_memory(include_bytes!("../icons/icon.png")) else {
+        return;
+    };
+    let rgba = img.into_rgba8();
+    let (width, height) = rgba.dimensions();
+    let icon = tauri::image::Image::new_owned(rgba.into_raw(), width, height);
+    let _ = window.set_icon(icon);
+}
+
 #[tauri::command]
 async fn close_splash(window: tauri::Window) -> Result<(), String> {
     let app = window.app_handle();
@@ -705,6 +715,7 @@ async fn close_splash(window: tauri::Window) -> Result<(), String> {
     std::thread::sleep(std::time::Duration::from_millis(420));
 
     if let Some(main_window) = app.get_webview_window("main") {
+        apply_app_icon(&main_window);
         main_window.show().map_err(|e| e.to_string())?;
         let _ = main_window.set_focus();
     }
@@ -724,7 +735,11 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            tauri::WebviewWindowBuilder::new(
+            if let Some(main_window) = app.get_webview_window("main") {
+                apply_app_icon(&main_window);
+            }
+
+            let splash_window = tauri::WebviewWindowBuilder::new(
                 app,
                 "splash",
                 tauri::WebviewUrl::App("splash.html".into()),
@@ -737,6 +752,7 @@ pub fn run() {
             .always_on_top(true)
             .skip_taskbar(true)
             .build()?;
+            apply_app_icon(&splash_window);
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

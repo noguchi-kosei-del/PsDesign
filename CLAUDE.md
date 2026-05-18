@@ -5314,3 +5314,25 @@ var PHOTOSHOP_RUBY_PARENT_BIAS_PX
 ### Version
 
 `package.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.30.6` に更新。
+---
+
+## v1.30.7: OPUS branding / taskbar icon refresh
+
+### OPUS logo and app icon
+
+- `logo/opus_icon.png` を新しいアプリアイコンとして採用し、`public/PsDesign_icon.png` へ反映。
+- `npm run tauri -- icon logo/opus_icon.png` で `src-tauri/icons/` 配下の ico / icns / PNG / Windows Square*Logo / Android / iOS アイコンを一括再生成。
+- `logo/opus_logo.png` を `public/opus_logo.png` として配信し、ホーム画面の `home-title` をテキストから `<img class="home-title-logo" src="/opus_logo.png">` に変更。
+- `opus_logo.png` は非透明ピクセルを白へ変換し、ダークモードでは白ロゴ、ライトモードでは CSS `brightness(0)` で黒ロゴとして表示。
+- ホーム画面の `home-logo-icon` / `home-title-logo` にテーマ別 `drop-shadow` を追加。ライトモードでは白系シャドウを使い、黒ロゴの下に暗い影が出ないよう調整。
+- `home-title-logo` の表示幅を `min(300px, 62vw)` に縮小し、OPUS 文字ロゴの主張を少し抑えた。
+
+### Splash and window/taskbar icon
+
+- `public/splash.html` のブランド名も `opus_logo.png` に置換し、起動時スプラッシュに OPUS アイコン + OPUS ロゴを反映。
+- Windows タスクバーが古い PsDesign アイコンを保持しないよう、Rust 側に `apply_app_icon` を追加。`src-tauri/icons/icon.png` を `image` crate で RGBA 展開し、main / splash の `WebviewWindow::set_icon` に明示設定する。
+- `close_splash` で main window 表示直前にも `apply_app_icon` を呼び、起動順や Windows のキャッシュ状態に左右されにくくした。
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.30.7` に更新。
