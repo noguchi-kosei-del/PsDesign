@@ -407,9 +407,9 @@ body.home-mode .toolbar .settings-toolbar-btn {
   cursor: pointer;
 }
 .window-controls .window-ctrl-btn:hover:not(:disabled) {
-  background: transparent;
+  background: color-mix(in srgb, var(--text) 10%, transparent);
   border-color: transparent;
-  color: var(--accent);
+  color: var(--text);
 }
 .window-controls .window-ctrl-btn.window-ctrl-close:hover:not(:disabled) {
   background: #e81123;
@@ -7114,6 +7114,18 @@ button.home-start-btn:hover:not(:disabled) svg,
 button.proofread-load-btn:hover svg,
 button.update-modal-primary:hover:not(:disabled) svg,
 button.overlay-align-btn-primary:hover:not(:disabled) svg {
+  color: #fff;
+  stroke: currentColor;
+}
+
+.window-controls .window-ctrl-btn:hover:not(:disabled),
+.window-controls .window-ctrl-btn:hover:not(:disabled) svg {
+  color: var(--text);
+  stroke: currentColor;
+}
+
+.window-controls .window-ctrl-btn.window-ctrl-close:hover:not(:disabled),
+.window-controls .window-ctrl-btn.window-ctrl-close:hover:not(:disabled) svg {
   color: #fff;
   stroke: currentColor;
 }

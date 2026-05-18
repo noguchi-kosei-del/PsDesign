@@ -10,6 +10,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 
 // 【v1.26.0】ルビ 1 件分のエントリ。state.js の charRubies スキーマと対応。
@@ -712,7 +713,7 @@ async fn close_splash(window: tauri::Window) -> Result<(), String> {
     update_splash_progress(&app, 88);
     std::thread::sleep(std::time::Duration::from_millis(160));
     update_splash_progress(&app, 100);
-    std::thread::sleep(std::time::Duration::from_millis(420));
+    std::thread::sleep(std::time::Duration::from_millis(900));
 
     if let Some(main_window) = app.get_webview_window("main") {
         apply_app_icon(&main_window);
@@ -745,12 +746,22 @@ pub fn run() {
                 tauri::WebviewUrl::App("splash.html".into()),
             )
             .title("PsDesign")
-            .inner_size(870.0, 600.0)
+            .inner_size(670.0, 420.0)
+            .background_color(tauri::webview::Color(0x21, 0x21, 0x21, 255))
+            .visible(false)
             .resizable(false)
             .decorations(false)
             .center()
             .always_on_top(true)
             .skip_taskbar(true)
+            .on_page_load(|window, payload| {
+                if payload.event() == PageLoadEvent::Finished {
+                    let _ = window.show();
+                    let _ = window.eval(
+                        "requestAnimationFrame(()=>requestAnimationFrame(()=>document.querySelector('.splash')?.classList.add('is-ready')));",
+                    );
+                }
+            })
             .build()?;
             apply_app_icon(&splash_window);
             Ok(())

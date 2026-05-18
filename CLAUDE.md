@@ -5336,3 +5336,24 @@ var PHOTOSHOP_RUBY_PARENT_BIAS_PX
 ### Version
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.30.7` に更新。
+
+---
+
+## v1.30.8: OPUS splash timing / window control polish
+
+### Splash screen
+
+- `public/splash.html` のスプラッシュ背景を `#212121` に統一し、進捗パーセント表示と進捗バーを削除。既存の Rust 側進捗更新呼び出しが失敗しないよう、`window.__splashSetProgress` の受け口だけは残した。
+- OPUS アイコン + OPUS ロゴをスプラッシュウインドウ右側へ配置し、`/PsDesign_icon.png` と `/opus_logo.png` を preload するようにした。
+- ロゴ表示は `.splash.is-ready` による opacity / transform transition に変更。スプラッシュウインドウは `visible(false)` で生成し、`PageLoadEvent::Finished` で表示してから `is-ready` を付与することで、ウインドウ表示後の空白時間を抑えつつ、表示開始とフェード開始を揃えた。
+- スプラッシュウインドウ / WebView の初期背景色を `tauri::webview::Color(0x21, 0x21, 0x21, 255)` に設定し、白い初期フラッシュを防止。
+- スプラッシュサイズを `670 x 420` に調整し、メインウインドウ表示前の保持時間を `420ms` から `900ms` に延長してロゴ表示後の余韻を確保。
+
+### Header / window controls
+
+- ヘッダー左のアプリアイコンから `title="PsDesign"` を削除し、ホバー時のブラウザ標準チップを非表示化。`aria-label` は維持。
+- ウインドウコントロールの最小化 / 最大化 hover 時は薄い背景だけを表示し、共通 `button:hover svg` ルールでアイコンが青くならないよう末尾で専用上書きを追加。閉じるボタンは赤背景 + 白アイコンを維持。
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.30.8` に更新。
