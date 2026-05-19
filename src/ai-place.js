@@ -32,7 +32,7 @@ import {
 import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress, promptDialog, showProgress, updateProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
-import { runAiOcrForFiles, PLACE_ICON_SVG } from "./ai-ocr.js";
+import { runAiOcrForFiles, runAiOcrForPlacementOnly, PLACE_ICON_SVG } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
@@ -475,7 +475,9 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   // 縦書きレイヤーは設定 verticalHalfToFullEnabled (default true) に従い、
   // 半角英数字 (0-9 / A-Z / a-z) を全角に自動変換する。
   // bbox 推定は変換後テキストで行うため、文字幅差は影響しない（char count ベース）。
-  const text = convertHalfToFullForVertical(contents ?? "", direction);
+  const rubyParsed = parseRubyAnnotatedText(contents ?? "");
+  const text = convertHalfToFullForVertical(rubyParsed.text, direction);
+  const charRubies = rubyParsed.charRubies;
   // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
   // 連結グループに属するブロック (member >= 2) はサイズを基本フォントサイズに統一。
   // 検出 font_size の揺れで連結セリフ間のサイズがバラつくのを防ぐ。
@@ -575,6 +577,8 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
     strokeWidthPx: defaults.strokeWidthPx,
     fillColor: defaults.fillColor,
     sourceTxtRef,
+    charRubies,
+    lineLeadings: rubyLineLeadingsForText(text, charRubies),
     autoFontSwitched,        // UI で色強調するためのフラグ
     autoFontSwitchBucket,    // 0..5 の 10% 刻みバケット (UI 色分け用)、-1 は未切替
   };
@@ -587,7 +591,9 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
 // direction は吹き出し情報がないため `getNewTextDirection()` (UI トグル) を採用。
 function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
   const direction = getNewTextDirection();
-  const text = convertHalfToFullForVertical(contents ?? "", direction);
+  const rubyParsed = parseRubyAnnotatedText(contents ?? "");
+  const text = convertHalfToFullForVertical(rubyParsed.text, direction);
+  const charRubies = rubyParsed.charRubies;
   const sizePt = defaults.sizePt ?? 24;
   const { width, height } = estimateLayerSize(
     psdPage, sizePt, text, defaults.leadingPct ?? 125, direction,
@@ -608,6 +614,8 @@ function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
     strokeWidthPx: defaults.strokeWidthPx,
     fillColor: defaults.fillColor,
     sourceTxtRef,
+    charRubies,
+    lineLeadings: rubyLineLeadingsForText(text, charRubies),
   };
 }
 
@@ -631,6 +639,151 @@ function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
 //     ],
 //     totals: { placed, leftoverTxt, leftoverBubbles },
 //   }
+function parseRubyAnnotatedText(raw) {
+  const input = String(raw ?? "");
+  const charRubies = {};
+  let text = "";
+  let last = 0;
+  const re = /\{([^{}]+)\}\(([^()]+)\)/g;
+  let m;
+  while ((m = re.exec(input)) !== null) {
+    text += input.slice(last, m.index);
+    const parentRaw = String(m[1] ?? "");
+    const rubyRaw = String(m[2] ?? "");
+    const parentText = parentRaw.replace(/[ \t\u3000]+/g, "");
+    const rubyText = rubyRaw.trim().replace(/[\t\u3000]+/g, " ").replace(/ +/g, " ");
+    if (parentText && rubyText) {
+      const start = text.length;
+      text += parentText;
+      const rubyParts = rubyText.split(/[ \u3000]+/).filter(Boolean);
+      const rubyHasSpaces = /[ \t\u3000]/.test(rubyRaw);
+      const rubyType = rubyHasSpaces && rubyParts.length === Array.from(parentText).length
+        ? "mono"
+        : "group";
+      charRubies[String(start)] = { end: start + parentText.length, text: rubyText, type: rubyType, scale: 50 };
+    } else {
+      text += m[0];
+    }
+    last = m.index + m[0].length;
+  }
+  text += input.slice(last);
+  return { text, charRubies };
+}
+
+function rubyLineLeadingsForText(text, charRubies) {
+  const out = {};
+  if (!charRubies || Object.keys(charRubies).length === 0) return out;
+  const rubyLeadingPct = Number(getDefault("rubyLeadingPct")) || 150;
+  for (const k of Object.keys(charRubies)) {
+    const start = Number(k);
+    if (!Number.isFinite(start)) continue;
+    const lineIndex = String(text ?? "").slice(0, start).split("\n").length - 1;
+    out[lineIndex] = rubyLeadingPct;
+  }
+  return out;
+}
+function mergeCharRubies(base, extra) {
+  return { ...(base ?? {}), ...(extra ?? {}) };
+}
+function normalizePlacementText(s) {
+  return parseRubyAnnotatedText(s).text
+    .normalize("NFKC")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\s\u3000]+/g, "")
+    .replace(/[\uFE63\uFF0D\uFF70\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "\u30fc")
+    .replace(/[\u3001\u3002\uFF0C\uFF0E.,!?！？\u30fb\u2026\u30fc\-()（）「」『』【】\[\]［］]/g, "")
+    .trim();
+}
+
+function getBlockText(block) {
+  if (!block) return "";
+  if (Array.isArray(block.lines)) return block.lines.join("\n");
+  if (typeof block.text === "string") return block.text;
+  if (typeof block.contents === "string") return block.contents;
+  return "";
+}
+
+function lcsLength(a, b) {
+  if (!a || !b) return 0;
+  const prev = new Array(b.length + 1).fill(0);
+  const cur = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      cur[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], cur[j - 1]);
+    }
+    for (let j = 0; j <= b.length; j += 1) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+function charOverlapScore(a, b) {
+  if (!a || !b) return 0;
+  const counts = new Map();
+  for (const ch of b) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let hit = 0;
+  for (const ch of a) {
+    const n = counts.get(ch) ?? 0;
+    if (n > 0) {
+      hit += 1;
+      counts.set(ch, n - 1);
+    }
+  }
+  return (2 * hit) / (a.length + b.length);
+}
+
+function textSimilarityScore(aRaw, bRaw) {
+  const a = normalizePlacementText(aRaw);
+  const b = normalizePlacementText(bRaw);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const shorter = Math.min(a.length, b.length);
+  const longer = Math.max(a.length, b.length);
+  const contain = (a.includes(b) || b.includes(a)) ? shorter / longer : 0;
+  const lcs = lcsLength(a, b) / longer;
+  const overlap = charOverlapScore(a, b);
+  return Math.max(contain, lcs * 0.72 + overlap * 0.28);
+}
+
+function lowPlacementMatchScore(txt, ocr) {
+  const len = Math.min(normalizePlacementText(txt).length, normalizePlacementText(ocr).length);
+  if (len <= 2) return 0.72;
+  if (len <= 4) return 0.58;
+  if (len <= 8) return 0.46;
+  return 0.38;
+}
+
+function assignBlocksToTxt(txtBlocks, sortedBlocks) {
+  const entries = sortedBlocks.map((block, index) => ({ block, index, text: getBlockText(block) }));
+  const candidates = [];
+  for (let j = 0; j < txtBlocks.length; j += 1) {
+    for (const entry of entries) {
+      const score = textSimilarityScore(txtBlocks[j], entry.text);
+      candidates.push({ txtIndex: j, entry, score });
+    }
+  }
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const ad = Math.abs(a.entry.index - a.txtIndex);
+    const bd = Math.abs(b.entry.index - b.txtIndex);
+    if (ad !== bd) return ad - bd;
+    if (a.txtIndex !== b.txtIndex) return a.txtIndex - b.txtIndex;
+    return a.entry.index - b.entry.index;
+  });
+  const usedTxt = new Set();
+  const usedBlock = new Set();
+  const assigned = new Array(txtBlocks.length).fill(null);
+  for (const c of candidates) {
+    if (usedTxt.has(c.txtIndex) || usedBlock.has(c.entry.index)) continue;
+    const lowThreshold = lowPlacementMatchScore(txtBlocks[c.txtIndex], c.entry.text);
+    assigned[c.txtIndex] = { ...c.entry, score: c.score, lowConfidence: c.score < lowThreshold };
+    usedTxt.add(c.txtIndex);
+    usedBlock.add(c.entry.index);
+  }
+  return assigned;
+}
+
 function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
   const N = Math.min(psdPages.length, mokuroDoc.pages.length);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
@@ -652,20 +805,27 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
     // 全 TXT 段落を配置: sorted[j] があれば吹き出し中央、無ければ PSD ページ中央。
     // 旧仕様は placedCount = min(txt, sorted) で余り TXT を捨てていたが、ユーザーが
     // 入力欄から追加した段落も自動配置で拾うために全件処理に変更。
+    const assignedBlocks = assignBlocksToTxt(txt, sorted);
     for (let j = 0; j < txt.length; j++) {
-      const block = sorted[j];
-      const sourceTxtRef = { pageNumber: i + 1, paragraphIndex: j };
+      const assigned = assignedBlocks[j];
+      const block = assigned?.block;
+      const blockIndex = Number.isInteger(assigned?.index) ? assigned.index : j;
+      const matchScore = Number.isFinite(assigned?.score) ? assigned.score : 0;
+      const sourceTxtRef = { pageNumber: i + 1, paragraphIndex: j, ocrBlockIndex: blockIndex, ocrMatchScore: matchScore };
       if (block) {
-        layers.push(mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef, groups[j]));
+        const layer = mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef, groups[blockIndex]);
+        layer.lowOcrTextMatch = assigned?.lowConfidence === true;
+        layer.ocrMatchScore = matchScore;
+        layers.push(layer);
       } else {
-        // 余り TXT: PSD ページ中央に配置
         layers.push(mapTxtToPageCenter(psd, txt[j], defaults, sourceTxtRef));
       }
     }
     const placedCount = txt.length;
     // leftoverTxt は実質ゼロになるが、互換のため空配列で保持する
     const leftoverTxt = [];
-    const leftoverBubbles = sorted.slice(txt.length).map((b) =>
+    const usedBlockIndices = new Set(assignedBlocks.filter(Boolean).map((a) => a.index));
+    const leftoverBubbles = sorted.filter((_, idx) => !usedBlockIndices.has(idx)).map((b) =>
       Array.isArray(b.lines) ? b.lines.join(" ") : ""
     );
     let status = "ok";
@@ -783,7 +943,9 @@ function applyPlan(plan) {
 // ============================================================
 // 自動配置メインフロー
 // ============================================================
-async function runAutoPlace() {
+async function runAutoPlace(options = {}) {
+  const forceRescan = !!options.forceRescan;
+  const positionOnlyScan = !!options.positionOnlyScan;
   if (runningPlace) return;
   runningPlace = true;
   try {
@@ -818,7 +980,7 @@ async function runAutoPlace() {
     //   - キャッシュ有効: 結果あり & pages 1 件以上 → そのまま再利用
     //   - 無効なら、読込済み見本ファイル全てを対象に画像スキャンを自動トリガーする。
     let cache = getAiOcrDoc();
-    const cacheValid = !!(
+    const cacheValid = !forceRescan && !!(
       cache &&
       cache.doc &&
       Array.isArray(cache.doc.pages) &&
@@ -835,7 +997,11 @@ async function runAutoPlace() {
       }
       // 既存の画像スキャンフローを呼び出す (進捗モーダルは ai-ocr 側が出す)。
       // 読込済みの見本ファイル全てを OCR 対象にして自動配置の整合を取る。
-      await runAiOcrForFiles(loadedRefs);
+      if (positionOnlyScan) {
+        await runAiOcrForPlacementOnly(loadedRefs);
+      } else {
+        await runAiOcrForFiles(loadedRefs);
+      }
       cache = getAiOcrDoc();
       if (!cache || !cache.doc) {
         // 画像スキャン側がエラー通知済みなのでここでは静かに戻る
@@ -944,17 +1110,18 @@ function syncPlacedFromTxt() {
       if (!paragraphs) continue;
       const rawNext = paragraphs[ref.paragraphIndex];
       if (rawNext == null) continue;
+      const rubyParsedNext = parseRubyAnnotatedText(rawNext);
       // 縦書きレイヤーは設定 verticalHalfToFullEnabled に従い半角英数字を全角化。
       // 原稿側は元データを保持する設計のため、レイヤー contents に変換後を書き戻す
       // ことで原稿との見た目差分を吸収する（横書きと設定 OFF は冪等に素通し）。
       const direction = layer.direction ?? "horizontal";
-      const next = convertHalfToFullForVertical(rawNext, direction);
+      const next = convertHalfToFullForVertical(rubyParsedNext.text, direction);
       if (next === layer.contents) continue;
 
       // contents 変更で推定 width/height が変わるため、x/y をそのままにすると
       // bbox top-left 固定 → 旧中心からズレて見える（上左に寄ったように見える）。
       // 旧 contents の bbox 中心を求め、新 contents の bbox を中心起点で再配置する。
-      const updates = { contents: next };
+      const updates = { contents: next, charRubies: rubyParsedNext.charRubies, lineLeadings: rubyLineLeadingsForText(next, rubyParsedNext.charRubies) };
       const psdPage = pagesByPath.get(layer.psdPath);
       if (psdPage) {
         const sizePt = layer.sizePt ?? 24;
@@ -983,8 +1150,10 @@ function syncPlacedFromTxt() {
 // ============================================================
 export function bindAiPlaceButton() {
   const btn = $("ai-place-btn");
-  if (!btn) return;
-  btn.addEventListener("click", () => { void runAutoPlace(); });
+  const positionBtn = $("ai-place-position-btn");
+  if (!btn && !positionBtn) return;
+  if (btn) btn.addEventListener("click", () => { void runAutoPlace(); });
+  if (positionBtn) positionBtn.addEventListener("click", () => { void runAutoPlace({ forceRescan: true, positionOnlyScan: true }); });
   // OCR 結果が無いうちはグレーアウト。setAiOcrDoc / clearAiOcrDoc に追従。
   const sync = () => {
     const locked = isAiActionsLocked();
@@ -995,12 +1164,20 @@ export function bindAiPlaceButton() {
       Array.isArray(cache.doc.pages) &&
       cache.doc.pages.length > 0
     );
-    btn.disabled = locked || !hasOcr;
-    btn.title = locked
-      ? "画像スキャンエンジンが未インストールです。"
-      : hasOcr
-      ? "OCR 結果と原稿テキストを吹き出し位置に自動配置"
-      : "先に画像スキャンを実行してください";
+    if (btn) {
+      btn.disabled = locked || !hasOcr;
+      btn.title = locked
+        ? "画像スキャンエンジンが未インストールです。"
+        : hasOcr
+        ? "OCR結果と原稿テキストを吹き出し位置に自動配置"
+        : "先に画像スキャンを実行してください";
+    }
+    if (positionBtn) {
+      positionBtn.disabled = locked;
+      positionBtn.title = locked
+        ? "画像スキャンエンジンが未インストールです。"
+        : "既存TXTを正として、見本画像から位置だけを検出して配置";
+    }
   };
   onAiOcrDocChange(sync);
   window.addEventListener("psdesign:ai-actions-lock-change", sync);
@@ -1122,7 +1299,7 @@ async function runPositionAdjust(mode = "mode1", options = {}) {
         let refCx, refCy;
         const txtRef = layer.sourceTxtRef;
         const block = (txtRef && Number.isInteger(txtRef.paragraphIndex))
-          ? mokuroPage?.blocks?.[txtRef.paragraphIndex]
+          ? mokuroPage?.blocks?.[Number.isInteger(txtRef.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef.paragraphIndex]
           : null;
         if (block?.box && block.box.length >= 4) {
           refCx = (block.box[0] + block.box[2]) / 2;
@@ -1606,7 +1783,7 @@ async function runOverlayAlign() {
       let refCx, refCy;
       const txtRef = layer.sourceTxtRef;
       const block = (txtRef && Number.isInteger(txtRef.paragraphIndex))
-        ? mokuroPage?.blocks?.[txtRef.paragraphIndex]
+        ? mokuroPage?.blocks?.[Number.isInteger(txtRef.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef.paragraphIndex]
         : null;
       if (block?.box && block.box.length >= 4) {
         refCx = (block.box[0] + block.box[2]) / 2;

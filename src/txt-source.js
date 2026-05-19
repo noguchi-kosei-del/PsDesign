@@ -4,6 +4,8 @@ import {
   getCurrentPageIndex,
   getFillColor,
   getLeadingPct,
+  getAiOcrTextDiffs,
+  getAiOcrTextSource,
   getNewLayers,
   getNewLayersForPsd,
   getPages,
@@ -18,6 +20,8 @@ import {
   onPageIndexChange,
   onPdfChange,
   onPdfPageIndexChange,
+  onAiOcrTextDiffsChange,
+  onAiOcrTextSourceChange,
   onTxtSourceChange,
   removeNewLayer,
   setTxtDirty,
@@ -125,8 +129,7 @@ export function getTxtPageCount() {
   return max;
 }
 
-function getVisibleBlocks() {
-  const source = getTxtSource();
+function getBlocksForSource(source) {
   if (!source) return { blocks: [], hasMarkers: false, pageNumber: null };
   const parsed = parsePages(source.content);
   if (!parsed.hasMarkers) {
@@ -140,8 +143,209 @@ function getVisibleBlocks() {
   };
 }
 
-export function renderTxtSourceViewer() {
-  renderViewer();
+function getVisibleBlocks() {
+  return getBlocksForSource(getTxtSource());
+}
+
+function formatOcrDiffLabel(diff) {
+  if (!diff) return "";
+  if (diff.type === "extra-ocr") return "OCRのみ";
+  if (diff.type === "missing-ocr") return "OCR欠落";
+  return "差分";
+}
+
+function compareOcrKeyText(s) {
+  return String(s ?? "")
+    .normalize("NFKC")
+    .replace(/\{([^{}]+)\}\(([^()]+)\)/g, "$1")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\s\u3000]+/g, "")
+    .replace(/[\u3001\u3002\uFF0C\uFF0E.,!?\u30FB\u2026\u30FC\-()（）「」『』【】\[\]・]/g, "")
+    .trim();
+}
+
+function ocrLcsLength(a, b) {
+  if (!a || !b) return 0;
+  const prev = new Array(b.length + 1).fill(0);
+  const cur = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      cur[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], cur[j - 1]);
+    }
+    for (let j = 0; j <= b.length; j += 1) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+function ocrCharOverlapScore(a, b) {
+  if (!a || !b) return 0;
+  const counts = new Map();
+  for (const ch of b) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let hit = 0;
+  for (const ch of a) {
+    const n = counts.get(ch) ?? 0;
+    if (n > 0) {
+      hit += 1;
+      counts.set(ch, n - 1);
+    }
+  }
+  return (2 * hit) / (a.length + b.length);
+}
+
+function ocrTextMatchScore(aRaw, bRaw) {
+  const a = compareOcrKeyText(aRaw);
+  const b = compareOcrKeyText(bRaw);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const shorter = Math.min(a.length, b.length);
+  const longer = Math.max(a.length, b.length);
+  const contain = (a.includes(b) || b.includes(a)) ? shorter / longer : 0;
+  const lcs = ocrLcsLength(a, b) / longer;
+  const overlap = ocrCharOverlapScore(a, b);
+  return Math.max(contain, lcs * 0.72 + overlap * 0.28);
+}
+
+function minimumOcrDisplayMatchScore(txt) {
+  const len = compareOcrKeyText(txt).length;
+  if (len <= 2) return 0.72;
+  if (len <= 4) return 0.58;
+  if (len <= 8) return 0.46;
+  return 0.38;
+}
+
+function buildPlacedOcrIndexMap(pageNumber) {
+  const out = new Map();
+  const layers = getNewLayers();
+  for (const layer of layers) {
+    const ref = layer?.sourceTxtRef;
+    if (!ref || !Number.isInteger(ref.paragraphIndex) || !Number.isInteger(ref.ocrBlockIndex)) continue;
+    if (Number.isFinite(pageNumber) && ref.pageNumber !== pageNumber) continue;
+    if (!out.has(ref.paragraphIndex)) out.set(ref.paragraphIndex, ref.ocrBlockIndex);
+  }
+  return out;
+}
+
+function buildOcrDisplayRows(txtBlocks, ocrBlocks, pageNumber) {
+  const matched = new Array(txtBlocks.length).fill(null);
+  const usedText = new Set();
+  const usedOcr = new Set();
+
+  // If auto placement already paired a TXT paragraph with an OCR block, trust that
+  // location-based pairing first. This prevents correctly placed items from being
+  // shown as "OCR missing" just because the OCR text differs too much.
+  const placedMap = buildPlacedOcrIndexMap(pageNumber);
+  for (const [ti, oi] of placedMap.entries()) {
+    if (!Number.isInteger(ti) || !Number.isInteger(oi)) continue;
+    if (ti < 0 || ti >= txtBlocks.length || oi < 0 || oi >= ocrBlocks.length) continue;
+    if (usedText.has(ti) || usedOcr.has(oi)) continue;
+    matched[ti] = { ocrIndex: oi, score: ocrTextMatchScore(txtBlocks[ti], ocrBlocks[oi]), source: "placed" };
+    usedText.add(ti);
+    usedOcr.add(oi);
+  }
+
+  const candidates = [];
+  for (let ti = 0; ti < txtBlocks.length; ti += 1) {
+    if (usedText.has(ti)) continue;
+    for (let oi = 0; oi < ocrBlocks.length; oi += 1) {
+      if (usedOcr.has(oi)) continue;
+      candidates.push({ ti, oi, score: ocrTextMatchScore(txtBlocks[ti], ocrBlocks[oi]) });
+    }
+  }
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const ad = Math.abs(a.oi - a.ti);
+    const bd = Math.abs(b.oi - b.ti);
+    if (ad !== bd) return ad - bd;
+    if (a.ti !== b.ti) return a.ti - b.ti;
+    return a.oi - b.oi;
+  });
+  for (const c of candidates) {
+    if (usedText.has(c.ti) || usedOcr.has(c.oi)) continue;
+    if (c.score < minimumOcrDisplayMatchScore(txtBlocks[c.ti])) continue;
+    matched[c.ti] = { ocrIndex: c.oi, score: c.score, source: "text" };
+    usedText.add(c.ti);
+    usedOcr.add(c.oi);
+  }
+  const rows = [];
+  for (let ti = 0; ti < txtBlocks.length; ti += 1) {
+    const match = matched[ti];
+    if (!match) {
+      rows.push({ type: "missing-ocr", textIndex: ti, ocrIndex: null, expected: txtBlocks[ti], scanned: "" });
+      continue;
+    }
+    const scanned = ocrBlocks[match.ocrIndex] ?? "";
+    const same = compareOcrKeyText(txtBlocks[ti]) === compareOcrKeyText(scanned);
+    rows.push({ type: same ? "same" : "changed", textIndex: ti, ocrIndex: match.ocrIndex, expected: txtBlocks[ti], scanned, score: match.score, source: match.source });
+  }
+  for (let oi = 0; oi < ocrBlocks.length; oi += 1) {
+    if (usedOcr.has(oi)) continue;
+    rows.push({ type: "extra-ocr", textIndex: null, ocrIndex: oi, expected: "", scanned: ocrBlocks[oi] ?? "" });
+  }
+  return rows;
+}
+function renderOcrSourceViewer() {
+  const panel = $("ocr-source-panel");
+  const viewer = $("ocr-source-viewer");
+  const summary = $("ocr-source-summary");
+  const title = $("ocr-source-title");
+  if (!panel || !viewer || !summary) return;
+  const source = getAiOcrTextSource();
+  const txtSource = getTxtSource();
+  const diffs = getAiOcrTextDiffs();
+  viewer.innerHTML = "";
+  if (!source || !String(source.content || "").trim()) {
+    panel.hidden = true;
+    return;
+  }
+  panel.hidden = false;
+  if (title) title.textContent = source.name || "画像スキャン結果";
+  summary.textContent = diffs.length > 0
+    ? `OCRとの差分 ${diffs.length} 件（TXT順に表示、OCRのみの認識は下部に表示）`
+    : "OCR結果と読み込み済みテキストは一致しています";
+
+  const ocrVisible = getBlocksForSource(source);
+  if (ocrVisible.hasMarkers && ocrVisible.blocks.length === 0) {
+    const info = document.createElement("div");
+    info.className = "txt-block-empty-hint";
+    info.textContent = `ページ ${ocrVisible.pageNumber} のOCRテキストはありません`;
+    viewer.appendChild(info);
+    return;
+  }
+
+  let rows = null;
+  if (txtSource && String(txtSource.content || "").trim()) {
+    const txtVisible = getBlocksForSource(txtSource);
+    rows = buildOcrDisplayRows(txtVisible.blocks, ocrVisible.blocks, txtVisible.hasMarkers ? txtVisible.pageNumber : (ocrVisible.hasMarkers ? ocrVisible.pageNumber : 1));
+  }
+
+  if (!rows) {
+    rows = ocrVisible.blocks.map((paragraph, idx) => ({ type: "same", textIndex: null, ocrIndex: idx, expected: "", scanned: paragraph }));
+  }
+
+  rows.forEach((row) => {
+    const el = document.createElement("div");
+    el.className = "ocr-source-block";
+    if (row.type !== "same") el.classList.add("changed");
+    if (row.type === "extra-ocr") el.classList.add("extra-ocr");
+    const body = document.createElement("div");
+    body.className = "ocr-source-block-body";
+    body.textContent = row.scanned || "(OCRなし)";
+    el.appendChild(body);
+    if (row.type !== "same") {
+      const meta = document.createElement("div");
+      meta.className = "ocr-source-diff-meta";
+      const label = formatOcrDiffLabel(row);
+      const textNo = Number.isInteger(row.textIndex) ? row.textIndex + 1 : "-";
+      const ocrNo = Number.isInteger(row.ocrIndex) ? row.ocrIndex + 1 : "-";
+      meta.textContent = `${label} / TXT#${textNo} / OCR#${ocrNo} / 使用する本文: ${row.expected || "(なし)"}`;
+      el.appendChild(meta);
+    }
+    viewer.appendChild(el);
+  });
+}
+export function renderTxtSourceViewer() {  renderViewer();
 }
 
 function renderViewer() {
@@ -154,7 +358,7 @@ function renderViewer() {
   const deleteBtn = $("delete-txt-btn");
 
   viewer.innerHTML = "";
-
+  renderOcrSourceViewer();
   // txt-source-actions 内 3 ボタン (保存 / 削除 / 再読み込み) は常時表示し、
   // TXT 未読込時は disabled でグレーアウトする（global の button:disabled ルール）。
   // 「テキストを削除」は選択中ブロックがある時だけ有効にする。
@@ -1010,6 +1214,8 @@ export function initTxtSource() {
   // setTxtSource からも同じ listener が発火する（loadTxtFromPath 等の呼び出し直後の
   // 明示 renderViewer 呼出と二重実行になるが、いずれも同期描画なので副作用なし）。
   onTxtSourceChange(() => renderViewer());
+  onAiOcrTextSourceChange(() => renderOcrSourceViewer());
+  onAiOcrTextDiffsChange(() => renderOcrSourceViewer());
   $("clear-txt-btn").addEventListener("click", async () => {
     if (!getTxtSource()) return;
     const ok = await confirmDialog({
@@ -1073,6 +1279,7 @@ export function initTxtSource() {
 
   bindDropzone();
   renderViewer();
+  renderOcrSourceViewer();
   syncNewInputAvailability();
 }
 

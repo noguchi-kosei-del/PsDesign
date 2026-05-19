@@ -43,6 +43,10 @@ const state = {
   // { doc: MokuroDocument, sourcePath: string } | null
   aiOcrDoc: null,
   aiOcrDocListeners: new Set(),
+  aiOcrTextSource: null,
+  aiOcrTextSourceListeners: new Set(),
+  aiOcrTextDiffs: [],
+  aiOcrTextDiffListeners: new Set(),
 };
 
 const HISTORY_MAX = 100;
@@ -196,6 +200,25 @@ export function clearAiOcrDoc() {
 export function onAiOcrDocChange(fn) {
   state.aiOcrDocListeners.add(fn);
   return () => state.aiOcrDocListeners.delete(fn);
+}
+
+export function setAiOcrTextSource(source) {
+  state.aiOcrTextSource = source && typeof source === "object" ? source : null;
+  for (const fn of state.aiOcrTextSourceListeners) fn(state.aiOcrTextSource);
+}
+export function getAiOcrTextSource() { return state.aiOcrTextSource; }
+export function onAiOcrTextSourceChange(fn) {
+  state.aiOcrTextSourceListeners.add(fn);
+  return () => state.aiOcrTextSourceListeners.delete(fn);
+}
+export function setAiOcrTextDiffs(diffs) {
+  state.aiOcrTextDiffs = Array.isArray(diffs) ? diffs : [];
+  for (const fn of state.aiOcrTextDiffListeners) fn(state.aiOcrTextDiffs);
+}
+export function getAiOcrTextDiffs() { return state.aiOcrTextDiffs; }
+export function onAiOcrTextDiffsChange(fn) {
+  state.aiOcrTextDiffListeners.add(fn);
+  return () => state.aiOcrTextDiffListeners.delete(fn);
 }
 
 // 環境設定 → 「デフォルト」の値を新規テキストレイヤー用ツール状態に反映する。
@@ -843,9 +866,13 @@ export function addNewLayer({
   rotation,
   leadingPct,
   syntheticBold,
+  lineLeadings,
+  charRubies,
   sourceTxtRef,
   autoFontSwitched,
   autoFontSwitchBucket,
+  lowOcrTextMatch,
+  ocrMatchScore,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -867,7 +894,7 @@ export function addNewLayer({
     syntheticBold: syntheticBold === true,
     // 行ごとの行間オーバーライド。キーは 0-based の行番号、値は %。
     // 未指定の行は層の leadingPct（autoLeading）を使う。
-    lineLeadings: {},
+    lineLeadings: lineLeadings && typeof lineLeadings === "object" ? { ...lineLeadings } : {},
     // 【v1.16.0】文字ごとのサイズ / フォントオーバーライド。
     // キーは contents 文字列の絶対 index（textarea selectionStart と同じ）。
     // UI プレビューのみ反映、Photoshop には書き戻されない（layer 全体の sizePt/font が使われる）。
@@ -881,7 +908,7 @@ export function addNewLayer({
     // overlap は禁止（setCharRubiesRange で正規化）。プレビューは <ruby><rt>...</rt></ruby>
     // タグで描画、Photoshop 保存時は jsx_gen.rs の applyRubies で親レイヤーの直前に新規ルビ
     // レイヤーを追加する。
-    charRubies: {},
+    charRubies: normalizeCharRubiesMap(charRubies),
     // 自動配置 (ai-place.js) で生成されたレイヤーは元 TXT 段落への参照を持つ。
     // { pageNumber, paragraphIndex } を保持し、後から TXT が編集されたときに
     // syncPlacedFromTxt が contents を追従させる。手動配置レイヤーは null。
@@ -893,6 +920,8 @@ export function addNewLayer({
     // 0..5 の bucket index (10% 刻み)。-1 は未切替 / 算出不能。
     // CSS 側で auto-font-bucket-N クラス → 6 段階の色グラデーション。
     autoFontSwitchBucket: Number.isInteger(autoFontSwitchBucket) ? autoFontSwitchBucket : -1,
+    lowOcrTextMatch: lowOcrTextMatch === true,
+    ocrMatchScore: Number.isFinite(ocrMatchScore) ? ocrMatchScore : null,
     // 【v1.28.0 移植 (PsDesign-main v1.25.0)】自動配置時の元 sizePt。
     // 位置調整 mode2 / mode3 でサイズ補正を idempotent にするために保存する。
     // layer.sizePt が後から更新されても、補正は sizePtBasis × sizeCorrectionFactor で再計算。

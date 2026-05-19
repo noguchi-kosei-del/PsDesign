@@ -17,8 +17,8 @@ import {
   hideProgress,
   toast,
 } from "./ui-feedback.js";
-import { getPdfPaths, getTxtSource, setAiOcrDoc } from "./state.js";
-import { loadTxtFromContent } from "./txt-source.js";
+import { getPdfPaths, getTxtSource, setAiOcrDoc, setAiOcrTextDiffs, setAiOcrTextSource } from "./state.js";
+import { loadTxtFromContent, parsePages } from "./txt-source.js";
 import { loadReferenceFiles } from "./pdf-loader.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
 import { checkAiModelsStatus } from "./ai-install.js";
@@ -32,6 +32,7 @@ let runningOcr = false;
 const AI_ACTION_BUTTON_IDS = [
   "ai-ocr-btn",
   "ai-place-btn",
+  "ai-place-position-btn",
   "ai-adjust-menu-btn",
   "ai-adjust-btn",
   "ai-adjust2-btn",
@@ -103,8 +104,149 @@ async function pickInputFiles() {
 }
 
 // MokuroDocument → COMIC-POT 風のテキスト本文 (ページマーカー付き)
-function mokuroDocToText(doc, normalizeSettings) {
-  const pages = Array.isArray(doc?.pages) ? doc.pages : [];
+function compareKeyText(s) {
+  return String(s ?? "")
+    .normalize("NFKC")
+    .replace(/\{([^{}]+)\}\(([^()]+)\)/g, "$1")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\s\u3000]+/g, "")
+    .replace(/[\u3001\u3002\uFF0C\uFF0E.,!?\u30FB\u2026\u30FC\-()（）「」『』【】\[\]・]/g, "")
+    .trim();
+}
+
+function blocksForPage(parsed, pageNumber) {
+  if (!parsed) return [];
+  if (parsed.hasMarkers) return parsed.byPage.get(pageNumber) ?? [];
+  return pageNumber === 1 ? parsed.all : [];
+}
+
+function lcsLength(a, b) {
+  if (!a || !b) return 0;
+  const prev = new Array(b.length + 1).fill(0);
+  const cur = new Array(b.length + 1).fill(0);
+  for (let i = 1; i <= a.length; i += 1) {
+    for (let j = 1; j <= b.length; j += 1) {
+      cur[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1] + 1
+        : Math.max(prev[j], cur[j - 1]);
+    }
+    for (let j = 0; j <= b.length; j += 1) prev[j] = cur[j];
+  }
+  return prev[b.length];
+}
+
+function charOverlapScore(a, b) {
+  if (!a || !b) return 0;
+  const counts = new Map();
+  for (const ch of b) counts.set(ch, (counts.get(ch) ?? 0) + 1);
+  let hit = 0;
+  for (const ch of a) {
+    const n = counts.get(ch) ?? 0;
+    if (n > 0) {
+      hit += 1;
+      counts.set(ch, n - 1);
+    }
+  }
+  return (2 * hit) / (a.length + b.length);
+}
+
+function textMatchScore(aRaw, bRaw) {
+  const a = compareKeyText(aRaw);
+  const b = compareKeyText(bRaw);
+  if (!a || !b) return 0;
+  if (a === b) return 1;
+  const shorter = Math.min(a.length, b.length);
+  const longer = Math.max(a.length, b.length);
+  const contain = (a.includes(b) || b.includes(a)) ? shorter / longer : 0;
+  const lcs = lcsLength(a, b) / longer;
+  const overlap = charOverlapScore(a, b);
+  return Math.max(contain, lcs * 0.72 + overlap * 0.28);
+}
+
+function minimumOcrTextMatchScore(txt) {
+  const len = compareKeyText(txt).length;
+  if (len <= 2) return 0.72;
+  if (len <= 4) return 0.58;
+  if (len <= 8) return 0.46;
+  return 0.38;
+}
+
+function matchOcrBlocksToText(aBlocks, oBlocks) {
+  const candidates = [];
+  for (let ti = 0; ti < aBlocks.length; ti += 1) {
+    for (let oi = 0; oi < oBlocks.length; oi += 1) {
+      const score = textMatchScore(aBlocks[ti], oBlocks[oi]);
+      candidates.push({ ti, oi, score });
+    }
+  }
+  candidates.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    const ad = Math.abs(a.oi - a.ti);
+    const bd = Math.abs(b.oi - b.ti);
+    if (ad !== bd) return ad - bd;
+    if (a.ti !== b.ti) return a.ti - b.ti;
+    return a.oi - b.oi;
+  });
+  const usedText = new Set();
+  const usedOcr = new Set();
+  const matched = new Array(aBlocks.length).fill(null);
+  for (const c of candidates) {
+    if (usedText.has(c.ti) || usedOcr.has(c.oi)) continue;
+    if (c.score < minimumOcrTextMatchScore(aBlocks[c.ti])) continue;
+    matched[c.ti] = { ocrIndex: c.oi, score: c.score };
+    usedText.add(c.ti);
+    usedOcr.add(c.oi);
+  }
+  return { matched, usedOcr };
+}
+
+function buildOcrTextDiffs(authoritativeContent, ocrContent) {
+  const authoritative = parsePages(authoritativeContent || "");
+  const ocr = parsePages(ocrContent || "");
+  const pages = new Set([1]);
+  if (authoritative.hasMarkers) for (const page of authoritative.byPage.keys()) pages.add(page);
+  if (ocr.hasMarkers) for (const page of ocr.byPage.keys()) pages.add(page);
+  const sortedPages = Array.from(pages).filter((n) => Number.isFinite(n)).sort((a, b) => a - b);
+  const diffs = [];
+  for (const pageNumber of sortedPages) {
+    const aBlocks = blocksForPage(authoritative, pageNumber);
+    const oBlocks = blocksForPage(ocr, pageNumber);
+    const { matched, usedOcr } = matchOcrBlocksToText(aBlocks, oBlocks);
+    for (let ti = 0; ti < aBlocks.length; ti += 1) {
+      const expected = aBlocks[ti] ?? "";
+      const match = matched[ti];
+      if (!match) {
+        diffs.push({ type: "missing-ocr", pageNumber, blockIndex: ti, textIndex: ti, ocrIndex: null, expected, scanned: "" });
+        continue;
+      }
+      const scanned = oBlocks[match.ocrIndex] ?? "";
+      if (compareKeyText(expected) !== compareKeyText(scanned)) {
+        diffs.push({ type: "changed", pageNumber, blockIndex: ti, textIndex: ti, ocrIndex: match.ocrIndex, expected, scanned, score: match.score });
+      }
+    }
+    for (let oi = 0; oi < oBlocks.length; oi += 1) {
+      if (usedOcr.has(oi)) continue;
+      diffs.push({ type: "extra-ocr", pageNumber, blockIndex: aBlocks.length + oi, textIndex: null, ocrIndex: oi, expected: "", scanned: oBlocks[oi] ?? "" });
+    }
+  }
+  return diffs;
+}
+
+function summarizeTextDiffs(diffs) {
+  if (!Array.isArray(diffs) || diffs.length === 0) return "OCR文字列との差分はありません。";
+  const rows = diffs.slice(0, 5).map((d) => {
+    const page = d.pageNumber ? `${d.pageNumber}P` : "TXT";
+    const idx = Number.isInteger(d.textIndex) ? d.textIndex + 1 : Number.isInteger(d.ocrIndex) ? `OCR${d.ocrIndex + 1}` : "?";
+    const expected = String(d.expected || "").replace(/\s+/g, " ").slice(0, 34);
+    const scanned = String(d.scanned || "").replace(/\s+/g, " ").slice(0, 34);
+    if (d.type === "extra-ocr") return `${page} #${idx}: OCRのみ「${scanned}」`;
+    if (d.type === "missing-ocr") return `${page} #${idx}: OCR欠落 / 使用「${expected}」`;
+    return `${page} #${idx}: OCR「${scanned}」→ 使用「${expected}」`;
+  });
+  const tail = diffs.length > rows.length ? `\nほか ${diffs.length - rows.length} 件` : "";
+  return `OCR文字列との差分 ${diffs.length} 件を検出しました。\n${rows.join("\n")}${tail}`;
+}
+function mokuroDocToText(doc, normalizeSettings) {  const pages = Array.isArray(doc?.pages) ? doc.pages : [];
   const out = [];
   pages.forEach((page, idx) => {
     const blocks = Array.isArray(page?.blocks) ? page.blocks : [];
@@ -140,6 +282,7 @@ async function runAiOcr(files, {
   // 進捗ダイアログのアイコン直下ラベル。直接呼ばれる「画像スキャン」と
   // 自動配置から呼ばれる経路で文言を切替えるため引数化。
   label = "画像スキャン中…",
+  consumeText = true,
 } = {}) {
   if (runningOcr) return;
   if (!files || files.length === 0) return; // 何も選択されていない場合は静かに戻る
@@ -286,20 +429,31 @@ async function runAiOcr(files, {
   }
   setAiOcrDoc(doc, files[0] || null);
 
+  const existingTxt = getTxtSource();
   const settings = loadNormalizeSettings();
   const content = mokuroDocToText(doc, settings);
   const baseLabel = files.length === 1
     ? stripExt(baseName(files[0]))
     : `OCR-${files.length}件`;
   const name = `${baseLabel}_AI.txt`;
-  loadTxtFromContent(name, content);
+  const hasAuthoritativeTxt = existingTxt && String(existingTxt.content || "").trim().length > 0;
+  const textDiffs = consumeText && hasAuthoritativeTxt ? buildOcrTextDiffs(existingTxt.content, content) : [];
+  if (consumeText) {
+    setAiOcrTextSource({ name, content, sourcePath: files[0] || null, createdAt: Date.now() });
+    setAiOcrTextDiffs(textDiffs);
+    if (!hasAuthoritativeTxt) {
+      loadTxtFromContent(name, content);
+    } else if (notifyOnComplete) {
+      toast("読み込み済みテキストを正として使用します。OCR結果は下の確認欄に残しました。", { kind: "info", duration: 3500 });
+    }
+  }
   if (notifyOnComplete) {
     // 画像スキャンボタン経由のとき: 次にやってほしいアクション (自動配置) を案内する。
     // 戻る (false) でただ閉じる、自動配置 (true) でそのままサイドパネルの自動配置ボタンを発火。
     // ai-place からの自動トリガー時はそのまま確認モーダルへ遷移するので案内は出さない。
     const goPlace = await confirmDialog({
       title: "画像スキャン完了",
-      message: "テキスト抽出が完了しました。\n自動配置を行ってください。",
+      message: hasAuthoritativeTxt ? `画像スキャンが完了しました。\n読み込み済みテキストを正として配置します。\n${summarizeTextDiffs(textDiffs)}` : "テキスト抽出が完了しました。\n自動配置を行ってください。",
       kind: "success",
       confirmLabel: "自動配置",
       cancelLabel: "戻る",
@@ -385,13 +539,17 @@ export async function runAiOcrForFiles(files) {
   await runAiOcr(files, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
 }
 
+export async function runAiOcrForPlacementOnly(files) {
+  await runAiOcr(files, { icon: PLACE_ICON_SVG, label: "位置検出中…", consumeText: false });
+}
+
 export async function openAiOcrDialog({ force = false } = {}) {
   if (!force && isAiActionsLocked()) return;
   if (runningOcr) return;
   if (getTxtSource()) {
     const ok = await confirmDialog({
       title: "画像スキャン",
-      message: "現在のテキストは破棄されます。よろしいですか？",
+      message: "読み込み済みテキストを正として残したまま、画像スキャン結果を位置情報として使用します。実行しますか？",
       confirmLabel: "実行",
       kind: "danger",
     });
@@ -447,7 +605,7 @@ export function bindAiOcrButton() {
     if (getTxtSource()) {
       const ok = await confirmDialog({
         title: "画像スキャン",
-        message: "現在のテキストは破棄されます。よろしいですか？",
+        message: "読み込み済みテキストを正として残したまま、画像スキャン結果を位置情報として使用します。実行しますか？",
         confirmLabel: "実行",
         kind: "danger",
       });

@@ -5357,3 +5357,73 @@ var PHOTOSHOP_RUBY_PARENT_BIAS_PX
 ### Version
 
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.30.8` に更新。
+
+---
+
+## 2026-05-19 追加修正: TXTルビ注記 + OCR/TXT差分表示の整合
+
+このセクションは、0519版で追加した「テキスト読み込み時のルビ注記解析」と「OCR結果と読み込み済みテキストの差分表示」を、別バージョンへ統合するときの移植メモ。
+
+### TXT内ルビ注記の解析
+
+- 対象ファイル: `src/ai-place.js`, `src/state.js`
+- 読み込み済みテキスト内に `{親文字}(ルビ)` 形式がある場合、自動配置時に本文から注記を除外し、親文字だけを `contents` に入れる。
+  - 例: `{健司}(けんじ)さん` → 配置・OCR照合上の本文は `健司さん`。
+  - ルビ情報は `charRubies` に `{ start: { end, text, type, scale } }` 形式で保存する。
+- モノルビ判定は「親文字側のスペース」では行わない。親文字にはスペースを入れず、ルビ側のスペース区切り数が親文字数と一致した場合だけ `type: "mono"` にする。
+  - `{健司}(けんじ)` → グループルビ。
+  - `{健司}(けん じ)` → モノルビ。
+- OCR照合・配置位置検索では、`{親文字}(ルビ)` のルビ部分を無視し、親文字のみを正規化対象にする。
+- TXT再同期時 (`syncPlacedFromTxt`) も、本文更新と同時に `charRubies` と `lineLeadings` を再生成する。
+- ルビ付き行は `rubyLeadingPct` を使って行間 override を自動付与する。これにより、TXTから作られたルビでも既存の手動ルビと同じ表示・出力経路を通る。
+
+### OCR/TXT差分検知と表示
+
+- 対象ファイル: `src/ai-ocr.js`, `src/txt-source.js`, `src/state.js`
+- テキストが既に読み込まれている状態で画像スキャンを行った場合、読み込み済みテキストを正とし、OCR結果は確認用 (`aiOcrTextSource`) と差分 (`aiOcrTextDiffs`) として保持する。
+- 差分検知は単純な同番号比較ではなく、TXT各段落に対してOCRブロックの最良一致を割り当てる。
+  - 正規化時は空白、句読点、ルビ注記を除外する。
+  - LCS + 文字重なり + 包含判定で一致度を算出する。
+  - 一致度が低い場合は `missing-ocr` とし、未使用OCRは `extra-ocr` として末尾に出す。
+- 表示順はTXT段落順を基準にする。OCRだけが認識した余剰ブロックは下部に表示する。
+- 差分表示には `TXT#` と `OCR#` を出し、どのTXT段落とどのOCRブロックを対応させたか確認できるようにする。
+- 既に自動配置済みのレイヤーがある場合は、レイヤーの `sourceTxtRef.ocrBlockIndex` を最優先で差分表示に使う。
+  - 文字照合だけでは「OCRなし」になるケースでも、実際に適正位置に配置できている場合は、その配置先OCRブロックの文言を表示する。
+  - これにより、配置結果と差分表示の基準がずれない。
+
+### 他バージョンへ統合するときの注意
+
+- `src/ai-place.js`
+  - `parseRubyAnnotatedText`, `rubyLineLeadingsForText`, `normalizePlacementText` のルビ注記対応を移植する。
+  - `mapBlockToNewLayer`, `mapTxtToPageCenter`, `syncPlacedFromTxt` が `charRubies` / `lineLeadings` を渡していることを確認する。
+  - `sourceTxtRef` には `pageNumber`, `paragraphIndex`, `ocrBlockIndex`, `ocrMatchScore` を保持する。
+- `src/ai-ocr.js`
+  - `buildOcrTextDiffs` はTXT順の最良一致方式にする。
+  - 差分検知時の正規化は、配置側の `normalizePlacementText` と同等に、ルビ注記を親文字へ変換してから比較する。
+- `src/txt-source.js`
+  - OCR結果確認欄はTXT順に再構成する。
+  - 自動配置済みレイヤーの `sourceTxtRef.ocrBlockIndex` を優先する `buildPlacedOcrIndexMap` 相当の処理を入れる。
+  - `OCRのみ` はTXT順表示の後ろにまとめて出す。
+- `src/state.js`
+  - `addNewLayer` が `charRubies`, `lineLeadings`, `sourceTxtRef`, `lowOcrTextMatch`, `ocrMatchScore` を保存できることを確認する。
+  - `aiOcrTextSource` / `aiOcrTextDiffs` の getter, setter, listener があることを確認する。
+- `src/canvas-tools.js`, `src-tauri/src/jsx_gen.rs`
+  - 既存の `charRubies` 表示・PSD出力機構をそのまま使う。TXT注記対応では座標計算やPSDルビ位置の仕組みは触らない。
+
+### 統合後チェックリスト
+
+1. `{健司}(けんじ)さん` を含むTXTを読み込み、自動配置後の本文が `健司さん` になり、`健司` にグループルビが付くこと。
+2. `{健司}(けん じ)さん` を含むTXTを読み込み、`健司` にモノルビが付くこと。
+3. OCR照合時に `{親文字}(ルビ)` のルビ部分を無視し、親文字だけで位置検索されること。
+4. TXT再同期後も `charRubies` が消えず、ルビが親文字の移動に追従すること。
+5. 画像スキャン後のOCR結果確認欄がTXT順に並ぶこと。
+6. OCRだけが認識した余剰ブロックが確認欄の下部に表示されること。
+7. 自動配置済みレイヤーがある状態で、文字一致度が低くても `sourceTxtRef.ocrBlockIndex` のOCR文言が表示され、「OCRなし」にならないこと。
+8. 低一致の配置は従来どおり視覚的に分かること。
+9. `npm run build` が通ること。
+10. 既存のルビ座標、PSD出力位置、白フチ、textグループ格納の処理に副作用がないこと。
+
+### 今回の主な検証
+
+- `npm run build` 成功。
+- Viteのdynamic import / chunk size警告は既存警告で、今回の修正によるビルド失敗ではない。
