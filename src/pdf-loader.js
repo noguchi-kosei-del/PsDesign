@@ -1,5 +1,5 @@
 import * as pdfjsLib from "pdfjs-dist";
-import { setPdf, setPdfSplitMode } from "./state.js";
+import { setPdf, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
 import { showProgress, hideProgress, toast, updateProgress } from "./ui-feedback.js";
 
 // 「見本」として読み込める拡張子。PDF（複数ページ）と、JPEG / PNG（単一画像）。
@@ -142,6 +142,39 @@ async function readPdfDocument(path) {
 }
 
 // 見本ファイル（PDF / JPEG / PNG）を選択。複数選択可。
+export async function countReferencePages(paths, options = {}) {
+  if (!Array.isArray(paths) || paths.length === 0) return 0;
+  const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
+  const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
+  let count = 0;
+  let hasPdf = false;
+  for (const p of filtered) {
+    if (IMAGE_EXT_REGEX.test(p)) {
+      count += 1;
+      continue;
+    }
+    hasPdf = true;
+    let doc = null;
+    try {
+      doc = await readPdfDocument(p);
+      const pageTotal = Math.max(0, Number(doc?.numPages) || 0);
+      for (let pageNum = 1; pageNum <= pageTotal; pageNum += 1) {
+        try {
+          const page = await doc.getPage(pageNum);
+          const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
+          const vp = page.getViewport({ scale: 1, rotation: baseRotation });
+          count += vp.width > vp.height ? 2 : 1;
+        } catch (_) {
+          count += 1;
+        }
+      }
+    } finally {
+      try { if (typeof doc?.destroy === "function") doc.destroy(); } catch (_) {}
+    }
+  }
+  return skipFirstBlankPage && hasPdf ? Math.max(0, count - 1) : count;
+}
+
 export async function pickReferenceFiles() {
   const { openFileDialog } = await import("./file-picker.js");
   const picked = await openFileDialog({
@@ -168,9 +201,11 @@ export async function pickPdfFile() {
 // - PDF はその全ページが順に展開される
 // - 画像は 1 ファイル = 1 ページ
 // - 並び順はファイル名の自然順（page1.jpg → page2.jpg → page10.jpg）
-export async function loadReferenceFiles(paths) {
+export async function loadReferenceFiles(paths, options = {}) {
   if (!Array.isArray(paths) || paths.length === 0) return;
+  const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
   const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
+  const hasPdf = filtered.some((p) => !IMAGE_EXT_REGEX.test(p));
   if (filtered.length === 0) {
     toast("PDF / JPEG / PNG ファイルを指定してください", { kind: "error", duration: 4000 });
     return;
@@ -225,6 +260,7 @@ export async function loadReferenceFiles(paths) {
     // 横長判定は 1 ページ目（先頭ソース）で行い、PDF と同じく自動 split mode を設定。
     const isLandscape = await detectLandscape(compositeDoc);
     setPdfSplitMode(isLandscape);
+    setPdfSkipFirstBlank(skipFirstBlankPage && hasPdf);
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
     // 画像スキャンや自動配置が複数ファイルを OCR 対象にできるようにする。
     setPdf(compositeDoc, sorted[0], sorted);

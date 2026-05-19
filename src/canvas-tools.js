@@ -69,10 +69,65 @@ function setLastInplaceSelection(v) {
       && a.psdPath === b.psdPath
       && a.layerId === b.layerId && a.tempId === b.tempId) return;
   _lastInplaceSelection = b;
+  syncInplaceSelectionHighlight(b);
   for (const fn of _selectionChangeListeners) fn(b);
 }
 
 // MojiQ 流パン状態：モジュールレベルで保持し、canvas に常設リスナーで扱う。
+function clearInplaceSelectionHighlight() {
+  try {
+    if (window.CSS?.highlights) CSS.highlights.delete("opus-inplace-selection");
+  } catch (_) {}
+}
+
+function syncInplaceSelectionHighlight(sel) {
+  clearInplaceSelectionHighlight();
+  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return false;
+  if (!window.CSS?.highlights || typeof Highlight === "undefined") return false;
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return false;
+  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  if (!inner) return false;
+  const startPos = charIndexToNodeOffset(inner, sel.start);
+  const endPos = charIndexToNodeOffset(inner, sel.end);
+  if (!startPos || !endPos) return false;
+  try {
+    const range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    CSS.highlights.set("opus-inplace-selection", new Highlight(range));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+export function restoreInplaceSelection(sel) {
+  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return false;
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return false;
+  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  if (!inner) return false;
+  const startPos = charIndexToNodeOffset(inner, sel.start);
+  const endPos = charIndexToNodeOffset(inner, sel.end);
+  if (!startPos || !endPos) return false;
+  try {
+    const range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    const selection = window.getSelection();
+    if (!selection) return false;
+    inner.focus({ preventScroll: true });
+    selection.removeAllRanges();
+    selection.addRange(range);
+    syncInplaceSelectionHighlight(sel);
+    setLastInplaceSelection({ ...sel });
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
 let panState = null;
 // マーキー（V ツールの矩形選択）状態。
 let marqueeState = null;
@@ -487,7 +542,7 @@ export function deleteSelectedLayers() {
 }
 
 function clampSizePt(v) {
-  const rounded = Math.round(v * 10) / 10;
+  const rounded = Math.round(v * 100) / 100;
   return Math.max(6, Math.min(999, rounded));
 }
 
@@ -504,7 +559,7 @@ export function snapNextSize(cur, baseStep, sign, multiplier = 1) {
     ? Math.round(ratio) + sign
     : (sign > 0 ? Math.ceil(ratio) : Math.floor(ratio));
   const finalGrid = firstStep + sign * (Math.max(1, multiplier) - 1);
-  return Math.round(finalGrid * baseStep * 10) / 10;
+  return Math.round(finalGrid * baseStep * 100) / 100;
 }
 
 // 選択中レイヤーをサイズ変更。sign（+1 / -1）と multiplier（Shift+wheel で 10）で
@@ -2071,7 +2126,7 @@ function createSizeBadge(sizePt, page, fontPostScriptName) {
   el.className = "layer-size-badge";
   // 基準PSD 比で換算した pt を表示。基準が 1 ページ目（または未読込）の場合は素のまま。
   const display = toDisplaySizePt(sizePt ?? 0, page);
-  const rounded = Math.round((display ?? 0) * 10) / 10;
+  const rounded = Math.round((display ?? 0) * 100) / 100;
   const fontName = fontPostScriptName ? (getFontDisplayName(fontPostScriptName) ?? fontPostScriptName) : "";
   // フォント名と文字サイズを 2 行に分けて表示（フォント上 / サイズ下）。
   if (fontName) {
@@ -2336,7 +2391,8 @@ function onLayerWheel(e, ctx, layerId) {
   e.stopPropagation();
   // 環境設定の「文字サイズの刻み」（0.1 / 0.5）を baseStep に、Shift で 10 倍。
   // off-grid な値（例：0.5 刻み設定で 12.3）は最寄りグリッドにスナップする。
-  const baseStep = Number(getDefault("textSizeStep")) === 0.5 ? 0.5 : 0.1;
+  const configuredStep = Number(getDefault("textSizeStep"));
+  const baseStep = configuredStep === 0.25 || configuredStep === 0.5 ? configuredStep : 0.1;
   const sign = e.deltaY < 0 ? +1 : -1;
   const multiplier = e.shiftKey ? 10 : 1;
   resizeSelectedLayers(baseStep, sign, multiplier);

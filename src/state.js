@@ -94,7 +94,7 @@ const _normPageIndex = (v) => {
 const _normSize = (v) => {
   const n = Number(v);
   if (!Number.isFinite(n)) return undefined;
-  const r = Math.round(n * 10) / 10;
+  const r = Math.round(n * 100) / 100;
   return Math.max(6, Math.min(999, r));
 };
 const _normLeading = (v) => {
@@ -211,6 +211,7 @@ export function onAiOcrTextSourceChange(fn) {
   state.aiOcrTextSourceListeners.add(fn);
   return () => state.aiOcrTextSourceListeners.delete(fn);
 }
+
 export function setAiOcrTextDiffs(diffs) {
   state.aiOcrTextDiffs = Array.isArray(diffs) ? diffs : [];
   for (const fn of state.aiOcrTextDiffListeners) fn(state.aiOcrTextDiffs);
@@ -866,11 +867,11 @@ export function addNewLayer({
   rotation,
   leadingPct,
   syntheticBold,
-  lineLeadings,
-  charRubies,
   sourceTxtRef,
   autoFontSwitched,
   autoFontSwitchBucket,
+  lineLeadings,
+  charRubies,
   lowOcrTextMatch,
   ocrMatchScore,
 }) {

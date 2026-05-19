@@ -550,6 +550,16 @@ function onKeyDown(e) {
     if (tag === "INPUT" || tag === "TEXTAREA") return;
     e.preventDefault();
     e.stopPropagation();
+    if (currentOpts?.mode === "open" && currentOpts?.multiple) {
+      selectedPaths.clear();
+      for (const entry of entries) {
+        if (!entry || entry.isDirectory) continue;
+        selectedPaths.add(entry.path);
+      }
+      lastClickIndex = entries.findIndex((entry) => entry && !entry.isDirectory);
+      syncRowSelectionDom();
+      updateConfirmState();
+    }
   }
 }
 

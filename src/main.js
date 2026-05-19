@@ -1,4 +1,4 @@
-import { loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
+import { countReferencePages, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { mountPdfView } from "./pdf-view.js";
 import {
   cycleLayerSelection,
@@ -11,6 +11,7 @@ import {
   onInplaceSelectionChange,
   // 【v1.21.0】per-char サイズ・フォント変更時の編集中 DOM リアルタイム反映
   applyEditModeStyleToRange,
+  restoreInplaceSelection,
   // 【v1.26.0】ルビ予定インジケータの編集中 DOM 反映
   applyEditModeRubyToRange,
   getExistingLayerEffectiveSizePt,
@@ -27,12 +28,13 @@ import {
   hasSelection,
   rebuildLayerList,
   syncBoldToggle,
+  unifySelectedTextSize,
 } from "./text-editor.js";
-import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath } from "./txt-source.js";
+import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
 import { bindAiInstallMenu } from "./ai-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
-import { bindAiOcrButton, openAiOcrDialog } from "./ai-ocr.js";
-import { bindAiPlaceButton, bindPositionAdjustButton } from "./ai-place.js";
+import { bindAiOcrButton, PLACE_ICON_SVG, runAiOcrForTranscription } from "./ai-ocr.js";
+import { bindAiPlaceButton, bindPositionAdjustButton, runAutoPlace } from "./ai-place.js";
 import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread } from "./proofread.js";
@@ -43,6 +45,7 @@ import {
   confirmDialog,
   hideModalAnimated,
   hideProgress,
+  notifyDialog,
   showModalAnimated,
   showProgress,
   toast,
@@ -63,6 +66,7 @@ import {
 } from "./services/psd-load.js";
 import {
   findShortcutMatch,
+  getArrowKeyMoveDistance,
   getDefault,
   getPageDirectionInverted,
   getShortcut,
@@ -89,6 +93,7 @@ import {
   canRedo,
   canUndo,
   clearAllEdits,
+  clearAiOcrDoc,
   clearPages,
   getActivePane,
   getCurrentPageIndex,
@@ -169,6 +174,8 @@ import {
   getPdfVirtualPageAt,
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
+
+let homeTypesetDropHandler = null;
 
 async function handleOpenPdf() {
   const paths = await pickReferenceFiles();
@@ -541,6 +548,18 @@ function bindTools() {
     });
   }
 
+  const unifyTextSizeBtn = document.getElementById("unify-text-size-btn");
+  if (unifyTextSizeBtn) {
+    unifyTextSizeBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      const defaultSize = Number(getDefault("textSize"));
+      const changed = unifySelectedTextSize(defaultSize);
+      if (!changed) {
+        toast("サイズを統一するテキストを2つ以上選択してください", { kind: "info", duration: 2400 });
+      }
+    });
+  }
+
   // Alt 単独押下/離上で Windows のシステムメニューが活性化し、次の Space で開いてしまう
   // 事故を防ぐ。Alt+wheel でズームした直後に Space を押すと左上にメニューが出る現象の対策。
   const suppressAltMenuActivation = (e) => {
@@ -603,7 +622,8 @@ function bindTools() {
         const hasSel = getSelectedLayers().length > 0;
         if (hasSel) {
           // 選択あり: 位置ナッジ (Shift で 10px)
-          const step = e.shiftKey ? 10 : 1;
+          const baseMove = getArrowKeyMoveDistance();
+          const step = e.shiftKey ? baseMove * 10 : baseMove;
           let dx = 0, dy = 0;
           if (e.key === "ArrowLeft") dx = -step;
           else if (e.key === "ArrowRight") dx = +step;
@@ -840,6 +860,9 @@ function setSidePanelTab(tab) {
   }
   for (const sec of document.querySelectorAll(".side-panel .panel-section")) {
     sec.hidden = sec.dataset.section !== tab;
+  }
+  if (tab === "font-book") {
+    window.dispatchEvent(new CustomEvent("opus:font-book-visible"));
   }
   try { localStorage.setItem(SIDE_PANEL_TAB_KEY, tab); } catch (_) {}
 }
@@ -1448,6 +1471,8 @@ function applyTextSize(n) {
     }
     refreshAllOverlays();
     rebuildLayerList();
+    restoreInplaceSelection(sel);
+    requestAnimationFrame(() => restoreInplaceSelection(sel));
     setTextSize(v); // サイドバー入力欄の値も同期
     return;
   }
@@ -1485,12 +1510,13 @@ function resolveLayerDefaultSizePt(sel) {
 function clampSize(n) {
   const v = Number(n);
   if (!Number.isFinite(v)) return getTextSize();
-  return Math.max(6, Math.min(999, Math.round(v * 10) / 10));
+  return Math.max(6, Math.min(999, Math.round(v * 100) / 100));
 }
 
 function getSizeStep() {
   const v = Number(getDefault("textSizeStep"));
-  return v === 0.5 ? 0.5 : 0.1;
+  if (v === 0.25 || v === 0.5) return v;
+  return 0.1;
 }
 
 // +/- ボタンと [/] ショートカット用のサイズ調整。
@@ -1679,6 +1705,8 @@ function bindRubyTool() {
     applyEditModeRubyToRange(sel.start, sel.end, text, type, scale);
     refreshAllOverlays();
     rebuildLayerList();
+    restoreInplaceSelection(sel);
+    requestAnimationFrame(() => restoreInplaceSelection(sel));
     removeBtn.disabled = false;
   };
   applyBtn.addEventListener("click", doApply);
@@ -1693,6 +1721,8 @@ function bindRubyTool() {
     });
     refreshAllOverlays();
     rebuildLayerList();
+    restoreInplaceSelection(sel);
+    requestAnimationFrame(() => restoreInplaceSelection(sel));
     inputEl.value = "";
     removeBtn.disabled = true;
   });
@@ -1734,6 +1764,8 @@ function bindSizeTool() {
   input.addEventListener("blur", () => {
     input.value = String(getTextSize());
   });
+  dec.addEventListener("mousedown", (e) => e.preventDefault());
+  inc.addEventListener("mousedown", (e) => e.preventDefault());
   dec.addEventListener("click", () => stepTextSize(-1));
   inc.addEventListener("click", () => stepTextSize(+1));
 }
@@ -1874,6 +1906,7 @@ async function setupTauriDragDrop() {
     const { listen } = await import("@tauri-apps/api/event");
     const overlay = document.getElementById("drag-overlay");
     const showOverlay = () => {
+      if (homeTypesetDropHandler) return;
       if (!overlay) return;
       overlay.classList.remove("flash");
       overlay.classList.add("active");
@@ -1893,8 +1926,12 @@ async function setupTauriDragDrop() {
     await listen("tauri://drag-over", showOverlay);
     await listen("tauri://drag-leave", hideOverlay);
     await listen("tauri://drag-drop", (e) => {
-      flashOverlay();
       const paths = Array.isArray(e.payload?.paths) ? e.payload.paths : [];
+      if (homeTypesetDropHandler?.(paths, e.payload) === true) {
+        hideOverlay();
+        return;
+      }
+      flashOverlay();
       handleDroppedPaths(paths).catch((err) => console.error(err));
     });
   } catch (e) {
@@ -2143,18 +2180,435 @@ function hideHomeScreen() {
   document.body.classList.remove("home-mode");
 }
 
-function bindHomeScreen() {
+function homeFlowBaseName(path) {
+  if (!path) return "";
+  const normalized = String(path).replace(/\\/g, "/");
+  const index = normalized.lastIndexOf("/");
+  return index >= 0 ? normalized.slice(index + 1) : normalized;
+}
+
+function homeFlowFileSummary(paths, emptyLabel) {
+  const list = Array.isArray(paths) ? paths.filter(Boolean) : paths ? [paths] : [];
+  if (list.length === 0) return emptyLabel;
+  if (list.length === 1) return homeFlowBaseName(list[0]);
+  return `${homeFlowBaseName(list[0])} ほか ${list.length - 1}件`;
+}
+
+function homeFlowFilterPaths(paths, kind) {
+  const list = (Array.isArray(paths) ? paths : [paths])
+    .filter((p) => typeof p === "string" && p.length > 0);
+  if (kind === "reference") return list.filter((p) => /\.(pdf|jpe?g|png)$/i.test(p));
+  if (kind === "psd") return list.filter((p) => /\.psd$/i.test(p));
+  if (kind === "txt") return list.filter((p) => /\.txt$/i.test(p)).slice(0, 1);
+  return [];
+}
+
+function openHomeTypesetDialog() {
+  return new Promise((resolve) => {
+    let referencePaths = [];
+    let psdPaths = [];
+    let txtPath = null;
+    let settled = false;
+    let pickingFile = false;
+    let referencePageCount = 0;
+    let referenceCountToken = 0;
+    let excludeFirstReferencePage = false;
+    let referenceCounting = false;
+
+    const modal = document.createElement("div");
+    modal.className = "home-typeset-modal";
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="home-typeset-card" role="dialog" aria-modal="true" aria-labelledby="home-typeset-title">
+        <div class="home-typeset-header">
+          <span class="home-typeset-title" id="home-typeset-title">写植用ファイルを選択</span>
+          <button class="home-typeset-close" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div class="home-typeset-list">
+          <div class="home-typeset-row" data-slot="reference">
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">見本</span>
+              <span class="home-typeset-row-desc">PDF / JPEG / PNG</span>
+              <span class="home-typeset-row-file" data-file="reference">未選択</span>
+            </div>
+            <button class="home-typeset-pick-btn" data-pick="reference" type="button">選択</button>
+          </div>
+          <div class="home-typeset-row" data-slot="psd">
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">PSD</span>
+              <span class="home-typeset-row-desc">複数選択できます</span>
+              <span class="home-typeset-row-file" data-file="psd">未選択</span>
+            </div>
+            <button class="home-typeset-pick-btn" data-pick="psd" type="button">選択</button>
+          </div>
+          <div class="home-typeset-row optional" data-slot="txt">
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">テキスト</span>
+              <span class="home-typeset-row-desc">未選択の場合は画像スキャン結果を使用</span>
+              <span class="home-typeset-row-file" data-file="txt">未選択</span>
+            </div>
+            <button class="home-typeset-pick-btn" data-pick="txt" type="button">選択</button>
+          </div>
+        </div>
+        <div class="home-typeset-actions">
+          <button class="page-jump-btn home-typeset-cancel" type="button">キャンセル</button>
+          <button class="page-jump-btn page-jump-btn-primary home-typeset-start" type="button" disabled>開始</button>
+        </div>
+      </div>
+    `;
+    modal.innerHTML = `
+      <div class="home-typeset-card" role="dialog" aria-modal="true" aria-labelledby="home-typeset-title">
+        <div class="home-typeset-header">
+          <span class="home-typeset-title" id="home-typeset-title">写植用ファイルを選択</span>
+          <button class="home-typeset-close" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div class="home-typeset-list">
+          <div class="home-typeset-row" data-slot="reference">
+            <span class="home-typeset-check" aria-hidden="true">✓</span>
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">見本</span>
+              <span class="home-typeset-row-desc">PDF / JPEG / PNG</span>
+              <span class="home-typeset-row-file" data-file="reference">未選択</span>
+            </div>
+            <button class="home-typeset-pick-btn" data-pick="reference" type="button">選択</button>
+          </div>
+          <div class="home-typeset-row" data-slot="psd">
+            <span class="home-typeset-check" aria-hidden="true">✓</span>
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">PSD</span>
+              <span class="home-typeset-row-desc">複数選択できます</span>
+              <span class="home-typeset-row-file" data-file="psd">未選択</span>
+            </div>
+            <button class="home-typeset-pick-btn" data-pick="psd" type="button">選択</button>
+          </div>
+          <div class="home-typeset-row optional" data-slot="txt">
+            <span class="home-typeset-check" aria-hidden="true">✓</span>
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">テキスト</span>
+              <span class="home-typeset-row-desc">未選択の場合は画像スキャン結果を使用</span>
+              <span class="home-typeset-row-file" data-file="txt">未選択</span>
+            </div>
+            <button class="home-typeset-pick-btn" data-pick="txt" type="button">選択</button>
+          </div>
+        </div>
+        <div class="home-typeset-actions">
+          <button class="page-jump-btn home-typeset-cancel" type="button">キャンセル</button>
+          <button class="page-jump-btn page-jump-btn-primary home-typeset-start" type="button" disabled>開始</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    modal.querySelector(".home-typeset-title")?.insertAdjacentHTML(
+      "afterend",
+      '<span class="home-typeset-subtitle">ドラッグ＆ドロップ可能</span>'
+    );
+    const homeTypeSetLabels = {
+      reference: { title: "見本", desc: "PDF / JPEG / PNG", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><circle cx="10" cy="12" r="2"/><path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/></svg>' },
+      psd: { title: "PSD", desc: "複数選択できます", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><text x="12" y="17" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: var(--ui-font); font-weight: 700;">PSD</text></svg>' },
+      txt: { title: "テキスト", desc: "未選択の場合は画像スキャン結果を使用", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><polyline points="14 2 14 8 20 8"/><text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: var(--ui-font); font-weight: 700;">TXT</text></svg>' },
+    };
+    modal.querySelector(".home-typeset-title").textContent = "写植用ファイルを選択";
+    modal.querySelector(".home-typeset-close").textContent = "×";
+    modal.querySelector(".home-typeset-close").setAttribute("aria-label", "閉じる");
+    modal.querySelector(".home-typeset-cancel").textContent = "キャンセル";
+    modal.querySelector(".home-typeset-start").textContent = "開始";
+    for (const row of modal.querySelectorAll(".home-typeset-row")) {
+      const info = homeTypeSetLabels[row.dataset.slot];
+      if (!info) continue;
+      const check = row.querySelector(".home-typeset-check");
+      if (check && !row.querySelector(".home-typeset-count")) {
+        check.insertAdjacentHTML("afterend", '<span class="home-typeset-count" aria-hidden="true" hidden></span>');
+      }
+      if (check) check.textContent = "✓";
+      const title = row.querySelector(".home-typeset-row-title");
+      const desc = row.querySelector(".home-typeset-row-desc");
+      const file = row.querySelector(".home-typeset-row-file");
+      const pick = row.querySelector(".home-typeset-pick-btn");
+      if (title) title.textContent = info.title;
+      if (desc) desc.textContent = info.desc;
+      if (file) file.textContent = "未選択";
+      if (pick) pick.textContent = "選択";
+      row.querySelector(".home-typeset-row-icon")?.remove();
+      row.insertAdjacentHTML("afterbegin", `<span class="home-typeset-row-icon">${info.icon}</span>`);
+    }
+    const referenceRow = modal.querySelector('.home-typeset-row[data-slot="reference"]');
+    referenceRow?.querySelector(".home-typeset-row-main")?.insertAdjacentHTML(
+      "beforeend",
+      '<label class="home-typeset-skip-first"><input type="checkbox" data-reference-skip-first /><span>先頭白紙ページを除外</span></label>'
+    );
+    referenceRow?.insertAdjacentHTML(
+      "beforeend",
+      '<div class="home-typeset-progress" aria-hidden="true"><span></span></div>'
+    );
+
+    const startBtn = modal.querySelector(".home-typeset-start");
+    const getReferenceDisplayCount = () => referencePageCount || referencePaths.length;
+    const refreshReferencePageCount = async () => {
+      const token = ++referenceCountToken;
+      const paths = [...referencePaths];
+      referenceCounting = paths.length > 0;
+      update();
+      try {
+        const count = await countReferencePages(paths, { skipFirstBlankPage: excludeFirstReferencePage });
+        if (token !== referenceCountToken) return getReferenceDisplayCount();
+        referencePageCount = count || paths.length;
+      } catch (e) {
+        console.error("countReferencePages failed:", e);
+        if (token !== referenceCountToken) return getReferenceDisplayCount();
+        referencePageCount = paths.length;
+      } finally {
+        if (token === referenceCountToken) {
+          referenceCounting = false;
+          update();
+        }
+      }
+      return getReferenceDisplayCount();
+    };
+    modal.querySelector("[data-reference-skip-first]")?.addEventListener("change", (e) => {
+      excludeFirstReferencePage = !!e.currentTarget.checked;
+      referencePageCount = 0;
+      update();
+      if (referencePaths.length > 0) void refreshReferencePageCount();
+    });
+    const update = () => {
+      const refEl = modal.querySelector('[data-file="reference"]');
+      const psdEl = modal.querySelector('[data-file="psd"]');
+      const txtEl = modal.querySelector('[data-file="txt"]');
+      if (refEl) refEl.textContent = homeFlowFileSummary(referencePaths, "未選択");
+      if (psdEl) psdEl.textContent = homeFlowFileSummary(psdPaths, "未選択");
+      if (txtEl) txtEl.textContent = homeFlowFileSummary(txtPath, "未選択");
+      if (refEl && referencePaths.length === 0) refEl.textContent = "未選択";
+      if (psdEl && psdPaths.length === 0) psdEl.textContent = "未選択";
+      if (txtEl && !txtPath) txtEl.textContent = "未選択";
+      for (const row of modal.querySelectorAll(".home-typeset-row")) {
+        const slot = row.dataset.slot;
+        const active =
+          slot === "reference" ? referencePaths.length > 0 :
+          slot === "psd" ? psdPaths.length > 0 :
+          !!txtPath;
+        const count =
+          slot === "reference" ? getReferenceDisplayCount() :
+          slot === "psd" ? psdPaths.length :
+          txtPath ? 1 : 0;
+        const countEl = row.querySelector(".home-typeset-count");
+        if (countEl) {
+          countEl.textContent = count > 0 ? String(count) : "";
+          countEl.hidden = count === 0;
+        }
+        row.classList.toggle("loading", slot === "reference" && referenceCounting);
+        row.classList.toggle("selected", active);
+      }
+      if (startBtn) startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0;
+    };
+
+    const applyDroppedPaths = (paths, slot = null) => {
+      if (!Array.isArray(paths) || paths.length === 0) return false;
+      let handled = false;
+      const applyToSlot = (kind) => {
+        const filtered = homeFlowFilterPaths(paths, kind);
+        if (filtered.length === 0) return;
+        if (kind === "reference") {
+          referencePaths = filtered;
+          referencePageCount = 0;
+          void refreshReferencePageCount();
+        }
+        else if (kind === "psd") psdPaths = filtered;
+        else if (kind === "txt") txtPath = filtered[0] ?? null;
+        handled = true;
+      };
+      if (slot) {
+        applyToSlot(slot);
+      } else {
+        applyToSlot("reference");
+        applyToSlot("psd");
+        applyToSlot("txt");
+      }
+      if (handled) {
+        update();
+        for (const row of modal.querySelectorAll(".home-typeset-row.drag-over")) {
+          row.classList.remove("drag-over");
+        }
+      } else {
+        toast("対応しているファイルをドロップしてください", { kind: "warning", duration: 2200 });
+      }
+      return handled;
+    };
+
+    const slotFromDropPayload = (payload) => {
+      const position = payload?.position || payload?.physicalPosition || payload?.logicalPosition;
+      const x = Number(position?.x);
+      const y = Number(position?.y);
+      if (Number.isFinite(x) && Number.isFinite(y)) {
+        const row = document.elementFromPoint(x, y)?.closest?.(".home-typeset-row");
+        if (row && modal.contains(row)) return row.dataset.slot || null;
+      }
+      const hovered = modal.querySelector(".home-typeset-row.drag-over");
+      return hovered?.dataset?.slot || null;
+    };
+
+    const handleHomeTypesetDrop = (paths, payload) => {
+      if (settled || pickingFile || modal.hidden) return false;
+      return applyDroppedPaths(paths, slotFromDropPayload(payload));
+    };
+
+    const cleanup = (value) => {
+      if (settled) return;
+      settled = true;
+      if (homeTypesetDropHandler === handleHomeTypesetDrop) homeTypesetDropHandler = null;
+      window.removeEventListener("keydown", onKeyDown, true);
+      hideModalAnimated(modal);
+      setTimeout(() => modal.remove(), 260);
+      resolve(value);
+    };
+    const onKeyDown = (e) => {
+      if (pickingFile) return;
+      if (e.key === "Escape") cleanup(null);
+    };
+    const pickWithHomeDialogHidden = async (pickFn) => {
+      pickingFile = true;
+      modal.classList.remove("visible");
+      modal.hidden = true;
+      try {
+        return await pickFn();
+      } finally {
+        pickingFile = false;
+        if (!settled) showModalAnimated(modal);
+      }
+    };
+
+    modal.querySelector(".home-typeset-close")?.addEventListener("click", () => cleanup(null));
+    modal.querySelector(".home-typeset-cancel")?.addEventListener("click", () => cleanup(null));
+    modal.addEventListener("mousedown", (e) => {
+      if (pickingFile) return;
+      if (e.target === modal) cleanup(null);
+    });
+    modal.addEventListener("click", async (e) => {
+      const btn = e.target.closest("[data-pick]");
+      if (!btn) return;
+      const kind = btn.dataset.pick;
+      btn.disabled = true;
+      try {
+        if (kind === "reference") {
+          referencePaths = await pickWithHomeDialogHidden(() => pickReferenceFiles());
+          referencePageCount = 0;
+          void refreshReferencePageCount();
+        } else if (kind === "psd") {
+          psdPaths = await pickWithHomeDialogHidden(() => pickPsdFiles());
+        } else if (kind === "txt") {
+          txtPath = await pickWithHomeDialogHidden(() => pickTxtPath());
+        }
+        update();
+      } catch (err) {
+        console.error(err);
+        toast(`ファイル選択に失敗しました: ${err?.message ?? err}`, { kind: "error", duration: 3500 });
+      } finally {
+        if (!settled) btn.disabled = false;
+      }
+    });
+    for (const row of modal.querySelectorAll(".home-typeset-row")) {
+      row.addEventListener("dragenter", (e) => {
+        e.preventDefault();
+        row.classList.add("drag-over");
+      });
+      row.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        row.classList.add("drag-over");
+      });
+      row.addEventListener("dragleave", () => row.classList.remove("drag-over"));
+      row.addEventListener("drop", (e) => {
+        e.preventDefault();
+        row.classList.remove("drag-over");
+        const paths = Array.from(e.dataTransfer?.files ?? [])
+          .map((file) => file.path || file.name)
+          .filter(Boolean);
+        applyDroppedPaths(paths, row.dataset.slot);
+      });
+    }
+    startBtn?.addEventListener("click", async () => {
+      if (referencePaths.length === 0 || psdPaths.length === 0) return;
+      const referenceCount = await refreshReferencePageCount();
+      if (referenceCount !== psdPaths.length) {
+        await notifyDialog({
+          title: "ファイル数が一致しません",
+          message: `見本は${referenceCount}件、PSDは${psdPaths.length}件です。ファイル数を揃えてから開始してください。`,
+          okLabel: "OK",
+          kind: "warning",
+        });
+        return;
+      }
+      cleanup({ referencePaths, psdPaths, txtPath, excludeFirstReferencePage });
+    });
+    window.addEventListener("keydown", onKeyDown, true);
+    homeTypesetDropHandler = handleHomeTypesetDrop;
+    update();
+    showModalAnimated(modal);
+  });
+}
+
+async function transitionFromHome() {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  const start = async () => {
-    document.body.classList.add("home-starting");
-    await wait(360);
-    hideHomeScreen();
-    document.body.classList.remove("home-starting");
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-    await openAiOcrDialog({ force: true });
-  };
-  document.getElementById("home-transcribe-start-btn")?.addEventListener("click", start);
-  document.getElementById("home-typeset-start-btn")?.addEventListener("click", start);
+  document.body.classList.add("home-starting");
+  await wait(360);
+  hideHomeScreen();
+  document.body.classList.remove("home-starting");
+  await new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+async function startHomeTypesetFlow() {
+  const picked = await openHomeTypesetDialog();
+  if (!picked) return;
+  await transitionFromHome();
+  try {
+    clearAiOcrDoc();
+    await loadReferenceFiles(picked.referencePaths, { skipFirstBlankPage: !!picked.excludeFirstReferencePage });
+    await loadPsdFilesByPaths(picked.psdPaths, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
+    if (!getPages().length) return;
+    if (picked.txtPath) await loadTxtFromPath(picked.txtPath);
+    await runAutoPlace({
+      allowOcrText: true,
+      preserveTxtDuringOcr: !!picked.txtPath,
+    });
+  } catch (e) {
+    console.error(e);
+    await notifyDialog({
+      title: "写植を開始できません",
+      message: String(e?.message ?? e ?? "不明なエラー"),
+    });
+  }
+}
+
+async function startHomeTranscribeFlow() {
+  let files = [];
+  try {
+    files = await pickReferenceFiles();
+  } catch (e) {
+    console.error(e);
+    toast(`ファイル選択に失敗しました: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
+    return;
+  }
+  if (!files.length) return;
+
+  await transitionFromHome();
+  try {
+    clearAiOcrDoc();
+    await loadReferenceFiles(files);
+    await runAiOcrForTranscription(files);
+    setParallelViewMode("editor");
+    setEditorLeftPaneMode("pdf");
+    setActivePane("pdf");
+    requestAnimationFrame(() => focusEditor());
+  } catch (e) {
+    console.error(e);
+    await notifyDialog({
+      title: "書き起こしを開始できません",
+      message: String(e?.message ?? e ?? "不明なエラー"),
+    });
+  }
+}
+
+function bindHomeScreen() {
+  document.getElementById("home-transcribe-start-btn")?.addEventListener("click", () => { void startHomeTranscribeFlow(); });
+  document.getElementById("home-typeset-start-btn")?.addEventListener("click", () => { void startHomeTypesetFlow(); });
   showHomeScreen();
 }
 

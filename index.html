@@ -3,17 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>PsDesign</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@300;400;500;700&display=swap" rel="stylesheet" />
+    <title>OPUS</title>
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
     <div id="app" class="app">
       <header class="toolbar" data-tauri-drag-region>
-        <h1 data-tauri-drag-region class="app-logo" aria-label="PsDesign">
-          <img class="app-logo-icon" src="/PsDesign_icon.png" alt="PsDesign" draggable="false" />
+        <h1 data-tauri-drag-region class="app-logo" aria-label="OPUS">
+          <img class="app-logo-icon" src="/PsDesign_icon.png" alt="OPUS" draggable="false" />
         </h1>
         <button id="hamburger-btn" class="icon-btn hamburger-btn" type="button" title="メニュー" aria-label="メニュー">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -119,14 +116,14 @@
           <button id="open-folder-btn" class="icon-btn file-open-btn" title="PSD を開く" aria-label="PSD を開く">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
-              <text x="12" y="17" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">PSD</text>
+              <text x="12" y="17" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', sans-serif; font-weight: 700;">PSD</text>
             </svg>
           </button>
           <button id="open-txt-toolbar-btn" class="icon-btn file-open-btn" title="テキストを開く" aria-label="テキストを開く">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
               <polyline points="14 2 14 8 20 8"/>
-              <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
+              <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', sans-serif; font-weight: 700;">TXT</text>
             </svg>
           </button>
           <div class="save-container" id="save-container">
@@ -167,10 +164,10 @@
       </header>
       <section id="home-screen" class="home-screen" aria-label="ホーム">
         <div class="home-screen-inner">
-          <img class="home-logo-icon" src="/PsDesign_icon.png" alt="PsDesign" draggable="false" />
           <h2 class="home-title">
             <img class="home-title-logo" src="/opus_logo.png" alt="OPUS" draggable="false" />
           </h2>
+          <span class="home-version">Ver 1.30.8</span>
           <div class="home-start-grid">
             <article class="home-start-card">
               <h3>
@@ -182,7 +179,7 @@
                 <span>書き起こし</span>
               </h3>
               <div class="home-card-rule" aria-hidden="true"></div>
-              <p>画像を読み込んで<br>テキストを抽出します</p>
+              <p>画像からテキストを抽出</p>
               <button id="home-transcribe-start-btn" class="home-start-btn" type="button">
                 <span>スタート</span>
                 <span class="home-start-arrow" aria-hidden="true">▶</span>
@@ -198,7 +195,7 @@
                 <span>写植</span>
               </h3>
               <div class="home-card-rule" aria-hidden="true"></div>
-              <p>画像からテキストを抽出して<br>自動配置を行います</p>
+              <p>自動配置による写植</p>
               <button id="home-typeset-start-btn" class="home-start-btn" type="button">
                 <span>スタート</span>
                 <span class="home-start-arrow" aria-hidden="true">▶</span>
@@ -358,7 +355,7 @@
                   <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                     <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
                     <polyline points="14 2 14 8 20 8"/>
-                    <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
+                    <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', sans-serif; font-weight: 700;">TXT</text>
                   </svg>
                   <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
                 </div>
@@ -407,6 +404,15 @@
               <polyline points="19 9 22 12 19 15"/>
               <line x1="2" y1="12" x2="22" y2="12"/>
               <line x1="12" y1="2" x2="12" y2="22"/>
+            </svg>
+          </button>
+          <button id="unify-text-size-btn" class="icon-btn side-tool-btn" type="button" title="選択中のテキストサイズを統一" aria-label="選択中のテキストサイズを統一">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M5 5h14"/>
+              <path d="M12 5v14"/>
+              <path d="M8 19h8"/>
+              <path d="M4 12h4"/>
+              <path d="M16 12h4"/>
             </svg>
           </button>
           <button id="tool-pan" class="tool-btn icon-btn side-tool-btn" data-tool="pan" title="パンツール (Space長押し)" aria-label="パンツール">
@@ -533,15 +539,9 @@
               <span>自動配置</span>
             </button>
             <div class="ai-adjust-dropdown">
-              <button id="ai-adjust-menu-btn" class="ai-adjust-menu-btn" type="button" title="位置調整メニュー" aria-label="位置調整メニュー" aria-haspopup="true" aria-expanded="false" disabled>
+              <button id="ai-adjust-menu-btn" class="ai-adjust-menu-btn" type="button" title="位置調整を選択" aria-label="位置調整を選択" aria-haspopup="dialog" disabled>
                 <span>位置調整</span>
-                <span class="ai-adjust-caret" aria-hidden="true">▼</span>
               </button>
-              <div class="ai-adjust-menu" role="menu" aria-label="位置調整メニュー">
-                <button id="ai-adjust-btn" class="ai-adjust-menu-item" type="button" title="位置調整1: PSDに余分余白あり (確定式)" role="menuitem" disabled>位置調整1</button>
-                <button id="ai-adjust2-btn" class="ai-adjust-menu-item" type="button" title="位置調整2: 見本に余分余白あり (画像差分 grid search)" role="menuitem" disabled>位置調整2</button>
-                <button id="ai-adjust3-btn" class="ai-adjust-menu-item" type="button" title="重ね調整: 見本に PSD を半透明で重ねて手動調整" role="menuitem" disabled>重ね調整</button>
-              </div>
             </div>
           </div>
           <div class="side-panel-tabs" role="tablist">
@@ -595,9 +595,17 @@
                 <svg class="txt-source-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
                   <polyline points="14 2 14 8 20 8"/>
-                  <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">TXT</text>
+                  <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', sans-serif; font-weight: 700;">TXT</text>
                 </svg>
                 <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
+              </div>
+              <div id="ocr-source-panel" class="ocr-source-panel" hidden>
+                <div class="ocr-source-header">
+                  <span class="ocr-source-label">画像スキャン結果</span>
+                  <span id="ocr-source-title" class="ocr-source-title"></span>
+                </div>
+                <div id="ocr-source-summary" class="ocr-source-summary"></div>
+                <div id="ocr-source-viewer" class="ocr-source-viewer"></div>
               </div>
             </div>
           </section>
@@ -712,31 +720,32 @@
           </div>
           </section>
           <section class="panel-section font-book-panel" data-section="font-book" hidden>
-            <div class="font-book-toolbar">
-              <button id="font-book-open-btn" class="font-book-open-btn" type="button">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                  <path d="M6 14l1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2"/>
-                </svg>
-                <span>フォント帳を開く</span>
-              </button>
-              <button id="font-book-refresh-btn" class="icon-btn" type="button" title="フォント帳を再読み込み" aria-label="フォント帳を再読み込み">
+            <div class="font-book-select-row">
+              <button id="font-book-select-info-btn" class="font-book-select-info-btn" type="button">作品情報を選択</button>
+              <button id="font-book-refresh-btn" class="icon-btn font-book-refresh-btn" type="button" title="フォント帳を再読み込み" aria-label="フォント帳を再読み込み">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                   <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"/>
                   <path d="M21 3v5h-5"/>
                 </svg>
               </button>
+              <div class="font-book-category-menu-wrap">
+                <button id="font-book-category-menu-btn" class="icon-btn font-book-category-menu-btn" type="button" title="カテゴリ" aria-label="カテゴリ" aria-expanded="false">
+                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true">
+                    <path d="M4 6h16"/>
+                    <path d="M4 12h16"/>
+                    <path d="M4 18h16"/>
+                  </svg>
+                </button>
+                <div id="font-book-category-menu" class="font-book-category-menu" hidden>
+                  <div class="font-book-menu-section">
+                    <label class="font-book-menu-label" for="font-book-sample-input">サンプル文字</label>
+                    <input id="font-book-sample-input" class="font-book-sample-input" type="text" value="永字八法 あいうえお ABC 123" aria-label="サンプル文字" />
+                  </div>
+                  <div class="font-book-menu-divider"></div>
+                  <div id="font-book-category-items" class="font-book-category-items"></div>
+                </div>
+              </div>
             </div>
-            <div class="font-book-meta" id="font-book-meta">fontbook.json が入っている「フォント帳」フォルダを選択してください。</div>
-            <div class="font-book-filters">
-              <input id="font-book-search" class="font-book-search" type="search" placeholder="フォント名で検索..." autocomplete="off" />
-              <button id="font-book-hide-empty-btn" class="font-book-filter-btn" type="button" aria-pressed="false">使用あり</button>
-            </div>
-            <div class="font-book-size-toggle" role="group" aria-label="プレビューサイズ">
-              <button class="font-book-size-btn" type="button" data-size="S">S</button>
-              <button class="font-book-size-btn active" type="button" data-size="M">M</button>
-              <button class="font-book-size-btn" type="button" data-size="L">L</button>
-            </div>
-            <div id="font-book-categories" class="font-book-categories" hidden></div>
             <div id="font-book-list" class="font-book-list"></div>
           </section>
         </aside>
@@ -864,7 +873,7 @@
         </div>
         <div class="settings-tabs" role="tablist">
           <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
-          <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">ページ送り</button>
+          <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">方向キー</button>
           <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">写植設定</button>
         </div>
         <div class="settings-tab-panel active" id="settings-tab-shortcuts" role="tabpanel">
@@ -876,9 +885,13 @@
         </div>
         <div class="settings-tab-panel" id="settings-tab-pageDir" role="tabpanel">
           <div class="settings-section-header">
-            <span>ページ送りの方向</span>
+            <span>方向キーの設定</span>
           </div>
           <p class="settings-section-desc">←/→ キー（および ▲/▼ ボタン）で前後どちらに進むかを選択します。</p>
+          <div class="settings-default-row">
+            <label class="settings-default-label" for="arrow-key-move-distance">方向キーの移動距離 (px)</label>
+            <input type="number" id="arrow-key-move-distance" class="settings-default-input" min="0.1" max="100" step="0.1" />
+          </div>
           <div class="settings-radio-list">
             <label class="settings-radio-option" data-value="false">
               <input type="radio" name="page-direction" value="false" />
@@ -911,6 +924,7 @@
               <label class="settings-default-label" for="default-text-size-step">文字サイズの刻み (pt)</label>
               <select id="default-text-size-step" class="settings-default-input">
                 <option value="0.1">0.1 pt</option>
+                <option value="0.25">0.25 pt</option>
                 <option value="0.5">0.5 pt</option>
               </select>
             </div>
@@ -1031,7 +1045,7 @@
         </div>
         <div class="ai-install-intro" data-tauri-drag-region>
           <p class="ai-install-intro-text" data-tauri-drag-region>
-            漫画のセリフを自動抽出するために、以下のスキャンエンジンを <code>%LOCALAPPDATA%\PsDesign\ai-runtime</code> にインストールします（合計 約 3〜5 GB / 10〜30 分）。
+            漫画のセリフを自動抽出するために、以下のスキャンエンジンを <code>%LOCALAPPDATA%\OPUS\ai-runtime</code> にインストールします（合計 約 3〜5 GB / 10〜30 分）。
           </p>
         </div>
         <div class="ai-install-status">
@@ -1111,8 +1125,8 @@
     </div>
     <div class="welcome-modal" id="first-run-welcome-modal" hidden>
       <div class="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
-        <img src="/PsDesign_icon.png" class="welcome-logo" alt="PsDesign" />
-        <h2 class="welcome-title" id="welcome-title">PsDesign へようこそ</h2>
+        <img src="/PsDesign_icon.png" class="welcome-logo" alt="OPUS" />
+        <h2 class="welcome-title" id="welcome-title">OPUS へようこそ</h2>
         <p class="welcome-message">
           本アプリでは AI による画像スキャンエンジンを使った<br>
           テキスト抽出と吹き出し検出が利用できます。<br>

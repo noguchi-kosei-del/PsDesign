@@ -103,7 +103,7 @@ function formatDisplayPt(actualPt, page) {
   const num = typeof actualPt === "number" ? actualPt : Number(actualPt);
   if (!Number.isFinite(num)) return "";
   const display = toDisplaySizePt(num, page);
-  const rounded = Math.round((display ?? 0) * 10) / 10;
+  const rounded = Math.round((display ?? 0) * 100) / 100;
   return `${rounded}pt`;
 }
 
@@ -1090,7 +1090,11 @@ export function commitFontToSelections(ps) {
       if (ref.kind === "existing") {
         setEdit(ref.page.path, ref.layer.id, { fontPostScriptName: ps });
       } else {
-        updateNewLayer(ref.newLayer.tempId, { fontPostScriptName: ps });
+        updateNewLayer(ref.newLayer.tempId, {
+          fontPostScriptName: ps,
+          autoFontSwitched: false,
+          autoFontSwitchBucket: -1,
+        });
       }
       recenterLayerToCenter(ref, oldCenter);
       any = true;
@@ -1100,6 +1104,7 @@ export function commitFontToSelections(ps) {
   if (mutated) {
     rebuildLayerList();
     refreshAllOverlays();
+    import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
   }
   return !!mutated;
 }
@@ -1148,6 +1153,15 @@ function commitSingleFieldToSelections(field, value) {
 export function commitSizeToSelections(sizePt) {
   if (!Number.isFinite(sizePt)) return false;
   return commitSingleFieldToSelections("sizePt", sizePt);
+}
+
+export function unifySelectedTextSize(sizePt) {
+  const selections = getSelectedLayers();
+  if (selections.length < 2) return false;
+  const targetSize = Math.round(Number(sizePt) * 100) / 100;
+  if (!Number.isFinite(targetSize)) return false;
+  setTextSize(targetSize);
+  return commitSizeToSelections(targetSize);
 }
 
 // 行間（leadingPct）を選択中の全レイヤーに書き込む。

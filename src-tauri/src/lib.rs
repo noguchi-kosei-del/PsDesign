@@ -277,12 +277,25 @@ fn write_progen_handoff(text_path: &Path) -> Result<(), String> {
 fn find_progen_launcher() -> Option<PathBuf> {
     let desktop = dirs::desktop_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))?;
-    let root = desktop.join("progen_DEMO").join("data");
-    let candidates = [
-        root.join("dev.bat"),
-        root.join("src-tauri").join("target").join("release").join("progen.exe"),
-        root.join("src-tauri").join("target").join("debug").join("progen.exe"),
+    let home = dirs::home_dir();
+    let demo_root = desktop.join("progen_DEMO");
+    let mut candidates = vec![
+        desktop.join("ProGen.lnk"),
     ];
+    if let Some(home) = home {
+        candidates.push(home.join("AppData").join("Local").join("ProGen").join("progen.exe"));
+    }
+    let checkout_roots = [
+        // Current ProGen checkout layout.
+        demo_root.join("progen"),
+        // Older layout kept for compatibility with existing local setups.
+        demo_root.join("data"),
+    ];
+    for root in checkout_roots {
+        candidates.push(root.join("src-tauri").join("target").join("release").join("progen.exe"));
+        candidates.push(root.join("src-tauri").join("target").join("debug").join("progen.exe"));
+        candidates.push(root.join("dev.bat"));
+    }
     candidates.into_iter().find(|p| p.exists())
 }
 
@@ -291,15 +304,24 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
     let text_path = PathBuf::from(text_path);
     write_progen_handoff(&text_path)?;
     let launcher = find_progen_launcher().ok_or_else(|| {
-        "ProGen launcher was not found under Desktop\\progen_DEMO\\data".to_string()
+        "ProGen launcher was not found under Desktop\\progen_DEMO\\progen or Desktop\\progen_DEMO\\data".to_string()
     })?;
 
-    if launcher.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("bat")).unwrap_or(false) {
+    let shell_launch = launcher
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| {
+            s.eq_ignore_ascii_case("bat")
+                || s.eq_ignore_ascii_case("cmd")
+                || s.eq_ignore_ascii_case("lnk")
+        })
+        .unwrap_or(false);
+    if shell_launch {
         Command::new("cmd")
             .args(["/C", "start", "", &launcher.to_string_lossy()])
             .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")))
             .spawn()
-            .map_err(|e| format!("ProGen dev.bat launch failed: {}", e))?;
+            .map_err(|e| format!("ProGen launcher start failed ({}): {}", launcher.display(), e))?;
     } else {
         Command::new(&launcher)
             .spawn()
@@ -745,7 +767,7 @@ pub fn run() {
                 "splash",
                 tauri::WebviewUrl::App("splash.html".into()),
             )
-            .title("PsDesign")
+            .title("OPUS")
             .inner_size(670.0, 420.0)
             .background_color(tauri::webview::Color(0x21, 0x21, 0x21, 255))
             .visible(false)

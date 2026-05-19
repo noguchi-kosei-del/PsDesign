@@ -445,7 +445,6 @@ async function handleSaveAuto() {
       onClick: async () => {
         try {
           await launchProgenWithText(outputPath);
-          toast("ProGenへテキスト情報を渡しました", { kind: "success", duration: 1800 });
         } catch (e) {
           console.error(e);
           toast(`ProGen起動失敗: ${e?.message ?? e}`, { kind: "error" });

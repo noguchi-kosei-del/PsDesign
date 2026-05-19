@@ -25,6 +25,7 @@ import {
   onTxtSourceChange,
   getNewLayers,
   updateNewLayer,
+  removeNewLayer,
   beginHistoryTransient,
   commitHistoryTransient,
   abortHistoryTransient,
@@ -32,7 +33,7 @@ import {
 import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress, promptDialog, showProgress, updateProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
-import { runAiOcrForFiles, runAiOcrForPlacementOnly, PLACE_ICON_SVG } from "./ai-ocr.js";
+import { runAiOcrForFiles, runAiOcrForPlacementOnly, PLACE_ICON_SVG, normalizeMokuroDocForReferencePages } from "./ai-ocr.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
@@ -540,11 +541,12 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
     if (Number.isFinite(ms)) uniScore = Math.max(0, Math.min(1, ms / 6));
     const score = Math.max(bgScore, uniScore);
     const threshold = defaults.cloudShapeScoreThreshold ?? 0.5;
-    if (score >= threshold) {
+    const bucket = Math.max(0, Math.min(5, Math.floor((score * 100 - 50) / 10)));
+    if (score >= threshold && bucket >= 1) {
       fontPostScriptName = defaults.cloudShapeFontPostScriptName;
       autoFontSwitched = true;
       // bucket: 50-59 → 0, 60-69 → 1, 70-79 → 2, 80-89 → 3, 90-99 → 4, 100 → 5
-      autoFontSwitchBucket = Math.max(0, Math.min(5, Math.floor((score - 0.5) / 0.1)));
+      autoFontSwitchBucket = bucket;
       const pct = Math.round(score * 100);
       scoreReason = bgScore >= uniScore ? `背景(${pct}%)` : `ウニ(${pct}%)`;
     }
@@ -645,12 +647,11 @@ function parseRubyAnnotatedText(raw) {
   let text = "";
   let last = 0;
   const re = /\{([^{}]+)\}\(([^()]+)\)/g;
-  let m;
-  while ((m = re.exec(input)) !== null) {
-    text += input.slice(last, m.index);
-    const parentRaw = String(m[1] ?? "");
-    const rubyRaw = String(m[2] ?? "");
-    const parentText = parentRaw.replace(/[ \t\u3000]+/g, "");
+  let match;
+  while ((match = re.exec(input)) !== null) {
+    text += input.slice(last, match.index);
+    const parentText = String(match[1] ?? "").replace(/[ \t\u3000]+/g, "");
+    const rubyRaw = String(match[2] ?? "");
     const rubyText = rubyRaw.trim().replace(/[\t\u3000]+/g, " ").replace(/ +/g, " ");
     if (parentText && rubyText) {
       const start = text.length;
@@ -660,11 +661,16 @@ function parseRubyAnnotatedText(raw) {
       const rubyType = rubyHasSpaces && rubyParts.length === Array.from(parentText).length
         ? "mono"
         : "group";
-      charRubies[String(start)] = { end: start + parentText.length, text: rubyText, type: rubyType, scale: 50 };
+      charRubies[String(start)] = {
+        end: start + parentText.length,
+        text: rubyText,
+        type: rubyType,
+        scale: 50,
+      };
     } else {
-      text += m[0];
+      text += match[0];
     }
-    last = m.index + m[0].length;
+    last = match.index + match[0].length;
   }
   text += input.slice(last);
   return { text, charRubies };
@@ -674,24 +680,22 @@ function rubyLineLeadingsForText(text, charRubies) {
   const out = {};
   if (!charRubies || Object.keys(charRubies).length === 0) return out;
   const rubyLeadingPct = Number(getDefault("rubyLeadingPct")) || 150;
-  for (const k of Object.keys(charRubies)) {
-    const start = Number(k);
+  for (const key of Object.keys(charRubies)) {
+    const start = Number(key);
     if (!Number.isFinite(start)) continue;
     const lineIndex = String(text ?? "").slice(0, start).split("\n").length - 1;
     out[lineIndex] = rubyLeadingPct;
   }
   return out;
 }
-function mergeCharRubies(base, extra) {
-  return { ...(base ?? {}), ...(extra ?? {}) };
-}
-function normalizePlacementText(s) {
-  return parseRubyAnnotatedText(s).text
+
+function normalizePlacementText(value) {
+  return parseRubyAnnotatedText(value).text
     .normalize("NFKC")
     .replace(/\r\n?/g, "\n")
     .replace(/[\s\u3000]+/g, "")
-    .replace(/[\uFE63\uFF0D\uFF70\u2010\u2011\u2012\u2013\u2014\u2015\u2212]/g, "\u30fc")
-    .replace(/[\u3001\u3002\uFF0C\uFF0E.,!?！？\u30fb\u2026\u30fc\-()（）「」『』【】\[\]［］]/g, "")
+    .replace(/[\uFE63\uFF0D\uFF70\u2010-\u2015\u2212]/g, "\u30fc")
+    .replace(/[、。，．.,!?！？・…ー\-()（）「」『』【】［］\[\]〈〉《》]/g, "")
     .trim();
 }
 
@@ -757,10 +761,13 @@ function lowPlacementMatchScore(txt, ocr) {
 function assignBlocksToTxt(txtBlocks, sortedBlocks) {
   const entries = sortedBlocks.map((block, index) => ({ block, index, text: getBlockText(block) }));
   const candidates = [];
-  for (let j = 0; j < txtBlocks.length; j += 1) {
+  for (let txtIndex = 0; txtIndex < txtBlocks.length; txtIndex += 1) {
     for (const entry of entries) {
-      const score = textSimilarityScore(txtBlocks[j], entry.text);
-      candidates.push({ txtIndex: j, entry, score });
+      candidates.push({
+        txtIndex,
+        entry,
+        score: textSimilarityScore(txtBlocks[txtIndex], entry.text),
+      });
     }
   }
   candidates.sort((a, b) => {
@@ -774,12 +781,16 @@ function assignBlocksToTxt(txtBlocks, sortedBlocks) {
   const usedTxt = new Set();
   const usedBlock = new Set();
   const assigned = new Array(txtBlocks.length).fill(null);
-  for (const c of candidates) {
-    if (usedTxt.has(c.txtIndex) || usedBlock.has(c.entry.index)) continue;
-    const lowThreshold = lowPlacementMatchScore(txtBlocks[c.txtIndex], c.entry.text);
-    assigned[c.txtIndex] = { ...c.entry, score: c.score, lowConfidence: c.score < lowThreshold };
-    usedTxt.add(c.txtIndex);
-    usedBlock.add(c.entry.index);
+  for (const candidate of candidates) {
+    if (usedTxt.has(candidate.txtIndex) || usedBlock.has(candidate.entry.index)) continue;
+    const lowThreshold = lowPlacementMatchScore(txtBlocks[candidate.txtIndex], candidate.entry.text);
+    assigned[candidate.txtIndex] = {
+      ...candidate.entry,
+      score: candidate.score,
+      lowConfidence: candidate.score < lowThreshold,
+    };
+    usedTxt.add(candidate.txtIndex);
+    usedBlock.add(candidate.entry.index);
   }
   return assigned;
 }
@@ -818,6 +829,7 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
         layer.ocrMatchScore = matchScore;
         layers.push(layer);
       } else {
+        // 余り TXT: PSD ページ中央に配置
         layers.push(mapTxtToPageCenter(psd, txt[j], defaults, sourceTxtRef));
       }
     }
@@ -837,6 +849,7 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
 
     out.pages.push({
       pageIndex: i + 1,
+      psdPath: psd.path,
       psdName: baseName(psd.path),
       bubbleCount: sorted.length,
       txtCount: txt.length,
@@ -919,17 +932,51 @@ function showPlanReviewModal(plan) {
 }
 
 // ============================================================
-// 確定 → addNewLayer 一括
+function removeExistingAutoPlacedLayersForPlan(plan) {
+  const targets = new Set();
+  for (const row of plan.pages) {
+    if (row?.psdPath) targets.add(`${row.psdPath}::${row.pageIndex ?? null}`);
+    for (const layer of row.layers) {
+      if (!layer?.psdPath || !layer?.sourceTxtRef) continue;
+      const pageNumber = layer.sourceTxtRef.pageNumber ?? null;
+      targets.add(`${layer.psdPath}::${pageNumber}`);
+    }
+  }
+  if (targets.size === 0) return 0;
+
+  let removed = 0;
+  for (const layer of getNewLayers().slice()) {
+    const ref = layer?.sourceTxtRef;
+    if (!ref || !layer?.psdPath) continue;
+    const key = `${layer.psdPath}::${ref.pageNumber ?? null}`;
+    if (!targets.has(key)) continue;
+    removeNewLayer(layer.tempId);
+    removed++;
+  }
+  return removed;
+}
+
+// 確定 → 既存の自動配置レイヤーを置換して addNewLayer 一括
 // ============================================================
 function applyPlan(plan) {
   let added = 0;
-  for (const row of plan.pages) {
-    for (const layer of row.layers) {
-      addNewLayer(layer);
-      added++;
+  let removed = 0;
+  beginHistoryTransient();
+  try {
+    removed = removeExistingAutoPlacedLayersForPlan(plan);
+    for (const row of plan.pages) {
+      for (const layer of row.layers) {
+        addNewLayer(layer);
+        added++;
+      }
     }
+    if (added > 0 || removed > 0) commitHistoryTransient();
+    else abortHistoryTransient();
+  } catch (e) {
+    abortHistoryTransient();
+    throw e;
   }
-  if (added > 0) {
+  if (added > 0 || removed > 0) {
     // overlay の再描画とレイヤーリスト更新を即座に反映
     try { renderAllSpreads(); } catch (_) {}
     try { rebuildLayerList(); } catch (_) {}
@@ -943,9 +990,12 @@ function applyPlan(plan) {
 // ============================================================
 // 自動配置メインフロー
 // ============================================================
-async function runAutoPlace(options = {}) {
-  const forceRescan = !!options.forceRescan;
-  const positionOnlyScan = !!options.positionOnlyScan;
+export async function runAutoPlace({
+  allowOcrText = false,
+  preserveTxtDuringOcr = false,
+  forceRescan = false,
+  positionOnlyScan = false,
+} = {}) {
   if (runningPlace) return;
   runningPlace = true;
   try {
@@ -965,16 +1015,14 @@ async function runAutoPlace(options = {}) {
         return;
       }
     }
-    const txtSrc = getTxtSource();
-    if (!txtSrc || !txtSrc.content) {
+    let txtSrc = getTxtSource();
+    if ((!txtSrc || !txtSrc.content) && !allowOcrText) {
       await notifyDialog({
         title: "自動配置できません",
         message: "テキストが読み込まれていません。\n先に TXT を開くか、画像スキャンを実行してください。",
       });
       return;
     }
-    const parsed = parsePages(txtSrc.content);
-    const txtByPage = parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 
     // 2. OCR キャッシュ確認
     //   - キャッシュ有効: 結果あり & pages 1 件以上 → そのまま再利用
@@ -1000,7 +1048,9 @@ async function runAutoPlace(options = {}) {
       if (positionOnlyScan) {
         await runAiOcrForPlacementOnly(loadedRefs);
       } else {
-        await runAiOcrForFiles(loadedRefs);
+        await runAiOcrForFiles(loadedRefs, {
+          loadText: !preserveTxtDuringOcr || !(txtSrc && txtSrc.content),
+        });
       }
       cache = getAiOcrDoc();
       if (!cache || !cache.doc) {
@@ -1008,6 +1058,17 @@ async function runAutoPlace(options = {}) {
         return;
       }
     }
+
+    txtSrc = getTxtSource();
+    if (!txtSrc || !txtSrc.content) {
+      await notifyDialog({
+        title: "自動配置できません",
+        message: "テキストが読み込まれていません。\nテキストファイルを指定するか、画像スキャン結果からテキストを生成してください。",
+      });
+      return;
+    }
+    const parsed = parsePages(txtSrc.content);
+    const txtByPage = parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 
     // 3. プラン構築
     // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
@@ -1028,7 +1089,8 @@ async function runAutoPlace(options = {}) {
       cloudShapeScoreThreshold: getDefault("cloudShapeScoreThreshold"),
       cloudShapeFontPostScriptName: getDefault("cloudShapeFontPostScriptName"),
     };
-    const plan = buildPlacementPlan(cache.doc, psdPages, txtByPage, defaults);
+    const placementDoc = normalizeMokuroDocForReferencePages(cache.doc);
+    const plan = buildPlacementPlan(placementDoc, psdPages, txtByPage, defaults);
 
     if (plan.totals.placed === 0) {
       await notifyDialog({
@@ -1110,18 +1172,22 @@ function syncPlacedFromTxt() {
       if (!paragraphs) continue;
       const rawNext = paragraphs[ref.paragraphIndex];
       if (rawNext == null) continue;
-      const rubyParsedNext = parseRubyAnnotatedText(rawNext);
       // 縦書きレイヤーは設定 verticalHalfToFullEnabled に従い半角英数字を全角化。
       // 原稿側は元データを保持する設計のため、レイヤー contents に変換後を書き戻す
       // ことで原稿との見た目差分を吸収する（横書きと設定 OFF は冪等に素通し）。
       const direction = layer.direction ?? "horizontal";
+      const rubyParsedNext = parseRubyAnnotatedText(rawNext);
       const next = convertHalfToFullForVertical(rubyParsedNext.text, direction);
-      if (next === layer.contents) continue;
+      const nextCharRubies = rubyParsedNext.charRubies;
+      const nextLineLeadings = rubyLineLeadingsForText(next, nextCharRubies);
+      const rubiesChanged = JSON.stringify(layer.charRubies ?? {}) !== JSON.stringify(nextCharRubies);
+      const leadingsChanged = JSON.stringify(layer.lineLeadings ?? {}) !== JSON.stringify(nextLineLeadings);
+      if (next === layer.contents && !rubiesChanged && !leadingsChanged) continue;
 
       // contents 変更で推定 width/height が変わるため、x/y をそのままにすると
       // bbox top-left 固定 → 旧中心からズレて見える（上左に寄ったように見える）。
       // 旧 contents の bbox 中心を求め、新 contents の bbox を中心起点で再配置する。
-      const updates = { contents: next, charRubies: rubyParsedNext.charRubies, lineLeadings: rubyLineLeadingsForText(next, rubyParsedNext.charRubies) };
+      const updates = { contents: next, charRubies: nextCharRubies, lineLeadings: nextLineLeadings };
       const psdPage = pagesByPath.get(layer.psdPath);
       if (psdPage) {
         const sizePt = layer.sizePt ?? 24;
@@ -1150,10 +1216,8 @@ function syncPlacedFromTxt() {
 // ============================================================
 export function bindAiPlaceButton() {
   const btn = $("ai-place-btn");
-  const positionBtn = $("ai-place-position-btn");
-  if (!btn && !positionBtn) return;
-  if (btn) btn.addEventListener("click", () => { void runAutoPlace(); });
-  if (positionBtn) positionBtn.addEventListener("click", () => { void runAutoPlace({ forceRescan: true, positionOnlyScan: true }); });
+  if (!btn) return;
+  btn.addEventListener("click", () => { void runAutoPlace(); });
   // OCR 結果が無いうちはグレーアウト。setAiOcrDoc / clearAiOcrDoc に追従。
   const sync = () => {
     const locked = isAiActionsLocked();
@@ -1164,20 +1228,12 @@ export function bindAiPlaceButton() {
       Array.isArray(cache.doc.pages) &&
       cache.doc.pages.length > 0
     );
-    if (btn) {
-      btn.disabled = locked || !hasOcr;
-      btn.title = locked
-        ? "画像スキャンエンジンが未インストールです。"
-        : hasOcr
-        ? "OCR結果と原稿テキストを吹き出し位置に自動配置"
-        : "先に画像スキャンを実行してください";
-    }
-    if (positionBtn) {
-      positionBtn.disabled = locked;
-      positionBtn.title = locked
-        ? "画像スキャンエンジンが未インストールです。"
-        : "既存TXTを正として、見本画像から位置だけを検出して配置";
-    }
+    btn.disabled = locked || !hasOcr;
+    btn.title = locked
+      ? "画像スキャンエンジンが未インストールです。"
+      : hasOcr
+      ? "OCR 結果と原稿テキストを吹き出し位置に自動配置"
+      : "先に画像スキャンを実行してください";
   };
   onAiOcrDocChange(sync);
   window.addEventListener("psdesign:ai-actions-lock-change", sync);
@@ -1298,8 +1354,9 @@ async function runPositionAdjust(mode = "mode1", options = {}) {
         // mokuro 元 bbox から refCx を取得 (idempotent)
         let refCx, refCy;
         const txtRef = layer.sourceTxtRef;
-        const block = (txtRef && Number.isInteger(txtRef.paragraphIndex))
-          ? mokuroPage?.blocks?.[Number.isInteger(txtRef.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef.paragraphIndex]
+        const ocrBlockIndex = Number.isInteger(txtRef?.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef?.paragraphIndex;
+        const block = (txtRef && Number.isInteger(ocrBlockIndex))
+          ? mokuroPage?.blocks?.[ocrBlockIndex]
           : null;
         if (block?.box && block.box.length >= 4) {
           refCx = (block.box[0] + block.box[2]) / 2;
@@ -1782,8 +1839,9 @@ async function runOverlayAlign() {
 
       let refCx, refCy;
       const txtRef = layer.sourceTxtRef;
-      const block = (txtRef && Number.isInteger(txtRef.paragraphIndex))
-        ? mokuroPage?.blocks?.[Number.isInteger(txtRef.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef.paragraphIndex]
+      const ocrBlockIndex = Number.isInteger(txtRef?.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef?.paragraphIndex;
+      const block = (txtRef && Number.isInteger(ocrBlockIndex))
+        ? mokuroPage?.blocks?.[ocrBlockIndex]
         : null;
       if (block?.box && block.box.length >= 4) {
         refCx = (block.box[0] + block.box[2]) / 2;
@@ -1853,24 +1911,94 @@ async function runOverlayAlign() {
   });
 }
 
+const POSITION_ADJUST_OPTIONS = [
+  {
+    mode: "mode1",
+    title: "位置調整1",
+    description: "PSDに余分余白あり",
+    run: () => runPositionAdjust("mode1"),
+  },
+  {
+    mode: "mode2",
+    title: "位置調整2",
+    description: "見本に余分余白あり",
+    run: () => runPositionAdjust("mode2"),
+  },
+  {
+    mode: "mode3",
+    title: "重ね調整",
+    description: "見本にPSDを重ねて手動調整",
+    run: () => runOverlayAlign(),
+  },
+];
+
+function ensurePositionAdjustDialog() {
+  let modal = $("ai-adjust-choice-modal");
+  if (modal) return modal;
+  modal = document.createElement("div");
+  modal.id = "ai-adjust-choice-modal";
+  modal.className = "ai-adjust-choice-modal";
+  modal.hidden = true;
+  modal.innerHTML = `
+    <div class="ai-adjust-choice-backdrop" data-close="1"></div>
+    <div class="ai-adjust-choice-card" role="dialog" aria-modal="true" aria-labelledby="ai-adjust-choice-title">
+      <div class="ai-adjust-choice-header">
+        <span class="ai-adjust-choice-title" id="ai-adjust-choice-title">位置調整を選択</span>
+        <button class="ai-adjust-choice-close" type="button" data-close="1" aria-label="閉じる">×</button>
+      </div>
+      <div class="ai-adjust-choice-list">
+        ${POSITION_ADJUST_OPTIONS.map((option) => `
+          <button class="ai-adjust-choice-option" type="button" data-mode="${option.mode}">
+            <span class="ai-adjust-choice-option-title">${option.title}</span>
+            <span class="ai-adjust-choice-option-desc">${option.description}</span>
+          </button>
+        `).join("")}
+      </div>
+    </div>`;
+  modal.addEventListener("click", (e) => {
+    const close = e.target?.closest?.("[data-close]");
+    if (close) {
+      closePositionAdjustDialog();
+      return;
+    }
+    const btn = e.target?.closest?.(".ai-adjust-choice-option");
+    if (!btn) return;
+    const option = POSITION_ADJUST_OPTIONS.find((item) => item.mode === btn.dataset.mode);
+    closePositionAdjustDialog();
+    if (option) void option.run();
+  });
+  document.body.appendChild(modal);
+  return modal;
+}
+
+function openPositionAdjustDialog() {
+  const modal = ensurePositionAdjustDialog();
+  modal.hidden = false;
+  requestAnimationFrame(() => {
+    modal.classList.add("visible");
+    modal.querySelector(".ai-adjust-choice-option")?.focus();
+  });
+}
+
+function closePositionAdjustDialog() {
+  const modal = $("ai-adjust-choice-modal");
+  if (!modal) return;
+  modal.classList.remove("visible");
+  window.setTimeout(() => { modal.hidden = true; }, 120);
+}
+
 export function bindPositionAdjustButton() {
   const menuBtn = $("ai-adjust-menu-btn");
-  const btn1 = $("ai-adjust-btn");
-  const btn2 = $("ai-adjust2-btn");
-  const btn3 = $("ai-adjust3-btn");
-  const dropdown = menuBtn?.closest?.(".ai-adjust-dropdown");
-  if (!menuBtn && !btn1 && !btn2 && !btn3) return;
-  if (btn1) btn1.addEventListener("click", () => { void runPositionAdjust("mode1"); });
-  if (btn2) btn2.addEventListener("click", () => { void runPositionAdjust("mode2"); });
-  if (btn3) btn3.addEventListener("click", () => { void runOverlayAlign(); });
-  if (dropdown && menuBtn) {
-    dropdown.addEventListener("mouseenter", () => {
-      if (!menuBtn.disabled) menuBtn.setAttribute("aria-expanded", "true");
-    });
-    dropdown.addEventListener("mouseleave", () => {
-      menuBtn.setAttribute("aria-expanded", "false");
-    });
-  }
+  if (!menuBtn) return;
+  menuBtn.addEventListener("click", () => {
+    if (!menuBtn.disabled) openPositionAdjustDialog();
+  });
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && !$("ai-adjust-choice-modal")?.hidden) {
+      e.preventDefault();
+      closePositionAdjustDialog();
+    }
+  });
   const sync = () => {
     const locked = isAiActionsLocked();
     const has = getNewLayers().some((l) => l && l.tempId);
@@ -1878,31 +2006,8 @@ export function bindPositionAdjustButton() {
     const titleWhenDisabled = locked
       ? "画像スキャンエンジンが未インストールです。"
       : "先に自動配置を実行してください";
-    if (menuBtn) {
-      menuBtn.disabled = disabled;
-      menuBtn.title = !disabled
-        ? "位置調整メニュー"
-        : titleWhenDisabled;
-      menuBtn.setAttribute("aria-expanded", !disabled ? menuBtn.getAttribute("aria-expanded") || "false" : "false");
-    }
-    if (btn1) {
-      btn1.disabled = disabled;
-      btn1.title = !disabled
-        ? "位置調整1: PSDに余分余白あり (確定式)"
-        : titleWhenDisabled;
-    }
-    if (btn2) {
-      btn2.disabled = disabled;
-      btn2.title = !disabled
-        ? "位置調整2: 見本に余分余白あり (画像差分 grid search)"
-        : titleWhenDisabled;
-    }
-    if (btn3) {
-      btn3.disabled = disabled;
-      btn3.title = !disabled
-        ? "重ね調整: 見本に PSD を半透明で重ねて手動調整"
-        : titleWhenDisabled;
-    }
+    menuBtn.disabled = disabled;
+    menuBtn.title = disabled ? titleWhenDisabled : "位置調整を選択";
   };
   sync();
   onAiOcrDocChange(sync);

@@ -9,6 +9,7 @@ import {
   checkConflict,
   formatShortcutDisplay,
   getAllShortcuts,
+  getArrowKeyMoveDistance,
   getDefaults,
   getPageDirectionInverted,
   normalizeKeyName,
@@ -16,6 +17,7 @@ import {
   resetDefaults,
   resetShortcuts,
   setDefault,
+  setArrowKeyMoveDistance,
   setPageDirectionInverted,
   setShortcut,
 } from "./settings.js";
@@ -97,6 +99,8 @@ function syncPageDirectionUi() {
     const wrap = inp.closest(".settings-radio-option");
     if (wrap) wrap.classList.toggle("selected", isOn);
   }
+  const moveInput = $("arrow-key-move-distance");
+  if (moveInput) moveInput.value = String(getArrowKeyMoveDistance());
 }
 
 // 「写植設定」タブのフィールドを schema として宣言。HTML 要素 ID / settings.js のキー /
@@ -145,7 +149,7 @@ const FORMATTERS = {
 
 const DEFAULT_SCHEMA = [
   { id: "default-text-size",            key: "textSize",                  type: "number",           applyTool: true },
-  { id: "default-text-size-step",       key: "textSizeStep",              type: "number",           allowedValues: [0.1, 0.5], applyTool: true },
+  { id: "default-text-size-step",       key: "textSizeStep",              type: "number",           allowedValues: [0.1, 0.25, 0.5], applyTool: true },
   { id: "default-leading-pct",          key: "leadingPct",                type: "number",           applyTool: true },
   // 【v1.29.0】ルビ適用時にその行の lineLeadings を自動上書きする %
   { id: "default-ruby-leading-pct",     key: "rubyLeadingPct",            type: "number",           applyTool: false },
@@ -345,6 +349,16 @@ export function initSettingsUi() {
   }
 
   // キーキャプチャモーダルのボタン群。
+  const arrowMoveInput = $("arrow-key-move-distance");
+  if (arrowMoveInput) {
+    const commitArrowMoveDistance = () => {
+      setArrowKeyMoveDistance(arrowMoveInput.value);
+      syncPageDirectionUi();
+    };
+    arrowMoveInput.addEventListener("change", commitArrowMoveDistance);
+    arrowMoveInput.addEventListener("blur", commitArrowMoveDistance);
+  }
+
   const cap = $("key-capture-modal");
   const capOk = $("key-capture-ok");
   const capCancel = $("key-capture-cancel");

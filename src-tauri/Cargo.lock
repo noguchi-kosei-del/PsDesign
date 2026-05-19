@@ -2609,6 +2609,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "04744f49eae99ab78e0d5c0b603ab218f515ea8cfe5a456d7629ad883a3b6e7d"
 
 [[package]]
+name = "opus"
+version = "1.30.9"
+dependencies = [
+ "base64 0.22.1",
+ "dirs 5.0.1",
+ "image",
+ "pdfium-render",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+ "tauri-plugin-dialog",
+ "tauri-plugin-fs",
+ "tauri-plugin-process",
+ "tauri-plugin-updater",
+ "thiserror 1.0.69",
+ "ttf-parser",
+ "winapi",
+ "winreg 0.52.0",
+]
+
+[[package]]
 name = "osakit"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3089,28 +3111,6 @@ checksum = "52717f9a02b6965224f95ca2a81e2e0c5c43baacd28ca057577988930b6c3d5b"
 dependencies = [
  "quote",
  "syn 2.0.117",
-]
-
-[[package]]
-name = "psdesign"
-version = "1.30.8"
-dependencies = [
- "base64 0.22.1",
- "dirs 5.0.1",
- "image",
- "pdfium-render",
- "serde",
- "serde_json",
- "tauri",
- "tauri-build",
- "tauri-plugin-dialog",
- "tauri-plugin-fs",
- "tauri-plugin-process",
- "tauri-plugin-updater",
- "thiserror 1.0.69",
- "ttf-parser",
- "winapi",
- "winreg 0.52.0",
 ]
 
 [[package]]

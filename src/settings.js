@@ -17,6 +17,7 @@ export const DEFAULT_SETTINGS = {
   version: 14,
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
   pageDirectionInverted: false,
+  arrowKeyMoveDistance: 1,
   // 新規テキストレイヤーの初期値 / レイアウト設定。
   //
   // 各キーに scope: タグを併記している。これは「設定変更時にどこへ反映されるか」を
@@ -155,12 +156,15 @@ function migrate(old) {
   if (typeof old.pageDirectionInverted === "boolean") {
     out.pageDirectionInverted = old.pageDirectionInverted;
   }
+  if (typeof old.arrowKeyMoveDistance === "number" && Number.isFinite(old.arrowKeyMoveDistance)) {
+    out.arrowKeyMoveDistance = Math.max(0.1, Math.min(100, Math.round(old.arrowKeyMoveDistance * 100) / 100));
+  }
   if (old.defaults && typeof old.defaults === "object") {
     const d = old.defaults;
     if (typeof d.textSize === "number" && Number.isFinite(d.textSize)) {
       out.defaults.textSize = d.textSize;
     }
-    if (typeof d.textSizeStep === "number" && (d.textSizeStep === 0.1 || d.textSizeStep === 0.5)) {
+    if (typeof d.textSizeStep === "number" && (d.textSizeStep === 0.1 || d.textSizeStep === 0.25 || d.textSizeStep === 0.5)) {
       out.defaults.textSizeStep = d.textSizeStep;
     }
     if (typeof d.leadingPct === "number" && Number.isFinite(d.leadingPct)) {
@@ -320,6 +324,22 @@ export function setPageDirectionInverted(v) {
   const next = !!v;
   if (settings.pageDirectionInverted === next) return;
   settings.pageDirectionInverted = next;
+  save();
+}
+
+export function getArrowKeyMoveDistance() {
+  if (!settings) load();
+  const n = Number(settings.arrowKeyMoveDistance);
+  return Number.isFinite(n) && n > 0 ? n : DEFAULT_SETTINGS.arrowKeyMoveDistance;
+}
+
+export function setArrowKeyMoveDistance(v) {
+  if (!settings) load();
+  const n = Number(v);
+  if (!Number.isFinite(n)) return;
+  const next = Math.max(0.1, Math.min(100, Math.round(n * 100) / 100));
+  if (settings.arrowKeyMoveDistance === next) return;
+  settings.arrowKeyMoveDistance = next;
   save();
 }
 

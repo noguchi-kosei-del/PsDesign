@@ -2,7 +2,7 @@
 chcp 65001 >nul
 cd /d "%~dp0"
 echo ============================================
-echo  PsDesign - Dev mode start
+echo  OPUS - Dev mode start
 echo ============================================
 call npm run tauri dev
 if errorlevel 1 (

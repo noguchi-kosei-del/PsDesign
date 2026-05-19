@@ -20,6 +20,17 @@ use tauri::{AppHandle, Emitter, Manager};
 
 const PDF_RENDER_DPI: f32 = 300.0;
 
+#[cfg(windows)]
+fn hide_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_cmd: &mut Command) {}
+
 // 進行中の install_ai_models プロセス (PowerShell.exe) の PID。
 // cancel_ai_install から taskkill /T /F でプロセスツリーごと殺すために保持。
 fn install_pid_holder() -> &'static Mutex<Option<u32>> {
@@ -32,7 +43,7 @@ fn user_runtime_dir(app: &AppHandle) -> Result<PathBuf, String> {
         .path()
         .local_data_dir()
         .map_err(|e| format!("local_data_dir取得失敗: {}", e))?;
-    Ok(base.join("PsDesign").join("ai-runtime"))
+    Ok(base.join("OPUS").join("ai-runtime"))
 }
 
 fn resolve_mokuro_exe(app: &AppHandle) -> Result<PathBuf, String> {
@@ -483,6 +494,7 @@ pub async fn run_ai_ocr(
     if force_cpu.unwrap_or(false) {
         cmd.arg("--force_cpu");
     }
+    hide_console_window(&mut cmd);
 
     let mut child = cmd
         .spawn()
@@ -873,6 +885,7 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
+    hide_console_window(&mut cmd);
 
     let mut child = cmd
         .spawn()

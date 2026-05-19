@@ -488,7 +488,7 @@ async function cancelInstall() {
 }
 
 // 画像スキャンエンジン (AI ランタイム + 重みキャッシュ) のアンインストール。
-//   - 削除対象: %LOCALAPPDATA%\PsDesign\ai-runtime\ + ~/.cache/huggingface/hub/models--kha-white--manga-ocr-base
+//   - 削除対象: %LOCALAPPDATA%\OPUS\ai-runtime\ + ~/.cache/huggingface/hub/models--kha-white--manga-ocr-base
 //   - 削除総量: 約 5〜5.5 GB
 // インストール処理中は呼ばない。confirmDialog (kind: danger) で明示確認、
 // 成功で notifyDialog (success) → ステータス再評価で UI を未インストール状態に戻す。
@@ -552,7 +552,7 @@ async function runUninstall() {
       title: "アンインストール失敗",
       message:
         String(error?.message ?? error ?? "不明なエラー") +
-        "\n\nファイルが使用中の場合は PsDesign を再起動してから再試行してください。",
+        "\n\nファイルが使用中の場合は OPUS を再起動してから再試行してください。",
     });
     return;
   }
@@ -573,7 +573,7 @@ async function runUninstall() {
       message:
         `${deletedCount} 件の項目を削除しましたが、以下は削除できませんでした:\n\n` +
         errorList.join("\n") +
-        "\n\nファイルが使用中の場合は PsDesign を再起動してから再試行してください。",
+        "\n\nファイルが使用中の場合は OPUS を再起動してから再試行してください。",
       kind: "warning",
     });
   } else {
