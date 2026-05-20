@@ -512,10 +512,7 @@ function renderFontBookSelectModal() {
       </div>
       <div class="font-book-browser-bar">
         <button class="font-book-browser-up" type="button" data-up="1" aria-label="上へ" title="上へ" ${isRoot ? "disabled" : ""}>
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M12 19V5"></path>
-            <path d="m5 12 7-7 7 7"></path>
-          </svg>
+          <span aria-hidden="true">↑</span>
         </button>
         <div class="font-book-browser-path" title="${escapeHtml(currentPath)}">${escapeHtml(currentPath.replace(FONT_BOOK_ROOT_PATH, "TOP"))}</div>
       </div>
@@ -715,6 +712,7 @@ function renderCategories(groups) {
   btn.disabled = false;
   btn.title = state.category ? `カテゴリ: ${state.category}` : "カテゴリ";
   btn.setAttribute("aria-label", btn.title);
+  root.hidden = false;
   root.innerHTML = [
     `<button class="font-book-category-item ${state.category ? "" : "active"}" type="button" data-category="">すべて</button>`,
     ...cats.map((cat) =>
@@ -724,7 +722,8 @@ function renderCategories(groups) {
   for (const item of root.querySelectorAll(".font-book-category-item")) {
     item.addEventListener("click", () => {
       state.category = item.dataset.category || "";
-      root.hidden = true;
+      const menu = $("font-book-category-menu");
+      if (menu) menu.hidden = true;
       btn.setAttribute("aria-expanded", "false");
       renderFontBook();
     });

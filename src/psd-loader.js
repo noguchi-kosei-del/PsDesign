@@ -124,6 +124,32 @@ function effectiveFontSize(rawFontSize, transform) {
   return rawFontSize * scale;
 }
 
+function extractStyleRunFonts(textData, baseFont) {
+  const text = textData?.text ?? "";
+  const runs = Array.isArray(textData?.styleRuns) ? textData.styleRuns : [];
+  const charFonts = {};
+  const usedFonts = [];
+  const addUsed = (font) => {
+    if (!font || usedFonts.includes(font)) return;
+    usedFonts.push(font);
+  };
+  addUsed(baseFont);
+
+  let pos = 0;
+  for (const run of runs) {
+    const len = Math.max(0, Math.floor(Number(run?.length) || 0));
+    const font = run?.style?.font?.name || baseFont || "";
+    if (font) addUsed(font);
+    const end = Math.min(text.length, pos + len);
+    if (font && font !== baseFont) {
+      for (let i = pos; i < end; i++) charFonts[i] = font;
+    }
+    pos += len;
+    if (pos >= text.length) break;
+  }
+  return { charFonts, usedFonts };
+}
+
 // 【v1.26.0 移植 (PsDesign-main v1.24.0)】非表示判定を統一する。
 // ag-psd のバージョンによっては `hidden` ではなく `visible: false` のみセットされる
 // ケースがあるため両方確認する。collectTextLayers / collectHiddenLayersForMasking /
@@ -146,11 +172,15 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
       const orientation = layer.text.orientation;
       const { strokeColor, strokeWidthPx } = extractStroke(layer);
       const fillColor = extractFillColor(layer);
+      const baseFont = style.font?.name ?? "";
+      const { charFonts, usedFonts } = extractStyleRunFonts(layer.text, baseFont);
       out.push({
         id: layer.id,
         name: layer.name ?? "",
         text: layer.text.text ?? "",
-        font: style.font?.name ?? "",
+        font: baseFont,
+        charFonts,
+        usedFonts,
         fontSize: effectiveFontSize(style.fontSize, layer.text.transform),
         left: layer.left ?? 0,
         top: layer.top ?? 0,

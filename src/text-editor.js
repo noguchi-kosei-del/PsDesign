@@ -4,6 +4,7 @@ import {
   getCurrentPageIndex,
   getEdit,
   getFillColor,
+  getFontDisplayName,
   getFonts,
   getNewLayersForPsd,
   getPages,
@@ -57,6 +58,7 @@ const fontEl = () => document.getElementById("edit-font");
 const fontComboboxEl = () => document.getElementById("edit-font-combobox");
 const fontToggleEl = () => document.getElementById("edit-font-toggle");
 const fontListEl = () => document.getElementById("edit-font-list");
+const fontUsageSummaryEl = () => document.getElementById("font-usage-summary");
 const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
@@ -80,6 +82,62 @@ function syncFillToggle(color) {
   const b = fillBlackBtnEl();
   if (w) w.classList.toggle("active", color === "white");
   if (b) b.classList.toggle("active", color === "black");
+}
+
+function displayFontName(psName) {
+  return getFontDisplayName(psName) ?? psName ?? "";
+}
+
+function layerDefaultFont(ref) {
+  if (!ref) return null;
+  return ref.kind === "existing"
+    ? (getEdit(ref.page.path, ref.layer.id)?.fontPostScriptName ?? ref.layer.font ?? null)
+    : (ref.newLayer.fontPostScriptName ?? null);
+}
+
+function charFontAt(ref, index) {
+  if (!ref || !Number.isInteger(index)) return layerDefaultFont(ref);
+  if (ref.kind === "existing") {
+    const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+    return edit.charFonts?.[index] ?? ref.layer.charFonts?.[index] ?? layerDefaultFont(ref);
+  }
+  return ref.newLayer.charFonts?.[index] ?? layerDefaultFont(ref);
+}
+
+function collectFontsForRange(ref, start, end) {
+  const fonts = [];
+  const seen = new Set();
+  const add = (ps) => {
+    if (!ps || seen.has(ps)) return;
+    seen.add(ps);
+    fonts.push(ps);
+  };
+  const text = ref?.kind === "existing"
+    ? (getEdit(ref.page.path, ref.layer.id)?.contents ?? ref.layer.text ?? "")
+    : (ref?.newLayer?.contents ?? "");
+  const len = text.length;
+  const from = Math.max(0, Math.min(len, Number.isInteger(start) ? start : 0));
+  const to = Math.max(from, Math.min(len, Number.isInteger(end) ? end : len));
+  if (to === from) {
+    add(charFontAt(ref, Math.max(0, Math.min(len - 1, from))));
+  } else {
+    for (let i = from; i < to; i++) add(charFontAt(ref, i));
+  }
+  return fonts;
+}
+
+function updateFontUsageSummary(fonts, label = "使用フォント") {
+  const el = fontUsageSummaryEl();
+  if (!el) return;
+  const values = (fonts ?? []).filter(Boolean);
+  if (!values.length) {
+    el.hidden = true;
+    el.innerHTML = "";
+    return;
+  }
+  el.hidden = false;
+  el.innerHTML = `<span class="font-usage-label">${escapeHtml(label)}:</span>`
+    + values.map((ps) => `<span class="font-usage-chip" title="${escapeHtml(ps)}">${escapeHtml(displayFontName(ps))}</span>`).join("");
 }
 
 // widthPx === null は混在。input を空にして placeholder で示す。
@@ -355,6 +413,7 @@ function populateEditor() {
     syncFillToggle(getFillColor());
     // 【v1.22.0】B トグルは選択 0 件で disabled。
     syncBoldToggle(undefined);
+    updateFontUsageSummary([]);
     return;
   }
 
@@ -374,18 +433,22 @@ function populateEditor() {
         // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
         effectiveLeading = edit.leadingPct ?? 125;
         rebuildFontOptions(effectiveFont);
+        updateFontUsageSummary(collectFontsForRange(resolved, 0, (edit.contents ?? layer.text ?? "").length));
       } else {
         const { newLayer } = resolved;
         effectiveSize = newLayer.sizePt ?? null;
         effectiveFont = newLayer.fontPostScriptName ?? null;
         effectiveLeading = newLayer.leadingPct ?? 125;
         rebuildFontOptions(effectiveFont ?? "");
+        updateFontUsageSummary(collectFontsForRange(resolved, 0, (newLayer.contents ?? "").length));
       }
 
       if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
       if (effectiveFont) setCurrentFont(effectiveFont);
       if (Number.isFinite(effectiveLeading)) setLeadingPct(effectiveLeading);
     }
+  } else {
+    updateFontUsageSummary([]);
   }
 
   // フチ/文字色は単独/複数いずれでも共通値を表示。
@@ -591,6 +654,7 @@ function commitFont(font) {
     if (fam) applyEditModeStyleToRange(sel.start, sel.end, { fontFamily: fam });
     refreshAllOverlays();
     rebuildLayerList();
+    rebuildFontOptions(font.postScriptName);
   } else {
     setCurrentFont(font.postScriptName);
     setFontPickerStuck(true);
@@ -870,20 +934,39 @@ export function bindEditorEvents() {
     onFontsRegistered(() => {
       if (getSelectedLayers().length === 0) syncFontInputFromState();
     });
+    window.addEventListener("psdesign:fonts-loaded", () => {
+      if (getSelectedLayers().length === 0) syncFontInputFromState();
+      else rebuildFontOptions(fontEl()?.dataset.ps || "");
+    });
     // 【v1.16.0】per-char フォント編集の UI 連動 — 選択範囲のキャッシュ変化に追従。
     // in-place 編集の選択範囲変化（module-level キャッシュ）に追従してフォント入力欄を更新。
     // 加えて、editor 上部に「選択: N 文字」のインジケータを出してユーザーに現状を伝える。
     setupCharSelectionIndicator();
     onInplaceSelectionChange((sel) => {
       updateCharSelectionIndicator(sel);
-      if (!sel) return;
+      if (!sel) {
+        populateEditor();
+        return;
+      }
       const targetId = sel.tempId ?? sel.layerId;
-      const ps = getCharFont(sel.psdPath, targetId, sel.start);
-      if (ps) {
+      const pageIndex = getPages().findIndex((p) => p.path === sel.psdPath);
+      const ref = pageIndex >= 0 ? resolveLayerRef({ pageIndex, layerId: targetId }) : null;
+      const fonts = ref ? collectFontsForRange(ref, sel.start, sel.end) : [];
+      updateFontUsageSummary(fonts, "選択範囲");
+      if (fonts.length === 1) {
+        rebuildFontOptions(fonts[0]);
+      } else if (fonts.length > 1) {
+        const inputEl = fontEl();
+        if (inputEl && document.activeElement !== inputEl) {
+          inputEl.value = "複数フォント";
+          inputEl.dataset.ps = "";
+        }
+        rebuildWeightSelector();
+      } else {
+        const ps = getCharFont(sel.psdPath, targetId, sel.start);
         // override がある → そのフォントを表示
         rebuildFontOptions(ps);
       }
-      // override が無いケースは現状の表示（layer.font）を維持
     });
   }
 
@@ -1157,7 +1240,7 @@ export function commitSizeToSelections(sizePt) {
 
 export function unifySelectedTextSize(sizePt) {
   const selections = getSelectedLayers();
-  if (selections.length < 2) return false;
+  if (selections.length < 1) return false;
   const targetSize = Math.round(Number(sizePt) * 100) / 100;
   if (!Number.isFinite(targetSize)) return false;
   setTextSize(targetSize);

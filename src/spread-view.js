@@ -22,6 +22,7 @@ let zoomSubscribed = false;
 let rotationSubscribed = false;
 
 const MAX_CANVAS_SIDE = 16384;
+const PSD_FIT_BASE_SCALE = 1.1;
 
 // ズーム変更時、ビューポート中心にあったキャンバス上のポイントを再描画後も
 // ビューポート中心に保つため、redraw 前にキャプチャしておく。
@@ -151,8 +152,8 @@ function buildPage(page, pageIndex, root) {
     }
 
     const zoom = getPsdZoom();
-    visualW *= zoom;
-    visualH *= zoom;
+    visualW *= PSD_FIT_BASE_SCALE * zoom;
+    visualH *= PSD_FIT_BASE_SCALE * zoom;
 
     // canvas 自体の CSS サイズ（= 回転前の寸法）
     const cssW = rotated90 ? visualH : visualW;

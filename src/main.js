@@ -1,18 +1,21 @@
-import { countReferencePages, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
+import { buildReferencePageCards, countReferencePages, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
+import { getVersion } from "@tauri-apps/api/app";
+import packageInfo from "../package.json";
 import { mountPdfView } from "./pdf-view.js";
 import {
   cycleLayerSelection,
   deleteSelectedLayers,
+  commitActiveInPlaceEdit,
   nudgeSelectedLayers,
   refreshAllOverlays,
   snapNextSize,
-  // 【v1.16.0】in-place 編集 textarea 上の文字選択キャッシュ
+  // 【v1.16.0】in-place 編雁Etextarea 上�E斁E��選択キャチE��ュ
   getLastInplaceSelection,
   onInplaceSelectionChange,
-  // 【v1.21.0】per-char サイズ・フォント変更時の編集中 DOM リアルタイム反映
+  // 【v1.21.0】per-char サイズ・フォント変更時�E編雁E�� DOM リアルタイム反映
   applyEditModeStyleToRange,
   restoreInplaceSelection,
-  // 【v1.26.0】ルビ予定インジケータの編集中 DOM 反映
+  // 【v1.26.0】ルビ予定インジケータの編雁E�� DOM 反映
   applyEditModeRubyToRange,
   getExistingLayerEffectiveSizePt,
 } from "./canvas-tools.js";
@@ -155,9 +158,9 @@ import {
   getLineLeading,
   // 【v1.16.0】per-char サイズ
   setCharSizesRange,
-  // 【v1.22.0】per-char 合成太字
+  // 【v1.22.0】per-char 合�E太孁E
   setCharBoldsRange,
-  // 【v1.26.0】per-char ルビ
+  // 【v1.26.0】per-char ルチE
   setCharRubiesRange,
   getCharRubyAt,
   rangeHasAnyRuby,
@@ -176,6 +179,8 @@ import {
 } from "./pdf-pages.js";
 
 let homeTypesetDropHandler = null;
+let homeTypesetDragOverHandler = null;
+let homeTypesetDragLeaveHandler = null;
 
 async function handleOpenPdf() {
   const paths = await pickReferenceFiles();
@@ -184,8 +189,8 @@ async function handleOpenPdf() {
 }
 
 function bindPdfWorkspaceToggle() {
-  // PDF エリアは常時表示（未読込時は empty state を見せる）。
-  // 回転ボタンも常時表示し、doc 未読込時は disabled でグレーアウト。
+  // PDF エリアは常時表示�E�未読込時�E empty state を見せる）、E
+  // 回転ボタンも常時表示し、doc 未読込時�E disabled でグレーアウト、E
   const rotateBtn = document.getElementById("pdf-rotate-btn");
   const apply = (doc) => {
     if (rotateBtn) rotateBtn.disabled = !doc;
@@ -225,18 +230,18 @@ function bindPsdGuidesLock() {
     btn.title = locked ? "ガイドのロック解除" : "ガイドをロック";
     btn.setAttribute("aria-label", btn.title);
   };
-  // PSD 未読込 or ガイドが 1 本も無い場合は disabled でグレーアウト。
-  // 表示/非表示はルーラー ON/OFF のみで制御（読込前でもバー上にボタンは出す）。
+  // PSD 未読込 or ガイドが 1 本も無ぁE��合�E disabled でグレーアウト、E
+  // 表示/非表示はルーラー ON/OFF のみで制御�E�読込前でもバー上にボタンは出す）、E
   const syncDisabled = () => {
     btn.disabled = getPages().length === 0 || !hasAnyGuide();
   };
   btn.addEventListener("click", () => toggleGuidesLocked());
   onGuidesLockedChange(syncPressed);
   onGuidesChange(syncDisabled);
-  onPageIndexChange(syncDisabled); // ページ切替で対象 PSD のガイド有無が変わる
+  onPageIndexChange(syncDisabled); // ペ�Eジ刁E��で対象 PSD のガイド有無が変わめE
   syncPressed();
   syncDisabled();
-  // ルーラー OFF のときだけ完全非表示（機能トグル）。読込前は disabled で見せる。
+  // ルーラー OFF のときだけ完�E非表示�E�機�Eトグル�E�。読込前�E disabled で見せる、E
   const updateVis = () => {
     btn.hidden = !getRulersVisible();
   };
@@ -244,7 +249,7 @@ function bindPsdGuidesLock() {
   updateVis();
 }
 
-// ガイドロックボタンの「ファイル読込みあり」条件 + ガイド有無を、PSD ロード/クリア時に同期。
+// ガイドロチE��ボタンの「ファイル読込みあり」条件 + ガイド有無を、PSD ローチEクリア時に同期、E
 function updatePsdGuidesLockVisibility() {
   const btn = document.getElementById("psd-guides-lock-btn");
   if (!btn) return;
@@ -252,10 +257,10 @@ function updatePsdGuidesLockVisibility() {
   btn.disabled = getPages().length === 0 || !hasAnyGuide();
 }
 
-// 「ガイドを複数反映」ボタン: ロックボタンと同じく ルーラー ON + PSD 読込済 で可視。
-// ただし反映先が無いと意味が無いので PSD が 2 ページ以上必要。
-// また「現在のガイドが確定している」ことを示すためロック中でないと無効にする
-// （ロック前 = 編集中なので、まだ反映を取らない方が UX として安全）。
+// 「ガイドを褁E��反映」�Eタン: ロチE��ボタンと同じぁEルーラー ON + PSD 読込渁Eで可視、E
+// ただし反映先が無ぁE��意味が無ぁE�Eで PSD ぁE2 ペ�Eジ以上忁E��、E
+// また「現在のガイドが確定してぁE��」ことを示すためロチE��中でなぁE��無効にする
+// �E�ロチE��剁E= 編雁E��なので、まだ反映を取らなぁE��ぁEUX として安�E�E�、E
 function bindPsdGuidesApply() {
   const btn = document.getElementById("psd-guides-apply-btn");
   if (!btn) return;
@@ -270,9 +275,9 @@ function bindPsdGuidesApply() {
 function updatePsdGuidesApplyVisibility() {
   const btn = document.getElementById("psd-guides-apply-btn");
   if (!btn) return;
-  // ルーラー OFF のときだけ完全非表示（機能トグル）。読込前 / 1 ページしか無い場合は disabled で見せる。
+  // ルーラー OFF のときだけ完�E非表示�E�機�Eトグル�E�。読込剁E/ 1 ペ�Eジしか無ぁE��合�E disabled で見せる、E
   btn.hidden = !getRulersVisible();
-  // 有効条件: PSD 2 ページ以上 + 現ページにガイドあり + ガイドロック中。
+  // 有効条件: PSD 2 ペ�Eジ以丁E+ 現ペ�EジにガイドあめE+ ガイドロチE��中、E
   const pageCount = getPages().length;
   const tooFewPages = pageCount < 2;
   const noGuides = !hasAnyGuide();
@@ -306,9 +311,9 @@ function openGuidesApplyModal() {
   for (let i = 0; i < pages.length; i++) {
     const page = pages[i];
     const isCurrent = i === currentIdx;
-    // 反映済み: 現ページとガイドが完全一致。
-    // ガイドあり: 何らかのガイドを持つが現ページと一致しない。
-    // 解除を後から行えるよう、現ページ以外は全て選択可能にする（disabled は外す）。
+    // 反映済み: 現ペ�Eジとガイドが完�E一致、E
+    // ガイドあめE 何らか�Eガイドを持つが現ペ�Eジと一致しなぁE��E
+    // 解除を後から行えるよぁE��現ペ�Eジ以外�E全て選択可能にする�E�Eisabled は外す�E�、E
     const alreadyApplied = !isCurrent && guidesMatchCurrent(page?.path);
     const otherHasGuides = !isCurrent && !alreadyApplied && hasAnyGuide(page?.path);
     const label = document.createElement("label");
@@ -319,8 +324,8 @@ function openGuidesApplyModal() {
     cb.type = "checkbox";
     cb.dataset.index = String(i);
     cb.dataset.hasGuides = (alreadyApplied || otherHasGuides) ? "1" : "0";
-    // 現ページもチェック可能にしておく（全選択に含めるため）。
-    // 実際の反映 / 解除は rulers.js 側で path === srcPath を弾くので二重防止。
+    // 現ペ�EジもチェチE��可能にしておく�E��E選択に含めるため�E�、E
+    // 実際の反映 / 解除は rulers.js 側で path === srcPath を弾く�Eで二重防止、E
     const span = document.createElement("span");
     span.className = "guides-apply-item-name";
     const m = (page?.path ?? "").match(/[\\/]([^\\/]+)$/);
@@ -364,9 +369,9 @@ function openGuidesApplyModal() {
     if (count > 0) toast(`${count} ページにガイドを反映しました`, { kind: "success" });
   };
   const onUnapply = () => {
-    // 解除はガイドを持つページのみ意味がある。
-    // ガイドのないページが混ざっていても rulers 側で no-op になるが、
-    // ユーザーには「N ページのガイドを解除しました」と実際に解除した数だけ通知する。
+    // 解除はガイドを持つペ�Eジのみ意味がある、E
+    // ガイド�EなぁE�Eージが混ざってぁE��めErulers 側で no-op になるが、E
+    // ユーザーには「N ペ�Eジのガイドを解除しました」と実際に解除した数だけ通知する、E
     const targetPaths = collectSelectedPaths((cb) => cb.dataset.hasGuides === "1");
     cleanup();
     if (targetPaths.length === 0) return;
@@ -398,16 +403,16 @@ async function loadFontsFromBackend() {
     setFonts(fonts);
     window.dispatchEvent(new CustomEvent("psdesign:fonts-loaded"));
   } catch (e) {
-    console.warn("フォント一覧の取得に失敗:", e);
+    console.warn("フォント一覧の取得に失敁E", e);
   }
 }
 
 let panPreviousTool = null;
 let panSpaceActive = false;
 
-// 環境設定経由でカスタマイズされたショートカット ID を実際のアクションに dispatch。
-// pagePrev / pageNext / pageFirst / pageLast はページ送り反転設定 (settings.js) に従って
-// 進行方向を入替える。＋/− ボタン・サイドバーボタンは反転対象外（物理矢印キーのみ反転）。
+// 環墁E��定経由でカスタマイズされたショートカチE�� ID を実際のアクションに dispatch、E
+// pagePrev / pageNext / pageFirst / pageLast はペ�Eジ送り反転設宁E(settings.js) に従って
+// 進行方向を入替える。！E∁Eボタン・サイドバーボタンは反転対象外（物琁E��印キーのみ反転�E�、E
 function runShortcut(id) {
   const inv = getPageDirectionInverted();
   switch (id) {
@@ -429,8 +434,8 @@ function runShortcut(id) {
   }
 }
 
-// 入力欄 (INPUT/TEXTAREA/contenteditable) 内では発火させたくないショートカット判定。
-// 規則：修飾キーなし or 矢印キー使用 → 入力欄では無効。Ctrl+S 等は入力欄でも有効を維持。
+// 入力欁E(INPUT/TEXTAREA/contenteditable) 冁E��は発火させたくなぁE��ョートカチE��判定、E
+// 規則�E�修飾キーなぁEor 矢印キー使用 ↁE入力欁E��は無効、Etrl+S 等�E入力欁E��も有効を維持、E
 function isShortcutBlockedInInput(id, target) {
   if (!target) return false;
   const isInput = target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable;
@@ -448,9 +453,9 @@ function isPageNavShortcut(id) {
   return id === "pagePrev" || id === "pageNext" || id === "pageFirst" || id === "pageLast";
 }
 
-// Undo / Redo / 全削除 ボタン群を配線。
-// 状態（disabled）は onHistoryChange / onPdfChange... ではなく state.history の
-// 変動と pages 切替に追従させたいので、updateHistoryButtons を共通呼び出しにする。
+// Undo / Redo / 全削除 ボタン群を�E線、E
+// 状態！Eisabled�E��E onHistoryChange / onPdfChange... ではなぁEstate.history の
+// 変動と pages 刁E��に追従させたぁE�Eで、updateHistoryButtons を�E通呼び出しにする、E
 function updateHistoryButtons() {
   const undoBtn = document.getElementById("undo-btn");
   const redoBtn = document.getElementById("redo-btn");
@@ -480,7 +485,7 @@ function bindHistoryButtons() {
   if (undoBtn) undoBtn.addEventListener("click", () => { if (undo()) syncAfterHistoryChange(); });
   if (redoBtn) redoBtn.addEventListener("click", () => { if (redo()) syncAfterHistoryChange(); });
   if (clearBtn) clearBtn.addEventListener("click", () => { handleClearAllEdits(); });
-  // 履歴の変更（push / undo / redo / baseline reset）に追従して disabled と再描画を更新。
+  // 履歴の変更�E�Eush / undo / redo / baseline reset�E�に追従して disabled と再描画を更新、E
   onHistoryChange(() => {
     updateHistoryButtons();
     refreshAllOverlays();
@@ -489,8 +494,8 @@ function bindHistoryButtons() {
   updateHistoryButtons();
 }
 
-// undo / redo は state を書換えるだけなので、UI は onHistoryChange listener が受ける。
-// ここでは listener を介さない経路向けに用意（現状未使用、将来のため安全側）。
+// undo / redo は state を書換えるだけなので、UI は onHistoryChange listener が受ける、E
+// ここでは listener を介さなぁE��路向けに用意（現状未使用、封E��のため安�E側�E�、E
 function syncAfterHistoryChange() {
   refreshAllOverlays();
   rebuildLayerList();
@@ -503,7 +508,7 @@ function bindTools() {
     btn.addEventListener("click", () => setTool(btn.dataset.tool));
   }
   const applyActive = () => {
-    // Space 長押しで一時的に pan 化しているときは、直前ツールを選択中として表示し続ける
+    // Space 長押しで一時的に pan 化してぁE��とき�E、直前ツールを選択中として表示し続けめE
     const current = panSpaceActive && panPreviousTool ? panPreviousTool : getTool();
     for (const btn of buttons) {
       btn.classList.toggle("active", btn.dataset.tool === current);
@@ -518,8 +523,8 @@ function bindTools() {
   });
   applyActive();
 
-  // 現在ページの全テキストフレーム (既存レイヤー + 新規レイヤー) を選択する。
-  // Ctrl+A 経由で呼ばれる。PSD 未読込時は no-op。
+  // 現在ペ�Eジの全チE��ストフレーム (既存レイヤー + 新規レイヤー) を選択する、E
+  // Ctrl+A 経由で呼ばれる。PSD 未読込時�E no-op、E
   const selectAllTextFramesOnCurrentPage = () => {
     const pages = getPages();
     if (pages.length === 0) return;
@@ -538,8 +543,8 @@ function bindTools() {
     refreshAllOverlays();
   };
 
-  // サイドツールバーの「全選択」ボタン (パンツールとレイヤーボタンの間)。
-  // Ctrl+A と同じく現在ページの全テキストフレーム (既存 + 新規) を選択する。
+  // サイドツールバ�Eの「�E選択」�Eタン (パンチE�Eルとレイヤーボタンの閁E、E
+  // Ctrl+A と同じく現在ペ�Eジの全チE��ストフレーム (既孁E+ 新要E を選択する、E
   const selectAllBtn = document.getElementById("select-all-btn");
   if (selectAllBtn) {
     selectAllBtn.addEventListener("click", (e) => {
@@ -552,16 +557,20 @@ function bindTools() {
   if (unifyTextSizeBtn) {
     unifyTextSizeBtn.addEventListener("click", (e) => {
       e.preventDefault();
+      if (!hasSelection()) {
+        toast("サイズを統一するテキストを選択してください", { kind: "info", duration: 2400 });
+        return;
+      }
       const defaultSize = Number(getDefault("textSize"));
       const changed = unifySelectedTextSize(defaultSize);
-      if (!changed) {
+      if (!changed && !hasSelection()) {
         toast("サイズを統一するテキストを2つ以上選択してください", { kind: "info", duration: 2400 });
       }
     });
   }
 
-  // Alt 単独押下/離上で Windows のシステムメニューが活性化し、次の Space で開いてしまう
-  // 事故を防ぐ。Alt+wheel でズームした直後に Space を押すと左上にメニューが出る現象の対策。
+  // Alt 単独押丁E離上で Windows のシスチE��メニューが活性化し、次の Space で開いてしまぁE
+  // 事故を防ぐ、Elt+wheel でズームした直後に Space を押すと左上にメニューが�Eる現象の対策、E
   const suppressAltMenuActivation = (e) => {
     if (e.key === "Alt" || e.code === "AltLeft" || e.code === "AltRight") {
       e.preventDefault();
@@ -571,7 +580,7 @@ function bindTools() {
   window.addEventListener("keyup", suppressAltMenuActivation);
 
   window.addEventListener("keydown", (e) => {
-    // Space は環境設定対象外（パン一時切替の特殊挙動を保つ）。
+    // Space は環墁E��定対象外（パン一時�E替の特殊挙動を保つ�E�、E
     if (e.code === "Space") {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -593,17 +602,17 @@ function bindTools() {
       return;
     }
 
-    // 矢印キー (V ツール):
-    //   - Alt+↑/↓ : 原稿テキスト (txt-source-viewer) の選択ブロックを順送り / 逆送り
-    //   - レイヤー選択あり: 全 4 方向で位置をナッジ (1px / Shift で 10px)
-    //   - レイヤー選択なし + ↑/↓: 現ページ内のレイヤー選択を順送り / 逆送り (cycleLayerSelection)
-    //   - レイヤー選択なし + ←/→: 下のショートカット dispatch に流して pagePrev/pageNext (ページ移動)
+    // 矢印キー:
+    //   - Alt+ↁEↁE: 原稿チE��スチE(txt-source-viewer) の選択ブロチE��を頁E��り / 送E��り
+    //   - チE��スト�EチE��ス選択あめE 全 4 方向で位置をナチE�� (設定値 / Shift で 10倁E
+    //   - レイヤー選択なぁE+ ↁEↁE 現ペ�Eジ冁E�Eレイヤー選択を頁E��り / 送E��り (cycleLayerSelection)
+    //   - レイヤー選択なぁE+ ↁEↁE 下�EショートカチE�� dispatch に流して pagePrev/pageNext (ペ�Eジ移勁E
     const isArrowKey =
       e.key === "ArrowLeft" || e.key === "ArrowRight" ||
       e.key === "ArrowUp" || e.key === "ArrowDown";
 
-    // Alt+↑/↓ で原稿テキストブロック選択を切替 (V ツール限定 + 入力欄外)。
-    // Alt+←/→ は無効 (将来何かにバインドする可能性のため未使用にしておく)。
+    // Alt+ↁEↁEで原稿チE��ストブロチE��選択を刁E�� (V チE�Eル限宁E+ 入力欁E��E、E
+    // Alt+ↁEↁEは無効 (封E��何かにバインドする可能性のため未使用にしておく)、E
     if (isArrowKey && e.altKey && !e.ctrlKey && !e.metaKey) {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
@@ -618,10 +627,9 @@ function bindTools() {
     if (isArrowKey && !e.ctrlKey && !e.metaKey && !e.altKey) {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
-      if (!isInput && getTool() === "move") {
+      if (!isInput) {
         const hasSel = getSelectedLayers().length > 0;
         if (hasSel) {
-          // 選択あり: 位置ナッジ (Shift で 10px)
           const baseMove = getArrowKeyMoveDistance();
           const step = e.shiftKey ? baseMove * 10 : baseMove;
           let dx = 0, dy = 0;
@@ -633,20 +641,20 @@ function bindTools() {
             e.preventDefault();
             return;
           }
-        } else if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-          // 選択なし + ↑/↓: レイヤー選択サイクル (先頭 / 末尾を選ぶ)
+        } else if (getTool() === "move" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+          // 選択なぁE+ ↁEↁE レイヤー選択サイクル (先頭 / 末尾を選ぶ)
           const delta = e.key === "ArrowDown" ? +1 : -1;
           cycleLayerSelection(delta);
           e.preventDefault();
           return;
         }
-        // 選択なし + ←/→: nudge せず page nav (pagePrev/pageNext) へ素通し。
+        // 選択なぁE+ ↁEↁE nudge せず page nav (pagePrev/pageNext) へ素通し、E
       }
     }
 
-    // Delete / Backspace で選択中のものを削除（修飾キーなし）。
-    // 入力欄やテキスト編集中（floater の textarea）には介入しない。
-    // 優先順: 原稿テキストブロック → 追加テキストフレーム
+    // Delete / Backspace で選択中のも�Eを削除�E�修飾キーなし）、E
+    // 入力欁E��チE��スト編雁E���E�Eloater の textarea�E�には介�EしなぁE��E
+    // 優先頁E 原稿チE��ストブロチE�� ↁE追加チE��ストフレーム
     if (
       (e.key === "Delete" || e.key === "Backspace") &&
       !e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey
@@ -666,18 +674,18 @@ function bindTools() {
       }
     }
 
-    // 履歴系（Ctrl+Z / Ctrl+Y / Ctrl+Shift+Z / Ctrl+Delete）。
-    // 環境設定対象外（破壊的でないため固定キー、入力欄でも有効）。
+    // 履歴系�E�Etrl+Z / Ctrl+Y / Ctrl+Shift+Z / Ctrl+Delete�E�、E
+    // 環墁E��定対象外（破壊的でなぁE��め固定キー、�E力欁E��も有効�E�、E
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const k = e.key.toLowerCase();
       if (k === "z" && !e.shiftKey) {
         e.preventDefault();
-        if (undo()) { /* listener が UI を更新 */ }
+        if (undo()) { /* listener ぁEUI を更新 */ }
         return;
       }
       if (k === "y" || (k === "z" && e.shiftKey)) {
         e.preventDefault();
-        if (redo()) { /* listener が UI を更新 */ }
+        if (redo()) { /* listener ぁEUI を更新 */ }
         return;
       }
       if (e.key === "Delete" || e.code === "Delete") {
@@ -685,9 +693,9 @@ function bindTools() {
         handleClearAllEdits();
         return;
       }
-      // Ctrl+A: 入力欄/contenteditable 内では通常の「フィールド内テキスト全選択」を
-      // 維持。それ以外では現在ページの全テキストフレーム (既存 + 新規) を選択する。
-      // ブラウザ既定の「ページ全体テキスト選択」は preventDefault で抑止。
+      // Ctrl+A: 入力欁Econtenteditable 冁E��は通常の「フィールド�EチE��スト�E選択」を
+      // 維持。それ以外では現在ペ�Eジの全チE��ストフレーム (既孁E+ 新要E を選択する、E
+      // ブラウザ既定�E「�Eージ全体テキスト選択」�E preventDefault で抑止、E
       if (k === "a" && !e.shiftKey) {
         const t = e.target;
         const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
@@ -699,11 +707,11 @@ function bindTools() {
       }
     }
 
-    // 環境設定でカスタマイズ可能なショートカットの dispatch。
+    // 環墁E��定でカスタマイズ可能なショートカチE��の dispatch、E
     const id = findShortcutMatch(e);
     if (!id) return;
     if (isShortcutBlockedInInput(id, e.target)) return;
-    // ページ移動系のみ auto-repeat スロットル（80ms ≒ 12Hz、OS auto-repeat の 30Hz 由来の暴走を抑制）。
+    // ペ�Eジ移動系のみ auto-repeat スロチE��ル�E�E0ms ≁E12Hz、OS auto-repeat の 30Hz 由来の暴走を抑制�E�、E
     if (e.repeat && isPageNavShortcut(id) && !canAdvancePageNow()) return;
     e.preventDefault();
     runShortcut(id, e);
@@ -730,15 +738,16 @@ function bindTools() {
   });
 }
 
-// ページ変更時の重い再描画 (renderAllSpreads は DOM を全壊して再構築する) を rAF で
-// 合流させる。連打や ←/→ の OS auto-repeat で 1 フレーム内に複数のページ index 変更が
-// 来ても、最終 index に対して 1 回だけ rebuild する。ラベル更新 (updatePageNav) は
-// 軽いので毎回実行して即時反映させる。
+// ペ�Eジ変更時�E重い再描画 (renderAllSpreads は DOM を�E壊して再構築すめE めErAF で
+// 合流させる。連打や ↁEↁEの OS auto-repeat で 1 フレーム冁E��褁E��のペ�Eジ index 変更ぁE
+// 来ても、最絁Eindex に対して 1 回だぁErebuild する。ラベル更新 (updatePageNav) は
+// 軽ぁE�Eで毎回実行して即時反映させる、E
 let pageChangeRaf = 0;
 function schedulePageRender() {
   if (pageChangeRaf) return;
   pageChangeRaf = requestAnimationFrame(() => {
     pageChangeRaf = 0;
+    commitActiveInPlaceEdit();
     renderAllSpreads();
     rebuildLayerList();
     updatePsdRotateVisibility();
@@ -758,8 +767,8 @@ function bindPageChange() {
   onPdfSkipFirstBlankChange(() => updatePageNav());
   onParallelSyncModeChange(() => updatePageNav());
   onActivePaneChange(() => updatePageNav());
-  // TXT 単体運用時は TXT のマーカー数がページ総数になるので、TXT の読込/クリアでも
-  // ナビ表示を更新する。さらに新 TXT のページ数が現在 index を下回ったら 0 にクランプ。
+  // TXT 単体運用時�E TXT のマ�Eカー数が�Eージ総数になる�Eで、TXT の読込/クリアでめE
+  // ナビ表示を更新する。さらに新 TXT のペ�Eジ数が現在 index を下回ったら 0 にクランプ、E
   onTxtSourceChange(() => {
     if (getPages().length === 0 && getPdfVirtualPageCount() === 0) {
       const total = getTxtPageCount();
@@ -769,8 +778,8 @@ function bindPageChange() {
   });
 }
 
-// サイドツールバー / サイドパネルの折り畳みトグル。localStorage に状態を保存して
-// 起動時に復元する（MojiQ Pro の同様 UI に倣う）。
+// サイドツールバ�E / サイドパネルの折り畳みトグル。localStorage に状態を保存して
+// 起動時に復允E��る！EojiQ Pro の同槁EUI に倣ぁE��、E
 const SIDE_TOOLBAR_COLLAPSED_KEY = "psdesign_side_toolbar_collapsed";
 const SIDE_PANEL_COLLAPSED_KEY = "psdesign_side_panel_collapsed";
 
@@ -814,8 +823,8 @@ function bindCollapseToggles() {
   );
 }
 
-// サイドパネル先頭の排他タブ（原稿テキスト / テキスト編集）。
-// active なタブの panel-section だけ表示し、他は hidden。状態は localStorage に保存。
+// サイドパネル先頭の排他タブ（原稿チE��スチE/ チE��スト編雁E��、E
+// active なタブ�E panel-section だけ表示し、他�E hidden。状態�E localStorage に保存、E
 const SIDE_PANEL_TAB_KEY = "psdesign_side_panel_tab";
 function loadSidePanelTab() {
   try {
@@ -881,11 +890,11 @@ function bindSidePanelTabs() {
   setSidePanelTab(loadSidePanelTab());
 }
 
-// レイヤードロワー：サイドツールバーの #layers-toggle-btn から横（左方向）スライドで開閉。
-// MojiQ の「指示ツール / 文字サイズ」ドロップダウンと同じシンプルパターン:
-// .open クラスのトグルだけで opacity / transform の transition を発火させる。
-// visibility / hidden 属性は使わず、display は常に flex 固定（CSS transition が
-// 両方向で確実に走るようにする）。永続化なし（毎セッション closed で起動）。
+// レイヤードロワー�E�サイドツールバ�Eの #layers-toggle-btn から横�E�左方向）スライドで開閉、E
+// MojiQ の「指示チE�Eル / 斁E��サイズ」ドロチE�Eダウンと同じシンプルパターン:
+// .open クラスのトグルだけで opacity / transform の transition を発火させる、E
+// visibility / hidden 属性は使わず、display は常に flex 固定！ESS transition ぁE
+// 両方向で確実に走るよぁE��する�E�。永続化なし（毎セチE��ョン closed で起動）、E
 function isLayersDrawerOpen() {
   return !!document.getElementById("layers-drawer")?.classList.contains("open");
 }
@@ -913,17 +922,17 @@ function bindLayersDrawer() {
   const btn = document.getElementById("layers-toggle-btn");
   if (btn) {
     btn.addEventListener("click", (e) => {
-      // ドキュメントレベルの outside-click ハンドラに伝播させない。
+      // ドキュメントレベルの outside-click ハンドラに伝播させなぁE��E
       e.stopPropagation();
       toggleLayersDrawer();
     });
   }
   const closeBtn = document.getElementById("layers-drawer-close-btn");
   if (closeBtn) closeBtn.addEventListener("click", closeLayersDrawer);
-  // 外側クリックで閉じる。
-  // ボタン自身のクリックは stopPropagation で除外、ドロワー内のクリックは
-  // drawer.contains で除外。両者とも .side-toolbar 直下に配置されているので、
-  // 個別に contains 判定する。
+  // 外�EクリチE��で閉じる、E
+  // ボタン自身のクリチE��は stopPropagation で除外、ドロワー冁E�EクリチE��は
+  // drawer.contains で除外。両老E��めE.side-toolbar 直下に配置されてぁE��ので、E
+  // 個別に contains 判定する、E
   document.addEventListener("mousedown", (e) => {
     if (!isLayersDrawerOpen()) return;
     const drawer = document.getElementById("layers-drawer");
@@ -932,7 +941,7 @@ function bindLayersDrawer() {
     if (triggerBtn && triggerBtn.contains(e.target)) return;
     closeLayersDrawer();
   });
-  // Esc で閉じる（他のモーダル類は自前で Esc を stopPropagation する設計のため安全）。
+  // Esc で閉じる（他�Eモーダル類�E自前で Esc めEstopPropagation する設計�Eため安�E�E�、E
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && isLayersDrawerOpen()) {
       closeLayersDrawer();
@@ -940,7 +949,7 @@ function bindLayersDrawer() {
   });
 }
 
-// サイドツールバーの上下ボタン（ページ移動）配線 + 表示更新。
+// サイドツールバ�Eの上下�Eタン�E��Eージ移動）�E緁E+ 表示更新、E
 function bindPageNav() {
   const prev = document.getElementById("page-prev-btn");
   const next = document.getElementById("page-next-btn");
@@ -953,7 +962,7 @@ function updatePageNav() {
   const label = document.getElementById("page-nav-label");
   const prev = document.getElementById("page-prev-btn");
   const next = document.getElementById("page-next-btn");
-  // advancePage と同じターゲット決定ロジック。PSD/PDF とも無ければ TXT マーカーへフォールバック。
+  // advancePage と同じターゲチE��決定ロジチE��。PSD/PDF とも無ければ TXT マ�Eカーへフォールバック、E
   const psdCount = getPages().length;
   const pdfCount = getPdfVirtualPageCount();
   const txtCount = getTxtPageCount();
@@ -973,15 +982,15 @@ function updatePageNav() {
     total = txtCount; current = getPdfPageIndex();
   }
   if (label) {
-    label.textContent = total > 0 ? `${current + 1} / ${total}` : "– / –";
+    label.textContent = total > 0 ? `${current + 1} / ${total}` : "- / -";
   }
   const disabled = total === 0;
   if (prev) prev.disabled = disabled || current <= 0;
   if (next) next.disabled = disabled || current >= total - 1;
 }
 
-// 矢印キー auto-repeat 時の leading-edge スロットル（80ms = 約 12Hz）。
-// 単発タップは throttle 対象外（ハンドラ側で e.repeat 判定して呼び分け）。
+// 矢印キー auto-repeat 時�E leading-edge スロチE��ル�E�E0ms = 紁E12Hz�E�、E
+// 単発タチE�Eは throttle 対象外（ハンドラ側で e.repeat 判定して呼び刁E���E�、E
 const ARROW_REPEAT_THROTTLE_MS = 80;
 let lastArrowAdvanceAt = 0;
 function canAdvancePageNow() {
@@ -991,9 +1000,9 @@ function canAdvancePageNow() {
   return true;
 }
 
-// 「現在ページ」のソースを判定して { source, total, current } を返す。
-// 優先順: PSD pages → PDF 仮想ページ → TXT マーカーページ。null = どれも無し。
-// TXT 単体運用時は pdfPageIndex を「閲覧中ページ index」として流用する設計。
+// 「現在ペ�Eジ」�Eソースを判定して { source, total, current } を返す、E
+// 優先頁E PSD pages ↁEPDF 仮想ペ�Eジ ↁETXT マ�Eカーペ�Eジ。null = どれも無し、E
+// TXT 単体運用時�E pdfPageIndex を「閲覧中ペ�Eジ index」として流用する設計、E
 export function activePageSource() {
   const psd = getPages().length;
   if (psd > 0) return { source: "psd", total: psd, current: getCurrentPageIndex() };
@@ -1006,13 +1015,13 @@ export function activePageSource() {
 
 function setActivePageIndex(source, idx) {
   if (source === "psd") setCurrentPageIndex(idx);
-  else setPdfPageIndex(idx); // pdf / txt はどちらも pdfPageIndex 駆動
+  else setPdfPageIndex(idx); // pdf / txt はどちらも pdfPageIndex 駁E��
 }
 
-// ページ送り：同期モードなら両側、非同期ならアクティブペインだけ進める。
-// 同期中でも PSD 未読込の場合は PDF を直接駆動する（空の PSD index 経由だと
-// setCurrentPageIndex が「pages 0 件 → index 0 固定」で何も起こらないため）。
-// PDF も無ければ TXT マーカーページ数にフォールバック（pdfPageIndex を流用）。
+// ペ�Eジ送り�E�同期モードなら両側、E��同期ならアクチE��ブ�Eインだけ進める、E
+// 同期中でめEPSD 未読込の場合�E PDF を直接駁E��する�E�空の PSD index 経由だと
+// setCurrentPageIndex が「pages 0 件 ↁEindex 0 固定」で何も起こらなぁE��めE��、E
+// PDF も無ければ TXT マ�Eカーペ�Eジ数にフォールバック�E�EdfPageIndex を流用�E�、E
 export function advancePage(delta) {
   if (getParallelSyncMode()) {
     const info = activePageSource();
@@ -1029,7 +1038,7 @@ export function advancePage(delta) {
   } else if (getPages().length > 0) {
     setCurrentPageIndex(getCurrentPageIndex() + delta);
   } else {
-    // PSD 無し + PDF 無し時の TXT-only フォールバック（非同期 + activePane=psd の場合）
+    // PSD 無ぁE+ PDF 無し時の TXT-only フォールバック�E�非同期 + activePane=psd の場合！E
     const info = activePageSource();
     if (!info) return;
     const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
@@ -1058,11 +1067,11 @@ function jumpToEdge(where) {
   }
 }
 
-// 見本 / PSD ペイン上のマウススクロールでページを送る。
-// 同期モード: advancePage で両ペインがブリッジ越しに同時に動く。
-// 非同期モード: スクロールしたペインだけを動かす（getActivePane には依存しない）。
-// Alt+wheel はズーム、選択レイヤー上の wheel は onLayerWheel がサイズ変更で stopPropagation
-// するため、それ以外の wheel イベントだけここで page nav に使う。
+// 見本 / PSD ペイン上�Eマウススクロールでペ�Eジを送る、E
+// 同期モーチE advancePage で両ペインがブリチE��越しに同時に動く、E
+// 非同期モーチE スクロールしたペインだけを動かす！EetActivePane には依存しなぁE��、E
+// Alt+wheel はズーム、E��択レイヤー上�E wheel は onLayerWheel がサイズ変更で stopPropagation
+// するため、それ以外�E wheel イベントだけここで page nav に使ぁE��E
 function bindWheelPageNav() {
   const pdfArea = document.getElementById("spreads-pdf-area");
   const psdArea = document.getElementById("spreads-psd-area");
@@ -1086,7 +1095,7 @@ function bindWheelPageNav() {
   };
 
   const onWheel = (pane) => (e) => {
-    // Alt / Ctrl / Meta は他のハンドラ（ズーム / ブラウザ既定）に委ねる。
+    // Alt / Ctrl / Meta は他�Eハンドラ�E�ズーム / ブラウザ既定）に委�Eる、E
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
     const now = Date.now();
@@ -1100,8 +1109,8 @@ function bindWheelPageNav() {
   if (psdArea) psdArea.addEventListener("wheel", onWheel("psd"), { passive: false });
 }
 
-// 同期モード中は currentPageIndex（PSD）と pdfPageIndex を相互にミラーする。
-// 非同期中は各側が独立して動く。再入防止にフラグで一方向の反映に限定。
+// 同期モード中は currentPageIndex�E�ESD�E�と pdfPageIndex を相互にミラーする、E
+// 非同期中は吁E�Eが独立して動く。�E入防止にフラグで一方向�E反映に限定、E
 let syncBridgeBusy = false;
 function bindParallelSync() {
   onPageIndexChange((psdIdx) => {
@@ -1123,8 +1132,8 @@ function bindParallelSync() {
 function bindActivePaneTracking() {
   const pdfArea = document.getElementById("spreads-pdf-area");
   const psdArea = document.getElementById("spreads-psd-area");
-  // 同期/非同期どちらでも activePane は常に追跡（ズーム対象の決定に使う）。
-  // リング枠の視覚強調は非同期モードのときだけ。
+  // 同期/非同期どちらでめEactivePane は常に追跡�E�ズーム対象の決定に使ぁE��、E
+  // リング枠の視覚強調は非同期モード�Eときだけ、E
   pdfArea?.addEventListener("mousedown", () => setActivePane("pdf"), true);
   psdArea?.addEventListener("mousedown", () => setActivePane("psd"), true);
   const apply = () => {
@@ -1183,15 +1192,15 @@ function bindViewModeControls() {
   const skipBlankBtn = document.getElementById("skip-first-blank-btn");
   if (!syncOnBtn || !syncOffBtn) return;
 
-  // 先頭白紙ページ除外トグル
+  // 先頭白紙�Eージ除外トグル
   if (skipBlankBtn) {
     const syncSkipUi = () => {
       skipBlankBtn.setAttribute("aria-pressed", getPdfSkipFirstBlank() ? "true" : "false");
     };
     syncSkipUi();
     skipBlankBtn.addEventListener("click", () => {
-      // 切替前後で「同じ物理ページ」を維持するため、現在の virtual page の pageNum を保存しておき
-      // 切替後にその pageNum に対応する virtual index へ再マップする。
+      // 刁E��前後で「同じ物琁E�Eージ」を維持するため、現在の virtual page の pageNum を保存しておき
+      // 刁E��後にそ�E pageNum に対応すめEvirtual index へ再�EチE�Eする、E
       const cur = getPdfVirtualPageAt(getPdfPageIndex());
       const prevPageNum = cur ? cur.pageNum : null;
       setPdfSkipFirstBlank(!getPdfSkipFirstBlank());
@@ -1208,7 +1217,7 @@ function bindViewModeControls() {
     const choice = await openResyncModal();
     if (choice === "cancel" || choice == null) return;
     if (choice === "match") {
-      // アクティブペイン側の index を非アクティブ側に合わせる。
+      // アクチE��ブ�Eイン側の index を非アクチE��ブ�Eに合わせる、E
       const active = getActivePane();
       if (active === "pdf") {
         setCurrentPageIndex(getPdfPageIndex());
@@ -1242,12 +1251,12 @@ function bindParallelViewMode() {
   const parallelBtn = document.getElementById("view-parallel-btn");
   const proofreadBtn = document.getElementById("view-proofread-btn");
   const editorBtn = document.getElementById("view-editor-btn");
-  // ドロワー要素は CSS で制御するため bind は不要だが、初期 DOM の存在確認だけ行う。
+  // ドロワー要素は CSS で制御するため bind は不要だが、�E朁EDOM の存在確認だけ行う、E
   const proofreadArea = document.getElementById("spreads-proofread-area");
   const editorArea = document.getElementById("spreads-editor-area");
   const proofreadPanel = document.getElementById("proofread-panel");
-  // editor モード時のみ表示される「校正 / 見本」セグメントトグル。
-  // proofread-panel-header 内に配置されている。
+  // editor モード時のみ表示される「校正 / 見本」セグメントトグル、E
+  // proofread-panel-header 冁E��配置されてぁE��、E
   const leftProofreadBtn = document.getElementById("editor-left-proofread-btn");
   const leftPdfBtn = document.getElementById("editor-left-pdf-btn");
   if (!parallelBtn || !proofreadBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
@@ -1259,8 +1268,8 @@ function bindParallelViewMode() {
     }
   } catch {}
 
-  // editor モード左ペイン (校正 / 見本) の選択を localStorage から復元。
-  // editor モードに入ったときだけ実効化される（CSS 側で .workspace.editor-mode が前提）。
+  // editor モード左ペイン (校正 / 見本) の選択を localStorage から復允E��E
+  // editor モードに入ったときだけ実効化される�E�ESS 側で .workspace.editor-mode が前提）、E
   try {
     const savedLeft = localStorage.getItem(EDITOR_LEFT_PANE_LS_KEY);
     if (savedLeft === "proofread" || savedLeft === "pdf") {
@@ -1278,20 +1287,20 @@ function bindParallelViewMode() {
     leftPdfBtn.addEventListener("click", () => setEditorLeftPaneMode("pdf"));
   }
 
-  // 3 モード構成:
-  //   parallel:  PDF + PSD のみ（proofread / editor ドロワーはどちらも左へ格納）
-  //   proofread: PDF + PSD + 校正パネルが左半分にスライドオーバーレイ（PDF area の上）
-  //   editor:    PDF/PSD は背景に残し、校正パネル（左）+ エディタ（右）が左からスライドして覆う
-  //              サイドバー類は display:none（編集に集中、本リクエスト対象外）
+  // 3 モード構�E:
+  //   parallel:  PDF + PSD のみ�E�Eroofread / editor ドロワーはどちらも左へ格納！E
+  //   proofread: PDF + PSD + 校正パネルが左半�Eにスライドオーバ�Eレイ�E�EDF area の上！E
+  //   editor:    PDF/PSD は背景に残し、校正パネル�E�左�E�E エチE��タ�E�右�E�が左からスライドして要E��
+  //              サイドバー類�E display:none�E�編雁E��雁E��、本リクエスト対象外！E
   //
-  // proofread-panel は #spreads-proofread-area 内に固定配置。モード切替で DOM を移動しない。
-  // ドロワーの slide-in/out は CSS の transform transition + visibility で実装され、
-  // .spreads-stage に付ける `proofread-visible` / `editor-visible` クラスで制御する。
+  // proofread-panel は #spreads-proofread-area 冁E��固定�E置。モード�E替で DOM を移動しなぁE��E
+  // ドロワーの slide-in/out は CSS の transform transition + visibility で実裁E��れ、E
+  // .spreads-stage に付けめE`proofread-visible` / `editor-visible` クラスで制御する、E
   const workspace = document.querySelector(".workspace");
   const stage = document.getElementById("spreads-stage");
   const applyEditorLeftPaneClass = () => {
     if (!workspace) return;
-    // editor モード時のみ left-pdf class が意味を持つ。それ以外では常に外す。
+    // editor モード時のみ left-pdf class が意味を持つ。それ以外では常に外す、E
     const inEditor = getParallelViewMode() === "editor";
     const leftPdf = inEditor && getEditorLeftPaneMode() === "pdf";
     workspace.classList.toggle("left-pdf", leftPdf);
@@ -1304,7 +1313,7 @@ function bindParallelViewMode() {
       workspace.classList.toggle("editor-mode", showEditor);
       workspace.classList.toggle("proofread-mode", showProofread);
     }
-    // ドロワー表示クラス。proofread / editor どちらでも proofread-area は表示する。
+    // ドロワー表示クラス。proofread / editor どちらでめEproofread-area は表示する、E
     if (stage) {
       stage.classList.toggle("proofread-visible", showProofread || showEditor);
       stage.classList.toggle("editor-visible", showEditor);
@@ -1316,30 +1325,30 @@ function bindParallelViewMode() {
     proofreadBtn.setAttribute("aria-pressed", mode === "proofread" ? "true" : "false");
     editorBtn.setAttribute("aria-pressed", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
-    // editor モード ON/OFF に応じて left-pdf class も更新（editor モード以外では常に外す）。
+    // editor モーチEON/OFF に応じて left-pdf class も更新�E�Editor モード以外では常に外す�E�、E
     applyEditorLeftPaneClass();
 
-    // 校正パネルの内部状態（panel 表示）を確保。parent (.spreads-proofread-area) の
-    // opacity / transform で実際の表示制御を行うため、panel 自体は閉じない（閉じると
-    // スライドアウト中に内容が瞬時に display:none になり、空のドロワーが滑る不格好な
-    // アニメになる）。closeProofread は呼ばない。
+    // 校正パネルの冁E��状態！Eanel 表示�E�を確保。parent (.spreads-proofread-area) の
+    // opacity / transform で実際の表示制御を行うため、panel 自体�E閉じなぁE��閉じると
+    // スライドアウト中に冁E��が瞬時に display:none になり、空のドロワーが滑る不格好な
+    // アニメになる）。closeProofread は呼ばなぁE��E
     if (showProofread || showEditor) openProofread();
 
     if (showEditor) focusEditor();
   };
   onParallelViewModeChange(sync);
 
-  // 「見本」モード時に pdf-area の幅を現在の見本ページの実アスペクト比に同期する。
-  // 50% 固定だと縦長ページで letter-box / 横長ページで切れる「ぎこちない表示」になる。
+  // 「見本」モード時に pdf-area の幁E��現在の見本ペ�Eジの実アスペクト比に同期する、E
+  // 50% 固定だと縦長ペ�Eジで letter-box / 横長ペ�Eジで刁E��る「ぎこちなぁE��示」になる、E
   // - stage 高さ - ヘッダー (34px) を基準に width = (height - padding) * AR + padding
-  // - 結果を CSS 変数 `--left-pdf-width` に書き込み、pdf-area / editor-area の両方が参照
-  // - rAF で coalesce、async getPage() の競合は seq token で抑止
-  // - syncEditorLeftPane より前に定義する必要あり (sync 初回呼出で requestRecompute を参照するため、
-  //   後置すると const TDZ エラーで init が止まり renderAllSpreads が走らない事故あり)
+  // - 結果めECSS 変数 `--left-pdf-width` に書き込み、pdf-area / editor-area の両方が参照
+  // - rAF で coalesce、async getPage() の競合�E seq token で抑止
+  // - syncEditorLeftPane より前に定義する忁E��あめE(sync 初回呼出で requestRecompute を参照するため、E
+  //   後置すると const TDZ エラーで init が止まめErenderAllSpreads が走らなぁE��故あり)
   const PANEL_PADDING = 32; // pdf-area の左右 padding 16+16
   const HEADER_OFFSET = 34; // proofread-panel-header 高さ
   const MIN_PANEL_WIDTH = 240;
-  const MAX_PANEL_RATIO = 0.85; // stage 幅の最大 85%
+  const MAX_PANEL_RATIO = 0.85; // stage 幁E�E最大 85%
   let leftPdfRecomputeRaf = 0;
   let leftPdfRecomputeSeq = 0;
 
@@ -1349,9 +1358,9 @@ function bindParallelViewMode() {
 
   const recomputeLeftPdfWidth = async () => {
     if (!workspace) return;
-    // editor モード以外では使わない（var を消して通常 50% に戻す）。
-    // editor モード中は left-pdf サブ状態でなくても先行計算しておくと、
-    // 「見本」トグルした瞬間に CSS var が既に正しい値になっていて 50% フラッシュが起きない。
+    // editor モード以外では使わなぁE��Ear を消して通常 50% に戻す）、E
+    // editor モード中は left-pdf サブ状態でなくても�E行計算しておくと、E
+    // 「見本」トグルした瞬間に CSS var が既に正しい値になってぁE�� 50% フラチE��ュが起きなぁE��E
     const inEditor = getParallelViewMode() === "editor";
     if (!inEditor) {
       clearLeftPdfWidth();
@@ -1367,7 +1376,7 @@ function bindParallelViewMode() {
     const doc = getPdfDoc();
     const vp = getPdfVirtualPageAt(getPdfPageIndex());
     if (!doc || !vp) {
-      // 見本未読込 / 範囲外: 50% フォールバック（CSS デフォルト）。
+      // 見本未読込 / 篁E��夁E 50% フォールバック�E�ESS チE��ォルト）、E
       clearLeftPdfWidth();
       return;
     }
@@ -1379,9 +1388,9 @@ function bindParallelViewMode() {
     } catch {
       return;
     }
-    // 競合 (新しい recompute が来た) なら破棄。
+    // 競吁E(新しい recompute が来ぁE なら破棁E��E
     if (seq !== leftPdfRecomputeSeq) return;
-    // editor モードを抜けていたら破棄して var クリア。
+    // editor モードを抜けてぁE��ら破棁E��て var クリア、E
     if (getParallelViewMode() !== "editor") {
       clearLeftPdfWidth();
       return;
@@ -1414,10 +1423,10 @@ function bindParallelViewMode() {
   };
 
   // recompute トリガー一覧:
-  // - PDF (見本) ロード変化、ページ切替、回転 → アスペクト比が変わる
-  // - parallel view mode 変化 → editor モード入退出
-  // - 既に editor.left-pdf に居る状態でも初回 sync で呼ぶ必要があるので↑の sync 経路でも発火
-  // - stage の resize → 高さ依存なのでウィンドウサイズに追従
+  // - PDF (見本) ロード変化、�Eージ刁E��、回転 ↁEアスペクト比が変わめE
+  // - parallel view mode 変化 ↁEeditor モード�E退出
+  // - 既に editor.left-pdf に屁E��状態でも�E囁Esync で呼ぶ忁E��があるので↑�E sync 経路でも発火
+  // - stage の resize ↁE高さ依存なのでウィンドウサイズに追征E
   onPdfChange(requestRecomputeLeftPdfWidth);
   onPdfPageIndexChange(requestRecomputeLeftPdfWidth);
   onPdfRotationChange(requestRecomputeLeftPdfWidth);
@@ -1426,14 +1435,14 @@ function bindParallelViewMode() {
     const ro = new ResizeObserver(requestRecomputeLeftPdfWidth);
     ro.observe(stage);
   }
-  // 初期同期。
+  // 初期同期、E
   requestRecomputeLeftPdfWidth();
 
-  // editor モードの左ペイン (校正 / 見本) 切替の同期。
-  // - workspace.classList の left-pdf を更新（CSS で表示切替）
-  // - セグメントボタンの active / aria-pressed を更新
+  // editor モード�E左ペイン (校正 / 見本) 刁E��の同期、E
+  // - workspace.classList の left-pdf を更新�E�ESS で表示刁E���E�E
+  // - セグメント�Eタンの active / aria-pressed を更新
   // - localStorage に永続化
-  // - requestRecomputeLeftPdfWidth を呼ぶので、必ずそれが定義された後に書く。
+  // - requestRecomputeLeftPdfWidth を呼ぶので、忁E��それが定義された後に書く、E
   const syncEditorLeftPane = () => {
     const m = getEditorLeftPaneMode();
     applyEditorLeftPaneClass();
@@ -1453,17 +1462,17 @@ function bindParallelViewMode() {
   sync();
 }
 
-// 【v1.16.0】フォントサイズ一部変更 — 選択範囲があれば per-char、無ければ layer 全体に適用。
+// 【v1.16.0】フォントサイズ一部変更  E選択篁E��があれ�E per-char、無ければ layer 全体に適用、E
 function applyTextSize(n) {
-  // in-place 編集中で文字選択がある → per-char サイズ適用。
-  // 選択範囲は canvas-tools の module-level キャッシュから取る（select イベントで保存される）。
+  // in-place 編雁E��で斁E��選択がある ↁEper-char サイズ適用、E
+  // 選択篁E��は canvas-tools の module-level キャチE��ュから取る�E�Eelect イベントで保存される�E�、E
   const sel = getLastInplaceSelection();
   if (sel && sel.end > sel.start) {
     const v = clampSize(n);
     const targetId = sel.tempId ?? sel.layerId;
     setCharSizesRange(sel.psdPath, targetId, sel.start, sel.end, v);
-    // 【v1.21.0】編集中の DOM にも即時反映: span でラップして fontSize を em 比で当てる。
-    // layer の defaultSizePt を取得して em 比 = v / defaultSizePt を求める。
+    // 【v1.21.0】編雁E��の DOM にも即時反映: span でラチE�Eして fontSize めEem 比で当てる、E
+    // layer の defaultSizePt を取得して em 毁E= v / defaultSizePt を求める、E
     const defaultSizePt = resolveLayerDefaultSizePt(sel);
     if (defaultSizePt > 0) {
       const ratio = v / defaultSizePt;
@@ -1473,15 +1482,15 @@ function applyTextSize(n) {
     rebuildLayerList();
     restoreInplaceSelection(sel);
     requestAnimationFrame(() => restoreInplaceSelection(sel));
-    setTextSize(v); // サイドバー入力欄の値も同期
+    setTextSize(v); // サイドバー入力欁E�E値も同朁E
     return;
   }
   setTextSize(n);
-  // 選択中の全レイヤーに同じサイズを適用（複数選択でも一括反映）。
+  // 選択中の全レイヤーに同じサイズを適用�E�褁E��選択でも一括反映�E�、E
   commitSizeToSelections(getTextSize());
 }
 
-// per-char サイズ変更で em 比換算に使う「対象レイヤーの defaultSizePt」を解決。
+// per-char サイズ変更で em 比換算に使ぁE��対象レイヤーの defaultSizePt」を解決、E
 function resolveLayerDefaultSizePt(sel) {
   if (!sel) return 0;
   const pages = getPages();
@@ -1492,13 +1501,13 @@ function resolveLayerDefaultSizePt(sel) {
       const layer = page.textLayers.find((l) => l.id === sel.layerId);
       if (!layer) return 0;
       const edit = getEdit(page.path, layer.id) ?? {};
-      // ↓ getExistingLayerEffectiveSizePt は canvas-tools.js から既に import 済み
+      // ↁEgetExistingLayerEffectiveSizePt は canvas-tools.js から既に import 済み
       return getExistingLayerEffectiveSizePt(page, layer, edit) || 0;
     }
     if (typeof sel.tempId === "string") {
-      const nl = page.textLayers; // 不要、newLayers から探す
+      const nl = page.textLayers; // 不要、newLayers から探ぁE
       // newLayers は state から
-      // import 経由で getNewLayersForPsd を使う必要があるが既に import 済み
+      // import 経由で getNewLayersForPsd を使ぁE��E��があるが既に import 済み
       const list = (typeof getNewLayersForPsd === "function") ? getNewLayersForPsd(page.path) : [];
       const item = list.find((l) => l.tempId === sel.tempId);
       return item?.sizePt ?? 0;
@@ -1519,51 +1528,51 @@ function getSizeStep() {
   return 0.1;
 }
 
-// +/- ボタンと [/] ショートカット用のサイズ調整。
-// 環境設定の baseStep（0.1 / 0.5）グリッドに揃える形でスナップする：
-// 例）0.5 刻み設定で現在 12.3pt → "+" で 12.5（13.0 ではない）／"-" で 12.0
+// +/- ボタンと [/] ショートカチE��用のサイズ調整、E
+// 環墁E��定�E baseStep�E�E.1 / 0.5�E�グリチE��に揁E��る形でスナップする！E
+// 例！E.5 刻み設定で現在 12.3pt ↁE"+" で 12.5�E�E3.0 ではなぁE��！E-" で 12.0
 function stepTextSize(sign, multiplier = 1) {
   const baseStep = getSizeStep();
   const next = snapNextSize(getTextSize(), baseStep, sign, multiplier);
   applyTextSize(next);
 }
 
-// 【v1.22.0】合成太字（faux bold）トグルボタン。Photoshop の Character パネル B ボタン相当。
-// in-place 編集中で文字選択あり → per-char (charBolds)、無ければ layer 全体 (syntheticBold)。
-// クリック時の現在 aria-pressed 値を反転させ、新値を適用する。populateEditor が
-// computeCommonBold で aria-pressed を同期するので、選択切替・複数選択時も正しく追従。
+// 【v1.22.0】合成太字！Eaux bold�E�トグルボタン。Photoshop の Character パネル B ボタン相当、E
+// in-place 編雁E��で斁E��選択あめEↁEper-char (charBolds)、無ければ layer 全佁E(syntheticBold)、E
+// クリチE��時�E現在 aria-pressed 値を反転させ、新値を適用する。populateEditor ぁE
+// computeCommonBold で aria-pressed を同期する�Eで、E��択�E替・褁E��選択時も正しく追従、E
 function bindBoldToggle() {
   const btn = document.getElementById("bold-toggle-btn");
   if (!btn) return;
-  // mousedown.preventDefault で contenteditable のフォーカス移動を抑止し、in-place 編集中の
-  // 文字選択を保ったまま B をクリックできるようにする（commitFontToSelections の bind パターンと同じ）。
+  // mousedown.preventDefault で contenteditable のフォーカス移動を抑止し、in-place 編雁E��の
+  // 斁E��選択を保ったまま B をクリチE��できるようにする�E�EommitFontToSelections の bind パターンと同じ�E�、E
   btn.addEventListener("mousedown", (e) => e.preventDefault());
   btn.addEventListener("click", () => {
     if (btn.disabled) return;
     const newValue = btn.getAttribute("aria-pressed") !== "true";
-    // 1. in-place 編集中の文字選択 → per-char 適用
+    // 1. in-place 編雁E��の斁E��選抁EↁEper-char 適用
     const sel = getLastInplaceSelection();
     if (sel && sel.end > sel.start) {
       const targetId = sel.tempId ?? sel.layerId;
       setCharBoldsRange(sel.psdPath, targetId, sel.start, sel.end, newValue);
-      // 編集中の DOM にも即時反映: span ラップで font-weight を当てる。
+      // 編雁E��の DOM にも即時反映: span ラチE�Eで font-weight を当てる、E
       applyEditModeStyleToRange(sel.start, sel.end, { fontWeight: newValue ? "700" : "400" });
       refreshAllOverlays();
       rebuildLayerList();
-      // ボタン表示: 範囲の bold 値を即座に反映（commit 後の populateEditor 経由でも同じだが visual lag を避ける）。
+      // ボタン表示: 篁E��の bold 値を即座に反映�E�Eommit 後�E populateEditor 経由でも同じだぁEvisual lag を避ける�E�、E
       btn.setAttribute("aria-pressed", newValue ? "true" : "false");
       return;
     }
-    // 2. layer 選択 → per-layer 適用（既存の commitFontToSelections と同じ流れ）
+    // 2. layer 選抁EↁEper-layer 適用�E�既存�E commitFontToSelections と同じ流れ�E�E
     if (commitBoldToSelections(newValue)) {
       btn.setAttribute("aria-pressed", newValue ? "true" : "false");
     }
   });
 }
 
-// 【v1.26.0】ルビパネル。in-place 編集中の文字選択範囲 + ふりがな入力 → 「適用」ボタンで
-// charRubies に書き込む。モノ/グループ自動判定は「入力にスペースあり and 分割数 == 親文字数」
-// のときモノ、それ以外グループ。手動 mode (自動/モノ/グループ) で強制も可。
+// 【v1.26.0】ルビパネル。in-place 編雁E��の斁E��選択篁E�� + ふりがな入劁EↁE「適用」�Eタンで
+// charRubies に書き込む。モチEグループ�E動判定�E「�E力にスペ�Eスあり and 刁E��数 == 親斁E��数、E
+// のときモノ、それ以外グループ。手勁Emode (自勁EモチEグルーチE で強制も可、E
 function bindRubyTool() {
   const parentEl = document.getElementById("ruby-parent-display");
   const inputEl = document.getElementById("ruby-text-input");
@@ -1577,8 +1586,8 @@ function bindRubyTool() {
 
   let currentMode = "auto"; // "auto" | "mono" | "group"
 
-  // フォーカスを盗まないように mousedown を抑制（in-place 編集を保護）。
-  // ただし input 系（ふりがな + scale）は通常通りフォーカスを許可する。
+  // フォーカスを盗まなぁE��ぁE�� mousedown を抑制�E�En-place 編雁E��保護�E�、E
+  // ただぁEinput 系�E��Eりがな + scale�E��E通常通りフォーカスを許可する、E
   const noFocusSteal = (el) => el && el.addEventListener("mousedown", (e) => e.preventDefault());
   [applyBtn, removeBtn, modeAuto, modeMono, modeGroup].forEach(noFocusSteal);
 
@@ -1613,10 +1622,10 @@ function bindRubyTool() {
     return "group";
   };
 
-  // 【v1.29.x】親文字選択時に行 index を表示するためのラベル
+  // 【v1.29.x】親斁E��選択時に衁Eindex を表示するためのラベル
   const lineHintEl = document.getElementById("ruby-line-hint");
 
-  // 文字選択変化で親文字表示と入力欄の有効化を切替
+  // 斁E��選択変化で親斁E��表示と入力欁E�E有効化を刁E��
   const updateSelection = (sel) => {
     if (sel && sel.end > sel.start) {
       const targetId = sel.tempId ?? sel.layerId;
@@ -1626,17 +1635,17 @@ function bindRubyTool() {
       parentEl.textContent = parentText || "（選択範囲）";
       inputEl.disabled = false;
       applyBtn.disabled = false;
-      // 【v1.29.x】親文字が乗る行 index を計算 (0-based) → ユーザーには 1-based で表示
+      // 【v1.29.x】親斁E��が乗る衁Eindex を計箁E(0-based) ↁEユーザーには 1-based で表示
       const startLine = (contents.substring(0, sel.start).match(/\n/g) ?? []).length;
       const endLine = (contents.substring(0, sel.end).match(/\n/g) ?? []).length;
       if (lineHintEl) {
         const lineLabel = startLine === endLine
           ? `${startLine + 1} 行目`
-          : `${startLine + 1}〜${endLine + 1} 行目`;
+          : `${startLine + 1}、E{endLine + 1} 行目`;
         lineHintEl.textContent = lineLabel;
         lineHintEl.hidden = false;
       }
-      // 既存ルビがあれば入力欄に reload
+      // 既存ルビがあれば入力欁E�� reload
       const existing = getCharRubyAt(sel.psdPath, targetId, sel.start);
       if (existing && existing.end === sel.end) {
         inputEl.value = existing.text;
@@ -1669,31 +1678,31 @@ function bindRubyTool() {
     const parentText = parentEl.textContent || "";
     const scale = clampRubyScale(scaleEl.value);
     const type = decideRubyType(currentMode, text, parentText);
-    // 【v1.29.0】ルビ適用と同時に、ルビが乗る行の lineLeading を rubyLeadingPct
-    // (デフォルト 150%) に上書き。同一 history snapshot にまとめ Ctrl+Z 一発で
-    // ルビ + leading 両方戻る。
-    // 行 index = 親文字 range の手前にある改行数。複数行に跨ぐ ruby は range 開始行のみ更新。
+    // 【v1.29.0】ルビ適用と同時に、ルビが乗る行�E lineLeading めErubyLeadingPct
+    // (チE��ォルチE150%) に上書き。同一 history snapshot にまとめECtrl+Z 一発で
+    // ルチE+ leading 両方戻る、E
+    // 衁Eindex = 親斁E��Erange の手前にある改行数。褁E��行に跨ぁEruby は range 開始行�Eみ更新、E
     const ec = getEditingContext();
     const contents = ec?.contents ?? "";
     const startLine = (contents.substring(0, sel.start).match(/\n/g) ?? []).length;
     const endLine = (contents.substring(0, sel.end).match(/\n/g) ?? []).length;
     const rubyLeadingPct = Number(getDefault("rubyLeadingPct")) || 150;
     console.info(
-      `[ruby-apply] 親文字 range=[${sel.start}, ${sel.end}) → ${startLine + 1}〜${endLine + 1} 行目 / lineLeading=${rubyLeadingPct}%`,
+      `[ruby-apply] parent range=[${sel.start}, ${sel.end}) lines=${startLine + 1}-${endLine + 1} / lineLeading=${rubyLeadingPct}%`,
     );
     withHistoryTransient(() => {
       setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, text, type, scale);
-      // 親文字 range が跨ぐすべての行に rubyLeadingPct を当てる。
+      // 親斁E��Erange が跨ぐすべての行に rubyLeadingPct を当てる、E
       for (let li = startLine; li <= endLine; li++) {
         setLineLeading(sel.psdPath, targetId, li, rubyLeadingPct);
       }
     });
-    // 【v1.29.x】編集中レイヤー DOM への即時 line-height 反映。
-    //   renderOverlay は .editing レイヤーをスキップする (caret 保護のため)。
-    //   state.lineLeadings の変更を画面に反映するには、編集中 inner の style を直接更新する必要がある。
-    //   ここでは簡易的に inner 全体の line-height を rubyLeadingPct に上書きする
-    //   (per-line ではなく per-layer の簡易適用)。編集モードを抜けると renderOverlay が
-    //   per-line lineLeadings を正確に反映するので、その時点でズレが解消される。
+    // 【v1.29.x】編雁E��レイヤー DOM への即晁Eline-height 反映、E
+    //   renderOverlay は .editing レイヤーをスキチE�Eする (caret 保護のため)、E
+    //   state.lineLeadings の変更を画面に反映するには、編雁E�� inner の style を直接更新する忁E��がある、E
+    //   ここでは簡易的に inner 全体�E line-height めErubyLeadingPct に上書きすめE
+    //   (per-line ではなぁEper-layer の簡易適用)。編雁E��ードを抜けると renderOverlay ぁE
+    //   per-line lineLeadings を正確に反映するので、その時点でズレが解消される、E
     const editingBox = document.querySelector(".layer-box.editing");
     if (editingBox) {
       const inner = editingBox.querySelector(".existing-layer-text, .new-layer-text");
@@ -1701,7 +1710,7 @@ function bindRubyTool() {
         inner.style.lineHeight = String(rubyLeadingPct / 100);
       }
     }
-    // 編集中 DOM への即時反映（実 DOM ルビ wrap を inner に挿入）。
+    // 編雁E�� DOM への即時反映�E�宁EDOM ルチEwrap めEinner に挿入�E�、E
     applyEditModeRubyToRange(sel.start, sel.end, text, type, scale);
     refreshAllOverlays();
     rebuildLayerList();
@@ -1770,11 +1779,11 @@ function bindSizeTool() {
   inc.addEventListener("click", () => stepTextSize(+1));
 }
 
-// 行間を適用。in-place 編集中（editingContext あり）はカーソル行の per-line override に
-// 書き込み、そうでなければ従来どおり layer 全体の leadingPct を更新する。
+// 行間を適用。in-place 編雁E���E�EditingContext あり�E��Eカーソル行�E per-line override に
+// 書き込み、そぁE��なければ従来どおり layer 全体�E leadingPct を更新する、E
 function applyLeading(n) {
   const v = clampLeading(n);
-  // 1. in-place 編集中はカーソル行の per-line override（既存挙動）
+  // 1. in-place 編雁E��はカーソル行�E per-line override�E�既存挙動！E
   const ec = getEditingContext();
   if (ec) {
     const targetId = ec.tempId ?? ec.layerId;
@@ -1784,9 +1793,9 @@ function applyLeading(n) {
     syncLeadingInputForEditingContext();
     return;
   }
-  // 2. 通常モード（in-place 編集なし）: 選択中レイヤー全体に一括適用 + global leadingPct 更新。
-  //    旧サイドバー行セレクタ（「全行 / 2 / 3 / …」ボタン）による per-line override は廃止。
-  //    in-place 編集中のカーソル行のみが per-line 対象。
+  // 2. 通常モード！En-place 編雁E��し！E 選択中レイヤー全体に一括適用 + global leadingPct 更新、E
+  //    旧サイドバー行セレクタ�E�「�E衁E/ 2 / 3 / …」�Eタン�E�による per-line override は廁E��、E
+  //    in-place 編雁E��のカーソル行�EみぁEper-line 対象、E
   setLeadingPct(v);
   commitLeadingToSelections(getLeadingPct());
 }
@@ -1807,8 +1816,8 @@ function adjustLeading(delta) {
   applyLeading(getLeadingPct() + delta);
 }
 
-// editingContext が active のときは leading-input にカーソル行の値を表示。
-// 行ごとの override が無ければレイヤー global の leadingPct を表示する。
+// editingContext ぁEactive のとき�E leading-input にカーソル行�E値を表示、E
+// 行ごとの override が無ければレイヤー global の leadingPct を表示する、E
 function syncLeadingInputForEditingContext() {
   const input = document.getElementById("leading-input");
   if (!input) return;
@@ -1836,7 +1845,7 @@ function bindLeadingTool() {
     applyLeading(v);
   });
   input.addEventListener("blur", () => {
-    // editingContext (in-place 編集中) ならカーソル行の per-line 値、それ以外は global。
+    // editingContext (in-place 編雁E��) ならカーソル行�E per-line 値、それ以外�E global、E
     const ec = getEditingContext();
     if (ec) {
       const targetId = ec.tempId ?? ec.layerId;
@@ -1846,19 +1855,19 @@ function bindLeadingTool() {
     }
     input.value = String(getLeadingPct());
   });
-  // ボタン群は in-place 編集 textarea からのフォーカス移動を抑止する。これがないと
-  // + を押すたびに textarea が blur → カーソル行が失われ、editingContext が消える。
+  // ボタン群は in-place 編雁Etextarea からのフォーカス移動を抑止する。これがなぁE��
+  // + を押すたびに textarea ぁEblur ↁEカーソル行が失われ、editingContext が消える、E
   const keepFocus = (el) => el && el.addEventListener("mousedown", (e) => e.preventDefault());
   keepFocus(dec); keepFocus(inc);
   dec.addEventListener("click", () => adjustLeading(-5));
   inc.addEventListener("click", () => adjustLeading(+5));
 
-  // in-place 編集の context 変化に追従して input/ボタンの表示を更新。
-  // context が立つ → カーソル行の per-line 値（無ければ global）を表示。
-  // context が消える → global 値に戻す。
-  // 旧 `syncRuby(leadingPct)` 呼出は v1.16.0 期の「leadingPct >= 150 でルビトグル active」
-  // 機構の残骸で、ルビ panel が独自 state（charRubies）に移行した時点で dead code 化していた
-  // が、未参照のままコードに残って `ReferenceError` を起こしていた。撤去済み。
+  // in-place 編雁E�E context 変化に追従して input/ボタンの表示を更新、E
+  // context が立つ ↁEカーソル行�E per-line 値�E�無ければ global�E�を表示、E
+  // context が消えめEↁEglobal 値に戻す、E
+  // 旧 `syncRuby(leadingPct)` 呼出は v1.16.0 期�E「leadingPct >= 150 でルビトグル active、E
+  // 機構�E残骸で、ルチEpanel が独自 state�E�EharRubies�E�に移行した時点で dead code 化してぁE��
+  // が、未参�Eのままコードに残って `ReferenceError` を起こしてぁE��。撤去済み、E
   onEditingContextChange((ec) => {
     if (ec) {
       syncLeadingInputForEditingContext();
@@ -1872,21 +1881,21 @@ async function handleDroppedPaths(paths) {
   if (!paths || paths.length === 0) return;
   const psdFiles = [];
   const txtFiles = [];
-  const pdfFiles = []; // PDF / JPEG / PNG いずれも「見本」としてここに入れる
-  const unknowns = []; // 拡張子なし ＝ おそらくフォルダ
+  const pdfFiles = []; // PDF / JPEG / PNG ぁE��れも「見本」としてここに入れる
+  const unknowns = []; // 拡張子なぁE�E�Eおそらくフォルダ
   for (const p of paths) {
     if (/\.psd$/i.test(p)) psdFiles.push(p);
     else if (/\.txt$/i.test(p)) txtFiles.push(p);
     else if (/\.(pdf|jpe?g|png)$/i.test(p)) pdfFiles.push(p);
     else unknowns.push(p);
   }
-  // フォルダらしきものは中の .psd を展開して取り込む（従来の利便性を維持）。
+  // フォルダらしきものは中の .psd を展開して取り込む�E�従来の利便性を維持E��、E
   for (const folder of unknowns) {
     try {
       const files = await listPsdFilesInFolder(folder);
       if (Array.isArray(files) && files.length) psdFiles.push(...files);
     } catch (e) {
-      console.warn("フォルダ展開に失敗:", folder, e);
+      console.warn("フォルダ展開に失敁E", folder, e);
     }
   }
   if (psdFiles.length > 0) {
@@ -1896,22 +1905,26 @@ async function handleDroppedPaths(paths) {
     await loadTxtFromPath(t);
   }
   if (pdfFiles.length > 0) {
-    // 複数ファイルは合成 doc としてまとめて読み込む（自然順 = page1 → page2 → page10）。
+    // 褁E��ファイルは合�E doc としてまとめて読み込む�E��E然頁E= page1 ↁEpage2 ↁEpage10�E�、E
     await loadReferenceFiles(pdfFiles);
   }
 }
 
 async function setupTauriDragDrop() {
   try {
-    const { listen } = await import("@tauri-apps/api/event");
+    const { getCurrentWindow } = await import("@tauri-apps/api/window");
     const overlay = document.getElementById("drag-overlay");
-    const showOverlay = () => {
+    const showOverlay = (payload) => {
+      if (homeTypesetDragOverHandler?.(payload) === true) return;
       if (homeTypesetDropHandler) return;
       if (!overlay) return;
       overlay.classList.remove("flash");
       overlay.classList.add("active");
     };
-    const hideOverlay = () => overlay?.classList.remove("active");
+    const hideOverlay = () => {
+      homeTypesetDragLeaveHandler?.();
+      overlay?.classList.remove("active");
+    };
     const flashOverlay = () => {
       if (!overlay) return;
       overlay.classList.remove("active");
@@ -1922,12 +1935,20 @@ async function setupTauriDragDrop() {
       setTimeout(() => overlay.classList.remove("flash"), 400);
     };
 
-    await listen("tauri://drag-enter", showOverlay);
-    await listen("tauri://drag-over", showOverlay);
-    await listen("tauri://drag-leave", hideOverlay);
-    await listen("tauri://drag-drop", (e) => {
-      const paths = Array.isArray(e.payload?.paths) ? e.payload.paths : [];
-      if (homeTypesetDropHandler?.(paths, e.payload) === true) {
+    await getCurrentWindow().onDragDropEvent((event) => {
+      const payload = event.payload;
+      if (payload?.type === "enter" || payload?.type === "over") {
+        showOverlay(payload);
+        return;
+      }
+      if (payload?.type === "leave") {
+        hideOverlay();
+        return;
+      }
+      if (payload?.type !== "drop") return;
+
+      const paths = Array.isArray(payload.paths) ? payload.paths : [];
+      if (homeTypesetDropHandler?.(paths, payload) === true) {
         hideOverlay();
         return;
       }
@@ -1939,7 +1960,7 @@ async function setupTauriDragDrop() {
   }
 }
 
-// アクティブペイン基準のズーム操作（ボタン・キーボード）
+// アクチE��ブ�Eイン基準�Eズーム操作（�Eタン・キーボ�Eド！E
 function zoomActivePaneBy(factor) {
   zoomPaneBy(getActivePane(), factor);
 }
@@ -1955,9 +1976,9 @@ function resetPaneZoom(pane) {
   else setPsdZoom(1);
 }
 
-// 定規ボタンの click + ON/OFF 表示同期 + Ctrl+R の WebView リロード抑止。
-// Ctrl+R は WebView2 の既定リロードに先取りされやすいので、bindZoomTool と同じく
-// capture フェーズで matchShortcut("toggleRulers") を判定して preventDefault。
+// 定規�Eタンの click + ON/OFF 表示同期 + Ctrl+R の WebView リロード抑止、E
+// Ctrl+R は WebView2 の既定リロードに先取りされやすいので、bindZoomTool と同じぁE
+// capture フェーズで matchShortcut("toggleRulers") を判定して preventDefault、E
 function bindRulerToggle() {
   const btn = document.getElementById("toggle-rulers-btn");
   const sync = () => {
@@ -1982,15 +2003,15 @@ function bindRulerToggle() {
   );
 }
 
-// V ツール直下の「新規テキスト方向」スイッチ (縦型トグル)。
-// 1 つのスイッチをクリックすると縦↔横が切替わる。
-// localStorage 永続化 + aria-checked 同期 (CSS が thumb 位置 / icon 色を担当)。
+// V チE�Eル直下�E「新規テキスト方向」スイチE�� (縦型トグル)、E
+// 1 つのスイチE��をクリチE��すると縦↔横が�E替わる、E
+// localStorage 永続化 + aria-checked 同期 (CSS ぁEthumb 位置 / icon 色を担彁E、E
 const NEW_TEXT_DIR_LS_KEY = "psdesign_new_text_direction";
 function bindNewTextDirectionToggle() {
   const sw = document.getElementById("new-text-dir-switch");
   if (!sw) return;
 
-  // 起動時: localStorage から復元
+  // 起動時: localStorage から復允E
   try {
     const saved = localStorage.getItem(NEW_TEXT_DIR_LS_KEY);
     if (saved === "vertical" || saved === "horizontal") {
@@ -2031,7 +2052,7 @@ function bindZoomTool() {
     const pane = getActivePane();
     const z = pane === "pdf" ? getPdfZoom() : getPsdZoom();
     level.textContent = `${paneLabel(pane)} ${Math.round(z * 100)}%`;
-    level.title = `${paneLabel(pane)} を 100% にリセット`;
+    level.title = `${paneLabel(pane)} を100% にリセット`;
   };
   updateLevel();
   onPdfZoomChange(updateLevel);
@@ -2042,7 +2063,7 @@ function bindZoomTool() {
   inn.addEventListener("click", () => zoomActivePaneBy(1.15));
   level.addEventListener("click", () => resetActivePaneZoom());
 
-  // Alt+wheel はカーソルが乗っているペインをズーム（active-pane には依存しない方が直感的）。
+  // Alt+wheel はカーソルが乗ってぁE��ペインをズーム�E�Ective-pane には依存しなぁE��が直感的�E�、E
   const attachWheel = (area, pane) => {
     if (!area) return;
     area.addEventListener(
@@ -2062,8 +2083,8 @@ function bindZoomTool() {
   window.addEventListener(
     "keydown",
     (e) => {
-      // ズーム系は WebView2 の既定ページズームに先取りされるため capture フェーズで拾う。
-      // 環境設定のキーを matchShortcut で照合してから handle。
+      // ズーム系は WebView2 の既定�Eージズームに先取りされるため capture フェーズで拾ぁE��E
+      // 環墁E��定�EキーめEmatchShortcut で照合してから handle、E
       let handled = false;
       if (matchShortcut(e, "zoomIn")) { zoomActivePaneBy(1.15); handled = true; }
       else if (matchShortcut(e, "zoomOut")) { zoomActivePaneBy(1 / 1.15); handled = true; }
@@ -2077,8 +2098,8 @@ function bindZoomTool() {
   );
 }
 
-// ページジャンプ対象は activePane を優先し、無効なら片方にフォールバック。
-// PDF 側を選んだ場合は仮想ページ番号（単ページ化時は見開き分割後の番号）でジャンプする。
+// ペ�Eジジャンプ対象は activePane を優先し、無効なら片方にフォールバック、E
+// PDF 側を選んだ場合�E仮想ペ�Eジ番号�E�単ペ�Eジ化時は見開き�E割後�E番号�E�でジャンプする、E
 let pageJumpTarget = "psd"; // "psd" | "pdf"
 
 function decidePageJumpTarget() {
@@ -2094,7 +2115,7 @@ function decidePageJumpTarget() {
   }
   if (psdHas) return { kind: "psd", total: getPages().length, current: getCurrentPageIndex(), label: "PSD" };
   if (pdfHas) return { kind: "pdf", total: getPdfVirtualPageCount(), current: getPdfPageIndex(), label: "PDF" };
-  // PSD/PDF とも無ければ TXT マーカーへフォールバック (pdfPageIndex を流用)
+  // PSD/PDF とも無ければ TXT マ�Eカーへフォールバック (pdfPageIndex を流用)
   if (txtHas) return { kind: "pdf", total: getTxtPageCount(), current: getPdfPageIndex(), label: "テキスト" };
   return null;
 }
@@ -2191,7 +2212,7 @@ function homeFlowFileSummary(paths, emptyLabel) {
   const list = Array.isArray(paths) ? paths.filter(Boolean) : paths ? [paths] : [];
   if (list.length === 0) return emptyLabel;
   if (list.length === 1) return homeFlowBaseName(list[0]);
-  return `${homeFlowBaseName(list[0])} ほか ${list.length - 1}件`;
+  return `${homeFlowBaseName(list[0])} ほぁE${list.length - 1}件`;
 }
 
 function homeFlowFilterPaths(paths, kind) {
@@ -2203,6 +2224,170 @@ function homeFlowFilterPaths(paths, kind) {
   return [];
 }
 
+async function homeFlowResolveDroppedPaths(paths, kind) {
+  const direct = homeFlowFilterPaths(paths, kind);
+  const list = (Array.isArray(paths) ? paths : [paths])
+    .filter((p) => typeof p === "string" && p.length > 0);
+  const folderCandidates = list.filter((p) => !/\.(psd|txt|pdf|jpe?g|png)$/i.test(p));
+  const fromFolders = [];
+  for (const folder of folderCandidates) {
+    try {
+      let files = [];
+      if (kind === "psd") {
+        files = await listPsdFilesInFolder(folder);
+      } else {
+        const { invoke } = await import("@tauri-apps/api/core");
+        const entries = await invoke("list_directory_entries", { path: folder });
+        const entryPaths = Array.isArray(entries)
+          ? entries.filter((entry) => entry?.isFile).map((entry) => entry.path).filter(Boolean)
+          : [];
+        files = homeFlowFilterPaths(entryPaths, kind);
+      }
+      if (Array.isArray(files) && files.length) fromFolders.push(...files);
+    } catch (e) {
+      console.warn("写植フォルダ展開に失敁E", folder, e);
+    }
+  }
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const resolved = [...direct, ...fromFolders].sort((a, b) => collator.compare(homeFlowBaseName(a), homeFlowBaseName(b)));
+  return kind === "txt" ? resolved.slice(0, 1) : resolved;
+}
+
+function openReferenceHiddenPicker(paths, selectedPages = new Set(), skipFirstBlankPage = false) {
+  return new Promise(async (resolve) => {
+    let settled = false;
+    let cards = [];
+    const selected = new Set(selectedPages);
+    let skipFirstBlank = !!skipFirstBlankPage;
+    const escapeHtml = (value) => String(value ?? "")
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+    const modal = document.createElement("div");
+    modal.className = "reference-hidden-modal";
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="reference-hidden-card" role="dialog" aria-modal="true" aria-labelledby="reference-hidden-title">
+        <div class="reference-hidden-header">
+          <div>
+            <div class="reference-hidden-title" id="reference-hidden-title">非表示にする見本を選択</div>
+            <div class="reference-hidden-subtitle">選択した見本は表示とページ計算から除外されます</div>
+          </div>
+          <button class="reference-hidden-close" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div class="reference-hidden-body">
+          <div class="reference-hidden-loading">見本を読み込み中...</div>
+          <div class="reference-hidden-grid" hidden></div>
+        </div>
+        <div class="reference-hidden-footer">
+          <div class="reference-hidden-footer-info">
+            <label class="reference-hidden-skip-first">
+              <input type="checkbox" data-reference-hidden-skip-first />
+              <span>先頭白紙ページを除外</span>
+            </label>
+            <span class="reference-hidden-count"></span>
+          </div>
+          <div class="reference-hidden-actions">
+            <button class="page-jump-btn reference-hidden-clear" type="button">選択解除</button>
+            <button class="page-jump-btn reference-hidden-cancel" type="button">キャンセル</button>
+            <button class="page-jump-btn page-jump-btn-primary reference-hidden-apply" type="button">反映</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    const grid = modal.querySelector(".reference-hidden-grid");
+    const loading = modal.querySelector(".reference-hidden-loading");
+    const count = modal.querySelector(".reference-hidden-count");
+    const skipFirstInput = modal.querySelector("[data-reference-hidden-skip-first]");
+    if (skipFirstInput) skipFirstInput.checked = skipFirstBlank;
+    const updateCount = () => {
+      if (count) {
+        const parts = [];
+        parts.push(selected.size ? `${selected.size}ページを非表示` : "非表示なし");
+        if (skipFirstBlank) parts.push("先頭白紙除外");
+        count.textContent = parts.join(" / ");
+      }
+      for (const btn of modal.querySelectorAll(".reference-hidden-page-card")) {
+        btn.classList.toggle("hidden-selected", selected.has(Number(btn.dataset.index)));
+      }
+    };
+    const renderCards = () => {
+      if (!grid) return;
+      grid.innerHTML = "";
+      for (const card of cards) {
+        const btn = document.createElement("button");
+        btn.className = "reference-hidden-page-card";
+        btn.type = "button";
+        btn.dataset.index = String(card.index);
+        btn.innerHTML = `
+          <span class="reference-hidden-thumb">
+            ${card.thumbnail ? `<img src="${card.thumbnail}" alt="">` : '<span class="reference-hidden-thumb-empty">Preview</span>'}
+            <span class="reference-hidden-overlay">非表示</span>
+          </span>
+          <span class="reference-hidden-info">
+            <span class="reference-hidden-page">${escapeHtml(card.pageLabel)}</span>
+            <span class="reference-hidden-name" title="${escapeHtml(card.sourceLabel)}">${escapeHtml(card.sourceLabel)}</span>
+          </span>
+        `;
+        btn.addEventListener("click", () => {
+          const index = Number(btn.dataset.index);
+          if (selected.has(index)) selected.delete(index); else selected.add(index);
+          updateCount();
+        });
+        grid.appendChild(btn);
+      }
+      updateCount();
+    };
+    const cleanup = (value) => {
+      if (settled) return;
+      settled = true;
+      window.removeEventListener("keydown", onKeyDown, true);
+      hideModalAnimated(modal);
+      setTimeout(() => modal.remove(), 260);
+      resolve(value);
+    };
+    modal.querySelector(".reference-hidden-close")?.addEventListener("click", () => cleanup(null));
+    modal.querySelector(".reference-hidden-cancel")?.addEventListener("click", () => cleanup(null));
+    modal.querySelector(".reference-hidden-clear")?.addEventListener("click", () => {
+      selected.clear();
+      updateCount();
+    });
+    skipFirstInput?.addEventListener("change", (e) => {
+      skipFirstBlank = !!e.currentTarget.checked;
+      updateCount();
+    });
+    modal.querySelector(".reference-hidden-apply")?.addEventListener("click", () => cleanup({
+      hiddenPages: new Set(selected),
+      skipFirstBlankPage: skipFirstBlank,
+    }));
+    modal.addEventListener("mousedown", (e) => {
+      if (e.target === modal) cleanup(null);
+    });
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") cleanup(null);
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    showModalAnimated(modal);
+    try {
+      cards = await buildReferencePageCards(paths);
+      if (!cards.length) {
+        if (loading) loading.textContent = "表示できる見本がありません";
+        updateCount();
+        return;
+      }
+      if (loading) loading.hidden = true;
+      if (grid) grid.hidden = false;
+      renderCards();
+    } catch (e) {
+      console.error("buildReferencePageCards failed:", e);
+      if (loading) loading.textContent = "見本の読み込みに失敗しました";
+      toast(`見本一覧を作成できませんでした: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
+    }
+  });
+}
+
 function openHomeTypesetDialog() {
   return new Promise((resolve) => {
     let referencePaths = [];
@@ -2210,9 +2395,10 @@ function openHomeTypesetDialog() {
     let txtPath = null;
     let settled = false;
     let pickingFile = false;
-    let referencePageCount = 0;
+    let referencePageCount = null;
     let referenceCountToken = 0;
     let excludeFirstReferencePage = false;
+    let hiddenReferencePages = new Set();
     let referenceCounting = false;
 
     const modal = document.createElement("div");
@@ -2293,7 +2479,7 @@ function openHomeTypesetDialog() {
         </div>
         <div class="home-typeset-actions">
           <button class="page-jump-btn home-typeset-cancel" type="button">キャンセル</button>
-          <button class="page-jump-btn page-jump-btn-primary home-typeset-start" type="button" disabled>開始</button>
+          <button class="page-jump-btn page-jump-btn-primary home-typeset-start" type="button" disabled>開姁E/button>
         </div>
       </div>
     `;
@@ -2332,26 +2518,29 @@ function openHomeTypesetDialog() {
       row.insertAdjacentHTML("afterbegin", `<span class="home-typeset-row-icon">${info.icon}</span>`);
     }
     const referenceRow = modal.querySelector('.home-typeset-row[data-slot="reference"]');
-    referenceRow?.querySelector(".home-typeset-row-main")?.insertAdjacentHTML(
-      "beforeend",
-      '<label class="home-typeset-skip-first"><input type="checkbox" data-reference-skip-first /><span>先頭白紙ページを除外</span></label>'
-    );
     referenceRow?.insertAdjacentHTML(
       "beforeend",
       '<div class="home-typeset-progress" aria-hidden="true"><span></span></div>'
     );
+    referenceRow?.querySelector('.home-typeset-pick-btn[data-pick="reference"]')?.insertAdjacentHTML(
+      "beforebegin",
+      '<button class="home-typeset-pick-btn home-typeset-hide-btn" data-reference-hide type="button" disabled>非表示選択</button>'
+    );
 
     const startBtn = modal.querySelector(".home-typeset-start");
-    const getReferenceDisplayCount = () => referencePageCount || referencePaths.length;
+    const getReferenceDisplayCount = () => Number.isFinite(referencePageCount) ? referencePageCount : referencePaths.length;
     const refreshReferencePageCount = async () => {
       const token = ++referenceCountToken;
       const paths = [...referencePaths];
       referenceCounting = paths.length > 0;
       update();
       try {
-        const count = await countReferencePages(paths, { skipFirstBlankPage: excludeFirstReferencePage });
+        const count = await countReferencePages(paths, {
+          skipFirstBlankPage: excludeFirstReferencePage,
+          excludedPages: hiddenReferencePages,
+        });
         if (token !== referenceCountToken) return getReferenceDisplayCount();
-        referencePageCount = count || paths.length;
+        referencePageCount = Number.isFinite(count) ? count : paths.length;
       } catch (e) {
         console.error("countReferencePages failed:", e);
         if (token !== referenceCountToken) return getReferenceDisplayCount();
@@ -2364,12 +2553,6 @@ function openHomeTypesetDialog() {
       }
       return getReferenceDisplayCount();
     };
-    modal.querySelector("[data-reference-skip-first]")?.addEventListener("change", (e) => {
-      excludeFirstReferencePage = !!e.currentTarget.checked;
-      referencePageCount = 0;
-      update();
-      if (referencePaths.length > 0) void refreshReferencePageCount();
-    });
     const update = () => {
       const refEl = modal.querySelector('[data-file="reference"]');
       const psdEl = modal.querySelector('[data-file="psd"]');
@@ -2398,18 +2581,34 @@ function openHomeTypesetDialog() {
         row.classList.toggle("loading", slot === "reference" && referenceCounting);
         row.classList.toggle("selected", active);
       }
+      const hideBtn = modal.querySelector("[data-reference-hide]");
+      if (hideBtn) {
+        hideBtn.disabled = referencePaths.length === 0 || referenceCounting;
+        hideBtn.classList.toggle("selected", hiddenReferencePages.size > 0 || excludeFirstReferencePage);
+        if (hiddenReferencePages.size > 0 && excludeFirstReferencePage) {
+          hideBtn.textContent = `非表示 ${hiddenReferencePages.size} / 白紙除外`;
+        } else if (hiddenReferencePages.size > 0) {
+          hideBtn.textContent = `非表示 ${hiddenReferencePages.size}`;
+        } else if (excludeFirstReferencePage) {
+          hideBtn.textContent = "白紙除外";
+        } else {
+          hideBtn.textContent = "非表示選択";
+        }
+      }
       if (startBtn) startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0;
     };
 
-    const applyDroppedPaths = (paths, slot = null) => {
+    const applyDroppedPaths = async (paths, slot = null) => {
       if (!Array.isArray(paths) || paths.length === 0) return false;
       let handled = false;
-      const applyToSlot = (kind) => {
-        const filtered = homeFlowFilterPaths(paths, kind);
+      const applyToSlot = async (kind) => {
+        const filtered = await homeFlowResolveDroppedPaths(paths, kind);
         if (filtered.length === 0) return;
         if (kind === "reference") {
           referencePaths = filtered;
-          referencePageCount = 0;
+          hiddenReferencePages = new Set();
+          excludeFirstReferencePage = false;
+          referencePageCount = null;
           void refreshReferencePageCount();
         }
         else if (kind === "psd") psdPaths = filtered;
@@ -2417,44 +2616,88 @@ function openHomeTypesetDialog() {
         handled = true;
       };
       if (slot) {
-        applyToSlot(slot);
+        await applyToSlot(slot);
       } else {
-        applyToSlot("reference");
-        applyToSlot("psd");
-        applyToSlot("txt");
+        await applyToSlot("reference");
+        await applyToSlot("psd");
+        await applyToSlot("txt");
       }
       if (handled) {
         update();
-        for (const row of modal.querySelectorAll(".home-typeset-row.drag-over")) {
-          row.classList.remove("drag-over");
-        }
+        clearDragOverRows();
       } else {
         toast("対応しているファイルをドロップしてください", { kind: "warning", duration: 2200 });
       }
       return handled;
     };
 
-    const slotFromDropPayload = (payload) => {
-      const position = payload?.position || payload?.physicalPosition || payload?.logicalPosition;
-      const x = Number(position?.x);
-      const y = Number(position?.y);
-      if (Number.isFinite(x) && Number.isFinite(y)) {
-        const row = document.elementFromPoint(x, y)?.closest?.(".home-typeset-row");
-        if (row && modal.contains(row)) return row.dataset.slot || null;
+    const clearDragOverRows = () => {
+      for (const row of modal.querySelectorAll(".home-typeset-row.drag-over")) {
+        row.classList.remove("drag-over");
       }
-      const hovered = modal.querySelector(".home-typeset-row.drag-over");
-      return hovered?.dataset?.slot || null;
+    };
+
+    const slotFromPaths = (paths) => {
+      const list = (Array.isArray(paths) ? paths : [paths])
+        .filter((p) => typeof p === "string" && p.length > 0);
+      if (list.some((p) => /\.psd$/i.test(p))) return "psd";
+      if (list.some((p) => /\.(pdf|jpe?g|png)$/i.test(p))) return "reference";
+      if (list.some((p) => /\.txt$/i.test(p))) return "txt";
+      return list.length > 0 ? "psd" : null;
+    };
+
+    const rowFromClientPoint = (x, y) => {
+      if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+      const direct = document.elementFromPoint(x, y)?.closest?.(".home-typeset-row");
+      if (direct && modal.contains(direct)) return direct;
+      for (const row of modal.querySelectorAll(".home-typeset-row")) {
+        const rect = row.getBoundingClientRect();
+        if (x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom) return row;
+      }
+      return null;
+    };
+
+    const slotFromDropPayload = (payload) => {
+      const positions = [
+        payload?.logicalPosition,
+        payload?.position,
+        payload?.physicalPosition,
+      ];
+      const dpr = window.devicePixelRatio || 1;
+      for (const position of positions) {
+        const x = Number(position?.x ?? position?.[0]);
+        const y = Number(position?.y ?? position?.[1]);
+        const row = rowFromClientPoint(x, y) || (dpr !== 1 ? rowFromClientPoint(x / dpr, y / dpr) : null);
+        if (row) return row.dataset.slot || null;
+      }
+      return modal.querySelector(".home-typeset-row.drag-over")?.dataset?.slot
+        || slotFromPaths(payload?.paths);
+    };
+
+    const handleHomeTypesetDragOver = (payload) => {
+      if (settled || pickingFile || modal.hidden) return false;
+      const slot = slotFromDropPayload(payload);
+      let matched = false;
+      for (const row of modal.querySelectorAll(".home-typeset-row")) {
+        const active = row.dataset.slot === slot;
+        row.classList.toggle("drag-over", active);
+        matched = matched || active;
+      }
+      return matched;
     };
 
     const handleHomeTypesetDrop = (paths, payload) => {
       if (settled || pickingFile || modal.hidden) return false;
-      return applyDroppedPaths(paths, slotFromDropPayload(payload));
+      void applyDroppedPaths(paths, slotFromDropPayload(payload));
+      return true;
     };
 
     const cleanup = (value) => {
       if (settled) return;
       settled = true;
       if (homeTypesetDropHandler === handleHomeTypesetDrop) homeTypesetDropHandler = null;
+      if (homeTypesetDragOverHandler === handleHomeTypesetDragOver) homeTypesetDragOverHandler = null;
+      if (homeTypesetDragLeaveHandler === clearDragOverRows) homeTypesetDragLeaveHandler = null;
       window.removeEventListener("keydown", onKeyDown, true);
       hideModalAnimated(modal);
       setTimeout(() => modal.remove(), 260);
@@ -2478,6 +2721,16 @@ function openHomeTypesetDialog() {
 
     modal.querySelector(".home-typeset-close")?.addEventListener("click", () => cleanup(null));
     modal.querySelector(".home-typeset-cancel")?.addEventListener("click", () => cleanup(null));
+    modal.querySelector("[data-reference-hide]")?.addEventListener("click", async () => {
+      if (referencePaths.length === 0 || referenceCounting) return;
+      const next = await openReferenceHiddenPicker(referencePaths, hiddenReferencePages, excludeFirstReferencePage);
+      if (!next) return;
+      hiddenReferencePages = next.hiddenPages instanceof Set ? next.hiddenPages : new Set(next.hiddenPages || []);
+      excludeFirstReferencePage = !!next.skipFirstBlankPage;
+      referencePageCount = null;
+      update();
+      void refreshReferencePageCount();
+    });
     modal.addEventListener("mousedown", (e) => {
       if (pickingFile) return;
       if (e.target === modal) cleanup(null);
@@ -2490,7 +2743,9 @@ function openHomeTypesetDialog() {
       try {
         if (kind === "reference") {
           referencePaths = await pickWithHomeDialogHidden(() => pickReferenceFiles());
-          referencePageCount = 0;
+          hiddenReferencePages = new Set();
+          excludeFirstReferencePage = false;
+          referencePageCount = null;
           void refreshReferencePageCount();
         } else if (kind === "psd") {
           psdPaths = await pickWithHomeDialogHidden(() => pickPsdFiles());
@@ -2521,7 +2776,7 @@ function openHomeTypesetDialog() {
         const paths = Array.from(e.dataTransfer?.files ?? [])
           .map((file) => file.path || file.name)
           .filter(Boolean);
-        applyDroppedPaths(paths, row.dataset.slot);
+        void applyDroppedPaths(paths, row.dataset.slot);
       });
     }
     startBtn?.addEventListener("click", async () => {
@@ -2536,10 +2791,12 @@ function openHomeTypesetDialog() {
         });
         return;
       }
-      cleanup({ referencePaths, psdPaths, txtPath, excludeFirstReferencePage });
+      cleanup({ referencePaths, psdPaths, txtPath, excludeFirstReferencePage, hiddenReferencePages: [...hiddenReferencePages] });
     });
     window.addEventListener("keydown", onKeyDown, true);
     homeTypesetDropHandler = handleHomeTypesetDrop;
+    homeTypesetDragOverHandler = handleHomeTypesetDragOver;
+    homeTypesetDragLeaveHandler = clearDragOverRows;
     update();
     showModalAnimated(modal);
   });
@@ -2560,7 +2817,10 @@ async function startHomeTypesetFlow() {
   await transitionFromHome();
   try {
     clearAiOcrDoc();
-    await loadReferenceFiles(picked.referencePaths, { skipFirstBlankPage: !!picked.excludeFirstReferencePage });
+    await loadReferenceFiles(picked.referencePaths, {
+      skipFirstBlankPage: !!picked.excludeFirstReferencePage,
+      excludedPages: picked.hiddenReferencePages,
+    });
     await loadPsdFilesByPaths(picked.psdPaths, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
     if (!getPages().length) return;
     if (picked.txtPath) await loadTxtFromPath(picked.txtPath);
@@ -2612,6 +2872,18 @@ function bindHomeScreen() {
   showHomeScreen();
 }
 
+async function syncHomeVersionLabel() {
+  const el = document.getElementById("home-version");
+  if (!el) return;
+  let version = packageInfo?.version;
+  try {
+    version = await getVersion();
+  } catch (_) {
+    // Browser-only dev falls back to package.json.
+  }
+  el.textContent = version ? `Ver ${version}` : "Ver -";
+}
+
 async function closeStartupSplash() {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -2623,6 +2895,7 @@ async function closeStartupSplash() {
 }
 
 function init() {
+  void syncHomeVersionLabel();
   document.getElementById("open-folder-btn").addEventListener("click", handleOpenFiles);
   document.getElementById("open-pdf-btn")?.addEventListener("click", handleOpenPdf);
   bindSaveMenu();
@@ -2668,20 +2941,20 @@ function init() {
   bindActivePaneTracking();
   bindResyncModal();
   bindViewModeControls();
-  // editor pane の初期化を view-mode 切替より先に行う。
-  // bindParallelViewMode の sync() が editor モードで focusEditor() を呼ぶ前に
-  // textarea を syncFromState() で正しい状態にしておく。
+  // editor pane の初期化を view-mode 刁E��より先に行う、E
+  // bindParallelViewMode の sync() ぁEeditor モードで focusEditor() を呼ぶ前に
+  // textarea めEsyncFromState() で正しい状態にしておく、E
   bindEditorPane();
   bindParallelViewMode();
   initSettingsUi();
-  // 環境設定の「デフォルト」（文字サイズ・行間・フチ太さ・フォント）をツール初期値に反映。
+  // 環墁E��定�E「デフォルト」（文字サイズ・行間・フチ太さ�Eフォント）をチE�Eル初期値に反映、E
   applyToolDefaults();
-  // 【v1.29.0】ルビあり行間 (%) を CSS variable で全体に伝達。
-  //   styles.css の .ruby-text transform で「親文字行と前の行のちょうど中間」位置を計算する。
-  //   設定 (写植設定タブ → ルビあり行間) を変えると即時更新。
-  // 【v1.29.x】さらに --ruby-parent-offset-em (UI 親寄せ em) も同期する。
-  //   これにより設定値の変更がビューアー上のルビ位置に即時反映される。
-  //   Photoshop 側の親寄せ em / 親離し px は exportEdits 経由で payload に乗る (後段)。
+  // 【v1.29.0】ルビあり行間 (%) めECSS variable で全体に伝達、E
+  //   styles.css の .ruby-text transform で「親斁E��行と前�E行�EちめE��ど中間」位置を計算する、E
+  //   設宁E(写植設定タチEↁEルビあり行間) を変えると即時更新、E
+  // 【v1.29.x】さらに --ruby-parent-offset-em (UI 親寁E�� em) も同期する、E
+  //   これにより設定値の変更がビューアー上�Eルビ位置に即時反映される、E
+  //   Photoshop 側の親寁E�� em / 親離ぁEpx は exportEdits 経由で payload に乗る (後段)、E
   const applyRubyCssVars = () => {
     const pct = Number(getDefault("rubyLeadingPct")) || 150;
     document.documentElement.style.setProperty("--ruby-row-leading-pct", String(pct));
@@ -2690,39 +2963,39 @@ function init() {
       "--ruby-parent-offset-em",
       Number.isFinite(uiOffsetEm) ? String(uiOffsetEm) : "0",
     );
-    // 既存レイヤーの ruby-text 位置を即時再描画 (CSS variable 更新だけでは
-    // 一部のブラウザで親要素の inline-block ボックス計算が遅延するため明示的に再描画)。
+    // 既存レイヤーの ruby-text 位置を即時�E描画 (CSS variable 更新だけでは
+    // 一部のブラウザで親要素の inline-block ボックス計算が遁E��するため明示皁E��再描画)、E
     try { refreshAllOverlays(); } catch (_) {}
   };
   applyRubyCssVars();
   onSettingsChange(applyRubyCssVars);
   renderAllSpreads();
   loadFontsFromBackend();
-  // フォントが非同期で登録されるたびにオーバーレイを再描画して反映。
+  // フォントが非同期で登録されるたびにオーバ�Eレイを�E描画して反映、E
   onFontsRegistered(() => refreshAllOverlays());
   bindGlobalBlurOnOutsideClick();
   initRulers();
   bindRulerToggle();
   bindNewTextDirectionToggle();
   bindViewerMode();
-  // services/psd-load.js から読込フェーズの節目で投げられるイベントを購読し、
-  // ページバー / 回転ボタン / ガイドロックボタンの可視状態を同期する。
-  // psd-load.js 側は main.js を直接 import しないので、循環参照を避けつつ
-  // UI 更新フックを差し込めるようにこの 1 箇所に集約している。
+  // services/psd-load.js から読込フェーズの節目で投げられるイベントを購読し、E
+  // ペ�Eジバ�E / 回転ボタン / ガイドロチE��ボタンの可視状態を同期する、E
+  // psd-load.js 側は main.js を直接 import しなぁE�Eで、循環参�Eを避けつつ
+  // UI 更新フックを差し込めるようにこ�E 1 箁E��に雁E��E��てぁE��、E
   window.addEventListener("psdesign:psd-loaded", () => {
     updatePageNav();
     updatePsdRotateVisibility();
     updatePsdGuidesLockVisibility();
     updatePsdGuidesApplyVisibility();
   });
-  // 初回起動セットアップ画面: AI 未インストール かつ 未スキップの初回のみ表示。
-  // await しない: 内部の checkAiModelsStatus は非同期だが他の起動処理を遅らせない。
+  // 初回起動セチE��アチE�E画面: AI 未インスト�Eル かつ 未スキチE�Eの初回のみ表示、E
+  // await しなぁE 冁E��の checkAiModelsStatus は非同期だが他�E起動�E琁E��遁E��せなぁE��E
   maybeShowFirstRunSetup();
   void closeStartupSplash();
 }
 
-// INPUT/TEXTAREA/contenteditable 以外をクリックしたら、現在フォーカス中のテキスト入力から
-// フォーカスを外す。Space でパンを切り替えた際に入力欄に文字が入る事故を防ぐ。
+// INPUT/TEXTAREA/contenteditable 以外をクリチE��したら、現在フォーカス中のチE��スト�E力かめE
+// フォーカスを外す。Space でパンを�Eり替えた際に入力欁E��斁E��が入る事故を防ぐ、E
 function bindGlobalBlurOnOutsideClick() {
   document.addEventListener("mousedown", (e) => {
     const active = document.activeElement;
@@ -2735,10 +3008,10 @@ function bindGlobalBlurOnOutsideClick() {
     if (!isTextInput) return;
     const target = e.target;
     if (!target) return;
-    // 入力欄自身やそれに紐づく UI（コンボボックス・ドロップダウン等）の中をクリックしたときは維持
+    // 入力欁E�E身めE��れに紐づぁEUI�E�コンボ�EチE��ス・ドロチE�Eダウン等）�E中をクリチE��したとき�E維持E
     if (target === active || active.contains(target)) return;
-    // editor パネル内のクリックも安全ゾーンに含める。in-place 編集 textarea が active な
-    // ときに行間 input / +/- / ルビボタンを触っても勝手に textarea が blur しないようにする。
+    // editor パネル冁E�EクリチE��も安�Eゾーンに含める。in-place 編雁Etextarea ぁEactive な
+    // ときに行間 input / +/- / ルビ�Eタンを触っても勝手に textarea ぁEblur しなぁE��ぁE��する、E
     const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .layer-box.editing, .editor");
     if (near) return;
     active.blur();

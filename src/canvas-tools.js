@@ -86,7 +86,7 @@ function syncInplaceSelectionHighlight(sel) {
   if (!window.CSS?.highlights || typeof Highlight === "undefined") return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
-  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return false;
   const startPos = charIndexToNodeOffset(inner, sel.start);
   const endPos = charIndexToNodeOffset(inner, sel.end);
@@ -106,7 +106,7 @@ export function restoreInplaceSelection(sel) {
   if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
-  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return false;
   const startPos = charIndexToNodeOffset(inner, sel.start);
   const endPos = charIndexToNodeOffset(inner, sel.end);
@@ -174,6 +174,15 @@ export function refreshAllOverlays() {
   for (const m of mounts.values()) renderOverlay(m);
 }
 
+export function commitActiveInPlaceEdit() {
+  const editing = document.querySelector(".layer-box.editing");
+  if (editing && typeof editing.__finalize === "function") {
+    editing.__finalize(true);
+    return true;
+  }
+  return false;
+}
+
 // 【v1.21.0】編集中レイヤーの inner で、char index 範囲 [start, end) を <span> でラップして
 // CSS スタイルを直接適用する。サイドバーから per-char サイズ・フォントを変更したときに
 // 編集中の DOM へリアルタイムに視覚反映するために使う。
@@ -191,7 +200,7 @@ export function applyEditModeStyleToRange(start, end, styleProps) {
   if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
-  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return false;
 
   const startPos = charIndexToNodeOffset(inner, start);
@@ -271,7 +280,7 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
   if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
-  const inner = editing.querySelector(".existing-layer-text, .new-layer-text");
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return false;
   if (typeof rubyText !== "string" || rubyText.length === 0) return false;
 
@@ -685,7 +694,8 @@ export function layerRectForExisting(page, layer, edit) {
   // 設定 ON かつ縦書きレイヤーのときのみ。
   const tcyEnabledExisting = (getDefault("tateChuYokoEnabled") !== false) && isVertical;
   // 【v1.16.0】measureMaxLineExtentEm はここで sizePt が確定してから呼ぶ（per-char override も反映）。
-  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, edit.charFonts, punctTsumePctExisting, tcyEnabledExisting);
+  const charFontsExisting = edit.charFonts ?? layer.charFonts ?? {};
+  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, charFontsExisting, punctTsumePctExisting, tcyEnabledExisting);
   // CJK 縦書きで小書き仮名（ょ・っ・ゃ等）や glyph の line-box overhang、
   // text-stroke の outset 半分（stroke 既定 20 PSD px → ~0.16em）を吸収するため
   // 列方向に 0.4em の安全余白を足す。テキスト本体は CSS で bbox 中央に配置するので
@@ -805,14 +815,24 @@ function applyFillPreview(inner, fillColor) {
   else if (fillColor === "black") inner.style.color = "#000";
 }
 
-function applyStrokePreview(inner, strokeColor, strokeWidthPx, pxPerPsd) {
-  if (!strokeColor || strokeColor === "none" || !(strokeWidthPx > 0) || !(pxPerPsd > 0)) return;
+function appendStrokePreviewUnderlay(box, inner, strokeColor, strokeWidthPx, pxPerPsd) {
+  if (!box || !inner || !strokeColor || strokeColor === "none" || !(strokeWidthPx > 0) || !(pxPerPsd > 0)) return;
   const cssColor = strokeColor === "white" ? "#fff" : "#000";
   // PSD px → screen px。最低 0.5px で visibility 確保。
   const w = Math.max(0.5, strokeWidthPx * pxPerPsd);
-  inner.style.webkitTextStroke = `${w}px ${cssColor}`;
+  const underlay = inner.cloneNode(true);
+  underlay.classList.add("stroke-preview-underlay");
+  underlay.setAttribute("aria-hidden", "true");
+  underlay.style.webkitTextStroke = `${w}px ${cssColor}`;
+  underlay.style.color = cssColor;
+  underlay.style.strokeLinejoin = "round";
+  underlay.style.strokeLinecap = "round";
+  underlay.style.webkitTextStrokeLinejoin = "round";
+  underlay.style.filter = `blur(${Math.min(0.8, Math.max(0.25, w * 0.08))}px)`;
   // paint-order を指定して、塗りが上・ストロークが下（外側近似）。
-  inner.style.paintOrder = "stroke fill";
+  underlay.style.paintOrder = "stroke fill";
+  inner.classList.add("stroke-preview-fill");
+  box.appendChild(underlay);
 }
 
 function renderOverlay(ctx) {
@@ -874,7 +894,7 @@ function renderOverlay(ctx) {
       inner, rect.previewText, defaultLeadPct, edit.lineLeadings, 0, 0,
       tcyEnabled && rect.isVertical,
       rect.isVertical,
-      edit.charSizes, existingSizePt, edit.charFonts,
+      edit.charSizes, existingSizePt, edit.charFonts ?? layer.charFonts,
       symbolFontPS,
       edit.charBolds,
       punctTsumePct,
@@ -888,13 +908,14 @@ function renderOverlay(ctx) {
     // span が override する。
     if (edit.syntheticBold === true) inner.style.fontWeight = "700";
     applyFillPreview(inner, edit.fillColor ?? layer.fillColor ?? "default");
-    applyStrokePreview(
+    box.appendChild(inner);
+    appendStrokePreviewUnderlay(
+      box,
       inner,
       edit.strokeColor ?? layer.strokeColor ?? "none",
       edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
       pxPerPsd,
     );
-    box.appendChild(inner);
 
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
@@ -903,7 +924,13 @@ function renderOverlay(ctx) {
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
       const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
-      const badge = createSizeBadge(effectivePt, page, edit.fontPostScriptName ?? layer.font ?? null);
+      const badge = createSizeBadge(
+        effectivePt,
+        page,
+        edit.fontPostScriptName ?? layer.font ?? null,
+        edit.strokeColor ?? layer.strokeColor ?? "none",
+        edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
+      );
       if (badge) box.appendChild(badge);
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
@@ -962,18 +989,25 @@ function renderOverlay(ctx) {
     // 【v1.22.0】layer 全体の合成太字。
     if (nl.syntheticBold === true) inner.style.fontWeight = "700";
     applyFillPreview(inner, nl.fillColor ?? "default");
-    applyStrokePreview(
+    box.appendChild(inner);
+    appendStrokePreviewUnderlay(
+      box,
       inner,
       nl.strokeColor ?? "none",
       nl.strokeWidthPx ?? 20,
       pxPerPsd,
     );
-    box.appendChild(inner);
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
       box.appendChild(createRotateHandle(ctx, nl.tempId));
-      const newBadge = createSizeBadge(nl.sizePt ?? 24, page, nl.fontPostScriptName ?? null);
+      const newBadge = createSizeBadge(
+        nl.sizePt ?? 24,
+        page,
+        nl.fontPostScriptName ?? null,
+        nl.strokeColor ?? "none",
+        nl.strokeWidthPx ?? 20,
+      );
       if (newBadge) box.appendChild(newBadge);
     }
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
@@ -1100,24 +1134,52 @@ function rubyPlacementBaseRect(wrap, box, vertical) {
   if (!baseRect) return null;
   const lineEl = lineElementForRubyWrap(wrap, box);
   const lineRect = layoutRectWithoutRuby(lineEl);
-  if (!lineRect) return baseRect;
+  if (lineRect) {
+    if (vertical) {
+      return {
+        left: lineRect.left,
+        right: lineRect.right,
+        top: baseRect.top,
+        bottom: baseRect.bottom,
+        width: lineRect.width,
+        height: baseRect.height,
+      };
+    }
+    return {
+      left: baseRect.left,
+      right: baseRect.right,
+      top: lineRect.top,
+      bottom: lineRect.bottom,
+      width: baseRect.width,
+      height: lineRect.height,
+    };
+  }
+  const rt = wrap.querySelector(".ruby-text");
+  if (!rt) return baseRect;
+  const rubyPct = Number(getDefault("rubyLeadingPct")) || 150;
+  const layerPct = Number(getDefault("leadingPct")) || 125;
+  const fontPx = rubyPct > 0 ? rubyFallbackAdvancePx(box, rt) / (rubyPct / 100) : 0;
+  if (fontPx <= 0) return baseRect;
+  const lineWidth = fontPx * (layerPct / 100);
+  const rightExtra = fontPx * 0.075;
+  const leftExtra = Math.max(0, lineWidth - baseRect.width - rightExtra);
   if (vertical) {
     return {
-      left: lineRect.left,
-      right: lineRect.right,
+      left: baseRect.left - leftExtra,
+      right: baseRect.right + rightExtra,
       top: baseRect.top,
       bottom: baseRect.bottom,
-      width: lineRect.width,
+      width: lineWidth,
       height: baseRect.height,
     };
   }
   return {
     left: baseRect.left,
     right: baseRect.right,
-    top: lineRect.top,
-    bottom: lineRect.bottom,
+    top: baseRect.top - leftExtra,
+    bottom: baseRect.bottom + rightExtra,
     width: baseRect.width,
-    height: lineRect.height,
+    height: lineWidth,
   };
 }
 
@@ -1140,7 +1202,7 @@ function screenPointToPsd(canvasRect, page, screenX, screenY) {
 function lineElementForRubyWrap(wrap, box) {
   const parent = wrap?.parentElement;
   if (!parent || parent === box) return null;
-  const inner = box?.querySelector?.(".new-layer-text, .existing-layer-text");
+  const inner = box?.querySelector?.(".new-layer-text:not(.stroke-preview-underlay), .existing-layer-text:not(.stroke-preview-underlay)");
   if (parent === inner) return null;
   return parent instanceof HTMLElement ? parent : null;
 }
@@ -1158,15 +1220,13 @@ function findNeighborLineRect(overlay, box, wrap, baseRect, vertical) {
   const wrapCenter = centerOfRect(baseRect);
   let best = null;
   const candidates = [];
-  for (const otherBox of overlay.querySelectorAll(".layer-box")) {
-    const inner = otherBox.querySelector(".new-layer-text, .existing-layer-text");
-    if (!inner) continue;
-    const lineChildren = Array.from(inner.children).filter((el) => el instanceof HTMLElement);
-    if (lineChildren.length > 0) {
-      for (const child of lineChildren) candidates.push(child);
-    } else {
-      candidates.push(inner);
-    }
+  const inner = box?.querySelector?.(".new-layer-text:not(.stroke-preview-underlay), .existing-layer-text:not(.stroke-preview-underlay)");
+  if (!inner) return null;
+  const lineChildren = Array.from(inner.children).filter((el) => el instanceof HTMLElement);
+  if (lineChildren.length > 0) {
+    for (const child of lineChildren) candidates.push(child);
+  } else {
+    candidates.push(inner);
   }
   for (const el of candidates) {
     if (el.contains(wrap)) continue;
@@ -1203,28 +1263,41 @@ function placeRubyAtLineMidpointsForOverlay(overlay, options = {}) {
       const baseCenter = centerOfRect(baseRect);
       let targetX = baseCenter.x;
       let targetY = baseCenter.y;
-      const neighbor = findNeighborLineRect(overlay, box, wrap, baseRect, vertical);
-      if (neighbor) {
+      let neighbor = findNeighborLineRect(overlay, box, wrap, baseRect, vertical);
+      if (!neighbor) {
+        const rubyAdvance = rubyFallbackAdvancePx(box, rt);
+        const rubyPct = Number(getDefault("rubyLeadingPct")) || 150;
+        const layerPct = Number(getDefault("leadingPct")) || 125;
+        const fontPx = rubyPct > 0 ? rubyAdvance / (rubyPct / 100) : 0;
+        const virtualGap = Math.max(0, fontPx * (rubyPct - layerPct) / 100);
         if (vertical) {
-          const middleX = (baseRect.right + neighbor.left) / 2;
-          targetX = middleX + (baseRect.right - middleX) * towardParentRatio;
-          targetY = baseCenter.y;
+          neighbor = {
+            left: baseRect.right + virtualGap,
+            right: baseRect.right + virtualGap + rubyAdvance,
+            top: baseRect.top,
+            bottom: baseRect.bottom,
+            width: rubyAdvance,
+            height: baseRect.height,
+          };
         } else {
-          targetX = baseCenter.x;
-          const middleY = (baseRect.top + neighbor.bottom) / 2;
-          targetY = middleY + (baseRect.top - middleY) * towardParentRatio;
+          neighbor = {
+            left: baseRect.left,
+            right: baseRect.right,
+            top: baseRect.top - virtualGap - rubyAdvance,
+            bottom: baseRect.top - virtualGap,
+            width: baseRect.width,
+            height: rubyAdvance,
+          };
         }
+      }
+      if (vertical) {
+        const middleX = (baseRect.right + neighbor.left) / 2;
+        targetX = middleX + (baseRect.right - middleX) * towardParentRatio;
+        targetY = baseCenter.y;
       } else {
-        const advance = rubyFallbackAdvancePx(box, rt);
-        if (vertical) {
-          const gap = Math.max(advance - baseRect.width, advance * 0.25, 1);
-          targetX = baseRect.right + gap * ((1 - towardParentRatio) / 2);
-          targetY = baseCenter.y;
-        } else {
-          targetX = baseCenter.x;
-          const gap = Math.max(advance - baseRect.height, advance * 0.25, 1);
-          targetY = baseRect.top - gap * ((1 - towardParentRatio) / 2);
-        }
+        targetX = baseCenter.x;
+        const middleY = (baseRect.top + neighbor.bottom) / 2;
+        targetY = middleY + (baseRect.top - middleY) * towardParentRatio;
       }
       const dx = targetX - anchorCenter.x;
       const dy = targetY - anchorCenter.y;
@@ -1237,7 +1310,7 @@ function placeRubyAtLineMidpointsForOverlay(overlay, options = {}) {
 }
 
 function uiTextBasisRectForBox(box) {
-  const inner = box?.querySelector?.(".new-layer-text, .existing-layer-text");
+  const inner = box?.querySelector?.(".new-layer-text:not(.stroke-preview-underlay), .existing-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return box?.getBoundingClientRect?.() ?? null;
   const rect = inner.getBoundingClientRect();
   const st = getComputedStyle(inner);
@@ -1421,7 +1494,7 @@ function scheduleBoxAutoFit(ctx) {
     const overlayH = ctx.overlay.clientHeight;
     if (overlayW <= 0 || overlayH <= 0) return;
     for (const box of ctx.overlay.querySelectorAll(".layer-box")) {
-      const inner = box.querySelector(".existing-layer-text, .new-layer-text");
+      const inner = box.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
       if (!inner) continue;
       const sw = inner.scrollWidth;
       const sh = inner.scrollHeight;
@@ -2117,7 +2190,19 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   }
 }
 
-function createSizeBadge(sizePt, page, fontPostScriptName) {
+function createStrokeBadgeSwatches(strokeColor, strokeWidthPx) {
+  const activeColor = (strokeColor !== "none" && Number(strokeWidthPx) > 0) ? strokeColor : "none";
+  const wrap = document.createElement("div");
+  wrap.className = "layer-size-badge-stroke size-row";
+  wrap.setAttribute("aria-label", "フチ");
+  const dot = document.createElement("span");
+  dot.className = `stroke-dot stroke-dot-${activeColor} layer-size-badge-stroke-dot active`;
+  dot.dataset.stroke = activeColor;
+  wrap.appendChild(dot);
+  return wrap;
+}
+
+function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none", strokeWidthPx = 20) {
   // 環境設定（デフォルトタブ）でフォント名・文字サイズの表示/非表示を一括切替。
   // OFF の場合はバッジ自体を生成せず null を返し、呼び出し側で append をスキップする。
   if (getDefault("showBadge") === false) return null;
@@ -2139,6 +2224,7 @@ function createSizeBadge(sizePt, page, fontPostScriptName) {
   sizeEl.className = "layer-size-badge-size";
   sizeEl.textContent = `${rounded}pt`;
   el.appendChild(sizeEl);
+  el.appendChild(createStrokeBadgeSwatches(strokeColor, strokeWidthPx));
   return el;
 }
 
@@ -2970,7 +3056,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     : `.layer-box-new[data-temp-id="${escapedKey}"]`;
   const box = ctx.overlay.querySelector(boxSelector);
   if (!box) return null;
-  const inner = box.querySelector(".existing-layer-text, .new-layer-text");
+  const inner = box.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return null;
 
   // 2. 開始時点のスナップショット（cancel 時の復元用）
@@ -2991,7 +3077,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     ? { ...(startEdit.charSizes ?? {}) }
     : { ...(target.nl.charSizes ?? {}) };
   const startCharFonts = isExisting
-    ? { ...(startEdit.charFonts ?? {}) }
+    ? { ...(startEdit.charFonts ?? target.layer.charFonts ?? {}) }
     : { ...(target.nl.charFonts ?? {}) };
   // 位置（x,y / dx,dy）も snapshot。recenterBox が edit 中に書き換えるので、
   // cancel 時に元の位置に戻すために必要。
@@ -3059,7 +3145,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
       const e = getEdit(page.path, target.layer.id) ?? {};
       return {
         charSizes: e.charSizes ?? {},
-        charFonts: e.charFonts ?? {},
+        charFonts: e.charFonts ?? target.layer.charFonts ?? {},
         charBolds: e.charBolds ?? {},
         charRubies: e.charRubies ?? {},
         lineLeadings: e.lineLeadings ?? {},
@@ -3625,6 +3711,12 @@ function startContentEditableEdit(ctx, target, options = {}) {
       }
       if (typeof options.afterCommit === "function") {
         try { options.afterCommit(finalContents); } catch (err) { console.error("afterCommit error", err); }
+      }
+      if (!isExisting && finalContents !== startContents) {
+        updateNewLayer(target.nl.tempId, {
+          autoFontSwitched: false,
+          autoFontSwitchBucket: -1,
+        });
       }
       if (abortRequested) abortHistoryTransient();
       else commitHistoryTransient(); // edit セッション全体を 1 history snapshot にまとめる

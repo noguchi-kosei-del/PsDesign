@@ -19,6 +19,7 @@ import {
 } from "./ui-feedback.js";
 import {
   getPdfPaths,
+  getPdfExcludedReferencePages,
   getPdfSkipFirstBlank,
   getPdfSplitMode,
   getTxtSource,
@@ -314,16 +315,21 @@ export function normalizeMokuroDocForReferencePages(doc) {
   if (!doc || !Array.isArray(doc.pages)) return doc;
   if (doc.__opusVirtualPages === true) return doc;
 
+  const excludedPages = getPdfExcludedReferencePages();
+  const physicalPages = excludedPages.size
+    ? doc.pages.filter((_, index) => !excludedPages.has(index + 1))
+    : doc.pages;
+
   let pages;
   if (getPdfSplitMode()) {
     pages = [];
-    for (const page of doc.pages) {
+    for (const page of physicalPages) {
       pages.push(splitMokuroPageToHalf(page, "right"));
       pages.push(splitMokuroPageToHalf(page, "left"));
     }
     if (getPdfSkipFirstBlank()) pages = pages.slice(1);
   } else {
-    pages = getPdfSkipFirstBlank() ? doc.pages.slice(1) : doc.pages.slice();
+    pages = getPdfSkipFirstBlank() ? physicalPages.slice(1) : physicalPages.slice();
   }
 
   return {

@@ -583,6 +583,7 @@ function applyStrokeEffect(layerRef, opts) {
   stroke.putEnumerated(sID("mode"), sID("blendMode"), sID("normal"));
   stroke.putUnitDouble(sID("opacity"), sID("percentUnit"), 100);
   stroke.putUnitDouble(sID("size"), sID("pixelsUnit"), size);
+  stroke.putBoolean(sID("antiAlias"), true);
 
   var c = new ActionDescriptor();
   c.putDouble(sID("red"), rgb[0]);
@@ -1165,7 +1166,8 @@ function computeRubyLineIndices(contents, charRubies, direction) {
 // 【v1.29.x】rubyPhotoshopOffsetEm / rubyPhotoshopBiasPx: ルビ位置 Photoshop 微調整値。
 // settings (写植設定) で変更可能。デフォルト 0 / 0。
 function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirection, parentFontPS, parentFillColor, parentTopLeftOverride, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx) {
-  if (!charRubies || isObjEmpty(charRubies)) return;
+  if (!charRubies || isObjEmpty(charRubies)) return [];
+  var __createdRubyLayers = [];
 
   for (var key in charRubies) {
     if (!charRubies.hasOwnProperty(key)) continue;
@@ -1208,7 +1210,7 @@ function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirect
     if (monoSegments) {
       for (var mi = 0; mi < parentText.length; mi++) {
         try {
-          createRubyLayer(parentLayer, contents, startChar + mi, startChar + mi + 1,
+          var __mrLayer = createRubyLayer(parentLayer, contents, startChar + mi, startChar + mi + 1,
                           parentText.charAt(mi), monoSegments[mi],
                           rubySizePt, parentDirection, parentFontPS, parentFillColor,
                           // モノルビは最初の文字 (mi=0) のみ UI offset を使う。
@@ -1217,23 +1219,26 @@ function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirect
                           mi === 0 ? uiAbsX : null, mi === 0 ? uiAbsY : null,
                           parentTopLeftOverride,
                           rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
+          if (__mrLayer) __createdRubyLayers.push(__mrLayer);
         } catch (eMono) {
           addWarning("モノルビ「" + parentText.charAt(mi) + "（" + monoSegments[mi] + "）」適用失敗: " + eMono);
         }
       }
     } else {
       try {
-        createRubyLayer(parentLayer, contents, startChar, endChar,
+        var __grLayer = createRubyLayer(parentLayer, contents, startChar, endChar,
                         parentText, rubyText,
                         rubySizePt, parentDirection, parentFontPS, parentFillColor,
                         uiOffsetX, uiOffsetY, uiAbsX, uiAbsY,
                         parentTopLeftOverride,
                         rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
+        if (__grLayer) __createdRubyLayers.push(__grLayer);
       } catch (eGroup) {
         addWarning("グループルビ「" + parentText + "（" + rubyText + "）」適用失敗: " + eGroup);
       }
     }
   }
+  return __createdRubyLayers;
 }
 
 // 1 個のルビレイヤーを生成して親の直前に挿入。
@@ -1423,6 +1428,7 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
   try {
     rubyLayer.move(parentLayer, ElementPlacement.PLACEBEFORE);
   } catch (eMove) {}
+  return rubyLayer;
 }
 
 // 親レイヤー全体の bounds を px 単位で取得。
@@ -2195,16 +2201,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           layer.translate(new UnitValue(dx, "px"), new UnitValue(dy, "px"));
         }
       }
-      if (typeof e.strokeColor === "string" || typeof e.strokeWidth === "number") {
-        try {
-          applyStrokeEffect(layer, {
-            color: (typeof e.strokeColor === "string") ? e.strokeColor : "none",
-            size: (typeof e.strokeWidth === "number") ? e.strokeWidth : 20,
-          });
-        } catch (eStroke) {
-          addWarning("境界線効果の適用に失敗 (layer " + e.id + "): " + eStroke);
-        }
-      }
+      // フチは文字装飾・ルビ・回転がすべて終わった後に一度だけ確定する。
       if (typeof e.fillColor === "string") {
         var fc = fillColorFor(e.fillColor);
         if (fc) {
@@ -2340,6 +2337,16 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           addWarning("レイヤー回転の適用に失敗 (layer " + e.id + "): " + eRot);
         }
       }
+      if (typeof e.strokeColor === "string" || typeof e.strokeWidth === "number") {
+        try {
+          applyStrokeEffect(layer, {
+            color: (typeof e.strokeColor === "string") ? e.strokeColor : "none",
+            size: (typeof e.strokeWidth === "number") ? e.strokeWidth : 20,
+          });
+        } catch (eStrokeUnder) {
+          addWarning("境界線効果の適用に失敗(layer " + e.id + "): " + eStrokeUnder);
+        }
+      }
     }
     if (newLayers && newLayers.length > 0) {
       // PsDesign が追加するテキストレイヤーは「毎回新しい text グループ」
@@ -2438,14 +2445,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             layerRef.translate(new UnitValue(_fixDx, "px"), new UnitValue(_fixDy, "px"));
           }
         } catch (eBounds) {}
-        try {
-          applyStrokeEffect(layerRef, {
-            color: (typeof nl.strokeColor === "string") ? nl.strokeColor : "none",
-            size: (typeof nl.strokeWidth === "number") ? nl.strokeWidth : 20,
-          });
-        } catch (eStrokeNew) {
-          addWarning("新規レイヤーへの境界線効果適用に失敗: " + eStrokeNew);
-        }
+        // フチはルビ生成後に一括適用する。ここで先に付けると、
+        // Photoshop の bounds が変わり、ルビ位置計算がぶれる。
         // 【v1.29.x】ルビあり時は applyLineLeadings (Ldng pt 固定) を呼ばず、
         // 代わりに後段の applyRubyAutoLeadingPercentage で paragraphStyleRange を分割する。
         // ルビなしのときだけユーザーの手動 per-line override を当てる。
@@ -2479,6 +2480,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         }
         // 【v1.26.0】ルビ（新規レイヤー）。親 layer の textKey 上書きが完了してから呼ぶ。
         // ルビレイヤーは親の直前に追加され、新規 text グループ (__textGroup) 内に居る。
+        var __rubyLayersNL = [];
         if (nl.charRubies && !isObjEmpty(nl.charRubies)) {
           // ルビあり行 (= main.js doApply で setLineLeading 済みの行) の
           // paragraphStyle.autoLeadingPercentage を rubyLeadingPct/100 に上書き。
@@ -2504,8 +2506,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             // シフトしても、ルビは「現在の親 bounds + uiOffsetX/Y」基準で配置することで、
             // ビューアー上で見ていた「親-ルビの相対位置」を維持する。
             var __rubiesScaledN = scaleRubyAbsoluteCoords(nl.charRubies, __rubyAbsScaleX, __rubyAbsScaleY);
-            applyRubies(layerRef, nti.contents, __rubiesScaledN, __szRN, __dirRN, __fontRN, __colRN, null,
+            var __rl = applyRubies(layerRef, nti.contents, __rubiesScaledN, __szRN, __dirRN, __fontRN, __colRN, null,
                         rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
+            if (__rl && __rl.length) __rubyLayersNL = __rl;
           } catch (eRubyN) {
             addWarning("新規レイヤーのルビ適用に失敗: " + eRubyN);
           }
@@ -2553,12 +2556,69 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         }
         // 全設定が完了したら "text" フォルダへ移動（座標は document 絶対なので
         // 表示位置は変わらない）。group 確保に失敗していた場合は doc 直下のまま。
-        if (__textGroup) {
-          try {
-            layerRef.move(__textGroup, ElementPlacement.PLACEATBEGINNING);
-          } catch (eMoveNL) {
-            addWarning("text フォルダへの移動に失敗 (新規レイヤー): " + eMoveNL);
+        var __strokeColorNL = (typeof nl.strokeColor === "string") ? nl.strokeColor : "none";
+        var __strokeSizeNL = (typeof nl.strokeWidth === "number") ? nl.strokeWidth : 20;
+        var __hasStrokeNL = (__strokeColorNL === "white" || __strokeColorNL === "black") && __strokeSizeNL > 0;
+        var __hasRubiesNL = (__rubyLayersNL && __rubyLayersNL.length > 0);
+        if (__hasRubiesNL) {
+          for (var __lkI = 0; __lkI < __rubyLayersNL.length; __lkI++) {
+            try { __rubyLayersNL[__lkI].link(layerRef); } catch (eLinkR) {}
           }
+        }
+        var __subGroupNL = null;
+        if (__hasStrokeNL && __hasRubiesNL) {
+          try {
+            if (__textGroup) {
+              try { __subGroupNL = __textGroup.layerSets.add(); } catch (eSgInTg) {
+                __subGroupNL = doc.layerSets.add();
+              }
+            } else {
+              __subGroupNL = doc.layerSets.add();
+            }
+            try {
+              __subGroupNL.name = (typeof layerRef.name === "string" && layerRef.name.length > 0) ? layerRef.name : "text";
+            } catch (eSgName) {}
+            for (var __sgI = __rubyLayersNL.length - 1; __sgI >= 0; __sgI--) {
+              try { __rubyLayersNL[__sgI].move(__subGroupNL, ElementPlacement.PLACEATBEGINNING); } catch (eSgR) {}
+            }
+            try { layerRef.move(__subGroupNL, ElementPlacement.PLACEATEND); } catch (eSgP) {}
+            try { applyStrokeEffect(layerRef, { color: "none", size: 0 }); } catch (eDisParentStroke) {}
+            try { applyStrokeEffect(__subGroupNL, { color: __strokeColorNL, size: __strokeSizeNL }); } catch (eSgStroke) {
+              addWarning("白フチ付きルビグループへの境界線効果適用に失敗: " + eSgStroke);
+            }
+          } catch (eSgCreate) {
+            addWarning("白フチ付きルビグループ作成に失敗: " + eSgCreate);
+            __subGroupNL = null;
+          }
+        }
+        if (__textGroup && !__subGroupNL) {
+          try { layerRef.move(__textGroup, ElementPlacement.PLACEATBEGINNING); } catch (eMoveNL2) {
+            addWarning("text フォルダへの移動に失敗 (新規レイヤー): " + eMoveNL2);
+          }
+          if (__hasRubiesNL) {
+            for (var __tgI = __rubyLayersNL.length - 1; __tgI >= 0; __tgI--) {
+              try { __rubyLayersNL[__tgI].move(layerRef, ElementPlacement.PLACEBEFORE); } catch (eTgR) {}
+            }
+          }
+        } else if (__textGroup && __subGroupNL) {
+          try { __subGroupNL.move(__textGroup, ElementPlacement.PLACEATBEGINNING); } catch (eMoveSg) {}
+        }
+        try { layerRef.visible = true; } catch (eVisNL2) {}
+        if (__subGroupNL) { try { __subGroupNL.visible = true; } catch (eVisSg) {} }
+        if (__hasRubiesNL) {
+          for (var __vrI = 0; __vrI < __rubyLayersNL.length; __vrI++) {
+            try { __rubyLayersNL[__vrI].visible = true; } catch (eVisR) {}
+          }
+        }
+        // フチはここだけで確定する。ルビあり + グループ作成成功時はグループ側にだけ境界線を持たせる。
+        if (__hasStrokeNL && (!__hasRubiesNL || !__subGroupNL)) {
+          try {
+            applyStrokeEffect(layerRef, { color: __strokeColorNL, size: __strokeSizeNL });
+          } catch (eStrokeNewFinal) {
+            addWarning("新規レイヤーの境界線効果適用に失敗: " + eStrokeNewFinal);
+          }
+        } else if (!__subGroupNL) {
+          try { applyStrokeEffect(layerRef, { color: "none", size: 0 }); } catch (eStrokeClearNew) {}
         }
         // 念のため可視化（一部 PS で move 後に visible=false になるケースを補正）
         try { layerRef.visible = true; } catch (eVisNL) {}

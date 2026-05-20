@@ -29,6 +29,8 @@ import {
   beginHistoryTransient,
   commitHistoryTransient,
   abortHistoryTransient,
+  setActivePane,
+  setPsdZoom,
 } from "./state.js";
 import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress, promptDialog, showProgress, updateProgress } from "./ui-feedback.js";
@@ -795,7 +797,20 @@ function assignBlocksToTxt(txtBlocks, sortedBlocks) {
   return assigned;
 }
 
-function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
+function buildTxtPagesForPlacement(parsed) {
+  if (!parsed?.hasMarkers) {
+    return [{ pageNumber: 1, blocks: parsed?.all ?? [] }];
+  }
+  return Array.from(parsed.byPage.entries())
+    .sort(([a], [b]) => a - b)
+    .map(([pageNumber, blocks]) => ({ pageNumber, blocks: blocks ?? [] }));
+}
+
+function buildTxtPageMapForSync(parsed) {
+  return parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
+}
+
+function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults) {
   const N = Math.min(psdPages.length, mokuroDoc.pages.length);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
   const baseName = (p) => {
@@ -805,7 +820,8 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
   for (let i = 0; i < N; i++) {
     const psd = psdPages[i];
     const mokuro = mokuroDoc.pages[i];
-    const txt = txtByPage.get(i + 1) ?? [];
+    const txtPage = txtPages[i] ?? { pageNumber: i + 1, blocks: [] };
+    const txt = txtPage.blocks ?? [];
     const sorted = sortBlocksMangaOrder(mokuro.blocks ?? []);
     // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
     // 連結グループ判定 (ひょうたん型フキダシ検出)。Union-Find で 3 条件 (vertical 一致 +
@@ -822,7 +838,7 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtByPage, defaults) {
       const block = assigned?.block;
       const blockIndex = Number.isInteger(assigned?.index) ? assigned.index : j;
       const matchScore = Number.isFinite(assigned?.score) ? assigned.score : 0;
-      const sourceTxtRef = { pageNumber: i + 1, paragraphIndex: j, ocrBlockIndex: blockIndex, ocrMatchScore: matchScore };
+      const sourceTxtRef = { pageNumber: txtPage.pageNumber, paragraphIndex: j, ocrBlockIndex: blockIndex, ocrMatchScore: matchScore };
       if (block) {
         const layer = mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef, groups[blockIndex]);
         layer.lowOcrTextMatch = assigned?.lowConfidence === true;
@@ -1068,7 +1084,7 @@ export async function runAutoPlace({
       return;
     }
     const parsed = parsePages(txtSrc.content);
-    const txtByPage = parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
+    const txtPages = buildTxtPagesForPlacement(parsed);
 
     // 3. プラン構築
     // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
@@ -1090,7 +1106,7 @@ export async function runAutoPlace({
       cloudShapeFontPostScriptName: getDefault("cloudShapeFontPostScriptName"),
     };
     const placementDoc = normalizeMokuroDocForReferencePages(cache.doc);
-    const plan = buildPlacementPlan(placementDoc, psdPages, txtByPage, defaults);
+    const plan = buildPlacementPlan(placementDoc, psdPages, txtPages, defaults);
 
     if (plan.totals.placed === 0) {
       await notifyDialog({
@@ -1122,6 +1138,8 @@ export async function runAutoPlace({
 
     // 6. 適用
     applyPlan(plan);
+    setActivePane("psd");
+    setPsdZoom(1);
     lastPlacedFingerprint = fingerprint;
     // 進捗モーダルだけ緑のチェックマークアニメで閉じる。完了 notifyDialog は
     // ユーザー要望で出さない（写植作業の流れを止めないため）。エラー時のみ下の
@@ -1155,7 +1173,7 @@ function syncPlacedFromTxt() {
   // 自動配置レイヤーが 1 件も無ければ早期 return（パースコスト回避）。
   if (!layers.some((l) => l && l.sourceTxtRef)) return;
   const parsed = parsePages(txtSrc.content);
-  const txtByPage = parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
+  const txtByPage = buildTxtPageMapForSync(parsed);
   // psdPath → page object のルックアップ。中心固定の x/y 再計算で page.dpi が必要。
   const pagesByPath = new Map();
   for (const p of getPages()) {
@@ -1188,6 +1206,10 @@ function syncPlacedFromTxt() {
       // bbox top-left 固定 → 旧中心からズレて見える（上左に寄ったように見える）。
       // 旧 contents の bbox 中心を求め、新 contents の bbox を中心起点で再配置する。
       const updates = { contents: next, charRubies: nextCharRubies, lineLeadings: nextLineLeadings };
+      if (next !== layer.contents) {
+        updates.autoFontSwitched = false;
+        updates.autoFontSwitchBucket = -1;
+      }
       const psdPage = pagesByPath.get(layer.psdPath);
       if (psdPage) {
         const sizePt = layer.sizePt ?? 24;
@@ -1932,6 +1954,28 @@ const POSITION_ADJUST_OPTIONS = [
   },
 ];
 
+function renderPositionAdjustPreview(mode) {
+  if (mode === "mode3") {
+    return `
+      <span class="ai-adjust-choice-preview ai-adjust-choice-preview-overlay" aria-hidden="true">
+        <span class="ai-adjust-choice-preview-photo ai-adjust-choice-preview-photo-back">
+          <span class="ai-adjust-choice-preview-mountain"></span>
+        </span>
+        <span class="ai-adjust-choice-preview-photo ai-adjust-choice-preview-photo-front">
+          <span class="ai-adjust-choice-preview-sun"></span>
+          <span class="ai-adjust-choice-preview-mountain"></span>
+        </span>
+      </span>`;
+  }
+
+  const isMode1 = mode === "mode1";
+  return `
+    <span class="ai-adjust-choice-preview ai-adjust-choice-preview-offset ${isMode1 ? "is-psd-framed" : "is-reference-framed"}" aria-hidden="true">
+      <span class="ai-adjust-choice-preview-doc ai-adjust-choice-preview-reference">見本</span>
+      <span class="ai-adjust-choice-preview-doc ai-adjust-choice-preview-psd">PSD</span>
+    </span>`;
+}
+
 function ensurePositionAdjustDialog() {
   let modal = $("ai-adjust-choice-modal");
   if (modal) return modal;
@@ -1949,8 +1993,11 @@ function ensurePositionAdjustDialog() {
       <div class="ai-adjust-choice-list">
         ${POSITION_ADJUST_OPTIONS.map((option) => `
           <button class="ai-adjust-choice-option" type="button" data-mode="${option.mode}">
-            <span class="ai-adjust-choice-option-title">${option.title}</span>
-            <span class="ai-adjust-choice-option-desc">${option.description}</span>
+            <span class="ai-adjust-choice-option-text">
+              <span class="ai-adjust-choice-option-title">${option.title}</span>
+              <span class="ai-adjust-choice-option-desc">${option.description}</span>
+            </span>
+            ${renderPositionAdjustPreview(option.mode)}
           </button>
         `).join("")}
       </div>

@@ -27,6 +27,7 @@ const state = {
   pdfDoc: null,
   pdfPath: null,
   pdfPaths: [], // loadReferenceFiles で読み込まれた全ファイルパス（自然順ソート済み）
+  pdfExcludedReferencePages: new Set(),
   pdfPageCount: 0,
   pdfListeners: new Set(),
   // 編集の undo / redo 履歴。スナップショット（edits + newLayers）配列。
@@ -339,7 +340,9 @@ export function setCharFontsRange(psdPath, layerIdOrTempId, from, to, postScript
     pushHistorySnapshot();
   } else {
     const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
-    const cur = { ...(existing.charFonts ?? {}) };
+    const page = state.pages.find((p) => p.path === psdPath);
+    const layer = page?.textLayers?.find((l) => l.id === layerIdOrTempId);
+    const cur = { ...(existing.charFonts ?? layer?.charFonts ?? {}) };
     for (let i = from; i < to; i++) {
       if (postScriptNameOrNull == null) delete cur[i]; else cur[i] = postScriptNameOrNull;
     }
@@ -353,7 +356,10 @@ export function getCharFont(psdPath, layerIdOrTempId, charIndex) {
     return nl?.charFonts?.[charIndex];
   }
   const e = getEdit(psdPath, layerIdOrTempId);
-  return e?.charFonts?.[charIndex];
+  if (e?.charFonts?.[charIndex]) return e.charFonts[charIndex];
+  const page = state.pages.find((p) => p.path === psdPath);
+  const layer = page?.textLayers?.find((l) => l.id === layerIdOrTempId);
+  return layer?.charFonts?.[charIndex];
 }
 
 // ===== 文字ごとの合成太字（faux bold / syntheticBold）オーバーライド =====
@@ -750,7 +756,12 @@ export function exportEdits() {
 
   for (const entry of state.edits.values()) {
     const { psdPath, layerId, ...rest } = entry;
-    ensure(psdPath).layers.push({ layerId, ...sanitizeNumericFields(rest) });
+    const page = state.pages.find((p) => p.path === psdPath) ?? null;
+    const layer = page?.textLayers?.find?.((l) => l.id === layerId) ?? null;
+    const payload = { layerId, ...sanitizeNumericFields(rest) };
+    if (payload.strokeColor == null && layer?.strokeColor != null) payload.strokeColor = layer.strokeColor;
+    if (payload.strokeWidthPx == null && Number.isFinite(layer?.strokeWidthPx)) payload.strokeWidthPx = layer.strokeWidthPx;
+    ensure(psdPath).layers.push(payload);
   }
 
   for (const nl of state.newLayers) {
@@ -1030,6 +1041,14 @@ export const onPsdZoomChange = $psdZoom.on;
 export function getPdfDoc() { return state.pdfDoc; }
 export function getPdfPath() { return state.pdfPath; }
 export function getPdfPaths() { return [...state.pdfPaths]; }
+export function getPdfExcludedReferencePages() { return new Set(state.pdfExcludedReferencePages); }
+export function setPdfExcludedReferencePages(pages) {
+  state.pdfExcludedReferencePages = new Set(
+    Array.from(pages || [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0),
+  );
+}
 export function getPdfPageCount() { return state.pdfPageCount; }
 export function setPdf(doc, path, paths) {
   const prev = state.pdfDoc;
@@ -1039,6 +1058,7 @@ export function setPdf(doc, path, paths) {
   state.pdfDoc = doc || null;
   state.pdfPath = path || null;
   state.pdfPaths = Array.isArray(paths) ? [...paths] : (path ? [path] : []);
+  state.pdfExcludedReferencePages = new Set();
   state.pdfPageCount = doc && typeof doc.numPages === "number" ? doc.numPages : 0;
   // ユーザー回転は PDF 切替時も保持（同じワークフローの PDF は同じ向きの傾向があるため）。
   // リセットしたい場合はホームに戻るで clearPdf → clearPdfRotation を呼ぶ。

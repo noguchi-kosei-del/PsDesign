@@ -8,6 +8,7 @@ import {
   getNewLayersForPsd,
   getAiOcrTextDiffs,
   getAiOcrTextSource,
+  getParallelViewMode,
   getPages,
   getPdfPageIndex,
   getStrokeColor,
@@ -22,6 +23,7 @@ import {
   onPdfPageIndexChange,
   onAiOcrTextDiffsChange,
   onAiOcrTextSourceChange,
+  onParallelViewModeChange,
   onTxtSourceChange,
   removeNewLayer,
   setTxtDirty,
@@ -60,7 +62,7 @@ function syncOcrSourcePanelVisibility() {
   const stage = $("spreads-stage");
   const toggle = $("editor-ocr-source-toggle");
   const source = getAiOcrTextSource();
-  const show = ocrSourcePanelVisible && !!source?.content;
+  const show = getParallelViewMode() === "editor" && ocrSourcePanelVisible && !!source?.content;
   if (toggle) toggle.checked = ocrSourcePanelVisible;
   if (panel) panel.hidden = !show;
   if (stage) stage.classList.toggle("ocr-source-visible", show);
@@ -663,6 +665,14 @@ export function cascadeRemoveTxtForLayers(deletedLayers, excludeTempIds = new Se
   const source = getTxtSource();
   if (!source) return false;
 
+  const hasRemainingLayerForRef = (pageNumber, paragraphIndex) => getNewLayers().some((layer) => {
+    if (!layer?.tempId || excludeTempIds.has(layer.tempId)) return false;
+    const ref = layer?.sourceTxtRef;
+    if (!ref) return false;
+    const refPage = ref.pageNumber == null ? null : Number(ref.pageNumber);
+    return refPage === pageNumber && ref.paragraphIndex === paragraphIndex;
+  });
+
   // ページごとに分けて、paragraphIndex の降順で処理する。
   // 降順にすると「先に下を消す → 上の index は不変」で重複補正が不要になる。
   const byPage = new Map();
@@ -682,6 +692,9 @@ export function cascadeRemoveTxtForLayers(deletedLayers, excludeTempIds = new Se
     for (const r of sortedDesc) {
       if (seen.has(r.paragraphIndex)) continue;
       seen.add(r.paragraphIndex);
+      // カット&ペースト等で同じ sourceTxtRef を別レイヤーがまだ参照している場合、
+      // 元レイヤー削除に合わせて TXT 段落まで消すと、残った貼り付け先も同期で巻き込まれる。
+      if (hasRemainingLayerForRef(pageNumber, r.paragraphIndex)) continue;
       const next = deleteBlockFromContent(content, pageNumber, r.paragraphIndex);
       if (next == null || next === content) continue;
       content = next;
@@ -1216,6 +1229,7 @@ export function initTxtSource() {
   // setTxtSource からも同じ listener が発火する（loadTxtFromPath 等の呼び出し直後の
   // 明示 renderViewer 呼出と二重実行になるが、いずれも同期描画なので副作用なし）。
   onTxtSourceChange(() => renderTxtSourceViewer());
+  onParallelViewModeChange(() => syncOcrSourcePanelVisibility());
   onAiOcrTextSourceChange(() => renderOcrSourceViewer());
   onAiOcrTextDiffsChange(() => renderOcrSourceViewer());
   $("clear-txt-btn").addEventListener("click", async () => {

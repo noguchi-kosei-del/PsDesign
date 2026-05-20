@@ -58,8 +58,8 @@ export const DEFAULT_SETTINGS = {
     rubyPhotoshopBiasPx: 0,
     // px（フチの太さ）。scope: creation-only
     strokeWidthPx: 20,
-    // 空文字 = 指定なし（system default）。scope: creation-only
-    fontPostScriptName: "",
+    // scope: creation-only
+    fontPostScriptName: "F910コミックW4-IPA Regular",
     // 選択中レイヤー下部のフォント名 + サイズバッジ（true: 表示 / false: 非表示）。
     // scope: render-all（refreshAllOverlays で全 layer-box の badge 有無が即時切替）
     showBadge: true,

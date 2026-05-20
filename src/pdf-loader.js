@@ -1,5 +1,5 @@
 import * as pdfjsLib from "pdfjs-dist";
-import { setPdf, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
+import { setPdf, setPdfExcludedReferencePages, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
 import { showProgress, hideProgress, toast, updateProgress } from "./ui-feedback.js";
 
 // 「見本」として読み込める拡張子。PDF（複数ページ）と、JPEG / PNG（単一画像）。
@@ -19,6 +19,14 @@ function basename(p) {
   const norm = p.replace(/\\/g, "/");
   const i = norm.lastIndexOf("/");
   return i >= 0 ? norm.slice(i + 1) : norm;
+}
+
+function normalizeExcludedPages(pages) {
+  return new Set(
+    Array.from(pages || [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0),
+  );
 }
 
 async function readFileBytes(path) {
@@ -145,11 +153,15 @@ async function readPdfDocument(path) {
 export async function countReferencePages(paths, options = {}) {
   if (!Array.isArray(paths) || paths.length === 0) return 0;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
-  const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
+  const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
+  const filtered = sortPathsNaturally(paths.filter((p) => REFERENCE_EXT_REGEX.test(p)));
   let count = 0;
   let hasPdf = false;
+  let sourceIndex = 0;
   for (const p of filtered) {
     if (IMAGE_EXT_REGEX.test(p)) {
+      sourceIndex += 1;
+      if (excludedPages.has(sourceIndex)) continue;
       count += 1;
       continue;
     }
@@ -159,6 +171,8 @@ export async function countReferencePages(paths, options = {}) {
       doc = await readPdfDocument(p);
       const pageTotal = Math.max(0, Number(doc?.numPages) || 0);
       for (let pageNum = 1; pageNum <= pageTotal; pageNum += 1) {
+        sourceIndex += 1;
+        if (excludedPages.has(sourceIndex)) continue;
         try {
           const page = await doc.getPage(pageNum);
           const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
@@ -173,6 +187,87 @@ export async function countReferencePages(paths, options = {}) {
     }
   }
   return skipFirstBlankPage && hasPdf ? Math.max(0, count - 1) : count;
+}
+
+export async function buildReferencePageCards(paths) {
+  const filtered = Array.isArray(paths) ? paths.filter((p) => REFERENCE_EXT_REGEX.test(p)) : [];
+  const sorted = sortPathsNaturally(filtered);
+  const cards = [];
+  let sourceIndex = 0;
+  for (const p of sorted) {
+    const name = basename(p);
+    if (IMAGE_EXT_REGEX.test(p)) {
+      sourceIndex += 1;
+      let bitmap = null;
+      try {
+        bitmap = await readImageBitmap(p);
+        cards.push({
+          index: sourceIndex,
+          path: p,
+          fileName: name,
+          pageLabel: `${cards.length + 1}P`,
+          sourceLabel: name,
+          thumbnail: makeImageThumbnail(bitmap),
+        });
+      } finally {
+        try { if (typeof bitmap?.close === "function") bitmap.close(); } catch (_) {}
+      }
+      continue;
+    }
+    let doc = null;
+    try {
+      doc = await readPdfDocument(p);
+      const total = Math.max(0, Number(doc?.numPages) || 0);
+      for (let pageNum = 1; pageNum <= total; pageNum += 1) {
+        sourceIndex += 1;
+        let thumbnail = "";
+        try {
+          thumbnail = await makePdfPageThumbnail(doc, pageNum);
+        } catch (e) {
+          console.warn("reference page thumbnail failed:", p, pageNum, e);
+        }
+        cards.push({
+          index: sourceIndex,
+          path: p,
+          fileName: name,
+          pageNum,
+          pageLabel: `${cards.length + 1}P`,
+          sourceLabel: total > 1 ? `${name} / ${pageNum}P` : name,
+          thumbnail,
+        });
+      }
+    } finally {
+      try { if (typeof doc?.destroy === "function") doc.destroy(); } catch (_) {}
+    }
+  }
+  return cards;
+}
+
+function makeImageThumbnail(bitmap) {
+  const max = 180;
+  const scale = Math.min(max / Math.max(1, bitmap.width), max / Math.max(1, bitmap.height), 1);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.round(bitmap.width * scale));
+  canvas.height = Math.max(1, Math.round(bitmap.height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/jpeg", 0.82);
+}
+
+async function makePdfPageThumbnail(doc, pageNum) {
+  const page = await doc.getPage(pageNum);
+  const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
+  const vp1 = page.getViewport({ scale: 1, rotation: baseRotation });
+  const scale = Math.min(180 / Math.max(1, vp1.width), 180 / Math.max(1, vp1.height), 1);
+  const viewport = page.getViewport({ scale, rotation: baseRotation });
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.max(1, Math.ceil(viewport.width));
+  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  const task = page.render({ canvasContext: canvas.getContext("2d"), viewport });
+  await task.promise;
+  return canvas.toDataURL("image/jpeg", 0.82);
 }
 
 export async function pickReferenceFiles() {
@@ -204,6 +299,7 @@ export async function pickPdfFile() {
 export async function loadReferenceFiles(paths, options = {}) {
   if (!Array.isArray(paths) || paths.length === 0) return;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
+  const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
   const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
   const hasPdf = filtered.some((p) => !IMAGE_EXT_REGEX.test(p));
   if (filtered.length === 0) {
@@ -225,6 +321,7 @@ export async function loadReferenceFiles(paths, options = {}) {
 
   const sources = [];
   const failures = [];
+  let sourceIndex = 0;
   try {
     for (let i = 0; i < total; i++) {
       const p = sorted[i];
@@ -236,12 +333,21 @@ export async function loadReferenceFiles(paths, options = {}) {
       });
       try {
         if (IMAGE_EXT_REGEX.test(p)) {
+          sourceIndex += 1;
+          if (excludedPages.has(sourceIndex)) continue;
           const bitmap = await readImageBitmap(p);
           sources.push({ type: "image", bitmap, path: p });
         } else {
           const doc = await readPdfDocument(p);
+          let addedFromDoc = false;
           for (let pn = 1; pn <= doc.numPages; pn++) {
+            sourceIndex += 1;
+            if (excludedPages.has(sourceIndex)) continue;
             sources.push({ type: "pdf", doc, pageNum: pn, path: p });
+            addedFromDoc = true;
+          }
+          if (!addedFromDoc) {
+            try { if (typeof doc?.destroy === "function") doc.destroy(); } catch (_) {}
           }
         }
       } catch (e) {
@@ -264,6 +370,7 @@ export async function loadReferenceFiles(paths, options = {}) {
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
     // 画像スキャンや自動配置が複数ファイルを OCR 対象にできるようにする。
     setPdf(compositeDoc, sorted[0], sorted);
+    setPdfExcludedReferencePages(excludedPages);
 
     if (failures.length > 0) {
       toast(
