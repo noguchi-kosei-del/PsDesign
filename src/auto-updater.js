@@ -3,10 +3,14 @@
 // idle → downloading → success → relaunch、または idle → error の状態遷移。
 
 import { check } from "@tauri-apps/plugin-updater";
+import { getVersion } from "@tauri-apps/api/app";
 import { relaunch } from "@tauri-apps/plugin-process";
 
 const STARTUP_DELAY_MS = 1500;
 const RELAUNCH_DELAY_MS = 1500;
+const RESET_MAJOR = 1;
+const RESET_MINOR = 4;
+const LEGACY_MINOR_FLOOR = 30;
 
 const ICONS = {
   download: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -39,6 +43,29 @@ let nowBtn = null;
 
 let dismissed = false;
 let cachedUpdate = null;
+
+function parseSemver(version) {
+  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(version || "").trim());
+  if (!m) return null;
+  return {
+    major: Number(m[1]),
+    minor: Number(m[2]),
+    patch: Number(m[3]),
+  };
+}
+
+function isLegacyUpdateFromBeforeVersionReset(currentVersion, updateVersion) {
+  const current = parseSemver(currentVersion);
+  const next = parseSemver(updateVersion);
+  if (!current || !next) return false;
+  return (
+    current.major === RESET_MAJOR &&
+    next.major === RESET_MAJOR &&
+    current.minor >= RESET_MINOR &&
+    current.minor < LEGACY_MINOR_FLOOR &&
+    next.minor >= LEGACY_MINOR_FLOOR
+  );
+}
 
 function ensureRefs() {
   if (modalEl) return true;
@@ -130,6 +157,12 @@ async function runUpdate() {
       hideModal();
       return;
     }
+    const currentVersion = await getVersion();
+    if (isLegacyUpdateFromBeforeVersionReset(currentVersion, update.version)) {
+      cachedUpdate = null;
+      hideModal();
+      return;
+    }
     await update.downloadAndInstall();
     renderSuccess();
     setTimeout(async () => {
@@ -171,6 +204,14 @@ export function bindAutoUpdater() {
     try {
       const update = await check();
       if (!update) return;
+      const currentVersion = await getVersion();
+      if (isLegacyUpdateFromBeforeVersionReset(currentVersion, update.version)) {
+        console.info("[updater] skip legacy update from before version reset:", {
+          currentVersion,
+          updateVersion: update.version,
+        });
+        return;
+      }
       cachedUpdate = update;
       renderIdle(update.version);
       showModal();

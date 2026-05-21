@@ -95,6 +95,51 @@ async function fetchEntries(dirPath) {
   return invoke("list_directory_entries", { path: dirPath });
 }
 
+async function fetchPathInfo(path) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("path_info", { path });
+}
+
+function normalizePathInput(raw) {
+  let s = String(raw ?? "").trim();
+  if (!s) return "";
+
+  // Markdown / HTML / Explorer の「リンクのコピー」系を普通のパスに寄せる。
+  const md = s.match(/^\[[^\]]*]\((.+)\)$/);
+  if (md) s = md[1].trim();
+  const href = s.match(/\bhref\s*=\s*["']([^"']+)["']/i);
+  if (href) s = href[1].trim();
+
+  for (let i = 0; i < 2; i++) {
+    const first = s[0];
+    const last = s[s.length - 1];
+    if ((first === '"' && last === '"') || (first === "'" && last === "'") || (first === "`" && last === "`")) {
+      s = s.slice(1, -1).trim();
+      continue;
+    }
+    if (first === "<" && last === ">") {
+      s = s.slice(1, -1).trim();
+      continue;
+    }
+    break;
+  }
+
+  if (/^file:/i.test(s)) {
+    try {
+      const url = new URL(s);
+      let p = decodeURIComponent(url.pathname || "");
+      if (url.host) p = `//${url.host}${p}`;
+      if (/^\/[A-Za-z]:/.test(p)) p = p.slice(1);
+      s = p.replace(/\//g, "\\");
+    } catch {
+      s = s.replace(/^file:\/+/i, "");
+      if (/^[A-Za-z]:/.test(s)) s = s.replace(/\//g, "\\");
+    }
+  }
+
+  return s.trim();
+}
+
 function escapeHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -414,6 +459,42 @@ async function navigateInto(dirPath) {
   await loadFolder(dirPath);
 }
 
+async function navigateFromPathInput(rawPath) {
+  const target = normalizePathInput(rawPath);
+  if (!target) return;
+  try {
+    const info = await fetchPathInfo(target);
+    if (info?.isDirectory) {
+      if (target !== currentPath) await navigateInto(target);
+      return;
+    }
+
+    if (info?.isFile) {
+      const parent = parentDir(target);
+      if (parent && parent !== currentPath) {
+        await navigateInto(parent);
+      }
+      if (currentOpts?.mode === "save") {
+        const input = $("file-picker-name-input");
+        if (input) input.value = info.name || baseName(target);
+      } else if (currentOpts?.mode === "open") {
+        selectedPaths.clear();
+        selectedPaths.add(target);
+        lastClickIndex = entries.findIndex((entry) => entry?.path === target);
+        syncRowSelectionDom();
+      }
+      updateConfirmState();
+    }
+  } catch (e) {
+    console.error("[file-picker] path input failed:", e);
+    const list = $("file-picker-list");
+    if (list) {
+      list.innerHTML = `<div class="file-picker-error">パスを開けません：${escapeHtml(String(e?.message ?? e))}</div>`;
+    }
+    renderPath();
+  }
+}
+
 async function goBack() {
   if (navStack.length === 0) return;
   if (currentPath) forwardStack.push(currentPath);
@@ -524,6 +605,15 @@ function closeAndResolve(value) {
 
 function onKeyDown(e) {
   if (isBusy) return;
+  if (e.key === "Enter" && e.target && e.target.id === "file-picker-path") {
+    e.preventDefault();
+    e.stopPropagation();
+    const pathEl = e.target;
+    void navigateFromPathInput(pathEl.value).finally(() => {
+      pathEl.blur();
+    });
+    return;
+  }
   if (e.key === "Escape") {
     e.preventDefault();
     e.stopPropagation();
@@ -615,9 +705,9 @@ function bindUiOnce() {
       if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        const target = (pathEl.value || "").trim();
+        const target = normalizePathInput(pathEl.value);
         if (target && target !== currentPath) {
-          void navigateInto(target);
+          void navigateFromPathInput(target);
         }
         // 移動成否に関わらずフォーカスを外す（選択ハイライトを外す）
         pathEl.blur();

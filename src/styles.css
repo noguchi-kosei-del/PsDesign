@@ -351,6 +351,13 @@ body.home-mode .toolbar .settings-toolbar-btn {
 .skip-blank-btn:hover {
   color: var(--accent);
 }
+.skip-blank-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+.skip-blank-btn:disabled:hover {
+  color: var(--text-muted);
+}
 .skip-blank-box {
   position: relative;
   width: 13px;
@@ -566,20 +573,6 @@ body.home-mode .toolbar .settings-toolbar-btn {
 }
 .ruby-parent-empty { color: var(--text-muted); }
 /* 【v1.29.x】親文字選択時の「N 行目」表示。ruby-parent-display の右隣にコンパクトに。 */
-.ruby-line-hint {
-  display: inline-block;
-  margin-left: 8px;
-  padding: 2px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--accent);
-  background: rgba(0, 120, 212, 0.12);
-  border: 1px solid rgba(0, 120, 212, 0.35);
-  border-radius: 3px;
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-.ruby-line-hint[hidden] { display: none; }
 .ruby-text-input {
   flex: 1 1 auto;
   min-width: 0;
@@ -1513,8 +1506,8 @@ body.home-starting .home-screen {
   pointer-events: auto;
 }
 .reference-hidden-card {
-  width: min(920px, calc(100vw - 56px));
-  max-height: min(760px, calc(100vh - 56px));
+  width: min(980px, calc(100vw - 56px));
+  height: min(640px, calc(100vh - 56px));
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: var(--panel);
@@ -1556,24 +1549,8 @@ body.home-starting .home-screen {
   display: grid;
   gap: 4px;
 }
-.reference-hidden-skip-first {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  color: var(--text);
-  font-size: 13px;
-  font-weight: 700;
-  line-height: 1.3;
-  cursor: pointer;
-  user-select: none;
-}
-.reference-hidden-skip-first input {
-  width: 14px;
-  height: 14px;
-  margin: 0;
-  accent-color: var(--accent);
-}
 .reference-hidden-close {
+  display: none;
   width: 34px;
   height: 34px;
   border: 1px solid var(--border);
@@ -1586,7 +1563,7 @@ body.home-starting .home-screen {
   background: var(--button-hover);
 }
 .reference-hidden-body {
-  min-height: 260px;
+  min-height: 0;
   overflow: auto;
   padding: 18px;
 }
@@ -1597,10 +1574,13 @@ body.home-starting .home-screen {
   color: var(--text-muted);
   font-weight: 700;
 }
+.reference-hidden-loading[hidden] {
+  display: none;
+}
 .reference-hidden-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-  gap: 14px;
+  gap: 10px;
 }
 .reference-hidden-page-card {
   display: grid;
@@ -3145,6 +3125,10 @@ body.home-starting .home-screen {
   box-shadow: 0 2px 6px rgba(0, 0, 0, 0.35);
 }
 .layer-rotate-handle:active { cursor: grabbing; }
+.page-overlay.layers-moving .layer-size-badge,
+.page-overlay.layers-moving .layer-rotate-handle {
+  display: none;
+}
 .layer-rotate-handle::before {
   content: "";
   position: absolute;
@@ -5126,6 +5110,20 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   flex-direction: column;
 }
 .editor-tab-panel { display: block; }
+.editor-tab-panel[hidden] { display: none !important; }
+.editor-tab-panel.ruby-panel-floating {
+  position: fixed;
+  z-index: 80;
+  width: 250px;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+}
+.editor-tab-panel.ruby-panel-floating + .editor-tab-panel {
+  margin-top: 0;
+}
 .editor-tabs-section > .editor-tab-panel + .editor-tab-panel {
   margin-top: 4px;
   padding-top: 4px;
@@ -5335,6 +5333,119 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.favorite-style-panel {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.favorite-style-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+.favorite-style-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+}
+.favorite-style-save-btn,
+.favorite-style-delete {
+  height: 24px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  line-height: 1;
+}
+.favorite-style-save-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  width: auto;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 700;
+}
+.favorite-style-delete {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+}
+.favorite-style-save-btn:hover,
+.favorite-style-delete:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.favorite-style-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 236px;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding-right: 2px;
+  scrollbar-gutter: stable;
+}
+.favorite-style-empty {
+  padding: 8px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--text-muted);
+  font-size: 11px;
+  text-align: center;
+}
+.favorite-style-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 24px;
+  gap: 4px;
+  align-items: stretch;
+}
+.favorite-style-apply {
+  min-width: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+  text-align: left;
+}
+.favorite-style-apply:hover {
+  border-color: var(--accent);
+  background: var(--panel-hover);
+}
+.favorite-style-name,
+.favorite-style-meta {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.favorite-style-name {
+  font-size: 12px;
+  font-weight: 700;
+}
+.favorite-style-meta {
+  margin-top: 2px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.favorite-style-delete {
+  color: var(--text-muted);
+}
+.favorite-style-delete:hover {
+  color: var(--danger);
+  border-color: var(--danger);
 }
 .font-combobox-list {
   /* position: fixed で親 (.panel-section の overflow: hidden) のクリップから脱出。
@@ -5724,9 +5835,8 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   transition: opacity 0.3s ease 0.1s;
   opacity: 0;
 }
-/* 確認ダイアログはハンバーガーメニュー (z-index 151) から呼ばれることがあるので、
-   必ずその上に表示させる。 */
-#confirm-modal { z-index: 300; }
+/* 確認/警告ダイアログは各種モーダルの上に重ねる。 */
+#confirm-modal { z-index: 520; }
 .progress-card {
   min-width: 360px;
   max-width: 520px;
@@ -5905,6 +6015,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 #progress-modal .progress-detail,
 /* progress-title はアイコン直下のラベル位置で表示。白文字、中央寄せ、影で読みやすく。 */
 #progress-modal .progress-title {
+  order: 3;
   display: block;
   text-align: center;
   font-size: 16px;
@@ -5919,6 +6030,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
    親が透明背景なので、アイコンを目立たせるため drop-shadow で輪郭を立たせる。
    未指定時 (空) は領域取らない。 */
 #progress-modal .progress-icon {
+  order: 1;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -6106,6 +6218,25 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 #progress-modal .progress-track {
   height: 22px;
   border-radius: 0;
+}
+
+#progress-modal .progress-card {
+  gap: 10px;
+}
+#progress-modal .progress-icon {
+  order: 1;
+}
+#progress-modal .progress-track {
+  order: 2;
+  height: 6px;
+  margin: 4px 0 2px;
+}
+#progress-modal .progress-title,
+#progress-modal .progress-detail {
+  order: 3;
+}
+#progress-modal .progress-loading-text {
+  order: 4;
 }
 .progress-track {
   position: relative;
@@ -7043,7 +7174,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .ai-adjust-choice-modal {
   position: fixed;
   inset: 0;
-  z-index: 230;
+  z-index: 360;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7065,12 +7196,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .ai-adjust-choice-card {
   position: relative;
-  width: min(420px, calc(100vw - 44px));
+  width: min(920px, calc(100vw - 44px));
+  max-height: min(620px, calc(100vh - 44px));
   background: var(--panel);
   border: 1px solid var(--border);
   border-radius: 8px;
   box-shadow: 0 18px 54px rgba(0, 0, 0, 0.45);
-  overflow: hidden;
+  overflow: auto;
   transform: translateY(6px);
   transition: transform 0.12s ease;
 }
@@ -7111,33 +7243,33 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: var(--text);
 }
 .ai-adjust-choice-list {
-  display: flex;
-  flex-direction: column;
-  padding: 0 10px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
 }
 .ai-adjust-choice-option {
-  display: flex;
+  display: grid;
+  grid-template-rows: auto 1fr;
   flex-direction: column;
   align-items: flex-start;
   gap: 10px;
   width: 100%;
-  padding: 12px 14px 14px;
-  border: 1px solid transparent;
-  border-radius: 6px;
+  min-height: 240px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
   background: transparent;
   color: var(--text);
   text-align: left;
   cursor: pointer;
   font: inherit;
 }
-.ai-adjust-choice-option + .ai-adjust-choice-option {
-  border-top-color: var(--border);
-}
 .ai-adjust-choice-option:hover,
 .ai-adjust-choice-option:focus-visible {
   outline: none;
-  border-color: var(--border);
-  background: transparent;
+  border-color: var(--accent);
+  background: var(--panel-hover);
 }
 .ai-adjust-choice-option-text {
   display: flex;
@@ -7155,35 +7287,35 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .ai-adjust-choice-preview {
   align-self: center;
-  width: min(100%, 260px);
-  height: 112px;
+  width: min(100%, 180px);
+  height: 130px;
   position: relative;
   display: block;
 }
 .ai-adjust-choice-preview-offset {
-  height: 116px;
+  height: 130px;
 }
 .ai-adjust-choice-preview-doc {
   position: absolute;
   top: 8px;
-  width: 78px;
-  height: 96px;
+  width: 64px;
+  height: 86px;
   display: grid;
   place-items: center;
   border: 2px solid #111;
   border-radius: 6px;
   background: #f3f1ea;
   color: #111;
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 500;
   line-height: 1;
   box-sizing: border-box;
 }
 .ai-adjust-choice-preview-reference {
-  left: 34px;
+  left: 14px;
 }
 .ai-adjust-choice-preview-psd {
-  right: 34px;
+  right: 14px;
 }
 .ai-adjust-choice-preview-doc::before {
   content: "";
@@ -7198,13 +7330,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   background: #6f6f6f;
 }
 .ai-adjust-choice-preview-overlay {
-  width: 180px;
+  width: 150px;
   height: 132px;
 }
 .ai-adjust-choice-preview-photo {
   position: absolute;
-  width: 86px;
-  height: 116px;
+  width: 76px;
+  height: 106px;
   border: 2px solid currentColor;
   border-radius: 5px;
   background: #f3f1ea;
@@ -7213,12 +7345,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   overflow: hidden;
 }
 .ai-adjust-choice-preview-photo-back {
-  right: 22px;
+  right: 10px;
   bottom: 0;
   color: rgba(148, 148, 148, 0.95);
 }
 .ai-adjust-choice-preview-photo-front {
-  left: 20px;
+  left: 8px;
   top: 0;
   color: #111;
 }
@@ -7241,6 +7373,29 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-top: 2px solid currentColor;
   transform: rotate(35deg) skew(-10deg);
   transform-origin: left bottom;
+}
+.ai-adjust-choice-preview-none {
+  height: 130px;
+}
+.ai-adjust-choice-preview-single {
+  left: 50%;
+  top: 20px;
+  transform: translateX(-50%);
+}
+.ai-adjust-choice-preview-none-mark {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  width: 74px;
+  height: 2px;
+  border-radius: 999px;
+  background: #111;
+  transform: translateX(-50%);
+}
+@media (max-width: 760px) {
+  .ai-adjust-choice-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
 }
 :root[data-theme="light"] .ai-adjust-choice-modal {
   background: rgba(15, 23, 42, 0.32);

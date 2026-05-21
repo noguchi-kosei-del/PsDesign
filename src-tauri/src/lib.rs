@@ -182,6 +182,7 @@ pub struct FontEntry {
     pub name: String,
     #[serde(rename = "postScriptName")]
     pub post_script_name: String,
+    pub aliases: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     // TTC / OTC 内の何番目の face か（0-based）。単独 TTF/OTF は 0。
@@ -192,7 +193,7 @@ pub struct FontEntry {
 }
 
 #[tauri::command]
-async fn apply_edits_via_photoshop(payload: EditPayload) -> Result<String, String> {
+async fn apply_edits_via_photoshop(app: tauri::AppHandle, payload: EditPayload) -> Result<String, String> {
     if payload.save_mode.as_deref() == Some("saveAs") {
         if let Some(dir) = payload.target_dir.as_deref() {
             if !dir.is_empty() {
@@ -201,7 +202,7 @@ async fn apply_edits_via_photoshop(payload: EditPayload) -> Result<String, Strin
             }
         }
     }
-    photoshop::apply_edits(&payload).map_err(|e| e.to_string())
+    photoshop::apply_edits(&payload, &app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -546,6 +547,16 @@ struct DirEntry {
 }
 
 #[derive(serde::Serialize)]
+struct PathInfo {
+    name: String,
+    path: String,
+    #[serde(rename = "isDirectory")]
+    is_directory: bool,
+    #[serde(rename = "isFile")]
+    is_file: bool,
+}
+
+#[derive(serde::Serialize)]
 struct DriveInfo {
     letter: String,
     path: String,
@@ -707,6 +718,24 @@ async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
     Ok(out)
 }
 
+#[tauri::command]
+async fn path_info(path: String) -> Result<PathInfo, String> {
+    let p = PathBuf::from(&path);
+    let meta = std::fs::metadata(&p)
+        .map_err(|e| format!("パスを確認できません: {}: {}", path, e))?;
+    let name = p
+        .file_name()
+        .and_then(|n| n.to_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| path.clone());
+    Ok(PathInfo {
+        name,
+        path,
+        is_directory: meta.is_dir(),
+        is_file: meta.is_file(),
+    })
+}
+
 fn update_splash_progress(app: &tauri::AppHandle, value: u32) {
     if let Some(splash_window) = app.get_webview_window("splash") {
         let _ = splash_window.eval(&format!(
@@ -799,6 +828,7 @@ pub fn run() {
             read_font_face_bytes,
             list_psd_files,
             list_directory_entries,
+            path_info,
             list_drives,
             home_dir,
             desktop_dir,

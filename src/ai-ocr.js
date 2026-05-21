@@ -12,6 +12,7 @@
 
 import {
   confirmDialog,
+  notifyDialog,
   showProgress,
   updateProgress,
   hideProgress,
@@ -311,11 +312,12 @@ function splitMokuroPageToHalf(page, side) {
   };
 }
 
-export function normalizeMokuroDocForReferencePages(doc) {
+export function normalizeMokuroDocForReferencePages(doc, options = {}) {
   if (!doc || !Array.isArray(doc.pages)) return doc;
   if (doc.__opusVirtualPages === true) return doc;
+  const applyExcludedPages = options.applyExcludedPages !== false;
 
-  const excludedPages = getPdfExcludedReferencePages();
+  const excludedPages = applyExcludedPages ? getPdfExcludedReferencePages() : new Set();
   const physicalPages = excludedPages.size
     ? doc.pages.filter((_, index) => !excludedPages.has(index + 1))
     : doc.pages;
@@ -352,6 +354,8 @@ async function runAiOcr(files, {
   icon = SCAN_ICON_SVG,
   loadText = true,
   consumeText = true,
+  maxPages = null,
+  excludedPages = null,
   // 進捗ダイアログのアイコン直下ラベル。直接呼ばれる「画像スキャン」と
   // 自動配置から呼ばれる経路で文言を切替えるため引数化。
   label = "画像スキャン中…",
@@ -464,8 +468,15 @@ async function runAiOcr(files, {
 
   let doc = null;
   let err = null;
+  const excludedReferencePages = Array.from(
+    excludedPages instanceof Set
+      ? excludedPages
+      : (Array.isArray(excludedPages) ? excludedPages : getPdfExcludedReferencePages()),
+  )
+    .map((v) => Number(v))
+    .filter((v) => Number.isInteger(v) && v > 0);
   try {
-    doc = await invoke("run_ai_ocr", { files, forceCpu: false });
+    doc = await invoke("run_ai_ocr", { files, forceCpu: false, excludedPages: excludedReferencePages });
   } catch (e) {
     err = e;
   } finally {
@@ -492,7 +503,17 @@ async function runAiOcr(files, {
   // これにより mokuroDocToText が出力する TXT の段落順と、buildPlacementPlan の
   // sortBlocksMangaOrder 結果が必ず一致し、自動配置のテレコ (順序逆転) が解消される。
   // doc は invoke 直後の使い捨てオブジェクトで他から参照されないため mutate で安全。
-  doc = normalizeMokuroDocForReferencePages(doc);
+  doc = normalizeMokuroDocForReferencePages(doc, {
+    applyExcludedPages: excludedReferencePages.length === 0,
+  });
+  const pageLimit = Number(maxPages);
+  if (doc && Array.isArray(doc.pages) && Number.isInteger(pageLimit) && pageLimit > 0 && doc.pages.length > pageLimit) {
+    doc = {
+      ...doc,
+      pages: doc.pages.slice(0, pageLimit),
+      __opusPageLimit: pageLimit,
+    };
+  }
   if (doc && Array.isArray(doc.pages)) {
     for (const page of doc.pages) {
       if (Array.isArray(page?.blocks)) {
@@ -617,8 +638,8 @@ function formatEta(eta) {
 // 公開: ファイル群に対して画像スキャンを実行し、MokuroDocument を返す。
 // (ai-place.js から「OCR キャッシュなし時に自動実行」用に呼ぶ)
 // 自動配置経由なのでアイコンは wand-sparkles、ラベルも「自動配置中…」に揃える。
-export async function runAiOcrForFiles(files, { loadText = true } = {}) {
-  await runAiOcr(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", loadText });
+export async function runAiOcrForFiles(files, { loadText = true, maxPages = null, excludedPages = null } = {}) {
+  await runAiOcr(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", loadText, maxPages, excludedPages });
 }
 
 export async function runAiOcrForTranscription(files) {

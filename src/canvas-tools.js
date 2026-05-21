@@ -21,6 +21,7 @@ import {
   getStrokeColor,
   getStrokeWidthPx,
   getTextSize,
+  getTxtSource,
   getTool,
   isLayerSelected,
   onToolChange,
@@ -30,6 +31,7 @@ import {
   setEditingContext,
   setSelectedLayer,
   setSelectedLayers,
+  setTxtSource,
   setTool,
   toDisplaySizePt,
   toggleLayerSelected,
@@ -40,7 +42,7 @@ import {
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
 import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
-import { cascadeRemoveTxtForLayers, syncTxtSelectionToLayer } from "./txt-source.js";
+import { appendBlockToCurrentPageContent, cascadeRemoveTxtForLayers, syncTxtSelectionToLayer } from "./txt-source.js";
 
 const mounts = new Map();
 const resizeObservers = new Set();
@@ -152,6 +154,7 @@ export function mountPageInteraction({ pageEl, canvas, overlay, page, pageIndex 
   canvas.addEventListener("mousedown", (e) => onCanvasMouseDown(e, mounts.get(pageIndex)));
   canvas.addEventListener("mousemove", (e) => onCanvasMouseMove(e, mounts.get(pageIndex)));
   canvas.addEventListener("mouseup", (e) => onCanvasMouseUp(e, mounts.get(pageIndex)));
+  pageEl.addEventListener("wheel", (e) => onPageWheel(e, mounts.get(pageIndex)), { passive: false });
   if (typeof ResizeObserver !== "undefined") {
     const ro = new ResizeObserver(() => {
       const m = mounts.get(pageIndex);
@@ -578,16 +581,47 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
   const pages = getPages();
+  const targets = [];
+  for (const sel of selections) {
+    const page = pages[sel.pageIndex];
+    if (!page) continue;
+    if (typeof sel.layerId === "string") {
+      const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+      if (!nl) continue;
+      const cur = Number(nl.sizePt ?? 24);
+      if (!Number.isFinite(cur)) continue;
+      targets.push({
+        kind: "new",
+        sel,
+        page,
+        nl,
+        cur,
+      });
+    } else {
+      const layer = page.textLayers.find((l) => l.id === sel.layerId);
+      if (!layer) continue;
+      const edit = getEdit(page.path, sel.layerId) ?? {};
+      const cur = Number(edit.sizePt ?? layer.fontSize ?? 24);
+      if (!Number.isFinite(cur)) continue;
+      targets.push({
+        kind: "existing",
+        sel,
+        page,
+        layer,
+        edit,
+        cur,
+      });
+    }
+  }
+  const sizes = targets.map((t) => t.cur);
+  if (sizes.length === 0) return false;
+  const baseSize = sign > 0 ? Math.max(...sizes) : Math.min(...sizes);
+  const next = clampSizePt(snapNextSize(baseSize, baseStep, sign, multiplier));
   const changed = withHistoryTransient(() => {
     let any = false;
-    for (const sel of selections) {
-      const page = pages[sel.pageIndex];
-      if (!page) continue;
-      if (typeof sel.layerId === "string") {
-        const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
-        if (!nl) continue;
-        const cur = nl.sizePt ?? 24;
-        const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
+    for (const target of targets) {
+      if (target.kind === "new") {
+        const { sel, page, nl, cur } = target;
         if (next === cur) continue;
         const oldRect = layerRectForNew(page, nl);
         const newRect = layerRectForNew(page, { ...nl, sizePt: next });
@@ -596,11 +630,7 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
         updateNewLayer(sel.layerId, { sizePt: next, x: nl.x + dx, y: nl.y + dy });
         any = true;
       } else {
-        const layer = page.textLayers.find((l) => l.id === sel.layerId);
-        if (!layer) continue;
-        const edit = getEdit(page.path, sel.layerId) ?? {};
-        const cur = edit.sizePt ?? layer.fontSize ?? 24;
-        const next = clampSizePt(snapNextSize(cur, baseStep, sign, multiplier));
+        const { sel, page, layer, edit, cur } = target;
         if (next === cur) continue;
         const oldRect = layerRectForExisting(page, layer, edit);
         const newRect = layerRectForExisting(page, layer, { ...edit, sizePt: next });
@@ -2191,7 +2221,8 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
 }
 
 function createStrokeBadgeSwatches(strokeColor, strokeWidthPx) {
-  const activeColor = (strokeColor !== "none" && Number(strokeWidthPx) > 0) ? strokeColor : "none";
+  if (!strokeColor || strokeColor === "none" || !(Number(strokeWidthPx) > 0)) return null;
+  const activeColor = strokeColor;
   const wrap = document.createElement("div");
   wrap.className = "layer-size-badge-stroke size-row";
   wrap.setAttribute("aria-label", "フチ");
@@ -2224,7 +2255,8 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
   sizeEl.className = "layer-size-badge-size";
   sizeEl.textContent = `${rounded}pt`;
   el.appendChild(sizeEl);
-  el.appendChild(createStrokeBadgeSwatches(strokeColor, strokeWidthPx));
+  const strokeBadge = createStrokeBadgeSwatches(strokeColor, strokeWidthPx);
+  if (strokeBadge) el.appendChild(strokeBadge);
   return el;
 }
 
@@ -2473,15 +2505,29 @@ function onLayerWheel(e, ctx, layerId) {
   const tool = getTool();
   if (tool !== "move") return;
   if (!isLayerSelected(ctx.pageIndex, layerId)) return;
+  if (!resizeSelectedLayersFromWheel(e)) return;
   e.preventDefault();
   e.stopPropagation();
+}
+
+function onPageWheel(e, ctx) {
+  if (!ctx) return;
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+  if (getTool() !== "move") return;
+  if (!getSelectedLayers().some((s) => s.pageIndex === ctx.pageIndex)) return;
+  if (!resizeSelectedLayersFromWheel(e)) return;
+  e.preventDefault();
+  e.stopPropagation();
+}
+
+function resizeSelectedLayersFromWheel(e) {
   // 環境設定の「文字サイズの刻み」（0.1 / 0.5）を baseStep に、Shift で 10 倍。
   // off-grid な値（例：0.5 刻み設定で 12.3）は最寄りグリッドにスナップする。
   const configuredStep = Number(getDefault("textSizeStep"));
   const baseStep = configuredStep === 0.25 || configuredStep === 0.5 ? configuredStep : 0.1;
   const sign = e.deltaY < 0 ? +1 : -1;
   const multiplier = e.shiftKey ? 10 : 1;
-  resizeSelectedLayers(baseStep, sign, multiplier);
+  return resizeSelectedLayers(baseStep, sign, multiplier);
 }
 
 // edit-font 欄 / スタイルパレットでユーザーがフォントを選んだ後（fontPickerStuck === true）、
@@ -2589,10 +2635,19 @@ function beginMultiLayerDrag(e, ctx) {
   if (isDuplicate) {
     beginHistoryTransient();
     const newSelections = [];
+    const pageNumber = ctx.pageIndex + 1;
+    const appendDuplicateToTxt = (text) => {
+      const src = getTxtSource() ?? { name: "new-text.txt", content: "" };
+      const { content, paragraphIndex } = appendBlockToCurrentPageContent(src.content, pageNumber, text);
+      if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) return null;
+      setTxtSource({ name: src.name, content });
+      return { pageNumber, paragraphIndex };
+    };
     for (const sel of selections) {
       if (typeof sel.layerId === "string") {
         const nl = getNewLayersForPsd(ctx.page.path).find((l) => l.tempId === sel.layerId);
         if (!nl) continue;
+        const sourceTxtRef = appendDuplicateToTxt(nl.contents);
         const dup = addNewLayer({
           psdPath: nl.psdPath,
           x: nl.x,
@@ -2606,10 +2661,20 @@ function beginMultiLayerDrag(e, ctx) {
           fillColor: nl.fillColor,
           rotation: nl.rotation ?? 0,
           leadingPct: nl.leadingPct,
+          syntheticBold: nl.syntheticBold === true,
+          sourceTxtRef,
+          lineLeadings: nl.lineLeadings,
+          charRubies: nl.charRubies,
+          autoFontSwitched: nl.autoFontSwitched,
+          autoFontSwitchBucket: nl.autoFontSwitchBucket,
+          lowOcrTextMatch: nl.lowOcrTextMatch,
+          ocrMatchScore: nl.ocrMatchScore,
         });
-        if (nl.lineLeadings && Object.keys(nl.lineLeadings).length > 0) {
-          updateNewLayer(dup.tempId, { lineLeadings: { ...nl.lineLeadings } });
-        }
+        updateNewLayer(dup.tempId, {
+          charSizes: { ...(nl.charSizes ?? {}) },
+          charFonts: { ...(nl.charFonts ?? {}) },
+          charBolds: { ...(nl.charBolds ?? {}) },
+        });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
       } else {
@@ -2618,11 +2683,13 @@ function beginMultiLayerDrag(e, ctx) {
         const edit = getEdit(ctx.page.path, sel.layerId) ?? {};
         const dupX = (layer.left ?? 0) + (edit.dx ?? 0);
         const dupY = (layer.top ?? 0) + (edit.dy ?? 0);
+        const contents = edit.contents ?? layer.text ?? "";
+        const sourceTxtRef = appendDuplicateToTxt(contents);
         const dup = addNewLayer({
           psdPath: ctx.page.path,
           x: dupX,
           y: dupY,
-          contents: edit.contents ?? layer.text ?? "",
+          contents,
           fontPostScriptName: edit.fontPostScriptName ?? layer.font ?? null,
           sizePt: edit.sizePt ?? layer.fontSize ?? null,
           direction: edit.direction ?? layer.direction ?? "horizontal",
@@ -2631,10 +2698,16 @@ function beginMultiLayerDrag(e, ctx) {
           fillColor: edit.fillColor ?? layer.fillColor ?? "default",
           rotation: edit.rotation ?? 0,
           leadingPct: edit.leadingPct ?? 125,
+          syntheticBold: edit.syntheticBold === true,
+          sourceTxtRef,
+          lineLeadings: edit.lineLeadings,
+          charRubies: edit.charRubies,
         });
-        if (edit.lineLeadings && Object.keys(edit.lineLeadings).length > 0) {
-          updateNewLayer(dup.tempId, { lineLeadings: { ...edit.lineLeadings } });
-        }
+        updateNewLayer(dup.tempId, {
+          charSizes: { ...(edit.charSizes ?? {}) },
+          charFonts: { ...(edit.charFonts ?? layer.charFonts ?? {}) },
+          charBolds: { ...(edit.charBolds ?? {}) },
+        });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
       }
@@ -2678,6 +2751,7 @@ function beginMultiLayerDrag(e, ctx) {
   const prevCursor = document.body.style.cursor;
   document.body.style.userSelect = "none";
   if (isDuplicate) document.body.style.cursor = "copy";
+  ctx.overlay.classList.add("layers-moving");
 
   // swap モード判定用：単一選択 + Alt 複製でないときのみ swap 可能。
   const isSingleMoveDrag = !isDuplicate && items.length === 1;
@@ -2776,6 +2850,7 @@ function beginMultiLayerDrag(e, ctx) {
     window.removeEventListener("dragstart", suppressDefault, true);
     window.removeEventListener("selectstart", suppressDefault, true);
     document.body.style.userSelect = prevUserSelect;
+    ctx.overlay.classList.remove("layers-moving");
     if (isDuplicate || lastSwapTarget) document.body.style.cursor = prevCursor;
     // swap モード中の hover ハイライト残骸を必ず掃除（refreshAllOverlays でも再構築されるが
     // 通常移動分岐では DOM が再生成されないため明示的に外す）。
@@ -3668,7 +3743,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
   const onBlur = (e) => {
     const next = e.relatedTarget;
     if (next && typeof next.closest === "function"
-        && next.closest(".editor, .side-panel .editor")) {
+        && next.closest(".editor, .side-panel .editor, .ruby-panel-floating")) {
       return;
     }
     finalize(true);

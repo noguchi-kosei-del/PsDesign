@@ -1202,7 +1202,7 @@ function bindDropzone() {
 
 export function initTxtSource() {
   setupEditorOcrSourcePanel();
-  $("open-txt-toolbar-btn").addEventListener("click", handleOpenBtn);
+  $("open-txt-toolbar-btn")?.addEventListener("click", handleOpenBtn);
   onPageIndexChange(() => {
     setTxtSelectedBlockIndex(null);
     setTxtSelection("");

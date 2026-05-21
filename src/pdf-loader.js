@@ -122,6 +122,10 @@ function makeCompositeDoc(sources) {
       const src = sources[n - 1];
       return src?.path ?? null;
     },
+    getSourcePageNum(n) {
+      const src = sources[n - 1];
+      return src?.type === "pdf" ? src.pageNum : 1;
+    },
     destroy() {
       const seenDocs = new Set();
       for (const src of sources) {

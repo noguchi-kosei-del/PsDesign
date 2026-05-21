@@ -21,6 +21,7 @@ import {
   getNewTextDirection,
   getPdfPaths,
   getPdfDoc,
+  getPdfExcludedReferencePages,
   getTxtSource,
   onTxtSourceChange,
   getNewLayers,
@@ -398,9 +399,48 @@ function groupConnectedBlocks(blocks, debugTag = "") {
 // PDF / JPEG / PNG に対応。失敗 / 見本未指定 は null を返してフォールバック。
 let lastAlignmentError = "";
 
+function computeCenterMarginAlignment(psdPage, mokuroPage) {
+  const refW = Number(mokuroPage?.img_width);
+  const refH = Number(mokuroPage?.img_height);
+  const psdW = Number(psdPage?.width);
+  const psdH = Number(psdPage?.height);
+  if (![refW, refH, psdW, psdH].every((v) => Number.isFinite(v) && v > 0)) return null;
+  return {
+    scale: 1.0,
+    offset_x: (refW - psdW) / 2.0,
+    offset_y: (refH - psdH) / 2.0,
+    diff_score: 0.0,
+    candidates: 1,
+    psd_bbox: [
+      psdW / 2.0 - refW / 2.0,
+      psdH / 2.0 - refH / 2.0,
+      psdW / 2.0 + refW / 2.0,
+      psdH / 2.0 + refH / 2.0,
+    ],
+    ref_bbox: [0.0, 0.0, refW, refH],
+    psd_full_size: [psdW, psdH],
+    ref_full_size: [refW, refH],
+  };
+}
+
+function snapHalfOrFull(pt) {
+  const intPart = Math.floor(pt);
+  const frac = pt - intPart;
+  if (frac < 0.25) return intPart;
+  if (frac < 0.75) return intPart + 0.5;
+  return intPart + 1;
+}
+
 async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageIndex = 0, mode = "mode1") {
   if (!referencePath) return null;
   if (!psdPage?.canvas) return null;
+  if (mode === "mode1") {
+    const alignment = computeCenterMarginAlignment(psdPage, mokuroPage);
+    if (alignment) {
+      lastAlignmentError = "";
+      return alignment;
+    }
+  }
   const errors = [];
   try {
     const psdBase64 = psdPage.canvas.toDataURL("image/png");
@@ -427,7 +467,26 @@ async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageI
       mokuroImgHeight: mokuroPage?.img_height ?? null,
     });
 
-    if (/\.(jpe?g|png|pdf)$/i.test(referencePath)) {
+    const isPdfReference = /\.pdf$/i.test(referencePath);
+    const isRasterReference = /\.(jpe?g|png)$/i.test(referencePath);
+
+    if (isPdfReference) {
+      const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, mokuroPage?.img_width ?? null);
+      const refBase64 = refCanvas ? refCanvas.toDataURL("image/png") : null;
+      if (refBase64) {
+        try {
+          const result = await invokeAlignment(refBase64);
+          lastAlignmentError = "";
+          return result;
+        } catch (e) {
+          errors.push(`canvas: ${String(e?.message ?? e)}`);
+        }
+      } else {
+        errors.push("canvas: 見本ページをCanvas化できませんでした");
+      }
+    }
+
+    if (isRasterReference || isPdfReference) {
       try {
         const result = await invokeAlignment(null);
         lastAlignmentError = "";
@@ -437,24 +496,68 @@ async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageI
       }
     }
 
-    const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, mokuroPage?.img_width ?? null);
-    const refBase64 = refCanvas ? refCanvas.toDataURL("image/png") : null;
-    if (refBase64) {
-      try {
-        const result = await invokeAlignment(refBase64);
-        lastAlignmentError = "";
-        return result;
-      } catch (e) {
-        errors.push(`canvas: ${String(e?.message ?? e)}`);
+    if (!isPdfReference) {
+      const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, mokuroPage?.img_width ?? null);
+      const refBase64 = refCanvas ? refCanvas.toDataURL("image/png") : null;
+      if (refBase64) {
+        try {
+          const result = await invokeAlignment(refBase64);
+          lastAlignmentError = "";
+          return result;
+        } catch (e) {
+          errors.push(`canvas: ${String(e?.message ?? e)}`);
+        }
+      } else {
+        errors.push("canvas: 見本ページをCanvas化できませんでした");
       }
-    } else {
-      errors.push("canvas: 見本ページをCanvas化できませんでした");
     }
   } catch (e) {
     errors.push(`unexpected: ${String(e?.message ?? e)}`);
   }
   lastAlignmentError = errors.join(" / ");
-  console.warn(`[ai-place] compute_alignment 失敗 (${referencePath}): ${lastAlignmentError}`);
+    console.warn(`[ai-place] compute_alignment 失敗 (${referencePath}): ${lastAlignmentError}`);
+  return null;
+}
+
+async function computeAlignmentsForPages(mode, psdPages, mokuroDoc, referencePaths, { progressLabel = null } = {}) {
+  if (mode !== "mode1" && mode !== "mode2") return new Map();
+  const alignmentByPath = new Map();
+  const isSinglePdfMultiPsd = referencePaths.length === 1
+    && /\.pdf$/i.test(referencePaths[0])
+    && psdPages.length > 1;
+  const N = isSinglePdfMultiPsd
+    ? psdPages.length
+    : Math.min(psdPages.length, referencePaths.length);
+  if (progressLabel) {
+    updateProgress({ current: 0, total: Math.max(N, 1), detail: `${progressLabel} 0/${N}`, showCount: false });
+  }
+  for (let i = 0; i < N; i++) {
+    const psd = psdPages[i];
+    const refEntry = isSinglePdfMultiPsd ? referencePaths[0] : referencePaths[i];
+    const refPath = typeof refEntry === "string" ? refEntry : refEntry?.path;
+    const pdfPageIdx = Number.isInteger(refEntry?.pdfPageIndex)
+      ? refEntry.pdfPageIndex
+      : (isSinglePdfMultiPsd ? i : 0);
+    const mokuro = mokuroDoc?.pages?.[i] ?? { blocks: [] };
+    if (progressLabel) {
+      updateProgress({ current: i, total: N, detail: `${progressLabel} ${i + 1}/${N} を計算中…`, showCount: false });
+    }
+    const alignment = await computeAlignmentSafe(refPath, psd, mokuro, pdfPageIdx, mode);
+    if (alignment && psd?.path) alignmentByPath.set(psd.path, alignment);
+    if (progressLabel) {
+      updateProgress({ current: i + 1, total: N, detail: `${progressLabel} ${i + 1}/${N} 完了`, showCount: false });
+    }
+  }
+  return alignmentByPath;
+}
+
+function getLoadedReferenceEntryForPage(index) {
+  const doc = getPdfDoc();
+  if (doc && typeof doc.getSourcePath === "function") {
+    const pageNum = typeof doc.getSourcePageNum === "function" ? doc.getSourcePageNum(index + 1) : 1;
+    const path = doc.getSourcePath(index + 1);
+    return path ? { path, pdfPageIndex: Math.max(0, (Number(pageNum) || 1) - 1) } : null;
+  }
   return null;
 }
 
@@ -493,6 +596,15 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   } else {
     const detectedPt = detectSizePtFromBlock(block, mokuroPage, psdPage, text);
     sizePt = detectedPt ?? defaults.sizePt ?? 24;
+  }
+  if (defaults.positionAdjustMode === "mode2" && alignment && Number.isFinite(alignment.scale) && alignment.scale > 0) {
+    const autoSx = psdPage.width / Math.max(mokuroPage.img_width, 1);
+    const sizeCorrectionFactor = 1.0 / (autoSx * alignment.scale);
+    if (Number.isFinite(sizeCorrectionFactor) && sizeCorrectionFactor > 0
+        && Math.abs(sizeCorrectionFactor - 1.0) > 0.02) {
+      const snapped = snapHalfOrFull(sizePt * sizeCorrectionFactor);
+      if (Number.isFinite(snapped) && snapped >= 6 && snapped <= 999) sizePt = snapped;
+    }
   }
   const { width, height } = estimateLayerSize(
     psdPage, sizePt, text, defaults.leadingPct ?? 125, direction,
@@ -801,16 +913,23 @@ function buildTxtPagesForPlacement(parsed) {
   if (!parsed?.hasMarkers) {
     return [{ pageNumber: 1, blocks: parsed?.all ?? [] }];
   }
-  return Array.from(parsed.byPage.entries())
-    .sort(([a], [b]) => a - b)
-    .map(([pageNumber, blocks]) => ({ pageNumber, blocks: blocks ?? [] }));
+  let maxPage = 0;
+  for (const pageNumber of parsed.byPage.keys()) {
+    if (Number.isInteger(pageNumber) && pageNumber > maxPage) maxPage = pageNumber;
+  }
+  const pages = [];
+  for (let pageNumber = 1; pageNumber <= maxPage; pageNumber += 1) {
+    pages.push({ pageNumber, blocks: parsed.byPage.get(pageNumber) ?? [] });
+  }
+  return pages;
 }
 
 function buildTxtPageMapForSync(parsed) {
   return parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 }
 
-function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults) {
+function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults, options = {}) {
+  const alignmentByPath = options.alignmentByPath instanceof Map ? options.alignmentByPath : null;
   const N = Math.min(psdPages.length, mokuroDoc.pages.length);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
   const baseName = (p) => {
@@ -820,6 +939,7 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults) {
   for (let i = 0; i < N; i++) {
     const psd = psdPages[i];
     const mokuro = mokuroDoc.pages[i];
+    const alignment = psd?.path && alignmentByPath ? alignmentByPath.get(psd.path) : null;
     const txtPage = txtPages[i] ?? { pageNumber: i + 1, blocks: [] };
     const txt = txtPage.blocks ?? [];
     const sorted = sortBlocksMangaOrder(mokuro.blocks ?? []);
@@ -829,6 +949,21 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults) {
     // 連結グループに属する block は mapBlockToNewLayer 内でサイズを defaults.sizePt に統一。
     const groups = groupConnectedBlocks(sorted, ` page ${i + 1}`);
     const layers = [];
+    if (txt.length === 0) {
+      out.pages.push({
+        pageIndex: i + 1,
+        psdPath: psd.path,
+        psdName: baseName(psd.path),
+        bubbleCount: sorted.length,
+        txtCount: 0,
+        placedCount: 0,
+        status: sorted.length === 0 ? "ok" : "skip-empty-txt",
+        layers,
+        leftoverTxt: [],
+        leftoverBubbles: [],
+      });
+      continue;
+    }
     // 全 TXT 段落を配置: sorted[j] があれば吹き出し中央、無ければ PSD ページ中央。
     // 旧仕様は placedCount = min(txt, sorted) で余り TXT を捨てていたが、ユーザーが
     // 入力欄から追加した段落も自動配置で拾うために全件処理に変更。
@@ -840,7 +975,7 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults) {
       const matchScore = Number.isFinite(assigned?.score) ? assigned.score : 0;
       const sourceTxtRef = { pageNumber: txtPage.pageNumber, paragraphIndex: j, ocrBlockIndex: blockIndex, ocrMatchScore: matchScore };
       if (block) {
-        const layer = mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef, groups[blockIndex]);
+        const layer = mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef, groups[blockIndex], alignment);
         layer.lowOcrTextMatch = assigned?.lowConfidence === true;
         layer.ocrMatchScore = matchScore;
         layers.push(layer);
@@ -1011,6 +1146,7 @@ export async function runAutoPlace({
   preserveTxtDuringOcr = false,
   forceRescan = false,
   positionOnlyScan = false,
+  positionAdjustMode = null,
 } = {}) {
   if (runningPlace) return;
   runningPlace = true;
@@ -1066,6 +1202,8 @@ export async function runAutoPlace({
       } else {
         await runAiOcrForFiles(loadedRefs, {
           loadText: !preserveTxtDuringOcr || !(txtSrc && txtSrc.content),
+          maxPages: psdPages.length,
+          excludedPages: getPdfExcludedReferencePages(),
         });
       }
       cache = getAiOcrDoc();
@@ -1104,9 +1242,29 @@ export async function runAutoPlace({
       cloudShapeFontEnabled: getDefault("cloudShapeFontEnabled"),
       cloudShapeScoreThreshold: getDefault("cloudShapeScoreThreshold"),
       cloudShapeFontPostScriptName: getDefault("cloudShapeFontPostScriptName"),
+      positionAdjustMode,
     };
     const placementDoc = normalizeMokuroDocForReferencePages(cache.doc);
-    const plan = buildPlacementPlan(placementDoc, psdPages, txtPages, defaults);
+    let alignmentByPath = null;
+    if (positionAdjustMode === "mode1" || positionAdjustMode === "mode2") {
+      showProgress({ detail: "位置調整を計算中…", icon: PLACE_ICON_SVG, label: "自動配置中…" });
+      alignmentByPath = await computeAlignmentsForPages(
+        positionAdjustMode,
+        psdPages,
+        placementDoc,
+        psdPages.map((_, i) => getLoadedReferenceEntryForPage(i)).filter(Boolean),
+        { progressLabel: "位置調整を計算中…" },
+      );
+      if (alignmentByPath.size === 0) {
+        await hideProgress();
+        await notifyDialog({
+          title: "位置調整できません",
+          message: `見本画像から位置調整を計算できませんでした。見本ページの表示状態と、PSD/見本のページ対応を確認してください。${lastAlignmentError ? `\n\n詳細: ${lastAlignmentError}` : ""}`,
+        });
+        return;
+      }
+    }
+    const plan = buildPlacementPlan(placementDoc, psdPages, txtPages, defaults, { alignmentByPath });
 
     if (plan.totals.placed === 0) {
       await notifyDialog({
@@ -1145,6 +1303,7 @@ export async function runAutoPlace({
     // ユーザー要望で出さない（写植作業の流れを止めないため）。エラー時のみ下の
     // catch で notifyDialog を表示する。
     await hideProgress({ success: true });
+    return { placed: true, positionAdjusted: positionAdjustMode === "mode1" || positionAdjustMode === "mode2" };
   } catch (e) {
     console.error(e);
     await hideProgress();
@@ -1283,7 +1442,7 @@ export function bindAiPlaceButton() {
 //
 // sourceTxtRef ベースで idempotent (累積バグなし、複数回押しても同じ結果)。
 // 範囲外飛び出しガード付き (PSD ±30% 超えるレイヤーは補正スキップ)。
-async function runPositionAdjust(mode = "mode1", options = {}) {
+export async function runPositionAdjust(mode = "mode1", options = {}) {
   if (runningAdjust) return;
   runningAdjust = true;
   const modeLabel = mode === "mode2"
@@ -1319,12 +1478,13 @@ async function runPositionAdjust(mode = "mode1", options = {}) {
     const N = isSinglePdfMultiPsd
       ? psdPages.length
       : Math.min(psdPages.length, referencePaths.length);
+    updateProgress({ current: 0, total: Math.max(N, 1), detail: `${modeLabel} 0/${N}`, showCount: false });
     for (let i = 0; i < N; i++) {
       const psd = psdPages[i];
       const refPath = isSinglePdfMultiPsd ? referencePaths[0] : referencePaths[i];
       const pdfPageIdx = isSinglePdfMultiPsd ? i : 0;
       const mokuro = mokuroDoc?.pages?.[i] ?? { blocks: [] };
-      updateProgress({ current: i, total: N, detail: `${modeLabel} ${i + 1}/${N}`, showCount: false });
+      updateProgress({ current: i, total: N, detail: `${modeLabel} ${i + 1}/${N} を計算中…`, showCount: false });
       console.info(
         `[ai-adjust] page=${i + 1} mode=${mode} ref=${refPath}`,
       );
@@ -1341,6 +1501,7 @@ async function runPositionAdjust(mode = "mode1", options = {}) {
           `[ai-adjust] page=${i + 1} mode=${mode} scale=${alignment.scale.toFixed(3)} offset=(${alignment.offset_x.toFixed(0)}, ${alignment.offset_y.toFixed(0)}) ${modeMatches ? "✓" : `⚠ 期待符号=${expectedSign}, 実符号=${actualSign}`}`,
         );
       }
+      updateProgress({ current: i + 1, total: N, detail: `${modeLabel} ${i + 1}/${N} 完了`, showCount: false });
     }
 
     if (alignmentByPath.size === 0) {
@@ -1457,7 +1618,7 @@ async function runPositionAdjust(mode = "mode1", options = {}) {
       try { rebuildLayerList(); } catch (_) {}
     }
     await hideProgress({ success: true });
-    await notifyDialog({
+    if (!options?.automatic) await notifyDialog({
       title: `${modeLabel} 完了`,
       message: `${movedCount} 件のレイヤーを調整しました。`,
       kind: "success",
@@ -1935,6 +2096,12 @@ async function runOverlayAlign() {
 
 const POSITION_ADJUST_OPTIONS = [
   {
+    mode: "none",
+    title: "位置調整なし",
+    description: "自動配置のみ行う",
+    run: () => undefined,
+  },
+  {
     mode: "mode1",
     title: "位置調整1",
     description: "PSDに余分余白あり",
@@ -1954,7 +2121,25 @@ const POSITION_ADJUST_OPTIONS = [
   },
 ];
 
+export function getPositionAdjustOptions() {
+  return POSITION_ADJUST_OPTIONS.map(({ mode, title, description }) => ({ mode, title, description }));
+}
+
+export async function runSelectedPositionAdjust(mode, options = {}) {
+  if (mode === "none") return undefined;
+  if (mode === "mode3") return await runOverlayAlign(options);
+  if (mode === "mode1" || mode === "mode2") return await runPositionAdjust(mode, options);
+  return undefined;
+}
+
 function renderPositionAdjustPreview(mode) {
+  if (mode === "none") {
+    return `
+      <span class="ai-adjust-choice-preview ai-adjust-choice-preview-none" aria-hidden="true">
+        <span class="ai-adjust-choice-preview-doc ai-adjust-choice-preview-single">PSD</span>
+        <span class="ai-adjust-choice-preview-none-mark"></span>
+      </span>`;
+  }
   if (mode === "mode3") {
     return `
       <span class="ai-adjust-choice-preview ai-adjust-choice-preview-overlay" aria-hidden="true">
@@ -2003,6 +2188,7 @@ function ensurePositionAdjustDialog() {
       </div>
     </div>`;
   modal.addEventListener("click", (e) => {
+    if (modal.dataset.chooseOnly === "1") return;
     const close = e.target?.closest?.("[data-close]");
     if (close) {
       closePositionAdjustDialog();
@@ -2032,6 +2218,50 @@ function closePositionAdjustDialog() {
   if (!modal) return;
   modal.classList.remove("visible");
   window.setTimeout(() => { modal.hidden = true; }, 120);
+}
+
+export function choosePositionAdjustMode() {
+  return new Promise((resolve) => {
+    const modal = ensurePositionAdjustDialog();
+    let settled = false;
+    const onClick = (e) => {
+      const close = e.target?.closest?.("[data-close]");
+      if (close) {
+        e.preventDefault();
+        e.stopImmediatePropagation();
+        cleanup(null);
+        return;
+      }
+      const btn = e.target?.closest?.(".ai-adjust-choice-option");
+      if (!btn) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      cleanup(btn.dataset.mode || null);
+    };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup(null);
+      }
+    };
+    const cleanup = (value) => {
+      if (settled) return;
+      settled = true;
+      delete modal.dataset.chooseOnly;
+      modal.removeEventListener("click", onClick, true);
+      window.removeEventListener("keydown", onKey, true);
+      closePositionAdjustDialog();
+      resolve(value);
+    };
+    modal.dataset.chooseOnly = "1";
+    modal.addEventListener("click", onClick, true);
+    window.addEventListener("keydown", onKey, true);
+    modal.hidden = false;
+    requestAnimationFrame(() => {
+      modal.classList.add("visible");
+      modal.querySelector(".ai-adjust-choice-option")?.focus();
+    });
+  });
 }
 
 export function bindPositionAdjustButton() {

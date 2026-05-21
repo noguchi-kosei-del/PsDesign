@@ -77,23 +77,52 @@ fn build_entry(face: &ttf_parser::Face) -> Option<FontEntry> {
     const NAME_ID_FULL: u16 = 4;
     const NAME_ID_POSTSCRIPT: u16 = 6;
     const NAME_ID_FAMILY: u16 = 1;
+    const NAME_ID_TYPOGRAPHIC_FAMILY: u16 = 16;
+    const NAME_ID_TYPOGRAPHIC_SUBFAMILY: u16 = 17;
+    const NAME_ID_COMPATIBLE_FULL: u16 = 18;
 
-    let mut full_name: Option<String> = None;
-    let mut family_name: Option<String> = None;
+    let mut full_name_ja: Option<String> = None;
+    let mut full_name_en: Option<String> = None;
+    let mut full_name_any: Option<String> = None;
+    let mut family_name_ja: Option<String> = None;
+    let mut family_name_en: Option<String> = None;
+    let mut family_name_any: Option<String> = None;
     let mut post_script_name: Option<String> = None;
+    let mut aliases: Vec<String> = Vec::new();
 
     for record in face.names() {
         let Some(decoded) = decode_name(&record) else { continue };
         match record.name_id {
+            NAME_ID_FAMILY
+            | NAME_ID_FULL
+            | NAME_ID_POSTSCRIPT
+            | NAME_ID_TYPOGRAPHIC_FAMILY
+            | NAME_ID_TYPOGRAPHIC_SUBFAMILY
+            | NAME_ID_COMPATIBLE_FULL => push_unique(&mut aliases, decoded.clone()),
+            _ => {}
+        }
+        match record.name_id {
             NAME_ID_POSTSCRIPT if post_script_name.is_none() => post_script_name = Some(decoded),
             NAME_ID_FULL => {
-                if prefer_record(&record) || full_name.is_none() {
-                    full_name = Some(decoded);
+                if full_name_any.is_none() {
+                    full_name_any = Some(decoded.clone());
+                }
+                if is_japanese_record(&record) && full_name_ja.is_none() {
+                    full_name_ja = Some(decoded.clone());
+                }
+                if is_english_record(&record) && full_name_en.is_none() {
+                    full_name_en = Some(decoded);
                 }
             }
             NAME_ID_FAMILY => {
-                if prefer_record(&record) || family_name.is_none() {
-                    family_name = Some(decoded);
+                if family_name_any.is_none() {
+                    family_name_any = Some(decoded.clone());
+                }
+                if is_japanese_record(&record) && family_name_ja.is_none() {
+                    family_name_ja = Some(decoded.clone());
+                }
+                if is_english_record(&record) && family_name_en.is_none() {
+                    family_name_en = Some(decoded);
                 }
             }
             _ => {}
@@ -101,18 +130,41 @@ fn build_entry(face: &ttf_parser::Face) -> Option<FontEntry> {
     }
 
     let ps = post_script_name?;
-    let display = full_name.or(family_name).unwrap_or_else(|| ps.clone());
+    let display = full_name_ja
+        .or(family_name_ja)
+        .or(full_name_en)
+        .or(family_name_en)
+        .or(full_name_any)
+        .or(family_name_any)
+        .unwrap_or_else(|| ps.clone());
+    push_unique(&mut aliases, display.clone());
+    push_unique(&mut aliases, ps.clone());
     Some(FontEntry {
         name: display,
         post_script_name: ps,
+        aliases,
         path: None,
         // 【v1.16.0】extract_fonts 側でループ中に上書きされる初期値。
         face_index: 0,
     })
 }
 
-fn prefer_record(record: &ttf_parser::name::Name) -> bool {
-    matches_lang(record, 0x0411) || matches_lang(record, 0x0409)
+fn push_unique(items: &mut Vec<String>, value: String) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    if !items.iter().any(|v| v.eq_ignore_ascii_case(trimmed)) {
+        items.push(trimmed.to_string());
+    }
+}
+
+fn is_japanese_record(record: &ttf_parser::name::Name) -> bool {
+    matches_lang(record, 0x0411) || matches_lang(record, 11)
+}
+
+fn is_english_record(record: &ttf_parser::name::Name) -> bool {
+    matches_lang(record, 0x0409) || matches_lang(record, 0)
 }
 
 fn matches_lang(record: &ttf_parser::name::Name, lang_id: u16) -> bool {
@@ -169,7 +221,7 @@ fn cache_path() -> Option<PathBuf> {
     let mut p = base;
     p.push("PsDesign");
     std::fs::create_dir_all(&p).ok()?;
-    p.push("fonts.json");
+    p.push("fonts-ja-display.json");
     Some(p)
 }
 
@@ -181,6 +233,7 @@ fn read_cache() -> Option<Vec<FontEntry>> {
         name: String,
         #[serde(rename = "postScriptName")]
         ps: String,
+        aliases: Option<Vec<String>>,
         #[serde(default)]
         path: Option<String>,
         // 【v1.16.0】v2 キャッシュ。旧キャッシュ（face_index なし）は None になる。
@@ -191,7 +244,7 @@ fn read_cache() -> Option<Vec<FontEntry>> {
     // 旧 v1 キャッシュ（path なし or face_index なし）は破棄して再ビルド。
     // face_index が無いと TTC 第 2 face 以降の Yu Gothic Bold 等が一切登録できないため、
     // 必ず再ビルドして全 face をキャッシュに含める必要がある。
-    if rows.iter().any(|r| r.path.is_none() || r.face_index.is_none()) {
+    if rows.iter().any(|r| r.path.is_none() || r.face_index.is_none() || r.aliases.is_none()) {
         return None;
     }
     Some(
@@ -199,6 +252,7 @@ fn read_cache() -> Option<Vec<FontEntry>> {
             .map(|r| FontEntry {
                 name: r.name,
                 post_script_name: r.ps,
+                aliases: r.aliases.unwrap_or_default(),
                 path: r.path,
                 face_index: r.face_index.unwrap_or(0),
             })

@@ -648,6 +648,10 @@ function fontLabel(font) {
   return font?.name || font?.family || font?.postScriptName || "";
 }
 
+function normalizeFontSearchText(value) {
+  return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ja");
+}
+
 function fontMapByPostScript() {
   const map = new Map();
   const fonts = Array.isArray(getFonts()) ? getFonts() : [];
@@ -669,6 +673,7 @@ function buildGroups() {
         postScriptName: preset.fontPostScript,
         displayName: fontLabel(font) || preset.displayName || preset.fontPostScript,
         subName: preset.subName,
+        aliases: Array.isArray(font?.aliases) ? font.aliases : [],
         entries: [],
       });
     } else if (preset.subName && !map.get(preset.fontPostScript).subName) {
@@ -681,6 +686,7 @@ function buildGroups() {
       postScriptName: entry.fontPostScript,
       displayName: fontLabel(font) || entry.fontDisplayName,
       subName: entry.subName,
+      aliases: Array.isArray(font?.aliases) ? font.aliases : [],
       entries: [],
     };
     if (!group.subName && entry.subName) group.subName = entry.subName;
@@ -694,12 +700,13 @@ function buildGroups() {
 }
 
 function filteredGroups() {
-  const query = state.query.trim().toLowerCase();
+  const query = normalizeFontSearchText(state.query).trim();
   return buildGroups().filter((group) => {
     if (state.hideEmpty && group.entries.length === 0) return false;
     if (state.category && group.subName !== state.category) return false;
     if (!query) return true;
-    const haystack = `${group.displayName} ${group.postScriptName} ${group.subName}`.toLowerCase();
+    const aliases = Array.isArray(group.aliases) ? group.aliases : [];
+    const haystack = normalizeFontSearchText(`${group.displayName} ${group.postScriptName} ${group.subName} ${aliases.join(" ")}`);
     return haystack.includes(query);
   });
 }

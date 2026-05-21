@@ -76,6 +76,19 @@ export function centerCanvasInViewport(stage, pageEl) {
   stage.scrollTop = Math.max(0, Math.min(maxScrollY, Math.round(canvasCenterY - stage.clientHeight / 2)));
 }
 
+export function alignCanvasStartInViewport(stage, pageEl, padding = 16) {
+  if (!stage || !pageEl) return;
+  const r = pageEl.getBoundingClientRect();
+  const sr = stage.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return;
+  const canvasLeftInScroll = r.left - sr.left + stage.scrollLeft;
+  const canvasTopInScroll = r.top - sr.top + stage.scrollTop;
+  const maxScrollX = Math.max(0, stage.scrollWidth - stage.clientWidth);
+  const maxScrollY = Math.max(0, stage.scrollHeight - stage.clientHeight);
+  stage.scrollLeft = Math.max(0, Math.min(maxScrollX, Math.round(canvasLeftInScroll - padding)));
+  stage.scrollTop = Math.max(0, Math.min(maxScrollY, Math.round(canvasTopInScroll - padding)));
+}
+
 export function restoreViewportCenter(stage, pageEl, frac) {
   if (!stage || !pageEl || !frac) return;
   // レイアウト確定後の getBoundingClientRect で実位置を取得し、

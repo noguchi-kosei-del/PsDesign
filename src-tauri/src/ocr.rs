@@ -7,6 +7,7 @@
 //   - PowerShell スクリプトを install-ai-models.ps1 に変更
 //   - 構造体・関数を pub(crate) に整理し lib.rs から register
 
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -308,7 +309,9 @@ fn render_pdf_pages(
     pdfium: &Pdfium,
     pdf_path: &Path,
     out_dir: &Path,
-    base_index: usize,
+    out_index: &mut usize,
+    source_index: &mut u32,
+    excluded_pages: &HashSet<u32>,
     overall_total: u32,
     pad: usize,
 ) -> Result<usize, String> {
@@ -320,14 +323,21 @@ fn render_pdf_pages(
         .scale_page_by_factor(PDF_RENDER_DPI / 72.0);
 
     let total = doc.pages().len();
+    let mut rendered = 0usize;
     for (i, page) in doc.pages().iter().enumerate() {
+        *source_index += 1;
+        if excluded_pages.contains(&*source_index) {
+            continue;
+        }
         let bitmap = page
             .render_with_config(&render_config)
             .map_err(|e| format!("PDFページ描画失敗: {:?}", e))?;
         let img = bitmap.as_image();
+        *out_index += 1;
+        rendered += 1;
         let dest = out_dir.join(format!(
             "page_{:0width$}.jpg",
-            base_index + i + 1,
+            *out_index,
             width = pad
         ));
         img.to_rgb8()
@@ -338,7 +348,7 @@ fn render_pdf_pages(
             "ai_ocr:progress",
             ProgressEvent {
                 phase: "pdf",
-                current: (base_index + i + 1) as u32,
+                current: *out_index as u32,
                 total: overall_total,
                 eta: None,
             },
@@ -359,12 +369,13 @@ fn render_pdf_pages(
         )
         .ok();
     }
-    Ok(total as usize)
+    Ok(rendered)
 }
 
 fn make_temp_volume(
     app: &AppHandle,
     files: &[String],
+    excluded_pages: &[u32],
 ) -> Result<(TempDirGuard, PathBuf, String), String> {
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -401,8 +412,10 @@ fn make_temp_volume(
 
     let needs_pdf = sorted.iter().any(|p| is_pdf(Path::new(p)));
     let pdfium = if needs_pdf { Some(make_pdfium(app)?) } else { None };
+    let excluded_pages: HashSet<u32> = excluded_pages.iter().copied().filter(|v| *v > 0).collect();
 
     let mut overall_total: u32 = 0;
+    let mut source_index: u32 = 0;
     for src in &sorted {
         let p = Path::new(src);
         if is_pdf(p) {
@@ -410,10 +423,21 @@ fn make_temp_volume(
             let pdf = pdfium_ref
                 .load_pdf_from_file(p, None)
                 .map_err(|e| format!("PDF読み込み失敗 {}: {:?}", p.display(), e))?;
-            overall_total += pdf.pages().len() as u32;
+            for _ in pdf.pages().iter() {
+                source_index += 1;
+                if !excluded_pages.contains(&source_index) {
+                    overall_total += 1;
+                }
+            }
         } else {
-            overall_total += 1;
+            source_index += 1;
+            if !excluded_pages.contains(&source_index) {
+                overall_total += 1;
+            }
         }
+    }
+    if overall_total == 0 {
+        return Err("OCR対象の見本がありません。非表示設定を確認してください。".to_string());
     }
 
     app.emit(
@@ -429,13 +453,27 @@ fn make_temp_volume(
 
     let pad = (overall_total as usize).to_string().len().max(4);
     let mut idx: usize = 0;
+    let mut source_index: u32 = 0;
     for src in &sorted {
         let src_path = PathBuf::from(src);
         if is_pdf(&src_path) {
             let pdfium_ref = pdfium.as_ref().expect("pdfium when PDFs present");
-            let n = render_pdf_pages(app, pdfium_ref, &src_path, &volume_dir, idx, overall_total, pad)?;
-            idx += n;
+            let _ = render_pdf_pages(
+                app,
+                pdfium_ref,
+                &src_path,
+                &volume_dir,
+                &mut idx,
+                &mut source_index,
+                &excluded_pages,
+                overall_total,
+                pad,
+            )?;
         } else {
+            source_index += 1;
+            if excluded_pages.contains(&source_index) {
+                continue;
+            }
             let ext = src_path
                 .extension()
                 .and_then(|e| e.to_str())
@@ -465,13 +503,15 @@ pub async fn run_ai_ocr(
     app: AppHandle,
     files: Vec<String>,
     force_cpu: Option<bool>,
+    excluded_pages: Option<Vec<u32>>,
 ) -> Result<MokuroDocument, String> {
     if files.is_empty() {
         return Err("ファイルが選択されていません".to_string());
     }
     let mokuro_path = resolve_mokuro_exe(&app)?;
 
-    let (_guard, parent_dir, volume_name) = make_temp_volume(&app, &files)?;
+    let excluded_pages = excluded_pages.unwrap_or_default();
+    let (_guard, parent_dir, volume_name) = make_temp_volume(&app, &files, &excluded_pages)?;
 
     app.emit("ai_ocr:start", &volume_name).ok();
 

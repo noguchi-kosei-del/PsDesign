@@ -4,7 +4,11 @@ import {
   getPdfPath,
   getPdfRotation,
   getPdfZoom,
+  getEditorLeftPaneMode,
+  getParallelViewMode,
   getTool,
+  onEditorLeftPaneModeChange,
+  onParallelViewModeChange,
   onPdfChange,
   onPdfPageIndexChange,
   onPdfRotationChange,
@@ -18,6 +22,7 @@ import {
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
 import {
+  alignCanvasStartInViewport,
   applyOverscrollMargin,
   captureViewportCenterFraction,
   centerCanvasInViewport,
@@ -25,6 +30,8 @@ import {
 } from "./overscroll.js";
 
 const MAX_CANVAS_SIDE = 16384;
+const PDF_FIT_BASE_SCALE = 1.1;
+export const PDF_FIT_ZOOM = 1 / PDF_FIT_BASE_SCALE;
 
 let mounted = false;
 let rootEl = null;
@@ -45,6 +52,11 @@ let currentRenderTask = null;
 // schedule() は他のイベント（ページ送り・回転・リサイズ等）でも呼ばれるため、
 // ズーム由来かどうかをフラグで区別する。
 let pdfZoomDirty = false;
+let resetZoomToStart = false;
+
+function isEditorPdfSampleMode() {
+  return getParallelViewMode() === "editor" && getEditorLeftPaneMode() === "pdf";
+}
 
 function cancelInFlightRender() {
   if (!currentRenderTask) return;
@@ -118,6 +130,8 @@ export function mountPdfView() {
   onPdfRotationChange(() => schedule());
   onPdfSplitModeChange(() => schedule());
   onPdfSkipFirstBlankChange(() => schedule());
+  onParallelViewModeChange(() => schedule());
+  onEditorLeftPaneModeChange(() => schedule());
 
   // パンツール対応：canvas 上で mousedown→move→up で stage をスクロールする。
   // PSD 側 (canvas-tools.js) と同じく、リスナーは canvas 自身に張り、毎回 stopPropagation
@@ -182,6 +196,56 @@ function endPdfPan() {
   document.body.style.userSelect = panState.prevUserSelect;
   panState = null;
   updatePdfCursor();
+}
+
+function centerCurrentPdfPageInStage() {
+  if (!stageEl || !pageWrap || pageWrap.hidden) return;
+  centerCanvasInViewport(stageEl, pageWrap);
+}
+
+function restoreCurrentPdfPageCenter(center) {
+  if (!stageEl || !pageWrap || pageWrap.hidden || !center) return;
+  restoreViewportCenter(stageEl, pageWrap, center);
+}
+
+export function capturePdfViewportCenter() {
+  if (!stageEl || !pageWrap || pageWrap.hidden) return null;
+  return captureViewportCenterFraction(stageEl, pageWrap);
+}
+
+export function resetPdfViewportToStart() {
+  resetZoomToStart = true;
+  const run = () => {
+    if (!resetZoomToStart) return;
+    if (pdfZoomDirty) return;
+    alignCanvasStartInViewport(stageEl, pageWrap);
+    resetZoomToStart = false;
+  };
+  requestAnimationFrame(run);
+  requestAnimationFrame(() => requestAnimationFrame(run));
+  setTimeout(run, 80);
+}
+
+export function refreshPdfStageLayout({ recenter = true, viewportCenter = null } = {}) {
+  if (isEditorPdfSampleMode()) {
+    centerCurrentPdfPageInStage();
+    return;
+  }
+  if (viewportCenter) {
+    restoreCurrentPdfPageCenter(viewportCenter);
+  } else if (recenter) {
+    centerCurrentPdfPageInStage();
+  }
+}
+
+export function schedulePdfStageLayoutRefresh({ durationMs = 360, recenter = true, viewportCenter = null } = {}) {
+  const center = viewportCenter ?? (recenter ? null : capturePdfViewportCenter());
+  const run = () => refreshPdfStageLayout({ recenter, viewportCenter: center });
+  requestAnimationFrame(run);
+  requestAnimationFrame(() => requestAnimationFrame(run));
+  setTimeout(run, 80);
+  setTimeout(run, Math.max(120, durationMs + 50));
+  setTimeout(run, Math.max(260, durationMs + 180));
 }
 
 function schedule() {
@@ -312,9 +376,10 @@ async function redraw() {
     cssH = availH;
     cssW = availH * pageAR;
   }
-  const zoom = getPdfZoom();
-  cssW *= zoom;
-  cssH *= zoom;
+  const fitToPane = isEditorPdfSampleMode();
+  const zoom = fitToPane ? PDF_FIT_ZOOM : getPdfZoom();
+  cssW *= PDF_FIT_BASE_SCALE * zoom;
+  cssH *= PDF_FIT_BASE_SCALE * zoom;
 
   let dpr = window.devicePixelRatio || 1;
   const maxSideCss = side === "full" ? cssW : cssW * 2;
@@ -344,9 +409,14 @@ async function redraw() {
   // ズーム経由の redraw のときだけ、サイズ変更前の現在レイアウトから
   // viewport 中心のキャンバス相対座標をキャプチャ。フラグはここで消費。
   let zoomFracForThisRedraw = null;
+  let resetZoomForThisRedraw = false;
   if (pdfZoomDirty) {
     pdfZoomDirty = false;
-    zoomFracForThisRedraw = captureViewportCenterFraction(stageEl, pageWrap);
+    resetZoomForThisRedraw = resetZoomToStart;
+    resetZoomToStart = false;
+    if (!fitToPane && !resetZoomForThisRedraw) {
+      zoomFracForThisRedraw = captureViewportCenterFraction(stageEl, pageWrap);
+    }
   }
 
   // canvas の CSS サイズを先に設定して pageWrap のレイアウトを確定させる
@@ -375,7 +445,11 @@ async function redraw() {
   // を使う：cssW/cssH はそもそも fit-to-availW/H × zoom で算出するので、ズーム≤1 では
   // 必ず availW/availH 以下になる。
   const hasOverflowAfter = cssW > availW || cssH > availH;
-  if (zoomFracForThisRedraw) {
+  if (fitToPane) {
+    centerCanvasInViewport(stageEl, pageWrap);
+  } else if (resetZoomForThisRedraw) {
+    alignCanvasStartInViewport(stageEl, pageWrap);
+  } else if (zoomFracForThisRedraw) {
     if (hasOverflowAfter) {
       restoreViewportCenter(stageEl, pageWrap, zoomFracForThisRedraw);
     } else {
@@ -431,5 +505,10 @@ async function redraw() {
     const ctx = canvas.getContext("2d");
     ctx.clearRect(0, 0, halfPxW, pxH);
     ctx.drawImage(off, -srcX, 0);
+  }
+  if (resetZoomForThisRedraw) {
+    alignCanvasStartInViewport(stageEl, pageWrap);
+    requestAnimationFrame(() => alignCanvasStartInViewport(stageEl, pageWrap));
+    setTimeout(() => alignCanvasStartInViewport(stageEl, pageWrap), 60);
   }
 }

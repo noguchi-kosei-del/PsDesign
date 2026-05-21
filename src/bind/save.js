@@ -10,6 +10,7 @@ import {
   notifyDialog,
   showProgress,
   toast,
+  updateProgress,
 } from "../ui-feedback.js";
 import { baseName, joinPath } from "../utils/path.js";
 import { launchTachimiWithPaths } from "../services/tachimi.js";
@@ -68,9 +69,26 @@ async function runSaveWithMode({ saveMode, targetDir }) {
   saveInflight = true;
   const saveBtn = document.getElementById("save-btn");
   if (saveBtn) saveBtn.disabled = true;
-  showProgress({ title: "Photoshop に反映中", detail: "スクリプトを実行しています..." });
+  let unlistenProgress = null;
+  showProgress({
+    title: "Photoshop に反映中",
+    detail: "Photoshop を起動しています...",
+    current: 0,
+    total: payload.edits?.length ?? 0,
+    showCount: true,
+  });
   try {
     const { invoke } = await import("@tauri-apps/api/core");
+    const { listen } = await import("@tauri-apps/api/event");
+    unlistenProgress = await listen("photoshop_save_progress", (event) => {
+      const p = event?.payload || {};
+      updateProgress({
+        detail: typeof p.detail === "string" ? p.detail : undefined,
+        current: Number.isFinite(p.current) ? p.current : undefined,
+        total: Number.isFinite(p.total) ? p.total : undefined,
+        showCount: true,
+      });
+    });
     const result = await invoke("apply_edits_via_photoshop", { payload });
     const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
     const hasWarn = typeof result === "string" && result.includes("警告:");
@@ -102,6 +120,9 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     await hideProgress();
     toast(`保存失敗: ${e.message ?? e}`, { kind: "error", duration: 5000 });
   } finally {
+    if (typeof unlistenProgress === "function") {
+      try { unlistenProgress(); } catch (_) {}
+    }
     saveInflight = false;
     // pages 0 件なら disabled のまま。ある場合のみ復帰。
     if (saveBtn) saveBtn.disabled = getPages().length === 0;

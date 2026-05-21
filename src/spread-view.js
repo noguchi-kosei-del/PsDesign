@@ -9,6 +9,7 @@ import {
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 import { requestRulerRedraw } from "./rulers.js";
 import {
+  alignCanvasStartInViewport,
   applyOverscrollMargin,
   captureViewportCenterFraction,
   centerCanvasInViewport,
@@ -23,12 +24,69 @@ let rotationSubscribed = false;
 
 const MAX_CANVAS_SIDE = 16384;
 const PSD_FIT_BASE_SCALE = 1.1;
+export const PSD_FIT_ZOOM = 1 / PSD_FIT_BASE_SCALE;
 
 // ズーム変更時、ビューポート中心にあったキャンバス上のポイントを再描画後も
 // ビューポート中心に保つため、redraw 前にキャプチャしておく。
 // redraw 内で読み出して新しいスクロール位置を計算 → null へリセット。
 // それ以外（リサイズ・回転）の redraw ではこの値は null のままなので副作用なし。
 let zoomTransitionCenter = null;
+let resetZoomToStart = false;
+let resetZoomDuringRedraw = false;
+
+function centerCurrentPageInStage() {
+  const root = container();
+  const pageEl = root ? root.querySelector(".page") : null;
+  if (!root || !pageEl) return;
+  centerCanvasInViewport(root, pageEl);
+}
+
+function restoreCurrentPageCenter(center) {
+  const root = container();
+  const pageEl = root ? root.querySelector(".page") : null;
+  if (!root || !pageEl || !center) return;
+  restoreViewportCenter(root, pageEl, center);
+}
+
+export function capturePsdViewportCenter() {
+  const root = container();
+  const pageEl = root ? root.querySelector(".page") : null;
+  return captureViewportCenterFraction(root, pageEl);
+}
+
+export function refreshPsdStageLayout({ recenter = true, viewportCenter = null } = {}) {
+  for (const fn of pageRedraws) fn();
+  if (viewportCenter) restoreCurrentPageCenter(viewportCenter);
+  else if (recenter) centerCurrentPageInStage();
+}
+
+export function schedulePsdStageLayoutRefresh({ durationMs = 360, recenter = true, viewportCenter = null } = {}) {
+  const center = viewportCenter ?? (recenter ? null : capturePsdViewportCenter());
+  const run = () => refreshPsdStageLayout({ recenter, viewportCenter: center });
+  requestAnimationFrame(run);
+  requestAnimationFrame(() => requestAnimationFrame(run));
+  setTimeout(run, 80);
+  setTimeout(run, Math.max(120, durationMs + 50));
+}
+
+export function resetPsdViewportToStart() {
+  resetZoomToStart = true;
+  const run = () => {
+    const root = container();
+    const pageEl = root ? root.querySelector(".page") : null;
+    // setPsdZoom() は同じ倍率では change event を出さない。
+    // 閲覧モード後の Ctrl+0 のように倍率は 100% のままでもステージ幅だけが
+    // 通常表示へ戻っている場合があるため、リセット時は必ず redraw して寸法を再計算する。
+    for (const fn of pageRedraws) fn();
+    const currentPageEl = root ? root.querySelector(".page") : pageEl;
+    alignCanvasStartInViewport(root, currentPageEl);
+    resetZoomToStart = false;
+  };
+  requestAnimationFrame(run);
+  requestAnimationFrame(() => requestAnimationFrame(run));
+  setTimeout(run, 80);
+  setTimeout(run, 460);
+}
 
 export function renderAllSpreads() {
   const root = container();
@@ -41,11 +99,14 @@ export function renderAllSpreads() {
       // スクロールを再計算する。これでズーム前後で同じ点が画面中央に保たれる。
       const stage = container();
       const pageEl = stage ? stage.querySelector(".page") : null;
-      zoomTransitionCenter = captureViewportCenterFraction(stage, pageEl);
+      resetZoomDuringRedraw = resetZoomToStart;
+      resetZoomToStart = false;
+      zoomTransitionCenter = resetZoomDuringRedraw ? null : captureViewportCenterFraction(stage, pageEl);
       try {
         for (const fn of pageRedraws) fn();
       } finally {
         zoomTransitionCenter = null;
+        resetZoomDuringRedraw = false;
       }
     });
   }
@@ -127,9 +188,15 @@ function buildPage(page, pageIndex, root) {
   // 初回 + overscroll margin 適用時は scroll(0,0) が padding 領域に乗ってしまう
   // ので、明示的にキャンバス中央へスクロールを合わせる。
   let isFirstRedraw = true;
+  let lastStageWidth = null;
+  let lastStageHeight = null;
 
   const redraw = () => {
     const box = root.getBoundingClientRect();
+    const stageSizeChanged = lastStageWidth != null && lastStageHeight != null
+      && (Math.abs(box.width - lastStageWidth) > 0.5 || Math.abs(box.height - lastStageHeight) > 0.5);
+    lastStageWidth = box.width;
+    lastStageHeight = box.height;
     const availW = Math.max(0, box.width - 32);
     const availH = Math.max(0, box.height - 32);
     if (availW <= 0 || availH <= 0) return;
@@ -222,13 +289,17 @@ function buildPage(page, pageIndex, root) {
     // box.width/height - 32、スクロールバー非依存）を使う。zoom ≤ 1 では visualW ≤ availW
     // が保証される。
     const hasOverflowAfter = visualW > availW || visualH > availH;
-    if (zoomTransitionCenter) {
+    if (resetZoomDuringRedraw) {
+      alignCanvasStartInViewport(root, el);
+    } else if (zoomTransitionCenter) {
       if (hasOverflowAfter) {
         restoreViewportCenter(root, el, zoomTransitionCenter);
       } else {
         root.scrollLeft = 0;
         root.scrollTop = 0;
       }
+    } else if (stageSizeChanged) {
+      centerCanvasInViewport(root, el);
     } else if (isFirstRedraw || marginNewlyApplied) {
       // 初回 redraw（PSD ロード直後・ページ切替直後）または margin が新規付与された
       // ときは、ステージのスクロール位置が (0,0) で padding 上に乗っており、

@@ -12,6 +12,7 @@ import {
   getSelectedLayers,
   getStrokeColor,
   getStrokeWidthPx,
+  getLeadingPct,
   onCurrentFontChange,
   onFillColorChange,
   removeNewLayer,
@@ -25,6 +26,7 @@ import {
   setSelectedLayers,
   setStrokeColor,
   setStrokeWidthPx,
+  getTextSize,
   setTextSize,
   toDisplaySizePt,
   toggleLayerSelected,
@@ -50,7 +52,7 @@ import {
   layerRectForNew,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
-import { confirmDialog } from "./ui-feedback.js";
+import { confirmDialog, promptDialog } from "./ui-feedback.js";
 
 const listEl = () => document.getElementById("layer-list");
 const editorEl = () => document.getElementById("editor");
@@ -59,6 +61,8 @@ const fontComboboxEl = () => document.getElementById("edit-font-combobox");
 const fontToggleEl = () => document.getElementById("edit-font-toggle");
 const fontListEl = () => document.getElementById("edit-font-list");
 const fontUsageSummaryEl = () => document.getElementById("font-usage-summary");
+const favoriteStyleListEl = () => document.getElementById("favorite-style-list");
+const favoriteStyleSaveBtnEl = () => document.getElementById("favorite-style-save-btn");
 const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
@@ -86,6 +90,19 @@ function syncFillToggle(color) {
 
 function displayFontName(psName) {
   return getFontDisplayName(psName) ?? psName ?? "";
+}
+
+function normalizeFontSearchText(value) {
+  return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ja");
+}
+
+function fontSearchHaystack(font) {
+  const aliases = Array.isArray(font?.aliases) ? font.aliases : [];
+  return normalizeFontSearchText([
+    font?.name,
+    font?.postScriptName,
+    ...aliases,
+  ].filter(Boolean).join("\n"));
 }
 
 function layerDefaultFont(ref) {
@@ -300,6 +317,7 @@ function applySelectionHighlight() {
     );
     li.classList.toggle("selected", match);
   }
+  window.dispatchEvent(new CustomEvent("psdesign:selection-changed"));
 }
 
 function resolveSelection() {
@@ -549,11 +567,11 @@ function attachFontPreviewObserver(list) {
 }
 
 function filterCombo(query) {
-  const q = (query ?? "").trim().toLowerCase();
+  const q = normalizeFontSearchText(query).trim();
   let firstVisible = -1;
   for (let i = 0; i < comboItems.length; i++) {
     const { el, font } = comboItems[i];
-    const hay = `${font.name ?? ""}\n${font.postScriptName ?? ""}`.toLowerCase();
+    const hay = fontSearchHaystack(font);
     const match = q === "" || hay.includes(q);
     el.style.display = match ? "" : "none";
     if (match && firstVisible < 0) firstVisible = i;
@@ -837,6 +855,198 @@ function updateCharSelectionIndicator(sel) {
 // font-source タブ：edit-font-combobox（フォント検索）と style-palette（プリセット）を
 // 排他切替する。ユーザーの選択は localStorage に永続化。
 const FONT_SOURCE_KEY = "psdesign_font_source";
+const FAVORITE_STYLES_KEY = "psdesign_favorite_text_styles";
+
+function readFavoriteStyles() {
+  try {
+    const raw = localStorage.getItem(FAVORITE_STYLES_KEY);
+    const arr = raw ? JSON.parse(raw) : [];
+    return Array.isArray(arr) ? arr.filter((s) => s && typeof s === "object") : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeFavoriteStyles(styles) {
+  try {
+    localStorage.setItem(FAVORITE_STYLES_KEY, JSON.stringify(styles));
+  } catch (e) {
+    console.error("[favorite-style] failed to save:", e);
+  }
+}
+
+function currentStyleSnapshot() {
+  const fontPs = fontEl()?.dataset.ps || getCurrentFont() || "";
+  const bold = computeCommonBold(getSelectedLayers());
+  return {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: "",
+    fontPostScriptName: fontPs,
+    sizePt: getTextSize(),
+    leadingPct: getLeadingPct(),
+    strokeColor: getStrokeColor(),
+    strokeWidthPx: getStrokeWidthPx(),
+    fillColor: getFillColor(),
+    syntheticBold: bold === true,
+    createdAt: Date.now(),
+  };
+}
+
+function favoriteStyleDefaultName(style) {
+  const fontName = displayFontName(style.fontPostScriptName) || "Style";
+  const size = Number.isFinite(Number(style.sizePt)) ? `${Math.round(Number(style.sizePt) * 10) / 10}pt` : "";
+  const stroke = style.strokeColor && style.strokeColor !== "none"
+    ? `${style.strokeColor === "white" ? "白" : style.strokeColor === "black" ? "黒" : style.strokeColor}フチ`
+    : "フチなし";
+  return [fontName, size, stroke].filter(Boolean).join(" / ");
+}
+
+function normalizeFavoriteStyle(style) {
+  return {
+    id: style.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name: String(style.name || "").trim() || favoriteStyleDefaultName(style),
+    fontPostScriptName: style.fontPostScriptName || "",
+    sizePt: Number(style.sizePt),
+    leadingPct: Number(style.leadingPct),
+    strokeColor: style.strokeColor || "none",
+    strokeWidthPx: Number(style.strokeWidthPx),
+    fillColor: style.fillColor || "default",
+    syntheticBold: style.syntheticBold === true,
+    createdAt: Number(style.createdAt) || Date.now(),
+  };
+}
+
+function styleSummary(style) {
+  const parts = [];
+  if (Number.isFinite(style.sizePt)) parts.push(`${Math.round(style.sizePt * 10) / 10}pt`);
+  if (Number.isFinite(style.leadingPct)) parts.push(`${Math.round(style.leadingPct)}%`);
+  if (style.strokeColor && style.strokeColor !== "none") {
+    const color = style.strokeColor === "white" ? "白" : style.strokeColor === "black" ? "黒" : style.strokeColor;
+    parts.push(`${color} ${Number.isFinite(style.strokeWidthPx) ? style.strokeWidthPx : 0}px`);
+  } else {
+    parts.push("フチなし");
+  }
+  if (style.fillColor && style.fillColor !== "default") {
+    parts.push(style.fillColor === "white" ? "白文字" : style.fillColor === "black" ? "黒文字" : style.fillColor);
+  }
+  if (style.syntheticBold) parts.push("太字");
+  return parts.join(" · ");
+}
+
+function renderFavoriteStyles() {
+  const list = favoriteStyleListEl();
+  if (!list) return;
+  const styles = readFavoriteStyles().map(normalizeFavoriteStyle);
+  if (!styles.length) {
+    list.innerHTML = '<div class="favorite-style-empty">保存したスタイルはありません</div>';
+    return;
+  }
+  list.innerHTML = "";
+  for (const style of styles) {
+    const row = document.createElement("div");
+    row.className = "favorite-style-item";
+    row.title = "クリックでスタイルを適用";
+
+    const body = document.createElement("button");
+    body.type = "button";
+    body.className = "favorite-style-apply";
+    body.addEventListener("click", () => applyFavoriteStyle(style));
+
+    const name = document.createElement("span");
+    name.className = "favorite-style-name";
+    name.textContent = style.name;
+    if (style.fontPostScriptName) {
+      const fam = cssFontFamily(style.fontPostScriptName);
+      if (fam) name.style.fontFamily = fam;
+      ensureFontLoaded(style.fontPostScriptName);
+    }
+    body.appendChild(name);
+
+    const meta = document.createElement("span");
+    meta.className = "favorite-style-meta";
+    meta.textContent = styleSummary(style);
+    body.appendChild(meta);
+
+    const del = document.createElement("button");
+    del.type = "button";
+    del.className = "favorite-style-delete";
+    del.title = "削除";
+    del.setAttribute("aria-label", `${style.name} を削除`);
+    del.innerHTML = `
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <path d="M3 6h18"/>
+        <path d="M8 6V4h8v2"/>
+        <path d="M19 6l-1 14H6L5 6"/>
+        <path d="M10 11v5"/>
+        <path d="M14 11v5"/>
+      </svg>
+    `;
+    del.addEventListener("click", (e) => {
+      e.stopPropagation();
+      writeFavoriteStyles(readFavoriteStyles().filter((s) => s.id !== style.id));
+      renderFavoriteStyles();
+    });
+
+    row.appendChild(body);
+    row.appendChild(del);
+    list.appendChild(row);
+  }
+}
+
+async function saveCurrentFavoriteStyle() {
+  const style = normalizeFavoriteStyle(currentStyleSnapshot());
+  const name = await promptDialog({
+    title: "お気に入りに保存",
+    message: "保存するスタイル名を入力してください。",
+    defaultValue: style.name,
+    placeholder: "スタイル名",
+    confirmLabel: "保存",
+    cancelLabel: "キャンセル",
+  });
+  if (name === null) return;
+  style.name = String(name).trim() || style.name;
+  const styles = readFavoriteStyles().map(normalizeFavoriteStyle);
+  styles.unshift(style);
+  writeFavoriteStyles(styles.slice(0, 30));
+  renderFavoriteStyles();
+}
+
+function applyFavoriteStyle(style) {
+  const s = normalizeFavoriteStyle(style);
+  if (s.fontPostScriptName) {
+    const font = getFonts().find((f) => f.postScriptName === s.fontPostScriptName)
+      ?? { postScriptName: s.fontPostScriptName, name: displayFontName(s.fontPostScriptName) };
+    commitFont(font);
+  }
+  if (Number.isFinite(s.sizePt)) {
+    setTextSize(s.sizePt);
+    commitSizeToSelections(s.sizePt);
+  }
+  if (Number.isFinite(s.leadingPct)) {
+    setLeadingPct(s.leadingPct);
+    commitLeadingToSelections(s.leadingPct);
+  }
+  setStrokeColor(s.strokeColor);
+  setStrokeWidthPx(Number.isFinite(s.strokeWidthPx) ? s.strokeWidthPx : 20);
+  syncStrokeToggle(s.strokeColor);
+  syncStrokeWidthInput(getStrokeWidthPx());
+  commitStrokeFields(s.strokeColor, getStrokeWidthPx());
+  setFillColor(s.fillColor);
+  syncFillToggle(s.fillColor);
+  commitFillField(s.fillColor);
+  commitBoldToSelections(s.syntheticBold === true);
+  syncBoldToggle(s.syntheticBold === true);
+  renderFavoriteStyles();
+}
+
+function bindFavoriteStyles() {
+  renderFavoriteStyles();
+  const saveBtn = favoriteStyleSaveBtnEl();
+  if (saveBtn) saveBtn.addEventListener("click", () => {
+    void saveCurrentFavoriteStyle();
+  });
+}
+
 function setFontSourceTab(source) {
   const tabs = document.querySelectorAll(".font-source-tab");
   const panels = document.querySelectorAll(".font-source-panel");
@@ -869,6 +1079,7 @@ function bindFontSourceTabs() {
 
 export function bindEditorEvents() {
   bindFontSourceTabs();
+  bindFavoriteStyles();
 
   // フォント検索コンボボックスの配線。
   const input = fontEl();

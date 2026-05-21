@@ -19,13 +19,16 @@ import {
   setActivePane,
   onPageIndexChange,
 } from "./state.js";
-import { matchShortcut } from "./settings.js";
+import { capturePdfViewportCenter, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
+import { capturePsdViewportCenter, schedulePsdStageLayoutRefresh } from "./spread-view.js";
 
 const HINT_SHOW_DURATION = 3000;
 const CLOSE_BTN_FADE_DELAY = 3000;
 
 let isActive = false;
 let previousZoom = 1;
+let previousViewportCenter = null;
+let previousPdfViewportCenter = null;
 
 let viewerBtn = null;
 let navHint = null;
@@ -38,6 +41,7 @@ const boundHandlers = {
   closeClick: null,
   keydown: null,
   mousemove: null,
+  wheel: null,
 };
 
 export function bindViewerMode() {
@@ -78,24 +82,25 @@ export function bindViewerMode() {
   onPageIndexChange(sync);
   sync();
 
-  // F1 はブラウザ既定で「ヘルプ」を開くため、capture フェーズで先取り。
-  // 入力欄にいても preventDefault は必ず行い、ヘルプ呼び出しを抑止する。
-  // toggle() は内部で getPages().length === 0 を弾くので PSD 未読込時も安全。
-  window.addEventListener(
-    "keydown",
-    (e) => {
-      if (matchShortcut(e, "viewerMode")) {
-        e.preventDefault();
-        e.stopPropagation();
-        toggle();
-      }
-    },
-    { capture: true },
-  );
+  // 閲覧モードの表示/非表示ショートカットは Esc 固定。
+  // 他のグローバルショートカットより先に capture で拾い、閲覧モード中は必ず終了する。
+  window.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape") return;
+    if (isActive) {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      exit();
+      return;
+    }
+    if (shouldIgnoreViewerEsc(e)) return;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+    enter();
+  }, true);
 }
 
 // 閲覧モードのキーボード/ボタン経由のエントリポイント。
-// 仕様: 起動のみ。終了は Esc に固定（F1 等のショートカット連打で意図せず抜けるのを防ぐ）。
+// 仕様: ボタン経由は起動のみ。ショートカットでの表示/非表示は Esc 固定。
 function toggle() {
   if (!isActive) enter();
   // isActive のときは no-op（Esc / 右上 × ボタンが唯一の終了手段）
@@ -103,6 +108,42 @@ function toggle() {
 
 // runShortcut からも呼べる外部 API。bindViewerMode 未呼出の段階や、
 // PSD 未読込時はガードで何もしない（enter 内でも getPages().length === 0 を弾く）。
+function isVisibleElement(el) {
+  if (!el || el.hidden) return false;
+  const style = window.getComputedStyle(el);
+  return style.display !== "none" && style.visibility !== "hidden" && el.getClientRects().length > 0;
+}
+
+function hasOpenDialog() {
+  const selectors = [
+    '[role="dialog"]',
+    ".progress-modal",
+    ".reference-hidden-modal",
+    ".settings-modal",
+    ".key-capture-modal",
+    ".font-book-modal",
+    ".style-palette-modal",
+    ".ai-adjust-choice-modal",
+  ];
+  return selectors.some((selector) =>
+    Array.from(document.querySelectorAll(selector)).some(isVisibleElement),
+  );
+}
+
+function isEditableTarget(target) {
+  if (!(target instanceof Element)) return false;
+  return !!target.closest(
+    'input, textarea, select, [contenteditable="true"], .text-input-floater, .font-combobox',
+  );
+}
+
+function shouldIgnoreViewerEsc(e) {
+  if (e.defaultPrevented) return true;
+  if (getPages().length === 0) return true;
+  if (isEditableTarget(e.target)) return true;
+  return hasOpenDialog();
+}
+
 export function toggleViewerMode() {
   toggle();
 }
@@ -116,6 +157,8 @@ function enter() {
   setActivePane("psd");
 
   previousZoom = getPsdZoom();
+  previousViewportCenter = capturePsdViewportCenter();
+  previousPdfViewportCenter = capturePdfViewportCenter();
 
   document.body.classList.add("viewer-mode");
   if (viewerBtn) viewerBtn.setAttribute("aria-pressed", "true");
@@ -124,6 +167,7 @@ function enter() {
 
   // CSS で psd-area が full-window に拡張されるので zoom=1 で fit する。
   setPsdZoom(1);
+  schedulePsdStageLayoutRefresh({ durationMs: 460, recenter: true });
 
   showCloseBtn();
 
@@ -145,6 +189,18 @@ function exit() {
   cleanupEventListeners();
 
   setPsdZoom(previousZoom);
+  schedulePsdStageLayoutRefresh({
+    durationMs: 420,
+    recenter: !previousViewportCenter,
+    viewportCenter: previousViewportCenter,
+  });
+  schedulePdfStageLayoutRefresh({
+    durationMs: 420,
+    recenter: !previousPdfViewportCenter,
+    viewportCenter: previousPdfViewportCenter,
+  });
+  previousViewportCenter = null;
+  previousPdfViewportCenter = null;
 }
 
 function setupEventListeners() {
@@ -168,8 +224,18 @@ function setupEventListeners() {
     }
   };
 
+  boundHandlers.wheel = (e) => {
+    if (!isActive || !e.altKey) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1;
+    setPsdZoom(getPsdZoom() * factor);
+    schedulePsdStageLayoutRefresh({ durationMs: 80, recenter: false });
+  };
+
   document.addEventListener("keydown", boundHandlers.keydown, true);
   document.addEventListener("mousemove", boundHandlers.mousemove);
+  document.addEventListener("wheel", boundHandlers.wheel, { capture: true, passive: false });
 }
 
 function cleanupEventListeners() {
@@ -178,6 +244,9 @@ function cleanupEventListeners() {
   }
   if (boundHandlers.mousemove) {
     document.removeEventListener("mousemove", boundHandlers.mousemove);
+  }
+  if (boundHandlers.wheel) {
+    document.removeEventListener("wheel", boundHandlers.wheel, true);
   }
 }
 

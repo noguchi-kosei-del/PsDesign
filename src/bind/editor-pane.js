@@ -24,6 +24,8 @@ import {
   deleteTxtBlockByIndex,
   getActivePageNumber,
   getTxtPageCount,
+  ensureTxtExtension,
+  pickTxtSavePath,
   syncNewInputAvailabilityFor,
 } from "../txt-source.js";
 import { notifyDialog, promptDialog, toast } from "../ui-feedback.js";

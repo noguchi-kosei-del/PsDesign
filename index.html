@@ -72,7 +72,7 @@
           </button>
         </div>
         <div class="toolbar-viewmode" role="group" aria-label="ビューモード">
-          <button id="skip-first-blank-btn" class="skip-blank-btn" type="button" aria-pressed="false" title="先頭ページを除外" aria-label="先頭ページを除外">
+          <button id="reference-hidden-btn" class="skip-blank-btn" type="button" aria-pressed="false" title="見本の非表示設定" aria-label="見本の非表示設定" disabled>
             <span class="skip-blank-box" aria-hidden="true"></span>
             <svg class="skip-blank-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
               <!-- ファイル本体 + 折り返し角 -->
@@ -105,27 +105,6 @@
           </div>
         </div>
         <div class="toolbar-actions">
-          <button id="open-pdf-btn" class="icon-btn file-open-btn" title="見本を読み込み" aria-label="見本を読み込み">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/>
-              <path d="M14 2v5a1 1 0 0 0 1 1h5"/>
-              <circle cx="10" cy="12" r="2"/>
-              <path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/>
-            </svg>
-          </button>
-          <button id="open-folder-btn" class="icon-btn file-open-btn" title="PSD を開く" aria-label="PSD を開く">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
-              <text x="12" y="17" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', sans-serif; font-weight: 700;">PSD</text>
-            </svg>
-          </button>
-          <button id="open-txt-toolbar-btn" class="icon-btn file-open-btn" title="テキストを開く" aria-label="テキストを開く">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/>
-              <polyline points="14 2 14 8 20 8"/>
-              <text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: 'Hiragino Kaku Gothic ProN', 'Hiragino Sans', sans-serif; font-weight: 700;">TXT</text>
-            </svg>
-          </button>
           <div class="save-container" id="save-container">
             <button id="save-btn" class="icon-btn file-open-btn" disabled title="Photoshop で保存 (Ctrl+S)" aria-label="Photoshop で保存">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -546,7 +525,7 @@
           </div>
           <div class="side-panel-tabs" role="tablist">
             <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
-            <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">テキスト編集</button>
+            <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">スタイル編集</button>
             <button id="side-panel-tab-font-book" class="side-panel-tab" data-tab="font-book" type="button" role="tab" aria-selected="false">フォント帳</button>
           </div>
           <section class="panel-section txt-source" id="txt-source" data-section="txt">
@@ -657,7 +636,6 @@
                   <div class="ruby-parent-display" id="ruby-parent-display" title="選択中の親文字" aria-live="polite">
                     <span class="ruby-parent-empty">文字を選択</span>
                   </div>
-                  <span class="ruby-line-hint" id="ruby-line-hint" aria-live="polite" hidden></span>
                 </div>
                 <div class="ruby-row">
                   <input id="ruby-text-input" class="ruby-text-input" type="text"
@@ -701,6 +679,18 @@
                 <div id="font-weight-selector" class="font-weight-selector" role="group" aria-label="フォントの太さ"></div>
                 <div id="font-usage-summary" class="font-usage-summary" hidden></div>
               </label>
+              <div class="favorite-style-panel" id="favorite-style-panel">
+                <div class="favorite-style-header">
+                  <span class="favorite-style-title">お気に入り</span>
+                  <button type="button" id="favorite-style-save-btn" class="favorite-style-save-btn" title="現在のスタイルを保存" aria-label="現在のスタイルを保存">
+                    <span aria-hidden="true">＋</span>
+                    <span>追加</span>
+                  </button>
+                </div>
+                <div id="favorite-style-list" class="favorite-style-list">
+                  <div class="favorite-style-empty">保存したスタイルはありません</div>
+                </div>
+              </div>
             </div>
             <div class="font-source-panel" data-source-panel="palette" role="tabpanel" hidden>
               <div class="style-palette" id="style-palette">
