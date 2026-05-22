@@ -479,12 +479,6 @@
               </svg>
             </button>
           </div>
-          <div class="fill-color-picker" role="group" aria-label="文字色">
-            <div class="fill-swatch-stack">
-              <button id="fill-white-btn" class="fill-swatch fill-swatch-white" type="button" data-fill="white" title="白文字（もう一度クリックで解除）" aria-label="白文字"></button>
-              <button id="fill-black-btn" class="fill-swatch fill-swatch-black" type="button" data-fill="black" title="黒文字（もう一度クリックで解除）" aria-label="黒文字"></button>
-            </div>
-          </div>
         </nav>
         <aside class="side-panel">
           <div class="panel-header">
@@ -584,6 +578,18 @@
                     <span class="size-unit">%</span>
                     <button id="leading-dec-btn" class="size-btn" type="button" title="狭く">−</button>
                   </div>
+                </div>
+              </div>
+              <div class="editor-tab-panel toolbar-fill-palette" data-tab-panel="fill">
+                <div class="editor-panel-label">文字色</div>
+                <div class="toolbar-fill-swatches" role="group" aria-label="文字色パレット">
+                  <span class="toolbar-fill-icon" aria-hidden="true">A</span>
+                  <button class="toolbar-fill-swatch toolbar-fill-black" type="button" data-fill="black" title="黒文字" aria-label="黒文字"></button>
+                  <button class="toolbar-fill-swatch toolbar-fill-white" type="button" data-fill="white" title="白文字" aria-label="白文字"></button>
+                  <button class="toolbar-fill-swatch toolbar-fill-red" type="button" data-fill="#ff0000" title="赤文字" aria-label="赤文字"></button>
+                  <button class="toolbar-fill-swatch toolbar-fill-blue" type="button" data-fill="#0000ff" title="青文字" aria-label="青文字"></button>
+                  <button id="fill-custom-swatch" class="toolbar-fill-swatch toolbar-fill-custom" type="button" title="カスタム文字色" aria-label="カスタム文字色"></button>
+                  <input id="fill-color-picker" class="toolbar-fill-picker" type="color" value="#ff0000" aria-label="カスタム文字色" />
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="stroke">

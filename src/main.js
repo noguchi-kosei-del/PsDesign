@@ -17,6 +17,7 @@ import {
   applyEditModeRubyToRange,
   removeEditModeRubyFromRange,
   getExistingLayerEffectiveSizePt,
+  toggleSelectionAdornmentsVisible,
 } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh } from "./spread-view.js";
@@ -397,6 +398,8 @@ async function loadFontsFromBackend() {
 
 let panPreviousTool = null;
 let panSpaceActive = false;
+let selectionAdornmentChordActive = false;
+let selectionAdornmentChordHadOtherKey = false;
 
 function runShortcut(id) {
   const inv = getPageDirectionInverted();
@@ -417,6 +420,65 @@ function runShortcut(id) {
     case "toggleRulers": toggleRulersVisible(); break;
     case "viewerMode":   toggleViewerMode(); break;
   }
+}
+
+function isCtrlLikeKey(e) {
+  return e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight";
+}
+
+function isMetaKey(e) {
+  return e.key === "Meta" || e.code === "MetaLeft" || e.code === "MetaRight";
+}
+
+function isShiftKey(e) {
+  return e.key === "Shift" || e.code === "ShiftLeft" || e.code === "ShiftRight";
+}
+
+function isCtrlShiftAdornmentChord(e) {
+  return e.ctrlKey && e.shiftKey && !e.metaKey && !e.altKey;
+}
+
+function handleSelectionAdornmentChordKeydown(e) {
+  if (selectionAdornmentChordActive) {
+    if (isMetaKey(e) || !isCtrlShiftAdornmentChord(e) || (!isCtrlLikeKey(e) && !isShiftKey(e))) {
+      selectionAdornmentChordHadOtherKey = true;
+    }
+  }
+
+  if (!isCtrlShiftAdornmentChord(e) || (!isCtrlLikeKey(e) && !isShiftKey(e))) {
+    return false;
+  }
+
+  if (!selectionAdornmentChordActive) {
+    selectionAdornmentChordActive = true;
+    selectionAdornmentChordHadOtherKey = false;
+  }
+  e.preventDefault();
+  return true;
+}
+
+function handleSelectionAdornmentChordKeyup(e) {
+  if (!selectionAdornmentChordActive) return false;
+  if (isMetaKey(e)) {
+    selectionAdornmentChordHadOtherKey = true;
+    return false;
+  }
+  if (!isCtrlLikeKey(e) && !isShiftKey(e)) return false;
+
+  const shouldToggle = !selectionAdornmentChordHadOtherKey && getSelectedLayers().length > 0;
+  if (!e.ctrlKey || !e.shiftKey || e.metaKey) {
+    selectionAdornmentChordActive = false;
+    selectionAdornmentChordHadOtherKey = false;
+  }
+  if (!shouldToggle) return false;
+
+  const visible = toggleSelectionAdornmentsVisible();
+  toast(visible ? "選択表示を表示しました" : "選択表示を非表示にしました", {
+    kind: "info",
+    duration: 1200,
+  });
+  e.preventDefault();
+  return true;
 }
 
 function isShortcutBlockedInInput(id, target) {
@@ -550,6 +612,8 @@ function bindTools() {
   window.addEventListener("keyup", suppressAltMenuActivation);
 
   window.addEventListener("keydown", (e) => {
+    if (handleSelectionAdornmentChordKeydown(e)) return;
+
     if (e.code === "Space") {
       const t = e.target;
       if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -685,6 +749,8 @@ function bindTools() {
   });
 
   window.addEventListener("keyup", (e) => {
+    if (handleSelectionAdornmentChordKeyup(e)) return;
+
     if (e.code === "Space" && panSpaceActive) {
       panSpaceActive = false;
       if (panPreviousTool) {
@@ -702,6 +768,8 @@ function bindTools() {
         panPreviousTool = null;
       }
     }
+    selectionAdornmentChordActive = false;
+    selectionAdornmentChordHadOtherKey = false;
   });
 }
 

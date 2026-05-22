@@ -774,6 +774,64 @@ export function replaceBlockInContent(content, pageNumber, oldText, newText) {
 // （自動配置）/ auto-place.js syncPlacedFromTxt（自動配置済みレイヤーの追従）。
 // 原稿テキスト (state.txtSource.content) 自体は触らない設計（原稿は元データを
 // 保持、レイヤー側だけ全角化）。
+function replaceBlockAtIndexInContent(content, pageNumber, paragraphIndex, newText) {
+  if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) return null;
+  const norm = (content ?? "").replace(/\r\n?/g, "\n");
+  const parsed = parsePages(norm);
+  const nextBlock = String(newText ?? "").replace(/\r\n?/g, "\n").trim();
+
+  if (!parsed.hasMarkers) {
+    const blocks = splitBlocksRaw(norm);
+    if (paragraphIndex >= blocks.length) return null;
+    blocks[paragraphIndex] = nextBlock;
+    return blocks.filter((b) => b.length > 0).join("\n\n");
+  }
+
+  if (!Number.isInteger(pageNumber)) return null;
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let sectionStart = -1;
+  let sectionEnd = norm.length;
+  let inTargetPage = false;
+  let m;
+  while ((m = re.exec(norm)) !== null) {
+    const num = toHalfWidthInt(m[1]);
+    if (inTargetPage) {
+      sectionEnd = m.index;
+      break;
+    }
+    if (num === pageNumber) {
+      inTargetPage = true;
+      sectionStart = m.index + m[0].length;
+    }
+  }
+  if (!inTargetPage) return null;
+
+  const sectionText = norm.slice(sectionStart, sectionEnd);
+  const blocks = splitBlocksRaw(sectionText);
+  if (paragraphIndex >= blocks.length) return null;
+  blocks[paragraphIndex] = nextBlock;
+  const kept = blocks.filter((b) => b.length > 0);
+  const newSection = kept.length === 0 ? "\n" : `\n${kept.join("\n\n")}\n`;
+  return norm.slice(0, sectionStart) + newSection + norm.slice(sectionEnd);
+}
+
+export function syncPlacedLayerTextToSource(layer, nextText) {
+  const ref = layer?.sourceTxtRef;
+  if (!ref || !Number.isInteger(ref.paragraphIndex)) return false;
+  const source = getTxtSource();
+  if (!source) return false;
+  const nextContent = replaceBlockAtIndexInContent(
+    source.content,
+    Number.isInteger(ref.pageNumber) ? ref.pageNumber : null,
+    ref.paragraphIndex,
+    nextText,
+  );
+  if (nextContent == null || nextContent === source.content) return false;
+  setTxtSource({ name: source.name, content: nextContent });
+  setTxtDirty(true);
+  return true;
+}
+
 export function convertHalfToFullForVertical(text, direction) {
   const s = String(text ?? "");
   if (direction !== "vertical") return s;

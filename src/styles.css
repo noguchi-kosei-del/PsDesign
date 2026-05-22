@@ -141,6 +141,72 @@ html, body, #app {
      引き続きツールバーの上に表示される。 */
   z-index: 110;
 }
+.toolbar-fill-palette {
+  display: flex;
+  flex-direction: column;
+}
+.toolbar-fill-icon {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text);
+  font-size: 15px;
+  font-weight: 800;
+  line-height: 1;
+  border-bottom: 2px solid currentColor;
+  user-select: none;
+}
+.toolbar-fill-swatches {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.toolbar-fill-swatch {
+  position: relative;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.toolbar-fill-swatch:hover:not(:disabled) {
+  transform: translateY(-1px);
+  border-color: var(--accent);
+}
+.toolbar-fill-swatch.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.toolbar-fill-white {
+  background: #fff;
+}
+.toolbar-fill-black {
+  background: #000;
+}
+.toolbar-fill-red {
+  background: #ff0000;
+}
+.toolbar-fill-blue {
+  background: #0000ff;
+}
+.toolbar-fill-custom {
+  background: transparent;
+  border: 2px dashed color-mix(in srgb, var(--text-muted) 72%, transparent);
+  box-shadow: none;
+}
+.toolbar-fill-custom.has-color {
+  border-style: solid;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+.toolbar-fill-picker {
+  display: none;
+}
 /* progress-modal 表示中はツールバーをグレーアウト（ウインドウコントロールのみ操作可）。
    pointer-events: none でクリック・hover も封じる。toolbar 自体は z-index 110 で
    blur 背景の上に残るため、ユーザーには「処理中で操作できない」状態が視認できる。 */
@@ -1956,7 +2022,7 @@ body.home-starting .home-screen {
   color: #fff;
 }
 /* レイヤートグルボタン：margin-top: auto でサイドツールバー底辺へ押し下げ、
-   自身以下の zoom / page-nav / fill-color-picker もボトムアンカー位置に収まる。
+   自身以下の zoom / page-nav もボトムアンカー位置に収まる。
    ドロワー本体は .side-toolbar 直下に配置されており、サイドツールバーの
    下端を anchor として展開する。 */
 .layers-toggle-btn[aria-expanded="true"] {
@@ -2043,51 +2109,6 @@ body.home-starting .home-screen {
   line-height: 1;
   padding: 1px 0;
   white-space: nowrap;
-}
-/* Photoshop 風の文字色ピッカー：白/黒の 2 枚をオーバーラップさせて下部に配置。 */
-.fill-color-picker {
-  padding: 8px 0 4px;
-  border-top: 1px solid var(--border);
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-}
-.fill-swatch-stack {
-  position: relative;
-  width: 28px;
-  height: 28px;
-}
-.fill-swatch {
-  position: absolute;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 1px solid #555;
-  border-radius: 2px;
-  cursor: pointer;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
-  transition: transform 0.08s ease;
-}
-.fill-swatch:hover {
-  transform: scale(1.08);
-}
-.fill-swatch-white {
-  background: #fff;
-  top: 0;
-  left: 0;
-  z-index: 1;
-}
-.fill-swatch-black {
-  background: #000;
-  bottom: 0;
-  right: 0;
-  z-index: 2;
-}
-.fill-swatch.active {
-  box-shadow: 0 0 0 2px var(--accent), 0 1px 3px rgba(0, 0, 0, 0.4);
-  z-index: 3;
 }
 .spreads-container {
   display: flex;
@@ -2408,7 +2429,7 @@ body.home-starting .home-screen {
   border-radius: 0;
   min-height: 1.4em;
   border: 1px solid transparent;
-  white-space: pre-wrap;
+  white-space: pre;
   word-break: break-word;
   cursor: text;
   color: var(--text);
@@ -2894,6 +2915,17 @@ body.home-starting .home-screen {
   outline: 2px dashed #4fc3f7;
   outline-offset: 0;
 }
+.page-overlay.selection-adornments-hidden .layer-box.selected,
+.page-overlay.selection-adornments-hidden .layer-box.multi-selected,
+.page-overlay.selection-adornments-hidden .layer-box-new.selected,
+.page-overlay.selection-adornments-hidden .layer-box-new.multi-selected {
+  box-shadow: none;
+  outline: none;
+}
+.page-overlay.selection-adornments-hidden .layer-size-badge,
+.page-overlay.selection-adornments-hidden .layer-rotate-handle {
+  display: none;
+}
 /* 複数選択時は回転ハンドルを非表示（個別のレイヤー操作が前提のため、複数同時回転は無効化）。 */
 .layer-box.multi-selected .layer-rotate-handle {
   display: none;
@@ -3020,21 +3052,6 @@ body.home-starting .home-screen {
 .tcy-span {
   text-combine-upright: all;
   -webkit-text-combine: horizontal;
-}
-/* layerRectFor* の THICK_SAFETY (= 0.4em) と対応する内側 padding。
-   bbox が広がった分だけ padding を入れ、テキスト本体を bbox 中央に視覚配置する。
-   これにより bbox サイズ変更でテキスト位置がずれない。
-   - 縦書き: 列方向 (左右) に 0.2em ずつ
-   - 横書き: 行方向 (上下) に 0.2em ずつ */
-.layer-box-new[data-direction="vertical"] .new-layer-text,
-.layer-box-existing[data-direction="vertical"] .existing-layer-text {
-  padding-left: 0.2em;
-  padding-right: 0.2em;
-}
-.layer-box-new[data-direction="horizontal"] .new-layer-text,
-.layer-box-existing[data-direction="horizontal"] .existing-layer-text {
-  padding-top: 0.2em;
-  padding-bottom: 0.2em;
 }
 .layer-size-badge {
   position: absolute;

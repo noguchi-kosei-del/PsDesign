@@ -115,7 +115,17 @@ const _normTool = (v) =>
 const _normNewTextDir = (v) =>
   v === "vertical" || v === "horizontal" ? v : undefined;
 const _normStrokeColor = (v) => (v === "white" || v === "black" ? v : "none");
-const _normFillColor = (v) => (v === "white" || v === "black" ? v : "default");
+const _hexColorRe = /^#[0-9a-fA-F]{6}$/;
+const _normFillColor = (v) => {
+  if (v === "white" || v === "black" || v === "default") return v;
+  if (typeof v === "string" && _hexColorRe.test(v)) {
+    const hex = v.toLowerCase();
+    if (hex === "#ffffff") return "white";
+    if (hex === "#000000") return "black";
+    return hex;
+  }
+  return "default";
+};
 const _normActivePane = (v) => (v === "pdf" ? "pdf" : "psd");
 // "psdOnly" モードは廃止。3 モード ("parallel" | "proofread" | "editor") のみ受け入れ、
 // それ以外（旧 "psdOnly" 等）は "parallel" にフォールバックする。
@@ -961,7 +971,7 @@ export function addNewLayer({
     direction: direction ?? "vertical",
     strokeColor: strokeColor ?? "none",
     strokeWidthPx: Number.isFinite(strokeWidthPx) ? strokeWidthPx : 20,
-    fillColor: fillColor === "white" || fillColor === "black" ? fillColor : "default",
+    fillColor: _normFillColor(fillColor),
     rotation: Number.isFinite(rotation) ? rotation : 0,
     leadingPct: Number.isFinite(leadingPct) ? leadingPct : 125,
     // 【v1.22.0】合成太字（faux bold）。layer 全体に適用、per-char (charBolds) があれば

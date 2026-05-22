@@ -67,8 +67,24 @@ const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
 const strokeWidthInputEl = () => document.getElementById("stroke-width-input");
-const fillWhiteBtnEl = () => document.getElementById("fill-white-btn");
-const fillBlackBtnEl = () => document.getElementById("fill-black-btn");
+const fillCustomBtnEl = () => document.getElementById("fill-custom-swatch");
+const fillColorPickerEl = () => document.getElementById("fill-color-picker");
+const fillButtonEls = () => Array.from(new Set([
+  ...document.querySelectorAll(".toolbar-fill-swatch[data-fill]"),
+  fillCustomBtnEl(),
+].filter(Boolean)));
+const HEX_FILL_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
+function normalizeFillChoice(color) {
+  if (color === "white" || color === "black" || color === "default") return color;
+  if (typeof color === "string" && HEX_FILL_COLOR_RE.test(color)) {
+    const hex = color.toLowerCase();
+    if (hex === "#ffffff") return "white";
+    if (hex === "#000000") return "black";
+    return hex;
+  }
+  return "default";
+}
 
 // color === null は「複数選択で値が混在している」状態。全ボタン非アクティブ。
 function syncStrokeToggle(color) {
@@ -80,12 +96,29 @@ function syncStrokeToggle(color) {
   if (b) b.classList.toggle("active", color === "black");
 }
 
-// color === null は混在、"default" は「そのまま」 → どちらも全スウォッチ非アクティブ。
+// color === null / default は混在または「そのまま」。見えるスウォッチは全て非アクティブにする。
 function syncFillToggle(color) {
-  const w = fillWhiteBtnEl();
-  const b = fillBlackBtnEl();
-  if (w) w.classList.toggle("active", color === "white");
-  if (b) b.classList.toggle("active", color === "black");
+  const normalized = color == null ? null : normalizeFillChoice(color);
+  syncCustomFillSwatch(normalized);
+  for (const btn of fillButtonEls()) {
+    const active = normalized != null && btn.dataset.fill === normalized;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+}
+
+function syncCustomFillSwatch(color) {
+  const btn = fillCustomBtnEl();
+  const picker = fillColorPickerEl();
+  if (!btn) return;
+  const presetMatched = color != null && Array.from(document.querySelectorAll(".toolbar-fill-swatch[data-fill]"))
+    .some((swatch) => swatch !== btn && swatch.dataset.fill === color);
+  if (typeof color === "string" && HEX_FILL_COLOR_RE.test(color) && !presetMatched) {
+    btn.dataset.fill = color;
+    btn.style.background = color;
+    btn.classList.add("has-color");
+    if (picker) picker.value = color;
+  }
 }
 
 function displayFontName(psName) {
@@ -1192,17 +1225,46 @@ export function bindEditorEvents() {
 
   // スウォッチ再クリックで「そのまま（default）」に戻せる：
   // アクティブ中の色を再押下すると default（色を触らない）状態に復帰する。
-  const bindFillButton = (btn, color) => {
+  const applyFillChoice = (color, { toggle = true } = {}) => {
+    const normalized = normalizeFillChoice(color);
+    const next = toggle && normalized !== "default" && getFillColor() === normalized
+      ? "default"
+      : normalized;
+    setFillColor(next);
+    syncFillToggle(next);
+    commitFillField(next);
+  };
+  const bindFillButton = (btn) => {
     if (!btn) return;
+    if (btn.dataset.fillBound === "true") return;
+    btn.dataset.fillBound = "true";
     btn.addEventListener("click", () => {
-      const next = getFillColor() === color ? "default" : color;
-      setFillColor(next);
-      syncFillToggle(next);
-      commitFillField(next);
+      if (btn.id === "fill-custom-swatch") {
+        const color = normalizeFillChoice(btn.dataset.fill);
+        if (HEX_FILL_COLOR_RE.test(color)) applyFillChoice(color, { toggle: false });
+        fillColorPickerEl()?.click();
+        return;
+      }
+      applyFillChoice(btn.dataset.fill);
     });
   };
-  bindFillButton(fillWhiteBtnEl(), "white");
-  bindFillButton(fillBlackBtnEl(), "black");
+  for (const btn of fillButtonEls()) bindFillButton(btn);
+  const picker = fillColorPickerEl();
+  if (picker && picker.dataset.fillBound !== "true") {
+    picker.dataset.fillBound = "true";
+    const applyPickerColor = () => {
+      const color = normalizeFillChoice(picker.value);
+      const custom = fillCustomBtnEl();
+      if (custom && HEX_FILL_COLOR_RE.test(color)) {
+        custom.dataset.fill = color;
+        custom.style.background = color;
+        custom.classList.add("has-color");
+      }
+      applyFillChoice(color, { toggle: false });
+    };
+    picker.addEventListener("input", applyPickerColor);
+    picker.addEventListener("change", applyPickerColor);
+  }
 
   // ツールバー常駐のフィルスウォッチは、外部の setFillColor（clearPages など）にも追従させる。
   syncFillToggle(getFillColor());
@@ -1401,7 +1463,12 @@ function commitSingleFieldToSelections(field, value) {
       if (ref.kind === "existing") {
         setEdit(ref.page.path, ref.layer.id, { [field]: value });
       } else {
-        updateNewLayer(ref.newLayer.tempId, { [field]: value });
+        const changes = { [field]: value };
+        if (field === "sizePt") {
+          changes.autoFontSwitched = false;
+          changes.autoFontSwitchBucket = -1;
+        }
+        updateNewLayer(ref.newLayer.tempId, changes);
       }
       recenterLayerToCenter(ref, oldCenter);
       any = true;
@@ -1411,6 +1478,9 @@ function commitSingleFieldToSelections(field, value) {
   if (mutated) {
     rebuildLayerList();
     refreshAllOverlays();
+    if (field === "sizePt") {
+      import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
+    }
   }
   return !!mutated;
 }
@@ -1556,6 +1626,7 @@ export { computeCommonItalic };
 
 // 文字色を選択中の全レイヤーに書き込む。
 function commitFillField(color) {
+  const normalized = normalizeFillChoice(color);
   const selections = getSelectedLayers();
   if (selections.length === 0) return;
   withHistoryTransient(() => {
@@ -1564,9 +1635,9 @@ function commitFillField(color) {
       const ref = resolveLayerRef(sel);
       if (!ref) continue;
       if (ref.kind === "existing") {
-        setEdit(ref.page.path, ref.layer.id, { fillColor: color });
+        setEdit(ref.page.path, ref.layer.id, { fillColor: normalized });
       } else {
-        updateNewLayer(ref.newLayer.tempId, { fillColor: color });
+        updateNewLayer(ref.newLayer.tempId, { fillColor: normalized });
       }
       mutated = true;
     }

@@ -500,11 +500,25 @@ function whiteColor() {
   return c;
 }
 
-// name: "white" | "black" | "default"（それ以外）。
+function hexColor(name) {
+  if (typeof name !== "string") return null;
+  var m = /^#([0-9a-fA-F]{6})$/.exec(name);
+  if (!m) return null;
+  var hex = m[1];
+  var c = new SolidColor();
+  c.rgb.red = parseInt(hex.substring(0, 2), 16);
+  c.rgb.green = parseInt(hex.substring(2, 4), 16);
+  c.rgb.blue = parseInt(hex.substring(4, 6), 16);
+  return c;
+}
+
+// name: "white" | "black" | "#rrggbb" | "default"（それ以外）。
 // "default" は null を返し、呼び出し側で「色を変更しない」を選択。
 function fillColorFor(name) {
   if (name === "white") return whiteColor();
   if (name === "black") return blackColor();
+  var hex = hexColor(name);
+  if (hex) return hex;
   return null;
 }
 
@@ -1776,10 +1790,12 @@ function applyPunctuationTsume(layer, contents, tsumePct) {
   // 0-100 にクランプ
   if (pct > 100) pct = 100;
 
-  // 対象は「、」(U+3001) と「。」(U+3002) のみ。
+  // 対象は「、」「。」「「」「」」「〝」「〟」。
   function isPunctChar(s) {
     var c = s.charCodeAt(0);
-    return c === 0x3001 || c === 0x3002;
+    return c === 0x3001 || c === 0x3002 ||
+           c === 0x300C || c === 0x300D ||
+           c === 0x301D || c === 0x301F;
   }
 
   var fullText = String(contents);

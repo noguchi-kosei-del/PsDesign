@@ -89,9 +89,9 @@ function countLines(s) {
   if (!s) return 0;
   return String(s).split(/\r?\n/).length;
 }
-// 【v1.x.0】句読点ツメ対象の文字（、 / 。）— canvas-tools.js の PUNCT_TSUME_CHAR_CODES と同一定義。
-// 自動配置時の bbox 推定にも反映するため、`、` `。` の個数だけ longest 行の effective 長を縮める。
-const PUNCT_TSUME_CHARS_SCAN = new Set(["、", "。"]);
+// 【v1.x.0】句読点ツメ対象の文字（、/。/「/」/〝/〟）— canvas-tools.js の PUNCT_TSUME_CHAR_CODES と同一定義。
+// 自動配置時の bbox 推定にも反映するため、対象文字の個数だけ longest 行の effective 長を縮める。
+const PUNCT_TSUME_CHARS_SCAN = new Set(["、", "。", "「", "」", "〝", "〟"]);
 function countPunctTsumeCharsScan(line) {
   if (!line) return 0;
   let n = 0;
@@ -119,8 +119,12 @@ function countTcyPairsScan(line) {
   }
   return n;
 }
+const TEXT_BBOX_THICK_SAFETY_EM_SCAN = 0;
+const TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM_SCAN = 0.4;
+const TEXT_BBOX_LONG_SAFETY_EM_SCAN = 0.4;
+const TEXT_BBOX_HEURISTIC_LONG_SCALE_SCAN = 1.05;
+
 // canvas-tools.js layerRectForNew の幅・高さ計算と同一ロジック (px は PSD 座標)。
-// thick / long の安全余白 (+0.4em) も canvas-tools.js と揃える。
 // 【v1.x.0】句読点ツメ (`punctuationTsumePercent`) を long 軸にも反映:
 //   各行の effective char count = (chars - punctCount × tsume/100)。
 //   最も長い行（実 char で）の effective 長を採用。
@@ -130,7 +134,10 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const ptInPsdPx = sizePt * (dpi / 72);
   const lineCount = Math.max(1, countLines(contents));
   const leadingFactor = (leadingPct ?? 125) / 100;
-  const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + 0.4));
+  const thickSafety = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM_SCAN : TEXT_BBOX_THICK_SAFETY_EM_SCAN;
+  const longSafety = TEXT_BBOX_LONG_SAFETY_EM_SCAN;
+  const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE_SCAN;
+  const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + thickSafety));
   // 句読点ツメぶんを差し引いた最大行幅（em 単位）を計算
   const tsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
   const tsumeMag = tsumePct > 0 ? tsumePct / 100 : 0;
@@ -145,7 +152,10 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
     const effective = ln.length - punct * tsumeMag - tcyPairs;
     if (effective > maxEffectiveChars) maxEffectiveChars = effective;
   }
-  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (1.05 * maxEffectiveChars + 0.4));
+  const longRaw = Math.max(
+    ptInPsdPx * 2,
+    ptInPsdPx * (longScale * maxEffectiveChars + longSafety),
+  );
   const maxLong = isVertical ? psdPage.height * 0.95 : psdPage.width * 0.95;
   const long = Math.min(longRaw, maxLong);
   return {

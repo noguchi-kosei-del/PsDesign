@@ -69,7 +69,7 @@ function readStrokeColor(fx) {
 
 // 塗り色は ag-psd の layer.text.style.fillColor に入る。保存時期/バージョンで
 // {r,g,b} / {red,green,blue} / [r,g,b] / #rrggbb の揺れがあるため吸収。
-// 白黒に分類できない色は "default"（= 元の色を保持、書き戻し時に触らない）。
+// 白黒に分類できない色は HEX として保持し、編集 UI / 書き戻しに渡す。
 function extractFillColor(layer) {
   const c = layer?.text?.style?.fillColor;
   if (!c) return "default";
@@ -87,9 +87,12 @@ function extractFillColor(layer) {
   } else {
     return "default";
   }
+  r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
+  g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
+  b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
   if (r > 240 && g > 240 && b > 240) return "white";
   if (r < 15 && g < 15 && b < 15) return "black";
-  return "default";
+  return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
 }
 
 function extractStroke(layer) {

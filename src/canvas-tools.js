@@ -42,17 +42,54 @@ import {
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
 import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
-import { appendBlockToCurrentPageContent, cascadeRemoveTxtForLayers, syncTxtSelectionToLayer } from "./txt-source.js";
+import {
+  appendBlockToCurrentPageContent,
+  cascadeRemoveTxtForLayers,
+  renderTxtSourceViewer,
+  syncPlacedLayerTextToSource,
+  syncTxtSelectionToLayer,
+} from "./txt-source.js";
 
 const mounts = new Map();
 const resizeObservers = new Set();
 let toolListenerBound = false;
 const RUBY_TOWARD_PARENT_RATIO = 1.60;
+const TEXT_BBOX_THICK_SAFETY_EM = 0;
+const TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM = 0.4;
+const TEXT_BBOX_LONG_SAFETY_EM = 0.4;
+const TEXT_BBOX_HEURISTIC_LONG_SCALE = 1.05;
+const LAYER_DRAG_THRESHOLD_PX = 5;
 let hideSelectedLayerBadges = false;
 let rotateHandlesVisible = false;
+let selectionAdornmentsVisible = true;
 
 function showSelectedLayerBadges() {
   hideSelectedLayerBadges = false;
+}
+
+function clearAutoFontMarkerForNewLayer(tempId, layer) {
+  if (!tempId || !layer?.autoFontSwitched) return false;
+  updateNewLayer(tempId, {
+    autoFontSwitched: false,
+    autoFontSwitchBucket: -1,
+  });
+  return true;
+}
+
+export function getSelectionAdornmentsVisible() {
+  return selectionAdornmentsVisible;
+}
+
+export function setSelectionAdornmentsVisible(visible) {
+  const next = visible !== false;
+  if (selectionAdornmentsVisible === next) return next;
+  selectionAdornmentsVisible = next;
+  refreshAllOverlays();
+  return next;
+}
+
+export function toggleSelectionAdornmentsVisible() {
+  return setSelectionAdornmentsVisible(!selectionAdornmentsVisible);
 }
 
 function hideRotateHandles(ctx = null) {
@@ -729,6 +766,7 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
   const next = clampSizePt(allSameSize
     ? snapNextSize(baseSize, baseStep, sign, multiplier)
     : baseSize);
+  let clearedAutoFontMarker = false;
   const changed = withHistoryTransient(() => {
     let any = false;
     for (const target of targets) {
@@ -739,7 +777,14 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
         const newRect = layerRectForNew(page, { ...nl, sizePt: next });
         const dx = (oldRect.width - newRect.width) / 2;
         const dy = (oldRect.height - newRect.height) / 2;
-        updateNewLayer(sel.layerId, { sizePt: next, x: nl.x + dx, y: nl.y + dy });
+        updateNewLayer(sel.layerId, {
+          sizePt: next,
+          x: nl.x + dx,
+          y: nl.y + dy,
+          autoFontSwitched: false,
+          autoFontSwitchBucket: -1,
+        });
+        if (nl.autoFontSwitched) clearedAutoFontMarker = true;
         any = true;
       } else {
         const { sel, page, layer, edit, cur } = target;
@@ -761,6 +806,7 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
   if (changed) {
     refreshAllOverlays();
     rebuildLayerList();
+    if (clearedAutoFontMarker) renderTxtSourceViewer();
   }
   return !!changed;
 }
@@ -819,10 +865,9 @@ export function layerRectForExisting(page, layer, edit) {
   const direction = edit.direction ?? layer.direction ?? "horizontal";
   const isVertical = direction === "vertical";
   const previewText = edit.contents ?? layer.text ?? "";
-  const chars = Math.max(1, longestLine(previewText));
   const lineCount = Math.max(1, countLines(previewText));
   // 【v1.16.0】枠の自動調整 — フォント実描画幅 + per-char サイズ/フォント override で long を再算出。
-  // 測定失敗 / 未ロード時は null → 従来の chars 推定にフォールバック。
+  // 測定失敗 / 未ロード時は null → ツメ反映後のセル数推定にフォールバック。
   const fontPs = edit.fontPostScriptName ?? layer.font ?? null;
   // 行間 (autoLeadingAmount %) を厚み（行スタック方向）の係数に反映。125% を最低値として
   // 設定しても既存の見た目より細くしないように clamp。
@@ -838,14 +883,9 @@ export function layerRectForExisting(page, layer, edit) {
   // 【v1.16.0】measureMaxLineExtentEm はここで sizePt が確定してから呼ぶ（per-char override も反映）。
   const charFontsExisting = edit.charFonts ?? layer.charFonts ?? {};
   const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, charFontsExisting, punctTsumePctExisting, tcyEnabledExisting);
-  // CJK 縦書きで小書き仮名（ょ・っ・ゃ等）や glyph の line-box overhang、
-  // text-stroke の outset 半分（stroke 既定 20 PSD px → ~0.16em）を吸収するため
-  // 列方向に 0.4em の安全余白を足す。テキスト本体は CSS で bbox 中央に配置するので
-  // bbox が広がっても視覚位置は不変。
-  // LONG 軸（流し方向）にも display 系フォントの ascender/descender が em-box を
-  // 超えてはみ出すぶんの安全余白を 0.4em 加える。
-  const THICK_SAFETY = 0.4;
-  const LONG_SAFETY = 0.4;
+  const THICK_SAFETY = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM;
+  const LONG_SAFETY = TEXT_BBOX_LONG_SAFETY_EM;
+  const LONG_SCALE = TEXT_BBOX_HEURISTIC_LONG_SCALE;
   // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
   // 行 N の override = 行 N-1 と行 N の隙間（marginBlockStart）。行 0 は「前の行」がないので無視。
   // per-char サイズ override がある行はその行の最大文字サイズで line-height をスケール。
@@ -870,11 +910,9 @@ export function layerRectForExisting(page, layer, edit) {
     thickSum += leading * lineMaxRatio;
   }
   const fallbackThick = ptInPsdPx * (thickSum + THICK_SAFETY);
-  // long 軸: 実測 em があればそれ、無ければ chars × 1.05 のヒューリスティック。
-  // CJK 縦書き等は chars と em がほぼ等価、Latin 系では em < chars になるので bbox が縮む。
-  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】フォント未ロード fallback / Latin 文字幅誤判定で
-  // measuredEm が極端に小さくなる事故を防ぐため、最低 1.05 × chars を保証する。
-  const heuristicLong = 1.05 * chars;
+  // long 軸: 実測 em があればそれ、無ければツメ/縦中横反映後のセル数にフォールバック。
+  // CJK 縦書き等はセル数と em がほぼ等価、Latin 系では em < セル数になるので bbox が縮む。
+  const heuristicLong = LONG_SCALE * estimateMaxLineExtentCells(previewText, punctTsumePctExisting, tcyEnabledExisting);
   const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
   const fallbackLong = ptInPsdPx * (longChars + LONG_SAFETY);
   const minThick = Math.max(ptInPsdPx * (leadingFactor + THICK_SAFETY), 20);
@@ -901,7 +939,6 @@ export function layerRectForNew(page, nl) {
   const sizePt = nl.sizePt ?? 24;
   const ptInPsdPx = sizePt * (dpi / 72);
   const contents = nl.contents ?? "";
-  const chars = Math.max(1, longestLine(contents));
   const lineCount = Math.max(1, countLines(contents));
   // 【v1.x.0】句読点ツメも bbox 幅に反映（、 / 。 の個数 × tsume% × em ぶん長さが縮む）。
   const punctTsumePctNew = Number(getDefault("punctuationTsumePercent")) || 0;
@@ -910,9 +947,6 @@ export function layerRectForNew(page, nl) {
   // 【v1.16.0】枠の自動調整 — 実描画幅で long を auto-fit（フォント変更 + per-char サイズ/フォント変更で bbox 自動更新）。
   const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts, punctTsumePctNew, tcyEnabledNew);
   // 行間 (%) を厚み係数に反映。125 が既定。
-  // 小書き仮名 + stroke overhang を吸収する 0.4em の安全余白を THICK 軸に加算。テキスト本体は
-  // CSS padding で bbox 中央に配置されるので、bbox が広がっても視覚位置は変わらない。
-  // LONG 軸（流し方向）にも display 系フォントの ascender/descender overshoot 用に 0.4em 加える。
   const leadingFactor = (nl.leadingPct ?? 125) / 100;
   // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
   const lineLeadings = nl.lineLeadings ?? {};
@@ -934,11 +968,13 @@ export function layerRectForNew(page, nl) {
     }
     thickSum += v * lineMaxRatio;
   }
-  const thick = Math.max(24, ptInPsdPx * (thickSum + 0.4));
-  // 【v1.26.0 移植 (PsDesign-main v1.24.0)】最低 1.05 × chars を保証して bbox 改行防止。
-  const heuristicLong = 1.05 * chars;
+  const thickSafety = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM;
+  const longSafety = TEXT_BBOX_LONG_SAFETY_EM;
+  const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE;
+  const thick = Math.max(24, ptInPsdPx * (thickSum + thickSafety));
+  const heuristicLong = longScale * estimateMaxLineExtentCells(contents, punctTsumePctNew, tcyEnabledNew);
   const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
-  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (longChars + 0.4));
+  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (longChars + longSafety));
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
   const width = isVertical ? thick : long;
@@ -950,11 +986,16 @@ function rectsIntersect(a, b) {
   return !(b.left >= a.right || b.right <= a.left || b.top >= a.bottom || b.bottom <= a.top);
 }
 
+const HEX_FILL_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+
 // fillColor === "default" はプレビュー上も編集前の表示を維持するため何も設定しない。
-// white/black のときだけ CSS color を上書きする。
+// white/black/HEX のときだけ CSS color を上書きする。
 function applyFillPreview(inner, fillColor) {
   if (fillColor === "white") inner.style.color = "#fff";
   else if (fillColor === "black") inner.style.color = "#000";
+  else if (typeof fillColor === "string" && HEX_FILL_COLOR_RE.test(fillColor)) {
+    inner.style.color = fillColor;
+  }
 }
 
 function appendStrokePreviewUnderlay(box, inner, strokeColor, strokeWidthPx, pxPerPsd) {
@@ -1001,6 +1042,8 @@ function renderOverlay(ctx) {
   const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
   // 複数選択 (2 件以上) の判定。.multi-selected クラスで CSS 側が水色点線 + 青バッジに切替える。
   const isMultiSelect = getSelectedLayers().length > 1;
+  const showSelectionAdornments = selectionAdornmentsVisible;
+  overlay.classList.toggle("selection-adornments-hidden", !showSelectionAdornments);
 
   for (const layer of page.textLayers) {
     // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
@@ -1064,10 +1107,10 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
-      if (rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
+      if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
-      if (!hideSelectedLayerBadges) {
+      if (showSelectionAdornments && !hideSelectedLayerBadges) {
         const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
         const badge = createSizeBadge(
           effectivePt,
@@ -1148,8 +1191,8 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
-      if (rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
-      if (!hideSelectedLayerBadges) {
+      if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
+      if (showSelectionAdornments && !hideSelectedLayerBadges) {
         const newBadge = createSizeBadge(
           nl.sizePt ?? 24,
           page,
@@ -1630,8 +1673,37 @@ function rectsOverlapPlaced(r, placed) {
   return false;
 }
 
+function measureInnerContentRect(inner) {
+  if (!inner || !inner.textContent) return null;
+  let range = null;
+  try {
+    range = document.createRange();
+    range.selectNodeContents(inner);
+    const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
+    if (rects.length === 0) return null;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const r of rects) {
+      if (r.left < left) left = r.left;
+      if (r.top < top) top = r.top;
+      if (r.right > right) right = r.right;
+      if (r.bottom > bottom) bottom = r.bottom;
+    }
+    if (!Number.isFinite(left) || !Number.isFinite(top) || right <= left || bottom <= top) return null;
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  } catch (_) {
+    return null;
+  } finally {
+    try { range?.detach?.(); } catch (_) {}
+  }
+}
+
 // 【v1.16.0】枠の自動調整（後置の保険）— measureText の予測がズレた場合の最終フォールバック。
-// 各 layer-box の inner.scrollWidth/Height を測って、box を超えていたら box CSS を伸ばす。
+// 各 layer-box の実描画文字範囲を測って、選択枠のサイズを文字に合わせる。
+// left/top は state 座標の基準なので触らない。ここを書き換えるとドラッグ開始時の
+// 座標基準と表示位置がズレ、移動完了時にレイヤーが少し飛ぶ。
 // PSD 座標 → % 換算で指定。直接的な auto-fit 保険として動作する。
 function scheduleBoxAutoFit(ctx) {
   if (typeof requestAnimationFrame !== "function") return;
@@ -1640,26 +1712,29 @@ function scheduleBoxAutoFit(ctx) {
   requestAnimationFrame(() => {
     ctx._autoFitScheduled = false;
     if (!ctx.overlay || !ctx.canvas) return;
-    const overlayW = ctx.overlay.clientWidth;
-    const overlayH = ctx.overlay.clientHeight;
+    const overlayRect = ctx.overlay.getBoundingClientRect();
+    const overlayW = overlayRect.width;
+    const overlayH = overlayRect.height;
     if (overlayW <= 0 || overlayH <= 0) return;
     for (const box of ctx.overlay.querySelectorAll(".layer-box")) {
+      if (box.classList.contains("editing")) continue;
+      // 回転済みの box は getClientRects() が回転後の外接矩形を返すため、
+      // その値で幅/高さを書き戻すと縦書きテキストが再流し込みされて崩れる。
+      if (box.style.transform && box.style.transform !== "none") continue;
       const inner = box.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
       if (!inner) continue;
-      const sw = inner.scrollWidth;
-      const sh = inner.scrollHeight;
-      const cw = inner.clientWidth;
-      const ch = inner.clientHeight;
-      const overflowW = sw - cw;
-      const overflowH = sh - ch;
-      if (overflowW > 1) {
-        const newW = (box.offsetWidth + overflowW + 4); // 4px 余裕
-        box.style.width = `${(newW / overlayW) * 100}%`;
-      }
-      if (overflowH > 1) {
-        const newH = (box.offsetHeight + overflowH + 4);
-        box.style.height = `${(newH / overlayH) * 100}%`;
-      }
+      const contentRect = measureInnerContentRect(inner);
+      if (!contentRect) continue;
+      const boxRect = box.getBoundingClientRect();
+      const fitPad = 1;
+      const boxLeft = Math.max(0, boxRect.left - overlayRect.left);
+      const boxTop = Math.max(0, boxRect.top - overlayRect.top);
+      const right = Math.min(overlayW, contentRect.right - overlayRect.left + fitPad);
+      const bottom = Math.min(overlayH, contentRect.bottom - overlayRect.top + fitPad);
+      const width = Math.max(1, right - boxLeft);
+      const height = Math.max(1, bottom - boxTop);
+      box.style.width = `${(width / overlayW) * 100}%`;
+      box.style.height = `${(height / overlayH) * 100}%`;
     }
   });
 }
@@ -1801,7 +1876,7 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
     if (fontStart) ensureFontLoaded(fontStart);
     const fontShorthand = `${refSizePx}px ${fam}`;
     // フォント未ロード時は measureText が fallback フォントで誤った値を返す。
-    // それを使うと bbox が一時的に小さく計算されて、CSS 側の `white-space: pre-wrap` で
+    // それを使うと bbox が一時的に小さく計算されて、CSS 側の `white-space: pre` で
     // 改行が走り「フォント変更で改行位置が変わる」事故になるため、未ロード時は
     // 保守的な 1em per char にフォールバックする（CJK で正確、Latin で大きめ）。
     //
@@ -1909,11 +1984,22 @@ function lineHasSymbolChar(s) {
 // 入力途中のケースが多いので対象外。
 const TCY_P画像スキャンR_REGEX = /!!|!\?|！！|！？/;
 
-// 【v1.x.0】句読点ツメ（mojiZume）の対象。U+3001「、」/ U+3002「。」のみ。
+// 【v1.x.0】句読点ツメ（mojiZume）の対象。
 // Photoshop 側 (jsx_gen.rs applyPunctuationTsume) と同じ char code 集合。
-// 環境設定 `punctuationTsumePercent` (0/50%) に従って、各文字の直後の空白を tsume% ぶん詰める。
-// CSS では `letter-spacing: -(tsume/100)em` を句読点の span に当てて、次の文字との距離を縮める。
-const PUNCT_TSUME_CHAR_CODES = new Set([0x3001, 0x3002]);
+// 環境設定 `punctuationTsumePercent` (0/50%) に従って、対象文字まわりの空白を tsume% ぶん詰める。
+// CSS では後ろ詰めは letter-spacing、前詰めは margin-inline-start で表現する。
+const PUNCT_TSUME_CHAR_CODES = new Set([
+  0x3001, // 、
+  0x3002, // 。
+  0x300C, // 「
+  0x300D, // 」
+  0x301D, // 〝
+  0x301F, // 〟
+]);
+const OPENING_PUNCT_TSUME_CHAR_CODES = new Set([
+  0x300C, // 「
+  0x301D, // 〝
+]);
 function isPunctTsumeChar(ch) {
   if (typeof ch !== "string" || ch.length === 0) return false;
   return PUNCT_TSUME_CHAR_CODES.has(ch.charCodeAt(0));
@@ -1924,6 +2010,34 @@ function lineHasPunctTsumeChar(s) {
     if (PUNCT_TSUME_CHAR_CODES.has(s.charCodeAt(i))) return true;
   }
   return false;
+}
+
+function estimateMaxLineExtentCells(text, punctTsumePct, tcyEnabled) {
+  const tsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
+  let maxCells = 1;
+  for (const line of String(text ?? "").split(/\r?\n/)) {
+    let punctReduction = 0;
+    if (tsumeMag > 0) {
+      for (let i = 0; i < line.length; i++) {
+        if (PUNCT_TSUME_CHAR_CODES.has(line.charCodeAt(i))) punctReduction += tsumeMag;
+      }
+    }
+    let tcyReduction = 0;
+    if (tcyEnabled && line.length >= 2) {
+      for (let i = 0; i < line.length - 1; ) {
+        const two = line.slice(i, i + 2);
+        if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
+          tcyReduction += 1;
+          i += 2;
+        } else {
+          i += 1;
+        }
+      }
+    }
+    const cells = line.length - punctReduction - tcyReduction;
+    if (cells > maxCells) maxCells = cells;
+  }
+  return maxCells;
 }
 
 function repeatedTargetGroup(ch) {
@@ -2170,9 +2284,8 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
 // 【v1.16.0】tcy 外セグメントを per-char signature (size, tracking, font) 統合で append。
 // segStartInLine: このセグメントが line のどの位置から始まるか（trackings 配列の index 算出用）
 // lineStartIdx: line が full contents のどの位置から始まるか（charSizes / charFonts の絶対 index 算出用）
-// 【v1.x.0】punctTsumeMag (0..1) で 、/。の直後を縮める。例: 0.5 で letter-spacing -0.5em。
-//   tracking (連続記号ツメ) と同じく letter-spacing で表現するが、対象文字が重複しないため
-//   両者の値を合算して 1 つの letterSpacing にセットする。
+// 【v1.x.0】punctTsumeMag (0..1) で句読点/括弧を縮める。例: 0.5 で 0.5em 詰める。
+//   始め括弧（「/〝）は前側、その他は後ろ側を詰める。
 function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag) {
   if (!segText.length) return;
   // 【v1.22.0】per-char font 解決: ユーザー手動指定 (charFonts[idx]) があれば最優先、
@@ -2185,9 +2298,14 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     if (symbolReplaceActive && SYMBOL_CHAR_CODES.has(ch.charCodeAt(0))) return symbolFontPS;
     return undefined;
   }
-  // 各 char の tsume em 値（負の letter-spacing として後で足す）。句読点で 0 < tsume <= 1。
-  function tsumeAt(ch) {
-    return tsumeActive && PUNCT_TSUME_CHAR_CODES.has(ch.charCodeAt(0)) ? punctTsumeMag : 0;
+  // 各 char の tsume em 値。始め括弧は前側、それ以外の対象文字は後ろ側を詰める。
+  function tsumeForChar(ch) {
+    if (!tsumeActive) return { before: 0, after: 0 };
+    const cc = ch.charCodeAt(0);
+    if (!PUNCT_TSUME_CHAR_CODES.has(cc)) return { before: 0, after: 0 };
+    return OPENING_PUNCT_TSUME_CHAR_CODES.has(cc)
+      ? { before: punctTsumeMag, after: 0 }
+      : { before: 0, after: punctTsumeMag };
   }
   let i = 0;
   while (i < segText.length) {
@@ -2198,8 +2316,8 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     // 【v1.22.0】per-char 合成太字 (charBolds[absIdx])。boolean があれば signature に含める。
     const sigBold = hasCharBolds ? charBolds[absIdx] : undefined;
     const sigItalic = hasCharItalics ? charItalics[absIdx] : undefined;
-    // 【v1.x.0】句読点ツメ（、 / 。）。signature に含めて連続する 、、 を 1 span にまとめる。
-    const sigTsume = tsumeAt(segText[i]);
+    // 【v1.x.0】句読点ツメ。signature に含めて同じ詰め方向の連続文字を 1 span にまとめる。
+    const sigTsume = tsumeForChar(segText[i]);
     let j = i + 1;
     while (j < segText.length) {
       const absJ = lineStartIdx + segStartInLine + j;
@@ -2208,14 +2326,18 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       const f = effectiveFontAt(absJ, segText[j]);
       const b = hasCharBolds ? charBolds[absJ] : undefined;
       const it = hasCharItalics ? charItalics[absJ] : undefined;
-      const tu = tsumeAt(segText[j]);
-      if (s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || it !== sigItalic || tu !== sigTsume) break;
+      const tu = tsumeForChar(segText[j]);
+      if (
+        s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || it !== sigItalic ||
+        tu.before !== sigTsume.before || tu.after !== sigTsume.after
+      ) break;
       j++;
     }
     const text = segText.slice(i, j);
-    // 句読点ツメと連続記号ツメは重複対象文字無し（、。 vs ー―〜 等）なので合算で問題ない。
-    const effectiveLetterSpacingEm = sigTrack + (sigTsume > 0 ? -sigTsume : 0);
-    const needsSpan = Number.isFinite(sigSize) || effectiveLetterSpacingEm !== 0
+    // 後ろ詰めは letter-spacing、前詰めは margin-inline-start。連続記号ツメは letter-spacing に合算する。
+    const effectiveLetterSpacingEm = sigTrack + (sigTsume.after > 0 ? -sigTsume.after : 0);
+    const effectiveMarginInlineStartEm = sigTsume.before > 0 ? -sigTsume.before : 0;
+    const needsSpan = Number.isFinite(sigSize) || effectiveLetterSpacingEm !== 0 || effectiveMarginInlineStartEm !== 0
       || (typeof sigFont === "string" && sigFont.length > 0)
       || typeof sigBold === "boolean"
       || typeof sigItalic === "boolean";
@@ -2228,6 +2350,9 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       }
       if (effectiveLetterSpacingEm !== 0) {
         span.style.letterSpacing = `${effectiveLetterSpacingEm}em`;
+      }
+      if (effectiveMarginInlineStartEm !== 0) {
+        span.style.marginInlineStart = `${effectiveMarginInlineStartEm}em`;
       }
       if (typeof sigFont === "string" && sigFont.length > 0) {
         // PostScript 名から family-name 解決 → font-family を上書き。
@@ -2337,7 +2462,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // 【v1.21.0】<br> ではなく \n text node でセパレートする。WebView2 (Chromium) の
     // writing-mode: vertical-rl + text-orientation: mixed で <br> の column break が
     // 期待通り発火しないケース（行が前の column に続いてしまう）があるため、
-    // white-space: pre-wrap が必ず尊重する \n text node に統一する。
+    // white-space: pre が必ず尊重する \n text node に統一する。
     // 【v1.27.0】charRubies 引数の渡し忘れバグ修正: 旧コードはこの経路で第 13 引数を
     // 省略していたため、per-line leadingPct override 無しのレイヤー（大多数）で finalize
     // 後の rebuild 時にルビが描画されない不具合があった。上の overrides 経路と同じく
@@ -2694,9 +2819,13 @@ function isLayerDoubleClick(pageIndex, layerKey) {
 function enterInPlaceEditFromMove(ctx, target) {
   showSelectedLayerBadges();
   const layerKey = target.kind === "existing" ? target.layer.id : target.nl.tempId;
+  const clearedAutoFontMarker = target.kind === "new"
+    ? clearAutoFontMarkerForNewLayer(target.nl.tempId, target.nl)
+    : false;
   setSelectedLayer(ctx.pageIndex, layerKey);
   renderOverlay(ctx);
   rebuildLayerList();
+  if (clearedAutoFontMarker) renderTxtSourceViewer();
   startInPlaceEdit(ctx, target);
 }
 
@@ -2906,6 +3035,7 @@ function beginMultiLayerDrag(e, ctx) {
     : null;
   let lastSwapTarget = null;
   let swapGhostEl = null;
+  let dragActivated = false;
   const swapTargetKey = (t) => (
     t ? `${t.kind}:${t.kind === "existing" ? t.layer.id : t.nl.tempId}` : null
   );
@@ -2968,6 +3098,14 @@ function beginMultiLayerDrag(e, ctx) {
   };
   const onMove = (ev) => {
     ev.preventDefault();
+    const movedScreenX = ev.clientX - startClientX;
+    const movedScreenY = ev.clientY - startClientY;
+    if (!dragActivated) {
+      if ((movedScreenX * movedScreenX + movedScreenY * movedScreenY) < (LAYER_DRAG_THRESHOLD_PX * LAYER_DRAG_THRESHOLD_PX)) {
+        return;
+      }
+      dragActivated = true;
+    }
     const { ddx, ddy } = computePsdDelta(ev);
     applyPreview(ddx, ddy);
     if (!isSingleMoveDrag) return;
@@ -2991,6 +3129,11 @@ function beginMultiLayerDrag(e, ctx) {
     // swap モード中の hover ハイライト残骸を必ず掃除（refreshAllOverlays でも再構築されるが
     // 通常移動分岐では DOM が再生成されないため明示的に外す）。
     applySwapVisuals(null);
+    if (!dragActivated) {
+      refreshAllOverlays();
+      rebuildLayerList();
+      return;
+    }
     const { ddx, ddy } = computePsdDelta(ev);
     if (isDuplicate) {
       // 複製は開始時点で beginHistoryTransient 済み。移動量があれば位置も確定し、
@@ -3931,6 +4074,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         try { options.afterCommit(finalContents); } catch (err) { console.error("afterCommit error", err); }
       }
       if (!isExisting && finalContents !== startContents) {
+        syncPlacedLayerTextToSource(target.nl, finalContents);
         updateNewLayer(target.nl.tempId, {
           autoFontSwitched: false,
           autoFontSwitchBucket: -1,
