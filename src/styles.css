@@ -799,6 +799,7 @@ button.tool-btn.active:hover:not(:disabled),
 button.side-tool-btn.active:hover:not(:disabled),
 button.layer-dir-btn.active:hover:not(:disabled),
 button.bold-toggle-btn[aria-pressed="true"]:hover:not(:disabled),
+button.italic-toggle-btn[aria-pressed="true"]:hover:not(:disabled),
 button.font-weight-btn[aria-pressed="true"]:hover:not(:disabled),
 button.font-weight-btn.active:hover:not(:disabled),
 button.page-jump-btn-primary:hover:not(:disabled),
@@ -814,6 +815,7 @@ button.tool-btn.active:hover:not(:disabled) svg,
 button.side-tool-btn.active:hover:not(:disabled) svg,
 button.layer-dir-btn.active:hover:not(:disabled) svg,
 button.bold-toggle-btn[aria-pressed="true"]:hover:not(:disabled) svg,
+button.italic-toggle-btn[aria-pressed="true"]:hover:not(:disabled) svg,
 button.font-weight-btn[aria-pressed="true"]:hover:not(:disabled) svg,
 button.font-weight-btn.active:hover:not(:disabled) svg,
 button.page-jump-btn-primary:hover:not(:disabled) svg,
@@ -2647,6 +2649,7 @@ body.home-starting .home-screen {
 /* これらのボタンは旧仕様ではペイン右下に absolute 配置していたが、
    `.stage-label-bar > .stage-label-actions` の flex 子としてバー右端に並ぶ
    方式に変更。バー高さ 24px に収めるため 22px 角・SVG 15px に揃える。 */
+.pdf-font-book-btn,
 .pdf-rotate-btn,
 .psd-rotate-btn,
 .psd-guides-lock-btn,
@@ -2665,6 +2668,7 @@ body.home-starting .home-screen {
   cursor: pointer;
   flex-shrink: 0;
 }
+.pdf-font-book-btn svg,
 .pdf-rotate-btn svg,
 .psd-rotate-btn svg,
 .psd-guides-lock-btn svg,
@@ -2673,6 +2677,7 @@ body.home-starting .home-screen {
   width: 15px;
   height: 15px;
 }
+.pdf-font-book-btn:hover:not(:disabled),
 .pdf-rotate-btn:hover:not(:disabled),
 .psd-rotate-btn:hover:not(:disabled),
 .psd-guides-lock-btn:hover:not(:disabled),
@@ -2757,6 +2762,33 @@ body.home-starting .home-screen {
   width: 100%;
   /* ズームで拡大した PDF はここでスクロール（ペインは overflow:hidden で回転ボタンを固定）。 */
   overflow: auto;
+}
+.pdf-stage[hidden] { display: none; }
+.pdf-font-book-stage {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--panel-body);
+}
+.pdf-font-book-stage[hidden] { display: none; }
+.pdf-font-book-toolbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.pdf-font-book-stage .font-book-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 10px 12px 14px;
 }
 .pdf-canvas {
   display: block;
@@ -5146,7 +5178,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 /* 【v1.22.0】合成太字（faux bold）トグルボタン。size-row 右側に配置。
    ラベル「太字」(2 文字) と他のトグルボタン（ruby-mode-btn 等）と視覚的に揃えるため
    font-size は 11px、min-width は 36px。aria-pressed で active 表示を切替。 */
-.bold-toggle-btn {
+.font-style-toggle-row {
+  display: flex;
+  gap: 6px;
+  margin-top: 6px;
+}
+.font-style-toggle-btn {
   min-width: 36px;
   padding: 0 8px;
   background: transparent;
@@ -5158,17 +5195,25 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   cursor: pointer;
   border-radius: 3px;
 }
-.bold-toggle-btn:hover:not(:disabled) {
+.font-style-toggle-btn:hover:not(:disabled) {
   color: var(--accent);
 }
-.bold-toggle-btn[aria-pressed="true"] {
+.pdf-font-book-btn[aria-pressed="true"] {
+  background: var(--accent, #3b82f6);
+  color: #fff;
+  border-color: var(--accent, #3b82f6);
+}
+.font-style-toggle-btn[aria-pressed="true"] {
   background: var(--accent);
   border-color: var(--accent);
   color: #fff;
 }
-.bold-toggle-btn:disabled {
+.font-style-toggle-btn:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.italic-toggle-btn {
+  font-style: italic;
 }
 /* ========== フォントソース切替タブ ==========
    edit-font-combobox（インストール済み全フォント検索）と style-palette（社内プリセット）を
@@ -5446,6 +5491,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .favorite-style-delete:hover {
   color: var(--danger);
   border-color: var(--danger);
+}
+button.favorite-style-delete:hover:not(:disabled),
+button.favorite-style-delete:hover:not(:disabled) svg,
+button.favorite-style-delete:hover:not(:disabled) svg * {
+  color: var(--danger) !important;
+  stroke: var(--danger) !important;
 }
 .font-combobox-list {
   /* position: fixed で親 (.panel-section の overflow: hidden) のクリップから脱出。
@@ -7391,22 +7442,39 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   transform-origin: left bottom;
 }
 .scan-adjust-choice-preview-none {
+  width: 180px;
   height: 130px;
 }
 .scan-adjust-choice-preview-single {
-  left: 50%;
-  top: 20px;
-  transform: translateX(-50%);
+  right: 0;
+  top: 14px;
 }
-.scan-adjust-choice-preview-none-mark {
+.scan-adjust-choice-preview-text-icon {
   position: absolute;
-  left: 50%;
-  bottom: 10px;
-  width: 74px;
-  height: 2px;
-  border-radius: 999px;
-  background: #111;
-  transform: translateX(-50%);
+  left: 12px;
+  top: 42px;
+  width: 46px;
+  height: 46px;
+  color: var(--scan-adjust-preview-ink, #f4f4f4);
+}
+.scan-adjust-choice-option:hover:not(:disabled) .scan-adjust-choice-preview-text-icon,
+.scan-adjust-choice-option:focus-visible .scan-adjust-choice-preview-text-icon {
+  color: var(--scan-adjust-preview-ink, #f4f4f4);
+}
+.scan-adjust-choice-preview-text-icon path {
+  fill: var(--scan-adjust-preview-ink, #f4f4f4);
+}
+.scan-adjust-choice-preview-arrow {
+  position: absolute;
+  left: 70px;
+  top: 57px;
+  width: 30px;
+  height: 20px;
+  color: var(--scan-adjust-preview-ink, #f4f4f4);
+}
+.scan-adjust-choice-option:hover:not(:disabled) .scan-adjust-choice-preview-arrow,
+.scan-adjust-choice-option:focus-visible .scan-adjust-choice-preview-arrow {
+  color: var(--scan-adjust-preview-ink, #f4f4f4);
 }
 @media (max-width: 760px) {
   .scan-adjust-choice-list {
@@ -7415,6 +7483,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 :root[data-theme="light"] .scan-adjust-choice-modal {
   background: rgba(15, 23, 42, 0.32);
+}
+:root[data-theme="light"] .scan-adjust-choice-preview-none {
+  --scan-adjust-preview-ink: #050505;
 }
 :root[data-theme="light"] .scan-adjust-choice-card {
   background: var(--home-bg);

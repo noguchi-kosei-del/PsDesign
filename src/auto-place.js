@@ -46,6 +46,7 @@ const $ = (id) => document.getElementById(id);
 const SOURCE_DOC_KEY = "mo" + "kuro";
 
 let runningPlace = false;
+let runningPlacePromise = null;
 // 【v1.28.0 移植】位置調整 (3 モード) の二重起動防止フラグ
 let runningAdjust = false;
 // 直近に適用された配置プランのテキスト内容指紋。
@@ -1149,8 +1150,15 @@ export async function runAutoPlace({
   positionOnlyScan = false,
   positionAdjustMode = null,
 } = {}) {
-  if (runningPlace) return;
+  if (runningPlacePromise) return runningPlacePromise;
   runningPlace = true;
+  runningPlacePromise = (async () => {
+  let progressOpenForAutoPlace = false;
+  const closeAutoPlaceProgress = async (options) => {
+    if (!progressOpenForAutoPlace) return;
+    progressOpenForAutoPlace = false;
+    await hideProgress(options);
+  };
   try {
     // 1. PSD / TXT の事前確認
     //    PSD 未読込なら、ファイル選択ダイアログを起動して読み込みまで一気通貫で進める
@@ -1199,16 +1207,27 @@ export async function runAutoPlace({
       // 既存の画像スキャンフローを呼び出す (進捗モーダルは scan-extract 側が出す)。
       // 読込済みの見本ファイル全てを 画像スキャン 対象にして自動配置の整合を取る。
       if (positionOnlyScan) {
-        await runScanExtractForPlacementOnly(loadedRefs);
+        await runScanExtractForPlacementOnly(loadedRefs, { keepProgressOpen: true });
       } else {
         await runScanExtractForFiles(loadedRefs, {
           loadText: !preserveTxtDuringExtract || !(txtSrc && txtSrc.content),
           maxPages: psdPages.length,
           excludedPages: getPdfExcludedReferencePages(),
+          keepProgressOpen: true,
         });
       }
+      progressOpenForAutoPlace = true;
+      showProgress({
+        title: "自動配置中…",
+        detail: "自動配置を準備中…",
+        icon: PLACE_ICON_SVG,
+        current: null,
+        total: null,
+        showCount: false,
+      });
       cache = getScanExtractDoc();
       if (!cache || !cache.doc) {
+        await closeAutoPlaceProgress();
         // 画像スキャン側がエラー通知済みなのでここでは静かに戻る
         return;
       }
@@ -1216,6 +1235,7 @@ export async function runAutoPlace({
 
     txtSrc = getTxtSource();
     if (!txtSrc || !txtSrc.content) {
+      await closeAutoPlaceProgress();
       await notifyDialog({
         title: "自動配置できません",
         message: "テキストが読み込まれていません。\nテキストファイルを指定するか、画像スキャン結果からテキストを生成してください。",
@@ -1248,7 +1268,8 @@ export async function runAutoPlace({
     const placementDoc = normalizeReferenceScanDocForReferencePages(cache.doc);
     let alignmentByPath = null;
     if (positionAdjustMode === "mode1" || positionAdjustMode === "mode2") {
-      showProgress({ detail: "位置調整を計算中…", icon: PLACE_ICON_SVG, label: "自動配置中…" });
+      progressOpenForAutoPlace = true;
+      showProgress({ title: "自動配置中…", detail: "位置調整を計算中…", icon: PLACE_ICON_SVG });
       alignmentByPath = await computeAlignmentsForPages(
         positionAdjustMode,
         psdPages,
@@ -1257,7 +1278,7 @@ export async function runAutoPlace({
         { progressLabel: "位置調整を計算中…" },
       );
       if (alignmentByPath.size === 0) {
-        await hideProgress();
+        await closeAutoPlaceProgress();
         await notifyDialog({
           title: "位置調整できません",
           message: `見本画像から位置調整を計算できませんでした。見本ページの表示状態と、PSD/見本のページ対応を確認してください。${lastAlignmentError ? `\n\n詳細: ${lastAlignmentError}` : ""}`,
@@ -1268,6 +1289,7 @@ export async function runAutoPlace({
     const plan = buildPlacementPlan(placementDoc, psdPages, txtPages, defaults, { alignmentByPath });
 
     if (plan.totals.placed === 0) {
+      await closeAutoPlaceProgress();
       await notifyDialog({
         title: "配置できる組み合わせがありません",
         message: "TXT ブロックと検出された吹き出しの対応が 1 件もありません。\nTXT のページ区切りや PSD の枚数を確認してください。",
@@ -1284,7 +1306,10 @@ export async function runAutoPlace({
         confirmLabel: "実行",
         cancelLabel: "キャンセル",
       });
-      if (!proceed) return;
+      if (!proceed) {
+        await closeAutoPlaceProgress();
+        return;
+      }
     }
 
     // 5. 確認モーダル（PSD と 画像スキャン ページ数が不一致のときだけ表示）
@@ -1292,7 +1317,10 @@ export async function runAutoPlace({
       (plan.unmappedPsdCount ?? 0) > 0 || (plan.unmappedReferenceScanCount ?? 0) > 0;
     if (hasMismatch) {
       const ok = await showPlanReviewModal(plan);
-      if (!ok) return;
+      if (!ok) {
+        await closeAutoPlaceProgress();
+        return;
+      }
     }
 
     // 6. 適用
@@ -1303,7 +1331,11 @@ export async function runAutoPlace({
     // 進捗モーダルだけ緑のチェックマークアニメで閉じる。完了 notifyDialog は
     // ユーザー要望で出さない（写植作業の流れを止めないため）。エラー時のみ下の
     // catch で notifyDialog を表示する。
-    await hideProgress({ success: true });
+    if (progressOpenForAutoPlace) {
+      await closeAutoPlaceProgress({ success: true });
+    } else {
+      await hideProgress({ success: true });
+    }
     return { placed: true, positionAdjusted: positionAdjustMode === "mode1" || positionAdjustMode === "mode2" };
   } catch (e) {
     console.error(e);
@@ -1314,7 +1346,10 @@ export async function runAutoPlace({
     });
   } finally {
     runningPlace = false;
+    runningPlacePromise = null;
   }
+  })();
+  return runningPlacePromise;
 }
 
 // ============================================================
@@ -1398,10 +1433,12 @@ function syncPlacedFromTxt() {
 // ============================================================
 export function bindScanPlaceButton() {
   const btn = $("scan-place-btn");
-  if (!btn) return;
-  btn.addEventListener("click", () => { void runAutoPlace(); });
+  if (btn) {
+    btn.addEventListener("click", () => { void runAutoPlace(); });
+  }
   // 画像スキャン 結果が無いうちはグレーアウト。setScanExtractDoc / clearScanExtractDoc に追従。
   const sync = () => {
+    if (!btn) return;
     const locked = isScanActionsLocked();
     const cache = getScanExtractDoc();
     const hasExtract = !!(
@@ -2137,8 +2174,13 @@ function renderPositionAdjustPreview(mode) {
   if (mode === "none") {
     return `
       <span class="scan-adjust-choice-preview scan-adjust-choice-preview-none" aria-hidden="true">
+        <svg class="scan-adjust-choice-preview-text-icon" viewBox="0 0 64 64" aria-hidden="true" focusable="false">
+          <path d="M8 10h48v15h-8v-7H36v36h8v8H20v-8h8V18H16v7H8V10z" fill="currentColor"></path>
+        </svg>
+        <svg class="scan-adjust-choice-preview-arrow" viewBox="0 0 32 20" aria-hidden="true" focusable="false">
+          <path d="M3 10h22M17 3l8 7-8 7" fill="none" stroke="currentColor" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"></path>
+        </svg>
         <span class="scan-adjust-choice-preview-doc scan-adjust-choice-preview-single">PSD</span>
-        <span class="scan-adjust-choice-preview-none-mark"></span>
       </span>`;
   }
   if (mode === "mode3") {

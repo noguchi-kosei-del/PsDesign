@@ -48,6 +48,20 @@ const mounts = new Map();
 const resizeObservers = new Set();
 let toolListenerBound = false;
 const RUBY_TOWARD_PARENT_RATIO = 1.60;
+let hideSelectedLayerBadges = false;
+let rotateHandlesVisible = false;
+
+function showSelectedLayerBadges() {
+  hideSelectedLayerBadges = false;
+}
+
+function hideRotateHandles(ctx = null) {
+  if (!rotateHandlesVisible) return false;
+  rotateHandlesVisible = false;
+  if (ctx) renderOverlay(ctx);
+  else refreshAllOverlays();
+  return true;
+}
 
 // 【v1.16.0】in-place 編集 textarea 上の文字選択範囲のキャッシュ。
 // reportCursor の発火点で必ずモジュール変数に保存しておくことで、focus 変動の影響を回避。
@@ -138,6 +152,12 @@ let marqueeState = null;
 if (typeof window !== "undefined") {
   window.addEventListener("mouseup", () => { if (panState) endPan(); });
   window.addEventListener("blur", () => { if (panState) endPan(); });
+  document.addEventListener("mousedown", (e) => {
+    if (!rotateHandlesVisible) return;
+    const target = e.target;
+    if (target?.closest?.(".layer-box")) return;
+    hideRotateHandles();
+  });
 }
 
 export function mountPageInteraction({ pageEl, canvas, overlay, page, pageIndex }) {
@@ -168,6 +188,8 @@ export function mountPageInteraction({ pageEl, canvas, overlay, page, pageIndex 
 }
 
 export function unmountAll() {
+  rotateHandlesVisible = false;
+  hideSelectedLayerBadges = false;
   mounts.clear();
   for (const ro of resizeObservers) ro.disconnect();
   resizeObservers.clear();
@@ -324,6 +346,7 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
   // 【v1.29.x UI-coord】後段の measureRubyOffsets が「どの charRubies エントリに対応するか」
   // 特定できるように、絶対 char start を data 属性で持たせる。
   wrap.dataset.rubyStart = String(start);
+  wrap.dataset.rubyEnd = String(end);
   if (rubyType === "mono" || rubyType === "group") {
     wrap.setAttribute("data-ruby-type", rubyType);
   }
@@ -369,16 +392,22 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
 // 交差する場合に unwrap 対象とする。range が wrap の内側に完全に収まっているケースも
 // 含まれる（user が既存 ruby を再適用するケース）。
 function unwrapRubyInRange(inner, range) {
-  if (!inner || !range) return;
+  if (!inner || !range) return [];
+  const removed = [];
   const wraps = Array.from(inner.querySelectorAll(".ruby-wrap"));
   for (const wrap of wraps) {
     const wrapRange = document.createRange();
     try { wrapRange.selectNode(wrap); } catch { continue; }
     // range と wrapRange が交差するか
     const intersects =
-      range.compareBoundaryPoints(Range.END_TO_START, wrapRange) < 0
-      && range.compareBoundaryPoints(Range.START_TO_END, wrapRange) > 0;
+      range.compareBoundaryPoints(Range.END_TO_START, wrapRange) > 0
+      && range.compareBoundaryPoints(Range.START_TO_END, wrapRange) < 0;
     if (!intersects) { wrapRange.detach?.(); continue; }
+    const rubyStart = Number(wrap.dataset.rubyStart);
+    const rubyEnd = Number(wrap.dataset.rubyEnd);
+    if (Number.isInteger(rubyStart) && Number.isInteger(rubyEnd) && rubyEnd > rubyStart) {
+      removed.push({ start: rubyStart, end: rubyEnd });
+    }
     // .ruby-base の中身を wrap の親に移動（wrap 位置に挿入）して wrap を削除。
     const parent = wrap.parentNode;
     if (!parent) continue;
@@ -391,6 +420,28 @@ function unwrapRubyInRange(inner, range) {
   // unwrap 後に隣接 text node の正規化（merge）を行う。range の boundary 位置が
   // text node 内 offset に正しく解決されるようにするため。
   inner.normalize();
+  return removed;
+}
+
+export function removeEditModeRubyFromRange(start, end) {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return [];
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return [];
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
+  if (!inner) return [];
+  const startPos = charIndexToNodeOffset(inner, start);
+  const endPos = charIndexToNodeOffset(inner, end);
+  if (!startPos || !endPos) return [];
+  const range = document.createRange();
+  try {
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+  } catch {
+    return [];
+  }
+  const removed = unwrapRubyInRange(inner, range);
+  inner.classList.toggle("has-ruby", !!inner.querySelector(".ruby-wrap"));
+  return removed;
 }
 
 // inner 内の text node を順に走査し、char index に対応する (text node, offset) を返す。
@@ -400,6 +451,10 @@ function charIndexToNodeOffset(rootEl, charIndex) {
   let lastNode = null;
   let node = walker.nextNode();
   while (node) {
+    if (node.parentElement?.closest?.(".ruby-text")) {
+      node = walker.nextNode();
+      continue;
+    }
     const len = node.nodeValue.length;
     if (remaining <= len) return { node, offset: remaining };
     remaining -= len;
@@ -470,10 +525,63 @@ export function nudgeSelectedLayers(dx, dy) {
     return any || false;
   });
   if (moved) {
+    hideSelectedLayerBadges = true;
     refreshAllOverlays();
     rebuildLayerList();
   }
   return !!moved;
+}
+
+function normalizedRotation(deg) {
+  return ((deg + 180) % 360 + 360) % 360 - 180;
+}
+
+function setLayerRotationForPage(page, layerId, deg) {
+  const normalized = normalizedRotation(deg);
+  if (typeof layerId === "string") {
+    updateNewLayer(layerId, { rotation: normalized });
+  } else {
+    setEdit(page.path, layerId, { rotation: normalized });
+  }
+}
+
+export function rotateSelectedLayers(deltaDeg = 90) {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  const pages = getPages();
+  const rotated = withHistoryTransient(() => {
+    let any = false;
+    for (const sel of selections) {
+      const page = pages[sel.pageIndex];
+      if (!page) continue;
+      if (typeof sel.layerId === "string") {
+        const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+        if (!nl) continue;
+        setLayerRotationForPage(page, sel.layerId, (nl.rotation ?? 0) + deltaDeg);
+        any = true;
+      } else {
+        const layer = page.textLayers.find((l) => l.id === sel.layerId);
+        if (!layer) continue;
+        const edit = getEdit(page.path, sel.layerId) ?? {};
+        setLayerRotationForPage(page, sel.layerId, (edit.rotation ?? 0) + deltaDeg);
+        any = true;
+      }
+    }
+    return any || false;
+  });
+  if (rotated) {
+    showSelectedLayerBadges();
+    refreshAllOverlays();
+    rebuildLayerList();
+  }
+  return !!rotated;
+}
+
+export function showRotationHandlesForSelectedLayers() {
+  if (getSelectedLayers().length === 0) return false;
+  rotateHandlesVisible = true;
+  refreshAllOverlays();
+  return true;
 }
 
 // 矢印キー ↑/↓ で現在ページ内のテキストレイヤー選択を順送り / 逆送りする。
@@ -482,6 +590,7 @@ export function nudgeSelectedLayers(dx, dy) {
 // レイヤーが 0 件のときは false、そうでなければ選択を切替えて true。
 // 現選択が別ページのレイヤーなら無視して現ページの先頭/末尾から開始する。
 export function cycleLayerSelection(delta) {
+  showSelectedLayerBadges();
   const pages = getPages();
   const pageIdx = getCurrentPageIndex();
   if (pageIdx < 0 || pageIdx >= pages.length) return false;
@@ -616,7 +725,10 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
   const sizes = targets.map((t) => t.cur);
   if (sizes.length === 0) return false;
   const baseSize = sign > 0 ? Math.max(...sizes) : Math.min(...sizes);
-  const next = clampSizePt(snapNextSize(baseSize, baseStep, sign, multiplier));
+  const allSameSize = sizes.every((s) => Math.abs(s - baseSize) < 1e-9);
+  const next = clampSizePt(allSameSize
+    ? snapNextSize(baseSize, baseStep, sign, multiplier)
+    : baseSize);
   const changed = withHistoryTransient(() => {
     let any = false;
     for (const target of targets) {
@@ -927,6 +1039,7 @@ function renderOverlay(ctx) {
       edit.charSizes, existingSizePt, edit.charFonts ?? layer.charFonts,
       symbolFontPS,
       edit.charBolds,
+      edit.charItalics,
       punctTsumePct,
       edit.charRubies,
     );
@@ -937,6 +1050,7 @@ function renderOverlay(ctx) {
     // 【v1.22.0】layer 全体の合成太字（faux bold）。per-char (charBolds) があれば
     // span が override する。
     if (edit.syntheticBold === true) inner.style.fontWeight = "700";
+    if (edit.syntheticItalic === true) inner.style.fontStyle = "italic";
     applyFillPreview(inner, edit.fillColor ?? layer.fillColor ?? "default");
     box.appendChild(inner);
     appendStrokePreviewUnderlay(
@@ -950,18 +1064,20 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
-      box.appendChild(createRotateHandle(ctx, layer.id));
+      if (rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
-      const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
-      const badge = createSizeBadge(
-        effectivePt,
-        page,
-        edit.fontPostScriptName ?? layer.font ?? null,
-        edit.strokeColor ?? layer.strokeColor ?? "none",
-        edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
-      );
-      if (badge) box.appendChild(badge);
+      if (!hideSelectedLayerBadges) {
+        const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
+        const badge = createSizeBadge(
+          effectivePt,
+          page,
+          edit.fontPostScriptName ?? layer.font ?? null,
+          edit.strokeColor ?? layer.strokeColor ?? "none",
+          edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
+        );
+        if (badge) box.appendChild(badge);
+      }
     }
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });
@@ -1010,6 +1126,7 @@ function renderOverlay(ctx) {
       nl.charSizes, nl.sizePt ?? 24, nl.charFonts,
       symbolFontPSNew,
       nl.charBolds,
+      nl.charItalics,
       punctTsumePctNew,
       nl.charRubies,
     );
@@ -1018,6 +1135,7 @@ function renderOverlay(ctx) {
     ensureFontLoaded(nl.fontPostScriptName);
     // 【v1.22.0】layer 全体の合成太字。
     if (nl.syntheticBold === true) inner.style.fontWeight = "700";
+    if (nl.syntheticItalic === true) inner.style.fontStyle = "italic";
     applyFillPreview(inner, nl.fillColor ?? "default");
     box.appendChild(inner);
     appendStrokePreviewUnderlay(
@@ -1030,15 +1148,17 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
-      box.appendChild(createRotateHandle(ctx, nl.tempId));
-      const newBadge = createSizeBadge(
-        nl.sizePt ?? 24,
-        page,
-        nl.fontPostScriptName ?? null,
-        nl.strokeColor ?? "none",
-        nl.strokeWidthPx ?? 20,
-      );
-      if (newBadge) box.appendChild(newBadge);
+      if (rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
+      if (!hideSelectedLayerBadges) {
+        const newBadge = createSizeBadge(
+          nl.sizePt ?? 24,
+          page,
+          nl.fontPostScriptName ?? null,
+          nl.strokeColor ?? "none",
+          nl.strokeWidthPx ?? 20,
+        );
+        if (newBadge) box.appendChild(newBadge);
+      }
     }
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, nl.tempId), { passive: false });
@@ -1865,7 +1985,7 @@ function findTcyPairs(line) {
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
 //
 // 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
-function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies) {
+function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies) {
   if (!line.length) {
     // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
     parentEl.appendChild(document.createTextNode("​"));
@@ -1877,6 +1997,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
+  const hasCharItalics = charItalics && Object.keys(charItalics).length > 0;
   const trackingActive = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(line);
   const symbolActive = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(line);
   // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。0..1 の em 量。
@@ -1909,7 +2030,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   }
 
   // 高速パス：何も装飾なし → 単純テキストノード 1 つで終わり
-  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !punctActive && !hasRuby) {
+  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !hasCharItalics && !punctActive && !hasRuby) {
     parentEl.appendChild(document.createTextNode(line));
     return;
   }
@@ -1947,7 +2068,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
       if (pair.start > pos) {
         appendStyledSegment(parentEl, sub.slice(pos, pair.start),
           fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
-          hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
+          hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg);
       }
       const span = document.createElement("span");
       span.className = "tcy-span";
@@ -1961,7 +2082,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
     if (pos < sub.length) {
       appendStyledSegment(parentEl, sub.slice(pos),
         fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
-        hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, hasCharBolds, tsumeArg);
+        hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg);
     }
   };
 
@@ -1972,8 +2093,8 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
       appendRubySegment(parentEl,
         line.slice(seg.start, seg.end), seg.start, lineStartIdx, seg.entry,
         trackings, charSizes, defaultSizePt, charFonts,
-        symbolActive ? symbolFontPS : null, charBolds,
-        hasCharSizes, hasCharFonts, hasCharBolds, tsumeArg);
+        symbolActive ? symbolFontPS : null, charBolds, charItalics,
+        hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, tsumeArg);
       cursor = seg.end;
     }
     if (cursor < line.length) emitNonRubyRange(cursor, line.length);
@@ -2000,8 +2121,8 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
 // を文字ごとに並べる。グループルビは親文字全体に 1 つの rt を付ける。
 function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx, entry,
                             trackings, charSizes, defaultSizePt, charFonts,
-                            symbolFontPS, charBolds,
-                            hasCharSizes, hasCharFonts, hasCharBolds, punctTsumeMag) {
+                            symbolFontPS, charBolds, charItalics,
+                            hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, punctTsumeMag) {
   if (!parentText.length || !entry || typeof entry.text !== "string") return;
   const isMono = entry.type === "mono"
     && /[ 　]/.test(entry.text)
@@ -2019,11 +2140,12 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     wrap.className = "ruby-wrap";
     wrap.style.setProperty("--ruby-scale", `${scale / 100}em`);
     wrap.dataset.rubyStart = String(absStartForThisPair);
+    wrap.dataset.rubyEnd = String(entry.end);
     const base = document.createElement("span");
     base.className = "ruby-base";
     appendStyledSegment(base, segText,
       segLocalStart, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
-      hasCharSizes, hasCharFonts, symbolFontPS, charBolds, hasCharBolds, punctTsumeMag);
+      hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag);
     wrap.appendChild(base);
     const rt = document.createElement("span");
     rt.className = "ruby-text";
@@ -2051,7 +2173,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
 // 【v1.x.0】punctTsumeMag (0..1) で 、/。の直後を縮める。例: 0.5 で letter-spacing -0.5em。
 //   tracking (連続記号ツメ) と同じく letter-spacing で表現するが、対象文字が重複しないため
 //   両者の値を合算して 1 つの letterSpacing にセットする。
-function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, hasCharBolds, punctTsumeMag) {
+function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag) {
   if (!segText.length) return;
   // 【v1.22.0】per-char font 解決: ユーザー手動指定 (charFonts[idx]) があれば最優先、
   // 無ければ symbol char に対しては symbolFontPS で自動置換、それでも無ければ undefined（layer 既定）。
@@ -2075,6 +2197,7 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     const sigFont = effectiveFontAt(absIdx, segText[i]);
     // 【v1.22.0】per-char 合成太字 (charBolds[absIdx])。boolean があれば signature に含める。
     const sigBold = hasCharBolds ? charBolds[absIdx] : undefined;
+    const sigItalic = hasCharItalics ? charItalics[absIdx] : undefined;
     // 【v1.x.0】句読点ツメ（、 / 。）。signature に含めて連続する 、、 を 1 span にまとめる。
     const sigTsume = tsumeAt(segText[i]);
     let j = i + 1;
@@ -2084,8 +2207,9 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       const t = trackings[segStartInLine + j];
       const f = effectiveFontAt(absJ, segText[j]);
       const b = hasCharBolds ? charBolds[absJ] : undefined;
+      const it = hasCharItalics ? charItalics[absJ] : undefined;
       const tu = tsumeAt(segText[j]);
-      if (s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || tu !== sigTsume) break;
+      if (s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || it !== sigItalic || tu !== sigTsume) break;
       j++;
     }
     const text = segText.slice(i, j);
@@ -2093,7 +2217,8 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     const effectiveLetterSpacingEm = sigTrack + (sigTsume > 0 ? -sigTsume : 0);
     const needsSpan = Number.isFinite(sigSize) || effectiveLetterSpacingEm !== 0
       || (typeof sigFont === "string" && sigFont.length > 0)
-      || typeof sigBold === "boolean";
+      || typeof sigBold === "boolean"
+      || typeof sigItalic === "boolean";
     if (needsSpan) {
       const span = document.createElement("span");
       if (Number.isFinite(sigSize) && Number.isFinite(defaultSizePt) && defaultSizePt > 0) {
@@ -2113,6 +2238,9 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       if (typeof sigBold === "boolean") {
         // per-char 合成太字。layer 全体の inner.style.fontWeight より span が優先（CSS specificity）。
         span.style.fontWeight = sigBold ? "700" : "400";
+      }
+      if (typeof sigItalic === "boolean") {
+        span.style.fontStyle = sigItalic ? "italic" : "normal";
       }
       span.textContent = text;
       parentEl.appendChild(span);
@@ -2135,12 +2263,13 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
 // それ以外は単一テキストノードで描画（最軽量）。
 // isVertical: true なら writing-mode: vertical-rl 想定で per-line の幅 (列幅) を切替える。
 // defaultSizePt: layer 全体の sizePt（charSizes の em 換算に使う）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumePct, charRubies) {
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumePct, charRubies) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
+  const hasCharItalics = charItalics && Object.keys(charItalics).length > 0;
   // 【v1.26.0】ruby 範囲 array に変換しておくと、appendLineWithTracking で line ごとに filter しやすい。
   const hasCharRubies = charRubies && Object.keys(charRubies).length > 0;
   // 【v1.26.0】親文字の `overflow: hidden`（new-layer-text / existing-layer-text 既定）が <ruby> の
@@ -2158,7 +2287,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const punctTsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
   const punctHits = punctTsumeMag > 0 && lineHasPunctTsumeChar(fullText);
   // 高速パス：何も装飾なし（charBolds / 句読点ツメ / charRubies も含めて全部空のときだけ通る）
-  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !punctHits && !hasCharRubies) {
+  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !hasCharItalics && !punctHits && !hasCharRubies) {
     inner.textContent = fullText;
     inner.style.lineHeight = fallback;
     return;
@@ -2201,7 +2330,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
           lineEl.style.marginBlockStart = `${extra}em`;
         }
       }
-      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies);
       inner.appendChild(lineEl);
     }
   } else {
@@ -2215,7 +2344,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // charRubies を渡すように修正。
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createTextNode("\n"));
-      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, punctTsumeMag, charRubies);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies);
     }
   }
 }
@@ -2278,12 +2407,7 @@ function getLayerRotation(ctx, layerId) {
 }
 
 function setLayerRotation(ctx, layerId, deg) {
-  const normalized = ((deg + 180) % 360 + 360) % 360 - 180;
-  if (typeof layerId === "string") {
-    updateNewLayer(layerId, { rotation: normalized });
-  } else {
-    setEdit(ctx.page.path, layerId, { rotation: normalized });
-  }
+  setLayerRotationForPage(ctx.page, layerId, deg);
 }
 
 function beginRotateDrag(e, ctx, layerId) {
@@ -2423,6 +2547,11 @@ function onCanvasMouseDown(e, ctx) {
   }
   if (e.button !== 0) return;
   if (tool === "move") {
+    if (rotateHandlesVisible) {
+      e.preventDefault();
+      hideRotateHandles(ctx);
+      return;
+    }
     // 1) アクティブな contenteditable 編集中レイヤーがあれば、外側クリックなら finalize。
     //    内側 (.editing 内) のクリックは contenteditable の caret 移動に委ねる
     //    （preventDefault しない／finalize しない）。
@@ -2563,6 +2692,7 @@ function isLayerDoubleClick(pageIndex, layerKey) {
 // T/Y ツールが廃止され V に統合された後は、ツール切替は不要（V に居続ける）。
 // direction は対象レイヤー自身の direction に従って floater の見え方が決まる。
 function enterInPlaceEditFromMove(ctx, target) {
+  showSelectedLayerBadges();
   const layerKey = target.kind === "existing" ? target.layer.id : target.nl.tempId;
   setSelectedLayer(ctx.pageIndex, layerKey);
   renderOverlay(ctx);
@@ -2571,6 +2701,7 @@ function enterInPlaceEditFromMove(ctx, target) {
 }
 
 function onExistingLayerMouseDown(e, ctx, layer) {
+  showSelectedLayerBadges();
   const tool = getTool();
   if (tool !== "move") return;
   // 【v1.21.0】編集中レイヤー (.editing) のクリックは contenteditable のキャレット移動に
@@ -2598,6 +2729,7 @@ function onExistingLayerMouseDown(e, ctx, layer) {
 }
 
 function onNewLayerMouseDown(e, ctx, nl) {
+  showSelectedLayerBadges();
   const tool = getTool();
   if (tool !== "move") return;
   // 編集中レイヤーのクリックは contenteditable に委ねる（上記 onExistingLayerMouseDown と同パターン）。
@@ -2662,6 +2794,7 @@ function beginMultiLayerDrag(e, ctx) {
           rotation: nl.rotation ?? 0,
           leadingPct: nl.leadingPct,
           syntheticBold: nl.syntheticBold === true,
+          syntheticItalic: nl.syntheticItalic === true,
           sourceTxtRef,
           lineLeadings: nl.lineLeadings,
           charRubies: nl.charRubies,
@@ -2674,6 +2807,7 @@ function beginMultiLayerDrag(e, ctx) {
           charSizes: { ...(nl.charSizes ?? {}) },
           charFonts: { ...(nl.charFonts ?? {}) },
           charBolds: { ...(nl.charBolds ?? {}) },
+          charItalics: { ...(nl.charItalics ?? {}) },
         });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
@@ -2699,6 +2833,7 @@ function beginMultiLayerDrag(e, ctx) {
           rotation: edit.rotation ?? 0,
           leadingPct: edit.leadingPct ?? 125,
           syntheticBold: edit.syntheticBold === true,
+          syntheticItalic: edit.syntheticItalic === true,
           sourceTxtRef,
           lineLeadings: edit.lineLeadings,
           charRubies: edit.charRubies,
@@ -2707,6 +2842,7 @@ function beginMultiLayerDrag(e, ctx) {
           charSizes: { ...(edit.charSizes ?? {}) },
           charFonts: { ...(edit.charFonts ?? layer.charFonts ?? {}) },
           charBolds: { ...(edit.charBolds ?? {}) },
+          charItalics: { ...(edit.charItalics ?? {}) },
         });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
@@ -3222,6 +3358,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charSizes: e.charSizes ?? {},
         charFonts: e.charFonts ?? target.layer.charFonts ?? {},
         charBolds: e.charBolds ?? {},
+        charItalics: e.charItalics ?? {},
         charRubies: e.charRubies ?? {},
         lineLeadings: e.lineLeadings ?? {},
       };
@@ -3232,6 +3369,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
       charSizes: nl.charSizes ?? {},
       charFonts: nl.charFonts ?? {},
       charBolds: nl.charBolds ?? {},
+      charItalics: nl.charItalics ?? {},
       charRubies: nl.charRubies ?? {},
       lineLeadings: nl.lineLeadings ?? {},
     };
@@ -3244,15 +3382,17 @@ function startContentEditableEdit(ctx, target, options = {}) {
     if (!s || s.rangeCount === 0) return null;
     const r = s.getRangeAt(0);
     if (!inner.contains(r.startContainer) && r.startContainer !== inner) return null;
+    const textLengthTo = (container, offset) => {
+      const probe = document.createRange();
+      probe.selectNodeContents(inner);
+      probe.setEnd(container, offset);
+      const frag = probe.cloneContents();
+      frag.querySelectorAll?.(".ruby-text").forEach((el) => el.remove());
+      return frag.textContent.length;
+    };
     try {
-      const a = document.createRange();
-      a.selectNodeContents(inner);
-      a.setEnd(r.startContainer, r.startOffset);
-      const startIdx = a.toString().length;
-      const b = document.createRange();
-      b.selectNodeContents(inner);
-      b.setEnd(r.endContainer, r.endOffset);
-      const endIdx = b.toString().length;
+      const startIdx = textLengthTo(r.startContainer, r.startOffset);
+      const endIdx = textLengthTo(r.endContainer, r.endOffset);
       return { start: Math.min(startIdx, endIdx), end: Math.max(startIdx, endIdx) };
     } catch (e) {
       return null;
@@ -3671,11 +3811,12 @@ function startContentEditableEdit(ctx, target, options = {}) {
       return;
     }
     const diff = computeStringDiff(lastContents, newContents);
-    const { charSizes, charFonts, charBolds, charRubies, lineLeadings } = readCurrentMaps();
+    const { charSizes, charFonts, charBolds, charItalics, charRubies, lineLeadings } = readCurrentMaps();
     const newCharSizes = shiftCharMap(charSizes, diff.pos, diff.deleted, diff.inserted);
     const newCharFonts = shiftCharMap(charFonts, diff.pos, diff.deleted, diff.inserted);
     // 【v1.26.0】charBolds も同じ shiftCharMap を適用（v1.22.0 で抜けていた既存バグ修正）。
     const newCharBolds = shiftCharMap(charBolds, diff.pos, diff.deleted, diff.inserted);
+    const newCharItalics = shiftCharMap(charItalics, diff.pos, diff.deleted, diff.inserted);
     // 【v1.26.0】charRubies はキーが range の start なので shiftRubyMap を使う。
     const newCharRubies = shiftRubyMap(charRubies, diff.pos, diff.deleted, diff.inserted);
     const newLineLeadings = shiftLineMap(
@@ -3689,6 +3830,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charSizes: newCharSizes,
         charFonts: newCharFonts,
         charBolds: newCharBolds,
+        charItalics: newCharItalics,
         charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });
@@ -3698,6 +3840,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charSizes: newCharSizes,
         charFonts: newCharFonts,
         charBolds: newCharBolds,
+        charItalics: newCharItalics,
         charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });

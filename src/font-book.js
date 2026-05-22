@@ -45,6 +45,21 @@ let initialLoadStarted = false;
 
 const $ = (id) => document.getElementById(id);
 
+function fontBookListEls() {
+  return [
+    $("font-book-list"),
+    $("pdf-font-book-list"),
+  ].filter(Boolean);
+}
+
+function fontBookSampleInputs() {
+  return Array.from(document.querySelectorAll("#font-book-sample-input, [data-font-book-sample]"));
+}
+
+function fontBookCategoryWraps() {
+  return Array.from(document.querySelectorAll(".font-book-category-menu-wrap"));
+}
+
 function escapeHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -406,7 +421,6 @@ async function loadFontBookFromJsonChoice(choice) {
     state.category = "";
     renderFontBook();
     closeFontBookSelectModal();
-    toast(`${state.selectedWorkName || "作品情報"} を読み込みました (${state.entries.length}件)`, { kind: "success" });
     return true;
   } catch (e) {
     toast(`fontbook.json を読み込めませんでした: ${e}`, { kind: "error" });
@@ -446,7 +460,6 @@ async function loadFontBookFromWorkFolder(folder) {
     state.scannedJsonCount = 0;
     state.category = "";
     renderFontBook();
-    toast(`${state.selectedWorkName || "フォント帳"} を読み込みました (${state.entries.length}件)`, { kind: "success" });
     return true;
   } catch (e) {
     toast(`fontbook.json を読み込めませんでした: ${e}`, { kind: "error" });
@@ -635,7 +648,6 @@ async function loadFontBooksFromGDrive({ notify = true } = {}) {
     state.scannedJsonCount = scannedJsonCount;
     renderFontBook();
     if (notify) {
-      toast(`作品名JSONからフォント帳を読み込みました (${scannedJsonCount}JSON / ${books.length}冊 / ${state.entries.length}件)`, { kind: "success" });
     }
     return books.length > 0;
   } catch (e) {
@@ -712,28 +724,30 @@ function filteredGroups() {
 }
 
 function renderCategories(groups) {
-  const root = $("font-book-category-items");
-  const btn = $("font-book-category-menu-btn");
-  if (!root || !btn) return;
   const cats = Array.from(new Set(groups.map((g) => g.subName).filter(Boolean))).sort((a, b) => a.localeCompare(b, "ja"));
-  btn.disabled = false;
-  btn.title = state.category ? `カテゴリ: ${state.category}` : "カテゴリ";
-  btn.setAttribute("aria-label", btn.title);
-  root.hidden = false;
-  root.innerHTML = [
-    `<button class="font-book-category-item ${state.category ? "" : "active"}" type="button" data-category="">すべて</button>`,
-    ...cats.map((cat) =>
-      `<button class="font-book-category-item ${state.category === cat ? "active" : ""}" type="button" data-category="${escapeHtml(cat)}">${escapeHtml(cat)}</button>`,
-    ),
-  ].join("");
-  for (const item of root.querySelectorAll(".font-book-category-item")) {
-    item.addEventListener("click", () => {
-      state.category = item.dataset.category || "";
-      const menu = $("font-book-category-menu");
-      if (menu) menu.hidden = true;
-      btn.setAttribute("aria-expanded", "false");
-      renderFontBook();
-    });
+  for (const wrap of fontBookCategoryWraps()) {
+    const root = wrap.querySelector("#font-book-category-items, .font-book-category-items");
+    const btn = wrap.querySelector("#font-book-category-menu-btn, [data-font-book-action='category']");
+    if (!root || !btn) continue;
+    btn.disabled = false;
+    btn.title = state.category ? `カテゴリ: ${state.category}` : "カテゴリ";
+    btn.setAttribute("aria-label", btn.title);
+    root.hidden = false;
+    root.innerHTML = [
+      `<button class="font-book-category-item ${state.category ? "" : "active"}" type="button" data-category="">すべて</button>`,
+      ...cats.map((cat) =>
+        `<button class="font-book-category-item ${state.category === cat ? "active" : ""}" type="button" data-category="${escapeHtml(cat)}">${escapeHtml(cat)}</button>`,
+      ),
+    ].join("");
+    for (const item of root.querySelectorAll(".font-book-category-item")) {
+      item.addEventListener("click", () => {
+        state.category = item.dataset.category || "";
+        const menu = wrap.querySelector(".font-book-category-menu");
+        if (menu) menu.hidden = true;
+        btn.setAttribute("aria-expanded", "false");
+        renderFontBook();
+      });
+    }
   }
 }
 
@@ -765,8 +779,8 @@ async function imageDataUrl(entry) {
 }
 
 function renderFontBook() {
-  const list = $("font-book-list");
-  if (!list) return;
+  const lists = fontBookListEls();
+  if (!lists.length) return;
 
   const allGroups = buildGroups();
   const groups = filteredGroups();
@@ -778,20 +792,20 @@ function renderFontBook() {
   const listHeader = `
     <div class="font-book-list-header">
       ${heading}
-      <input id="font-book-search" class="font-book-search" type="search" placeholder="フォント名で検索..." autocomplete="off" value="${escapeHtml(state.query)}" />
+      <input class="font-book-search" type="search" placeholder="フォント名で検索..." autocomplete="off" value="${escapeHtml(state.query)}" />
     </div>`;
-  if (groups.length === 0) {
-    list.innerHTML = `
-      ${listHeader}
-      <div class="font-book-empty">
-        <div class="font-book-empty-icon">Aa</div>
-        <div>表示できるフォントがありません。</div>
-      </div>`;
-    return;
+  const bodyHtml = groups.length === 0
+    ? `
+        ${listHeader}
+        <div class="font-book-empty">
+          <div class="font-book-empty-icon">Aa</div>
+          <div>表示できるフォントがありません。</div>
+        </div>`
+    : `${listHeader}${groups.map(renderGroup).join("")}`;
+  for (const list of lists) {
+    list.dataset.size = state.previewSize;
+    list.innerHTML = bodyHtml;
   }
-
-  list.dataset.size = state.previewSize;
-  list.innerHTML = `${listHeader}${groups.map(renderGroup).join("")}`;
   bindRenderedCards();
 }
 
@@ -830,7 +844,6 @@ function bindRenderedCards() {
     sampleObserver.disconnect();
     sampleObserver = null;
   }
-  const list = $("font-book-list");
   const fonts = fontMapByPostScript();
   sampleObserver = new IntersectionObserver((items) => {
     for (const item of items) {
@@ -844,7 +857,7 @@ function bindRenderedCards() {
       }
       sampleObserver?.unobserve(sample);
     }
-  }, { root: list, rootMargin: "140px" });
+  }, { root: null, rootMargin: "140px" });
   for (const sample of document.querySelectorAll(".font-book-sample[data-font-ps]")) {
     const ps = sample.dataset.fontPs;
     const font = fonts.get(ps);
@@ -912,43 +925,80 @@ function closeExpanded() {
   if (modal) modal.hidden = true;
 }
 
+function setPdfFontBookVisible(visible) {
+  const area = $("spreads-pdf-area");
+  const stage = $("pdf-font-book-stage");
+  const pdfStage = $("pdf-stage");
+  const btn = $("pdf-font-book-btn");
+  if (!area || !stage || !pdfStage || !btn) return;
+  area.classList.toggle("font-book-visible", visible);
+  stage.hidden = !visible;
+  pdfStage.hidden = visible;
+  btn.setAttribute("aria-pressed", visible ? "true" : "false");
+  if (visible) {
+    loadInitialFontBook();
+    renderFontBook();
+  }
+}
+
+function bindPdfFontBookToggle() {
+  const btn = $("pdf-font-book-btn");
+  if (!btn) return;
+  btn.addEventListener("click", () => {
+    const visible = !$("pdf-font-book-stage")?.hidden;
+    setPdfFontBookVisible(!visible);
+  });
+}
+
 function bindControls() {
-  $("font-book-select-info-btn")?.addEventListener("click", () => {
-    openFontBookSelectModal();
-  });
-  $("font-book-refresh-btn")?.addEventListener("click", () => {
-    loadRootFolders();
-  });
-  $("font-book-category-menu-btn")?.addEventListener("click", (e) => {
+  document.addEventListener("click", (e) => {
+    const selectBtn = e.target?.closest?.("#font-book-select-info-btn, [data-font-book-action='select']");
+    if (selectBtn) {
+      openFontBookSelectModal();
+      return;
+    }
+    const refreshBtn = e.target?.closest?.("#font-book-refresh-btn, [data-font-book-action='refresh']");
+    if (refreshBtn) {
+      loadRootFolders();
+      return;
+    }
+    const categoryBtn = e.target?.closest?.("#font-book-category-menu-btn, [data-font-book-action='category']");
+    if (!categoryBtn) return;
     e.stopPropagation();
-    const menu = $("font-book-category-menu");
-    const btn = $("font-book-category-menu-btn");
-    if (!menu || !btn) return;
+    const wrap = categoryBtn.closest(".font-book-category-menu-wrap");
+    const menu = wrap?.querySelector?.(".font-book-category-menu");
+    if (!menu) return;
     const willOpen = menu.hidden;
     if (willOpen) {
-      const rect = btn.getBoundingClientRect();
+      const rect = categoryBtn.getBoundingClientRect();
       const width = 220;
       const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
       menu.style.setProperty("--font-book-category-menu-left", `${left}px`);
       menu.style.setProperty("--font-book-category-menu-top", `${rect.bottom + 6}px`);
     }
     menu.hidden = !willOpen;
-    btn.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
-  });
-  $("font-book-sample-input")?.addEventListener("input", (e) => {
-    state.sampleText = e.target.value || DEFAULT_SAMPLE_TEXT;
-    try {
-      localStorage.setItem(STORAGE_SAMPLE, state.sampleText);
-    } catch (_) {}
-    renderFontBook();
+    categoryBtn.setAttribute("aria-expanded", menu.hidden ? "false" : "true");
   });
   document.addEventListener("input", (e) => {
-    if (e.target?.id !== "font-book-search") return;
+    if (e.target?.matches?.("#font-book-sample-input, [data-font-book-sample]")) {
+      state.sampleText = e.target.value || DEFAULT_SAMPLE_TEXT;
+      try {
+        localStorage.setItem(STORAGE_SAMPLE, state.sampleText);
+      } catch (_) {}
+      for (const input of fontBookSampleInputs()) {
+        if (input !== e.target) input.value = state.sampleText;
+      }
+      renderFontBook();
+      return;
+    }
+    if (!e.target?.classList?.contains("font-book-search")) return;
     const pos = e.target.selectionStart ?? e.target.value.length;
+    const listId = e.target.closest(".font-book-list")?.id || "";
     state.query = e.target.value || "";
     renderFontBook();
     requestAnimationFrame(() => {
-      const input = $("font-book-search");
+      const root = listId ? $(listId) : null;
+      const input = root?.querySelector(".font-book-search") ?? document.querySelector(".font-book-search");
       if (!input) return;
       input.focus();
       input.setSelectionRange(pos, pos);
@@ -958,20 +1008,23 @@ function bindControls() {
     if (e.key === "Escape" && expandedEntryId) closeExpanded();
     if (e.key === "Escape" && state.selectModalOpen) closeFontBookSelectModal();
     if (e.key === "Escape") {
-      const menu = $("font-book-category-menu");
-      const btn = $("font-book-category-menu-btn");
-      if (menu && !menu.hidden) {
+      for (const wrap of fontBookCategoryWraps()) {
+        const menu = wrap.querySelector(".font-book-category-menu");
+        const btn = wrap.querySelector("#font-book-category-menu-btn, [data-font-book-action='category']");
+        if (!menu || menu.hidden) continue;
         menu.hidden = true;
         btn?.setAttribute("aria-expanded", "false");
       }
     }
   });
   document.addEventListener("click", (e) => {
-    const menu = $("font-book-category-menu");
     const wrap = e.target?.closest?.(".font-book-category-menu-wrap");
-    if (menu && !menu.hidden && !wrap) {
+    if (wrap) return;
+    for (const categoryWrap of fontBookCategoryWraps()) {
+      const menu = categoryWrap.querySelector(".font-book-category-menu");
+      if (!menu || menu.hidden) continue;
       menu.hidden = true;
-      $("font-book-category-menu-btn")?.setAttribute("aria-expanded", "false");
+      categoryWrap.querySelector("#font-book-category-menu-btn, [data-font-book-action='category']")?.setAttribute("aria-expanded", "false");
     }
   });
   window.addEventListener("psdesign:fonts-loaded", renderFontBook);
@@ -991,8 +1044,10 @@ export function initFontBookPanel() {
     const sample = localStorage.getItem(STORAGE_SAMPLE);
     if (sample) state.sampleText = sample;
   } catch (_) {}
-  const sampleInput = $("font-book-sample-input");
-  if (sampleInput) sampleInput.value = state.sampleText;
+  for (const sampleInput of fontBookSampleInputs()) {
+    sampleInput.value = state.sampleText;
+  }
+  bindPdfFontBookToggle();
   bindControls();
   renderFontBook();
 }

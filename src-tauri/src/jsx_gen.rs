@@ -124,10 +124,19 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
             if let Some(b) = layer.synthetic_bold {
                 out.push_str(&format!(", syntheticBold: {}", if b { "true" } else { "false" }));
             }
+            if let Some(i) = layer.synthetic_italic {
+                out.push_str(&format!(", syntheticItalic: {}", if i { "true" } else { "false" }));
+            }
             if let Some(ref cb) = layer.char_bolds {
                 if !cb.is_empty() {
                     out.push_str(", charBolds: ");
                     emit_char_bolds(&mut out, cb);
+                }
+            }
+            if let Some(ref ci) = layer.char_italics {
+                if !ci.is_empty() {
+                    out.push_str(", charItalics: ");
+                    emit_char_bolds(&mut out, ci);
                 }
             }
             if let Some(ref cr) = layer.char_rubies {
@@ -188,10 +197,19 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
             if let Some(b) = nl.synthetic_bold {
                 out.push_str(&format!(", syntheticBold: {}", if b { "true" } else { "false" }));
             }
+            if let Some(i) = nl.synthetic_italic {
+                out.push_str(&format!(", syntheticItalic: {}", if i { "true" } else { "false" }));
+            }
             if let Some(ref cb) = nl.char_bolds {
                 if !cb.is_empty() {
                     out.push_str(", charBolds: ");
                     emit_char_bolds(&mut out, cb);
+                }
+            }
+            if let Some(ref ci) = nl.char_italics {
+                if !ci.is_empty() {
+                    out.push_str(", charItalics: ");
+                    emit_char_bolds(&mut out, ci);
                 }
             }
             if let Some(ref cr) = nl.char_rubies {
@@ -934,6 +952,79 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
 //   rubyLineIndices: ルビが乗る行の 0-based index の配列 (例: [1, 3])
 //   multiplier: 倍率 (1.5 = 150%)
 //   defaultMultiplier: 他の行に当てる元の倍率 (例: 1.25 = 125%、e.leadingPct/100 でいい)
+function applyPerCharItalics(layer, contents, charItalics, layerItalic) {
+  var hasChar = charItalics && !isObjEmpty(charItalics);
+  var li = layerItalic === true;
+  app.activeDocument.activeLayer = layer;
+
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  function readItalic(idx) {
+    if (charItalics) {
+      var v = charItalics[String(idx)];
+      if (typeof v === "boolean") return v;
+    }
+    return li;
+  }
+
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curItalic = readItalic(0);
+
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextItalic, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc; nextItalic = curItalic;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextItalic = readItalic(p);
+      boundary = (nextSrc !== curSrc) || (nextItalic !== curItalic);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      try { styleClone.putBoolean(sID("syntheticItalic"), curItalic === true); } catch (eSI) {}
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), p);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curItalic = nextItalic;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
 function applyRubyAutoLeadingPercentage(layer, contents, rubyLineIndices, multiplier, defaultMultiplier) {
   if (!rubyLineIndices || rubyLineIndices.length === 0) return;
   if (typeof multiplier !== "number" || !isFinite(multiplier) || multiplier <= 0) return;
@@ -2270,6 +2361,14 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           addWarning("合成太字の適用に失敗 (layer " + e.id + "): " + eBold);
         }
       }
+      if (e.syntheticItalic === true || e.syntheticItalic === false ||
+          (e.charItalics && !isObjEmpty(e.charItalics))) {
+        try {
+          applyPerCharItalics(layer, ti.contents, e.charItalics, e.syntheticItalic === true);
+        } catch (eItalic) {
+          addWarning("合成斜体の適用に失敗 (layer " + e.id + "): " + eItalic);
+        }
+      }
       // 【v1.26.0】ルビ。親レイヤーは保持しつつ、ルビごとに新規テキストレイヤーを
       // 親の直前に追加する（Photoshop ruby プラグインと同じ方針）。
       if (e.charRubies && !isObjEmpty(e.charRubies)) {
@@ -2492,6 +2591,14 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             applyPerCharBolds(layerRef, nti.contents, nl.charBolds, nl.syntheticBold === true);
           } catch (eBoldNew) {
             addWarning("新規レイヤーの合成太字適用に失敗: " + eBoldNew);
+          }
+        }
+        if (nl.syntheticItalic === true || nl.syntheticItalic === false ||
+            (nl.charItalics && !isObjEmpty(nl.charItalics))) {
+          try {
+            applyPerCharItalics(layerRef, nti.contents, nl.charItalics, nl.syntheticItalic === true);
+          } catch (eItalicNew) {
+            addWarning("新規レイヤーの合成斜体適用に失敗: " + eItalicNew);
           }
         }
         // 【v1.26.0】ルビ（新規レイヤー）。親 layer の textKey 上書きが完了してから呼ぶ。

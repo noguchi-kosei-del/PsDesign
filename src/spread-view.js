@@ -23,8 +23,8 @@ let zoomSubscribed = false;
 let rotationSubscribed = false;
 
 const MAX_CANVAS_SIDE = 16384;
-const PSD_FIT_BASE_SCALE = 1.1;
-export const PSD_FIT_ZOOM = 1 / PSD_FIT_BASE_SCALE;
+export const PSD_FIT_BASE_SCALE = 1.1;
+export const PSD_FIT_ZOOM = 1;
 
 // ズーム変更時、ビューポート中心にあったキャンバス上のポイントを再描画後も
 // ビューポート中心に保つため、redraw 前にキャプチャしておく。

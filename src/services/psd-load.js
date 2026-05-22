@@ -38,7 +38,7 @@ export async function listPsdFilesInFolder(folder) {
 //   自動配置から呼ばれるときは auto-place.js が PLACE_ICON_SVG を渡す。
 // options.label: アイコン直下のラベル文言（省略時は "PSD を読み込み中"）。
 //   自動配置経由は "自動配置中…" を渡してプロセス全体の文脈を維持する。
-export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み込み中" } = {}) {
+export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み込み中", keepProgressOpen = false } = {}) {
   if (!files || files.length === 0) return;
   // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
   // のいずれもページ番号順 (page1 → page2 → page10) で先頭から並ぶようにする。
@@ -105,7 +105,9 @@ export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み�
   window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
   // 全件失敗のときは緑チェック演出をスキップ。1 件でも成功していれば success 表示。
   const allFailed = failures.length === files.length;
-  await hideProgress({ success: !allFailed });
+  if (!keepProgressOpen || allFailed) {
+    await hideProgress({ success: !allFailed });
+  }
   if (failures.length) {
     const first = failures[0];
     const msg =

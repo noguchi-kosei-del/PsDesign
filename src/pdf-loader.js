@@ -302,6 +302,7 @@ export async function pickPdfFile() {
 // - 並び順はファイル名の自然順（page1.jpg → page2.jpg → page10.jpg）
 export async function loadReferenceFiles(paths, options = {}) {
   if (!Array.isArray(paths) || paths.length === 0) return;
+  const keepProgressOpen = !!options.keepProgressOpen;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
   const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
   const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
@@ -383,7 +384,7 @@ export async function loadReferenceFiles(paths, options = {}) {
       );
     }
   } finally {
-    hideProgress();
+    if (!keepProgressOpen) hideProgress();
   }
 }
 

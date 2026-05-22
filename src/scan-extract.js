@@ -61,25 +61,26 @@ function isScanActionsLocked() {
 
 function setScanActionsEngineLock(locked) {
   const row = $("scan-actions-row");
-  if (!row) return;
-  row.classList.toggle("scan-actions-row-locked", locked);
-  row.setAttribute("aria-disabled", locked ? "true" : "false");
-  row.title = locked ? SCAN_ENGINE_LOCK_TITLE : "";
-  for (const id of SCAN_ACTION_BUTTON_IDS) {
-    const btn = $(id);
-    if (!btn) continue;
-    if (locked) {
-      btn.dataset.aiEngineLocked = "true";
-      btn.disabled = true;
-      btn.title = SCAN_ENGINE_LOCK_TITLE;
-    } else if (btn.dataset.aiEngineLocked === "true") {
-      delete btn.dataset.aiEngineLocked;
+  if (row) {
+    row.classList.toggle("scan-actions-row-locked", locked);
+    row.setAttribute("aria-disabled", locked ? "true" : "false");
+    row.title = locked ? SCAN_ENGINE_LOCK_TITLE : "";
+    for (const id of SCAN_ACTION_BUTTON_IDS) {
+      const btn = $(id);
+      if (!btn) continue;
+      if (locked) {
+        btn.dataset.aiEngineLocked = "true";
+        btn.disabled = true;
+        btn.title = SCAN_ENGINE_LOCK_TITLE;
+      } else if (btn.dataset.aiEngineLocked === "true") {
+        delete btn.dataset.aiEngineLocked;
+      }
     }
-  }
-  const extractBtn = $("scan-extract-btn");
-  if (extractBtn && !locked) {
-    extractBtn.disabled = false;
-    extractBtn.title = "見本画像を 画像スキャン で画像スキャン（未読込ならファイル選択ダイアログを表示）";
+    const extractBtn = $("scan-extract-btn");
+    if (extractBtn && !locked) {
+      extractBtn.disabled = false;
+      extractBtn.title = "見本画像を 画像スキャン で画像スキャン（未読込ならファイル選択ダイアログを表示）";
+    }
   }
   window.dispatchEvent(new CustomEvent("psdesign:scan-actions-lock-change", { detail: { locked } }));
 }
@@ -356,6 +357,7 @@ async function runScanExtract(files, {
   consumeText = true,
   maxPages = null,
   excludedPages = null,
+  keepProgressOpen = false,
   // 進捗ダイアログのアイコン直下ラベル。直接呼ばれる「画像スキャン」と
   // 自動配置から呼ばれる経路で文言を切替えるため引数化。
   label = "画像スキャン中…",
@@ -485,7 +487,9 @@ async function runScanExtract(files, {
     // 画像スキャン 成功時のみ緑チェックマークを再生してから閉じる。失敗 (err あり / doc なし)
     // のときは即座に閉じて、失敗ダイアログをすぐ出す。
     const ok = !err && !!doc;
-    await hideProgress({ success: ok });
+    if (!keepProgressOpen || !ok) {
+      await hideProgress({ success: ok });
+    }
     runningExtract = false;
     if (btn) btn.disabled = false;
   }
@@ -562,11 +566,8 @@ async function runScanExtract(files, {
       confirmKind: "place",
     });
     if (goPlace) {
-      // auto-place.js は scan-extract.js を import しており逆方向 import は循環参照になる。
-      // ボタンの DOM クリックを介してハンドラを発火させ循環を避ける。
-      // setScanExtractDoc は既に上で呼び済みなので onScanExtractDocChange 経由で disabled は解除済み。
-      const placeBtn = $("scan-place-btn");
-      if (placeBtn && !placeBtn.disabled) placeBtn.click();
+      const { runAutoPlace } = await import("./auto-place.js");
+      await runAutoPlace();
     }
   }
 }
@@ -637,8 +638,8 @@ function formatEta(eta) {
 // 公開: ファイル群に対して画像スキャンを実行し、ReferenceScanDocument を返す。
 // (auto-place.js から「画像スキャン キャッシュなし時に自動実行」用に呼ぶ)
 // 自動配置経由なのでアイコンは wand-sparkles、ラベルも「自動配置中…」に揃える。
-export async function runScanExtractForFiles(files, { loadText = true, maxPages = null, excludedPages = null } = {}) {
-  await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", loadText, maxPages, excludedPages });
+export async function runScanExtractForFiles(files, { loadText = true, maxPages = null, excludedPages = null, keepProgressOpen = false } = {}) {
+  await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", loadText, maxPages, excludedPages, keepProgressOpen });
 }
 
 export async function runScanExtractForTranscription(files) {
@@ -651,12 +652,13 @@ export async function runScanExtractForTranscription(files) {
   });
 }
 
-export async function runScanExtractForPlacementOnly(files) {
+export async function runScanExtractForPlacementOnly(files, { keepProgressOpen = false } = {}) {
   await runScanExtract(files, {
     icon: PLACE_ICON_SVG,
     label: "位置検出中…",
     consumeText: false,
     loadText: false,
+    keepProgressOpen,
   });
 }
 

@@ -72,9 +72,13 @@ pub struct LayerEdit {
     // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
     #[serde(rename = "syntheticBold", default)]
     pub synthetic_bold: Option<bool>,
+    #[serde(rename = "syntheticItalic", default)]
+    pub synthetic_italic: Option<bool>,
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     #[serde(rename = "charBolds", default)]
     pub char_bolds: Option<HashMap<String, bool>>,
+    #[serde(rename = "charItalics", default)]
+    pub char_italics: Option<HashMap<String, bool>>,
     // 【v1.26.0】文字ごとのルビ。start index をキー、value は {end, text, type, scale}。
     #[serde(rename = "charRubies", default)]
     pub char_rubies: Option<HashMap<String, RubyEntry>>,
@@ -110,9 +114,13 @@ pub struct NewLayer {
     // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
     #[serde(rename = "syntheticBold", default)]
     pub synthetic_bold: Option<bool>,
+    #[serde(rename = "syntheticItalic", default)]
+    pub synthetic_italic: Option<bool>,
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     #[serde(rename = "charBolds", default)]
     pub char_bolds: Option<HashMap<String, bool>>,
+    #[serde(rename = "charItalics", default)]
+    pub char_italics: Option<HashMap<String, bool>>,
     // 【v1.26.0】文字ごとのルビ。start index をキー、value は {end, text, type, scale}。
     #[serde(rename = "charRubies", default)]
     pub char_rubies: Option<HashMap<String, RubyEntry>>,

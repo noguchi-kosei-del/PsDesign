@@ -22,7 +22,6 @@ import {
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
 import {
-  alignCanvasStartInViewport,
   applyOverscrollMargin,
   captureViewportCenterFraction,
   centerCanvasInViewport,
@@ -30,8 +29,8 @@ import {
 } from "./overscroll.js";
 
 const MAX_CANVAS_SIDE = 16384;
-const PDF_FIT_BASE_SCALE = 1.1;
-export const PDF_FIT_ZOOM = 1 / PDF_FIT_BASE_SCALE;
+export const PDF_FIT_BASE_SCALE = 1.1;
+export const PDF_FIT_ZOOM = 1;
 
 let mounted = false;
 let rootEl = null;
@@ -218,7 +217,7 @@ export function resetPdfViewportToStart() {
   const run = () => {
     if (!resetZoomToStart) return;
     if (pdfZoomDirty) return;
-    alignCanvasStartInViewport(stageEl, pageWrap);
+    centerCanvasInViewport(stageEl, pageWrap);
     resetZoomToStart = false;
   };
   requestAnimationFrame(run);
@@ -448,7 +447,7 @@ async function redraw() {
   if (fitToPane) {
     centerCanvasInViewport(stageEl, pageWrap);
   } else if (resetZoomForThisRedraw) {
-    alignCanvasStartInViewport(stageEl, pageWrap);
+    centerCanvasInViewport(stageEl, pageWrap);
   } else if (zoomFracForThisRedraw) {
     if (hasOverflowAfter) {
       restoreViewportCenter(stageEl, pageWrap, zoomFracForThisRedraw);
@@ -507,8 +506,8 @@ async function redraw() {
     ctx.drawImage(off, -srcX, 0);
   }
   if (resetZoomForThisRedraw) {
-    alignCanvasStartInViewport(stageEl, pageWrap);
-    requestAnimationFrame(() => alignCanvasStartInViewport(stageEl, pageWrap));
-    setTimeout(() => alignCanvasStartInViewport(stageEl, pageWrap), 60);
+    centerCanvasInViewport(stageEl, pageWrap);
+    requestAnimationFrame(() => centerCanvasInViewport(stageEl, pageWrap));
+    setTimeout(() => centerCanvasInViewport(stageEl, pageWrap), 60);
   }
 }

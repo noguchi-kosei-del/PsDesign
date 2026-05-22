@@ -71,39 +71,6 @@
             </svg>
           </button>
         </div>
-        <div class="toolbar-viewmode" role="group" aria-label="ビューモード">
-          <button id="reference-hidden-btn" class="skip-blank-btn" type="button" aria-pressed="false" title="見本の非表示設定" aria-label="見本の非表示設定" disabled>
-            <span class="skip-blank-box" aria-hidden="true"></span>
-            <svg class="skip-blank-icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true">
-              <!-- ファイル本体 + 折り返し角 -->
-              <path d="M3 1.5 H10 L13 4.5 V14.5 H3 Z" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>
-              <path d="M10 1.5 V4.5 H13" fill="none" stroke="currentColor" stroke-width="1" stroke-linejoin="round"/>
-              <!-- ファイル中央の × -->
-              <g stroke="currentColor" stroke-width="1.3" stroke-linecap="round">
-                <line x1="5.5" y1="7" x2="10.5" y2="12"/>
-                <line x1="10.5" y1="7" x2="5.5" y2="12"/>
-              </g>
-            </svg>
-          </button>
-          <div class="sync-segment" role="group" aria-label="同期モード">
-            <button id="sync-on-btn" class="sync-seg-btn active" type="button" title="ページ同期" aria-label="ページ同期" aria-pressed="true">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/>
-                <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/>
-              </svg>
-            </button>
-            <button id="sync-off-btn" class="sync-seg-btn" type="button" title="ページ非同期" aria-label="ページ非同期" aria-pressed="false">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M18.84 12.25l1.72-1.71a5 5 0 0 0-7.07-7.07L11 5.41"/>
-                <path d="M5.17 11.75l-1.71 1.71a5 5 0 0 0 7.07 7.07L12.58 18"/>
-                <line x1="8" y1="2" x2="8" y2="5"/>
-                <line x1="2" y1="8" x2="5" y2="8"/>
-                <line x1="16" y1="19" x2="16" y2="22"/>
-                <line x1="19" y1="16" x2="22" y2="16"/>
-              </svg>
-            </button>
-          </div>
-        </div>
         <div class="toolbar-actions">
           <div class="save-container" id="save-container">
             <button id="save-btn" class="icon-btn file-open-btn" disabled title="Photoshop で保存 (Ctrl+S)" aria-label="Photoshop で保存">
@@ -190,6 +157,14 @@
               <div class="stage-label-bar" id="pdf-stage-label-bar">
                 <span class="stage-label-text" id="pdf-stage-label"></span>
                 <div class="stage-label-actions">
+                  <button id="pdf-font-book-btn" class="pdf-font-book-btn icon-btn" type="button" title="フォント帳" aria-label="フォント帳" aria-pressed="false">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/>
+                      <path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5z"/>
+                      <path d="M8 7h8"/>
+                      <path d="M8 11h6"/>
+                    </svg>
+                  </button>
                   <button id="pdf-rotate-btn" class="pdf-rotate-btn icon-btn" type="button" title="PDF を 90° 回転（クリックごと）" aria-label="PDF を回転" disabled>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <polyline points="21 2 21 8 15 8"/>
@@ -199,6 +174,35 @@
                 </div>
               </div>
               <div id="pdf-stage" class="pdf-stage"></div>
+              <div id="pdf-font-book-stage" class="pdf-font-book-stage" hidden>
+                <div class="pdf-font-book-toolbar">
+                  <button class="font-book-select-info-btn" type="button" data-font-book-action="select">作品情報を選択</button>
+                  <button class="icon-btn font-book-refresh-btn" type="button" data-font-book-action="refresh" title="フォント帳を再読み込み" aria-label="フォント帳を再読み込み">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                      <path d="M21 12a9 9 0 1 1-2.64-6.36"/>
+                      <polyline points="21 3 21 9 15 9"/>
+                    </svg>
+                  </button>
+                  <div class="font-book-category-menu-wrap">
+                    <button class="icon-btn font-book-category-menu-btn" type="button" data-font-book-action="category" title="カテゴリ" aria-label="カテゴリ" aria-expanded="false">
+                      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                        <path d="M4 6h16"/>
+                        <path d="M7 12h10"/>
+                        <path d="M10 18h4"/>
+                      </svg>
+                    </button>
+                    <div class="font-book-category-menu" hidden>
+                      <div class="font-book-menu-section">
+                        <label class="font-book-menu-label">サンプル文字</label>
+                        <input class="font-book-sample-input" data-font-book-sample type="text" value="永字八法 あいうえお ABC 123" aria-label="サンプル文字" />
+                      </div>
+                      <div class="font-book-menu-divider"></div>
+                      <div class="font-book-category-items"></div>
+                    </div>
+                  </div>
+                </div>
+                <div id="pdf-font-book-list" class="font-book-list pdf-font-book-list"></div>
+              </div>
             </div>
             <div class="spreads-proofread-area" id="spreads-proofread-area">
               <div id="proofread-panel" class="proofread-panel" hidden>
@@ -493,40 +497,9 @@
               </svg>
             </button>
           </div>
-          <div id="scan-actions-row" class="scan-actions-row">
-            <button id="scan-extract-btn" class="scan-extract-btn" type="button" title="開いている PDF / 画像から 画像スキャン でセリフを抽出" aria-label="画像スキャン" disabled>
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
-                <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
-                <path d="M21 17v2a2 2 0 0 1-2 2h-2"/>
-                <path d="M7 21H5a2 2 0 0 1-2-2v-2"/>
-                <path d="M7 12h10"/>
-              </svg>
-              <span>画像スキャン</span>
-            </button>
-            <button id="scan-place-btn" class="scan-place-btn" type="button" title="検出した吹き出しに TXT のセリフを自動で割り当てて配置" aria-label="自動配置">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/>
-                <path d="m14 7 3 3"/>
-                <path d="M5 6v4"/>
-                <path d="M19 14v4"/>
-                <path d="M10 2v2"/>
-                <path d="M7 8H3"/>
-                <path d="M21 16h-4"/>
-                <path d="M11 3H9"/>
-              </svg>
-              <span>自動配置</span>
-            </button>
-            <div class="scan-adjust-dropdown">
-              <button id="scan-adjust-menu-btn" class="scan-adjust-menu-btn" type="button" title="位置調整を選択" aria-label="位置調整を選択" aria-haspopup="dialog" disabled>
-                <span>位置調整</span>
-              </button>
-            </div>
-          </div>
           <div class="side-panel-tabs" role="tablist">
             <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
             <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">スタイル編集</button>
-            <button id="side-panel-tab-font-book" class="side-panel-tab" data-tab="font-book" type="button" role="tab" aria-selected="false">フォント帳</button>
           </div>
           <section class="panel-section txt-source" id="txt-source" data-section="txt">
             <div id="txt-source-actions" class="txt-source-actions">
@@ -600,7 +573,6 @@
                     <span class="size-unit">pt</span>
                     <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
                   </div>
-                  <button id="bold-toggle-btn" class="bold-toggle-btn" type="button" title="太字（合成太字）" aria-label="太字" aria-pressed="false" disabled>太字</button>
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="leading">
@@ -677,6 +649,10 @@
                   <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
                 </div>
                 <div id="font-weight-selector" class="font-weight-selector" role="group" aria-label="フォントの太さ"></div>
+                <div class="font-style-toggle-row" role="group" aria-label="文字スタイル">
+                  <button id="bold-toggle-btn" class="font-style-toggle-btn bold-toggle-btn" type="button" title="太字（合成太字）" aria-label="太字" aria-pressed="false" disabled>太字</button>
+                  <button id="italic-toggle-btn" class="font-style-toggle-btn italic-toggle-btn" type="button" title="イタリック体（合成斜体）" aria-label="イタリック体" aria-pressed="false" disabled>斜体</button>
+                </div>
                 <div id="font-usage-summary" class="font-usage-summary" hidden></div>
               </label>
               <div class="favorite-style-panel" id="favorite-style-panel">

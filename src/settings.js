@@ -122,7 +122,7 @@ export const DEFAULT_SETTINGS = {
     toolSelect: { key: "v",          modifiers: [],                description: "選択ツール" },
     zoomIn:     { key: "=",          modifiers: ["ctrl"],          description: "ズームイン" },
     zoomOut:    { key: "-",          modifiers: ["ctrl"],          description: "ズームアウト" },
-    zoomReset:  { key: "0",          modifiers: ["ctrl"],          description: "ズーム 100%" },
+    zoomReset:  { key: "0",          modifiers: ["ctrl"],          description: "ズームを画面フィットに戻す" },
     sizeUp:     { key: "]",          modifiers: [],                description: "文字サイズを大きく" },
     sizeDown:   { key: "[",          modifiers: [],                description: "文字サイズを小さく" },
     toggleRulers: { key: "r",        modifiers: ["ctrl"],          description: "定規の表示切替" },

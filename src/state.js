@@ -135,8 +135,8 @@ const $currentFont = createObservable(null, _normFontPs);
 const $strokeColor = createObservable("none", _normStrokeColor);
 const $strokeWidthPx = createObservable(20, _normStrokeWidth);
 const $fillColor = createObservable("default", _normFillColor);
-const $pdfZoom = createObservable(1 / 1.1, (v) => clampZoom(v) ?? undefined);
-const $psdZoom = createObservable(1 / 1.1, (v) => clampZoom(v) ?? undefined);
+const $pdfZoom = createObservable(1, (v) => clampZoom(v) ?? undefined);
+const $psdZoom = createObservable(1, (v) => clampZoom(v) ?? undefined);
 const $pdfRotation = createObservable(0, _norm90);
 const $psdRotation = createObservable(0, _norm90);
 const $pdfPageIndex = createObservable(0, _normPageIndex);
@@ -396,6 +396,37 @@ export function getCharBold(psdPath, layerIdOrTempId, charIndex) {
   return e?.charBolds?.[charIndex];
 }
 
+export function setCharItalicsRange(psdPath, layerIdOrTempId, from, to, valueOrNull) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].charItalics ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (valueOrNull == null) delete cur[i]; else cur[i] = !!valueOrNull;
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], charItalics: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.charItalics ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (valueOrNull == null) delete cur[i]; else cur[i] = !!valueOrNull;
+    }
+    setEdit(psdPath, layerIdOrTempId, { charItalics: cur });
+  }
+}
+
+export function getCharItalic(psdPath, layerIdOrTempId, charIndex) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.charItalics?.[charIndex];
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  return e?.charItalics?.[charIndex];
+}
+
 // ===== 【v1.26.0】文字ごとのルビ（per-char ruby）=====
 // スキーマ: { "<startIndex>": {end, text, type:"mono"|"group", scale:50} }。
 // start index をキー、range 全体を 1 件で保持する（他の per-char API とは異なる形式）。
@@ -468,6 +499,39 @@ export function setCharRubiesRange(psdPath, layerIdOrTempId, from, to, text, typ
     }
     setEdit(psdPath, layerIdOrTempId, { charRubies: cur });
   }
+}
+
+export function removeCharRubyAt(psdPath, layerIdOrTempId, charIndex) {
+  if (!Number.isInteger(charIndex)) return null;
+  const removeFromMap = (map) => {
+    const cur = normalizeCharRubiesMap(map);
+    for (const k of Object.keys(cur)) {
+      const start = Number(k);
+      const entry = cur[k];
+      const end = Number(entry?.end);
+      if (Number.isFinite(start) && Number.isFinite(end) && charIndex >= start && charIndex < end) {
+        delete cur[k];
+        return { map: cur, removed: { start, end, text: entry.text, type: entry.type, scale: entry.scale } };
+      }
+    }
+    return { map: cur, removed: null };
+  };
+
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return null;
+    const { map, removed } = removeFromMap(state.newLayers[idx].charRubies);
+    if (!removed) return null;
+    state.newLayers[idx] = { ...state.newLayers[idx], charRubies: map };
+    pushHistorySnapshot();
+    return removed;
+  }
+
+  const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+  const { map, removed } = removeFromMap(existing.charRubies);
+  if (!removed) return null;
+  setEdit(psdPath, layerIdOrTempId, { charRubies: map });
+  return removed;
 }
 
 export function getCharRubies(psdPath, layerIdOrTempId) {
@@ -876,6 +940,7 @@ export function addNewLayer({
   rotation,
   leadingPct,
   syntheticBold,
+  syntheticItalic,
   sourceTxtRef,
   autoFontSwitched,
   autoFontSwitchBucket,
@@ -902,6 +967,7 @@ export function addNewLayer({
     // 【v1.22.0】合成太字（faux bold）。layer 全体に適用、per-char (charBolds) があれば
     // それが優先される。
     syntheticBold: syntheticBold === true,
+    syntheticItalic: syntheticItalic === true,
     // 行ごとの行間オーバーライド。キーは 0-based の行番号、値は %。
     // 未指定の行は層の leadingPct（autoLeading）を使う。
     lineLeadings: lineLeadings && typeof lineLeadings === "object" ? { ...lineLeadings } : {},
@@ -913,6 +979,7 @@ export function addNewLayer({
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     // 値あり → layer の syntheticBold より優先。値なし → layer 値にフォールバック。
     charBolds: {},
+    charItalics: {},
     // 【v1.26.0 ルビ】文字ごとのルビ。スキーマは他の per-char とは異なり「start index を
     // キーに range 全体を 1 件で保持」: { "<start>": {end, text, type:"mono"|"group", scale:50} }。
     // overlap は禁止（setCharRubiesRange で正規化）。プレビューは <ruby><rt>...</rt></ruby>

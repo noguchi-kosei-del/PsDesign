@@ -1,12 +1,13 @@
 import { buildReferencePageCards, countReferencePages, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { getVersion } from "@tauri-apps/api/app";
 import packageInfo from "../package.json";
-import { capturePdfViewportCenter, mountPdfView, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
+import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
 import {
   cycleLayerSelection,
   deleteSelectedLayers,
   commitActiveInPlaceEdit,
   nudgeSelectedLayers,
+  showRotationHandlesForSelectedLayers,
   refreshAllOverlays,
   snapNextSize,
   getLastInplaceSelection,
@@ -14,13 +15,15 @@ import {
   applyEditModeStyleToRange,
   restoreInplaceSelection,
   applyEditModeRubyToRange,
+  removeEditModeRubyFromRange,
   getExistingLayerEffectiveSizePt,
 } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
-import { capturePsdViewportCenter, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh } from "./spread-view.js";
+import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh } from "./spread-view.js";
 import {
   bindEditorEvents,
   commitBoldToSelections,
+  commitItalicToSelections,
   commitLeadingToSelections,
   commitSelectedLayerField,
   commitSizeToSelections,
@@ -28,6 +31,7 @@ import {
   hasSelection,
   rebuildLayerList,
   syncBoldToggle,
+  syncItalicToggle,
   unifySelectedTextSize,
 } from "./text-editor.js";
 import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
@@ -163,7 +167,9 @@ import {
   getLineLeading,
   setCharSizesRange,
   setCharBoldsRange,
+  setCharItalicsRange,
   setCharRubiesRange,
+  removeCharRubyAt,
   getCharRubyAt,
   rangeHasAnyRuby,
   withHistoryTransient,
@@ -565,6 +571,23 @@ function bindTools() {
       return;
     }
 
+    const target = e.target;
+    const isTextInput =
+      target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+
+    if (
+      !isTextInput &&
+      (e.ctrlKey || e.metaKey) &&
+      !e.altKey &&
+      String(e.key).toLowerCase() === "t"
+    ) {
+      if (showRotationHandlesForSelectedLayers()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
+
     const isArrowKey =
       e.key === "ArrowLeft" || e.key === "ArrowRight" ||
       e.key === "ArrowUp" || e.key === "ArrowDown";
@@ -763,7 +786,7 @@ const SIDE_PANEL_TAB_KEY = "psdesign_side_panel_tab";
 function loadSidePanelTab() {
   try {
     const v = localStorage.getItem(SIDE_PANEL_TAB_KEY);
-    if (v === "txt" || v === "editor" || v === "font-book") return v;
+    if (v === "txt" || v === "editor") return v;
   } catch (_) {}
   return "txt";
 }
@@ -795,6 +818,7 @@ function syncTextEditorTabLock() {
   if (locked) closeLayersDrawer();
 }
 function setSidePanelTab(tab) {
+  if (tab !== "txt" && tab !== "editor") tab = "txt";
   if (tab === "editor" && !hasTextForEditorTab()) tab = "txt";
   for (const btn of document.querySelectorAll(".side-panel-tab")) {
     const isActive = btn.dataset.tab === tab;
@@ -803,9 +827,6 @@ function setSidePanelTab(tab) {
   }
   for (const sec of document.querySelectorAll(".side-panel .panel-section")) {
     sec.hidden = sec.dataset.section !== tab;
-  }
-  if (tab === "font-book") {
-    window.dispatchEvent(new CustomEvent("opus:font-book-visible"));
   }
   try { localStorage.setItem(SIDE_PANEL_TAB_KEY, tab); } catch (_) {}
 }
@@ -1002,6 +1023,7 @@ function bindWheelPageNav() {
 
   const onWheel = (pane) => (e) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
+    if (pane === "pdf" && e.target?.closest?.(".pdf-font-book-stage")) return;
     e.preventDefault();
     const now = Date.now();
     if (now - lastWheelMs < throttleMs) return;
@@ -1087,73 +1109,8 @@ function bindResyncModal() {
 }
 
 function bindViewModeControls() {
-  const syncOnBtn = document.getElementById("sync-on-btn");
-  const syncOffBtn = document.getElementById("sync-off-btn");
-  const referenceHiddenBtn = document.getElementById("reference-hidden-btn");
-  if (!syncOnBtn || !syncOffBtn) return;
-
-  if (referenceHiddenBtn) {
-    const syncReferenceHiddenUi = () => {
-      const hiddenPages = getPdfExcludedReferencePages();
-      const hasHidden = hiddenPages.size > 0;
-      const hasReferences = getPdfPaths().length > 0 && !!getPdfDoc();
-      referenceHiddenBtn.disabled = !hasReferences;
-      referenceHiddenBtn.setAttribute("aria-pressed", hasHidden ? "true" : "false");
-    };
-    syncReferenceHiddenUi();
-    referenceHiddenBtn.addEventListener("click", async () => {
-      const paths = getPdfPaths();
-      if (!paths.length) return;
-      const current = getPdfVirtualPageAt(getPdfPageIndex());
-      const next = await openReferenceHiddenPicker(
-        paths,
-        getPdfExcludedReferencePages(),
-      );
-      if (!next) return;
-      const hiddenPages = next.hiddenPages instanceof Set ? next.hiddenPages : new Set(next.hiddenPages || []);
-      setPdfExcludedReferencePages(hiddenPages);
-      setPdfSkipFirstBlank(false);
-      await loadReferenceFiles(paths, {
-        excludedPages: hiddenPages,
-        skipFirstBlankPage: false,
-      });
-      if (current) {
-        setPdfPageIndex(getPdfVirtualIndexForPhysicalPage(current.pageNum));
-      }
-      syncReferenceHiddenUi();
-    });
-    onPdfChange(syncReferenceHiddenUi);
-  }
-
-  syncOnBtn.addEventListener("click", async () => {
-    if (getParallelSyncMode()) return;
-    const choice = await openResyncModal();
-    if (choice === "cancel" || choice == null) return;
-    if (choice === "match") {
-      const active = getActivePane();
-      if (active === "pdf") {
-        setCurrentPageIndex(getPdfPageIndex());
-      } else {
-        setPdfPageIndex(getCurrentPageIndex());
-      }
-    }
-    setParallelSyncMode(true);
-  });
-  syncOffBtn.addEventListener("click", () => {
-    if (!getParallelSyncMode()) return;
-    setParallelSyncMode(false);
-    setActivePane("psd");
-  });
-
-  const syncModeUi = () => {
-    const sync = getParallelSyncMode();
-    syncOnBtn.classList.toggle("active", sync);
-    syncOffBtn.classList.toggle("active", !sync);
-    syncOnBtn.setAttribute("aria-pressed", sync ? "true" : "false");
-    syncOffBtn.setAttribute("aria-pressed", !sync ? "true" : "false");
-  };
-  onParallelSyncModeChange(syncModeUi);
-  syncModeUi();
+  setParallelSyncMode(true);
+  setActivePane("psd");
 }
 
 const VIEW_MODE_LS_KEY = "psdesign_parallel_view_mode";
@@ -1446,6 +1403,29 @@ function bindBoldToggle() {
   });
 }
 
+function bindItalicToggle() {
+  const btn = document.getElementById("italic-toggle-btn");
+  if (!btn) return;
+  btn.addEventListener("mousedown", (e) => e.preventDefault());
+  btn.addEventListener("click", () => {
+    if (btn.disabled) return;
+    const newValue = btn.getAttribute("aria-pressed") !== "true";
+    const sel = getLastInplaceSelection();
+    if (sel && sel.end > sel.start) {
+      const targetId = sel.tempId ?? sel.layerId;
+      setCharItalicsRange(sel.psdPath, targetId, sel.start, sel.end, newValue);
+      applyEditModeStyleToRange(sel.start, sel.end, { fontStyle: newValue ? "italic" : "normal" });
+      refreshAllOverlays();
+      rebuildLayerList();
+      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+      return;
+    }
+    if (commitItalicToSelections(newValue)) {
+      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+    }
+  });
+}
+
 function bindRubyTool() {
   const panelEl = document.querySelector(".editor-tab-panel[data-tab-panel='ruby']");
   const parentEl = document.getElementById("ruby-parent-display");
@@ -1605,6 +1585,8 @@ function bindRubyTool() {
         removeBtn.disabled = false;
       } else {
         inputEl.value = "";
+        scaleEl.value = "50";
+        setMode("auto");
         removeBtn.disabled = !rangeHasAnyRuby(sel.psdPath, targetId, sel.start, sel.end);
       }
     } else {
@@ -1613,6 +1595,8 @@ function bindRubyTool() {
       applyBtn.disabled = true;
       removeBtn.disabled = true;
       inputEl.value = "";
+      scaleEl.value = "50";
+      setMode("auto");
     }
     placeRubyPanelNearText();
   };
@@ -1669,8 +1653,49 @@ function bindRubyTool() {
     const sel = currentRubyTarget();
     if (!sel || sel.end <= sel.start) return;
     const targetId = sel.tempId ?? sel.layerId;
+    const contents = sel.contents ?? "";
+    const lineIndexAt = (index) => {
+      const head = contents.slice(0, Math.max(0, index));
+      return head.split(/\r\n|\r|\n/).length - 1;
+    };
+    const lineRangeAt = (lineIndex) => {
+      let start = 0;
+      let current = 0;
+      const re = /\r\n|\r|\n/g;
+      let m;
+      while ((m = re.exec(contents))) {
+        if (current === lineIndex) return { start, end: m.index };
+        current += 1;
+        start = m.index + m[0].length;
+      }
+      return current === lineIndex ? { start, end: contents.length } : null;
+    };
+    const clearRubyLineLeadingIfEmpty = (from, to) => {
+      const startLine = lineIndexAt(from);
+      const endLine = lineIndexAt(Math.max(from, to - 1));
+      for (let li = startLine; li <= endLine; li++) {
+        const range = lineRangeAt(li);
+        if (!range) continue;
+        if (!rangeHasAnyRuby(sel.psdPath, targetId, range.start, range.end)) {
+          setLineLeading(sel.psdPath, targetId, li, null);
+        }
+      }
+    };
+    const rubyAtStart = getCharRubyAt(sel.psdPath, targetId, sel.start);
+    const rubyAtEnd = getCharRubyAt(sel.psdPath, targetId, Math.max(sel.start, sel.end - 1));
+    const rubyToRemove = rubyAtStart ?? rubyAtEnd ?? null;
+    const removeStart = rubyToRemove?.start ?? sel.start;
+    const removeEnd = rubyToRemove?.end ?? sel.end;
+    const removedRubies = !sel.objectSelection ? removeEditModeRubyFromRange(sel.start, sel.end) : [];
     withHistoryTransient(() => {
-      setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, "", "group", 50);
+      removeCharRubyAt(sel.psdPath, targetId, removeStart);
+      setCharRubiesRange(sel.psdPath, targetId, removeStart, removeEnd, "", "group", 50);
+      clearRubyLineLeadingIfEmpty(removeStart, removeEnd);
+      for (const r of removedRubies) {
+        removeCharRubyAt(sel.psdPath, targetId, r.start);
+        setCharRubiesRange(sel.psdPath, targetId, r.start, r.end, "", "group", 50);
+        clearRubyLineLeadingIfEmpty(r.start, r.end);
+      }
     });
     refreshAllOverlays();
     rebuildLayerList();
@@ -1907,8 +1932,8 @@ function resetPaneZoom(pane) {
 }
 function displayZoomPercent(pane) {
   const z = pane === "pdf" ? getPdfZoom() : getPsdZoom();
-  const fit = pane === "pdf" ? PDF_FIT_ZOOM : PSD_FIT_ZOOM;
-  return Math.round((z / fit) * 100);
+  const base = pane === "pdf" ? PDF_FIT_BASE_SCALE : PSD_FIT_BASE_SCALE;
+  return Math.round(z * base * 100);
 }
 
 function bindRulerToggle() {
@@ -2714,21 +2739,29 @@ async function startHomeTypesetFlow() {
     await loadReferenceFiles(picked.referencePaths, {
       skipFirstBlankPage: false,
       excludedPages: picked.hiddenReferencePages,
+      keepProgressOpen: true,
     });
-    await loadPsdFilesByPaths(picked.psdPaths, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
-    if (!getPages().length) return;
+    await loadPsdFilesByPaths(picked.psdPaths, { icon: PLACE_ICON_SVG, label: "自動配置中…", keepProgressOpen: true });
+    if (!getPages().length) {
+      await hideProgress();
+      return;
+    }
     if (picked.txtPath) await loadTxtFromPath(picked.txtPath);
     const placed = await runAutoPlace({
       allowExtractText: true,
       preserveTxtDuringExtract: !!picked.txtPath,
       positionAdjustMode,
     });
-    if (!placed) return;
+    if (!placed) {
+      await hideProgress();
+      return;
+    }
     if (placed?.positionAdjusted !== true) {
       await runSelectedPositionAdjust(positionAdjustMode, { automatic: true });
     }
   } catch (e) {
     console.error(e);
+    await hideProgress();
     await notifyDialog({
       title: "写植を開始できません",
       message: String(e?.message ?? e ?? "不明なエラー"),
@@ -2804,6 +2837,7 @@ function init() {
   bindSizeTool();
   bindLeadingTool();
   bindBoldToggle();
+  bindItalicToggle();
   bindRubyTool();
   bindZoomTool();
   bindPageChange();
@@ -2887,7 +2921,7 @@ function bindGlobalBlurOnOutsideClick() {
     const target = e.target;
     if (!target) return;
     if (target === active || active.contains(target)) return;
-    const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .layer-box.editing, .editor");
+    const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .layer-box.editing, .editor, .ruby-panel-floating");
     if (near) return;
     active.blur();
   }, true);

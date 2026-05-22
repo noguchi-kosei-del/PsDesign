@@ -52,7 +52,7 @@ import {
   layerRectForNew,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
-import { confirmDialog, promptDialog } from "./ui-feedback.js";
+import { confirmDialog, toast } from "./ui-feedback.js";
 
 const listEl = () => document.getElementById("layer-list");
 const editorEl = () => document.getElementById("editor");
@@ -153,8 +153,9 @@ function updateFontUsageSummary(fonts, label = "使用フォント") {
     return;
   }
   el.hidden = false;
-  el.innerHTML = `<span class="font-usage-label">${escapeHtml(label)}:</span>`
-    + values.map((ps) => `<span class="font-usage-chip" title="${escapeHtml(ps)}">${escapeHtml(displayFontName(ps))}</span>`).join("");
+  el.innerHTML = values
+    .map((ps) => `<span class="font-usage-chip" title="${escapeHtml(ps)}">${escapeHtml(displayFontName(ps))}</span>`)
+    .join("");
 }
 
 // widthPx === null は混在。input を空にして placeholder で示す。
@@ -431,6 +432,7 @@ function populateEditor() {
     syncFillToggle(getFillColor());
     // 【v1.22.0】B トグルは選択 0 件で disabled。
     syncBoldToggle(undefined);
+    syncItalicToggle(undefined);
     updateFontUsageSummary([]);
     return;
   }
@@ -484,6 +486,8 @@ function populateEditor() {
   // 混在 (null) のときはニュートラル表示（aria-pressed="false"）。
   const commonBold = computeCommonBold(selections);
   syncBoldToggle(commonBold);
+  const commonItalic = computeCommonItalic(selections);
+  syncItalicToggle(commonItalic);
 }
 
 // 【v1.22.0】B トグルボタンの aria-pressed と disabled を更新。
@@ -500,6 +504,19 @@ function syncBoldToggle(value) {
   }
 }
 export { syncBoldToggle };
+
+function syncItalicToggle(value) {
+  const btn = document.getElementById("italic-toggle-btn");
+  if (!btn) return;
+  if (value === undefined) {
+    btn.disabled = true;
+    btn.setAttribute("aria-pressed", "false");
+  } else {
+    btn.disabled = false;
+    btn.setAttribute("aria-pressed", value === true ? "true" : "false");
+  }
+}
+export { syncItalicToggle };
 
 // ========== フォント検索コンボボックス ==========
 // editor-tabs-section の上に配置されたインストール済み全フォント検索 UI。
@@ -791,13 +808,13 @@ function resolveFontFromInput(typed) {
   return null;
 }
 
-function rebuildFontOptions(currentValue) {
+function rebuildFontOptions(currentValue, options = {}) {
   const input = fontEl();
   if (!input) return;
   // ユーザーがフォント名を入力中（input が active）なら、入力中の文字列を
   // populateEditor / rebuildLayerList などの再描画で上書きしないようにする。
   // dataset.ps だけは更新して、確定時の resolveFontFromInput が壊れないようにする。
-  const isTypingHere = document.activeElement === input;
+  const isTypingHere = !options.force && document.activeElement === input;
   const fonts = getFonts();
   let displayText = "";
   let ps = "";
@@ -816,6 +833,21 @@ function rebuildFontOptions(currentValue) {
   if (!isTypingHere) input.value = displayText;
   input.dataset.ps = ps;
   rebuildWeightSelector();
+}
+
+function syncFontInputFromRangeFonts(fonts) {
+  const input = fontEl();
+  if (!input) return;
+  const values = (fonts ?? []).filter(Boolean);
+  if (values.length === 1) {
+    rebuildFontOptions(values[0], { force: true });
+    return;
+  }
+  if (values.length > 1) {
+    input.value = values.map((ps) => displayFontName(ps)).join(" / ");
+    input.dataset.ps = "";
+    rebuildWeightSelector();
+  }
 }
 
 function syncFontInputFromState() {
@@ -877,28 +909,16 @@ function writeFavoriteStyles(styles) {
 
 function currentStyleSnapshot() {
   const fontPs = fontEl()?.dataset.ps || getCurrentFont() || "";
-  const bold = computeCommonBold(getSelectedLayers());
   return {
     id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: "",
     fontPostScriptName: fontPs,
-    sizePt: getTextSize(),
-    leadingPct: getLeadingPct(),
-    strokeColor: getStrokeColor(),
-    strokeWidthPx: getStrokeWidthPx(),
-    fillColor: getFillColor(),
-    syntheticBold: bold === true,
     createdAt: Date.now(),
   };
 }
 
 function favoriteStyleDefaultName(style) {
-  const fontName = displayFontName(style.fontPostScriptName) || "Style";
-  const size = Number.isFinite(Number(style.sizePt)) ? `${Math.round(Number(style.sizePt) * 10) / 10}pt` : "";
-  const stroke = style.strokeColor && style.strokeColor !== "none"
-    ? `${style.strokeColor === "white" ? "白" : style.strokeColor === "black" ? "黒" : style.strokeColor}フチ`
-    : "フチなし";
-  return [fontName, size, stroke].filter(Boolean).join(" / ");
+  return displayFontName(style.fontPostScriptName) || "Font";
 }
 
 function normalizeFavoriteStyle(style) {
@@ -906,31 +926,12 @@ function normalizeFavoriteStyle(style) {
     id: style.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name: String(style.name || "").trim() || favoriteStyleDefaultName(style),
     fontPostScriptName: style.fontPostScriptName || "",
-    sizePt: Number(style.sizePt),
-    leadingPct: Number(style.leadingPct),
-    strokeColor: style.strokeColor || "none",
-    strokeWidthPx: Number(style.strokeWidthPx),
-    fillColor: style.fillColor || "default",
-    syntheticBold: style.syntheticBold === true,
     createdAt: Number(style.createdAt) || Date.now(),
   };
 }
 
 function styleSummary(style) {
-  const parts = [];
-  if (Number.isFinite(style.sizePt)) parts.push(`${Math.round(style.sizePt * 10) / 10}pt`);
-  if (Number.isFinite(style.leadingPct)) parts.push(`${Math.round(style.leadingPct)}%`);
-  if (style.strokeColor && style.strokeColor !== "none") {
-    const color = style.strokeColor === "white" ? "白" : style.strokeColor === "black" ? "黒" : style.strokeColor;
-    parts.push(`${color} ${Number.isFinite(style.strokeWidthPx) ? style.strokeWidthPx : 0}px`);
-  } else {
-    parts.push("フチなし");
-  }
-  if (style.fillColor && style.fillColor !== "default") {
-    parts.push(style.fillColor === "white" ? "白文字" : style.fillColor === "black" ? "黒文字" : style.fillColor);
-  }
-  if (style.syntheticBold) parts.push("太字");
-  return parts.join(" · ");
+  return displayFontName(style.fontPostScriptName) || style.fontPostScriptName || "";
 }
 
 function renderFavoriteStyles() {
@@ -993,19 +994,13 @@ function renderFavoriteStyles() {
   }
 }
 
-async function saveCurrentFavoriteStyle() {
+function saveCurrentFavoriteStyle() {
   const style = normalizeFavoriteStyle(currentStyleSnapshot());
-  const name = await promptDialog({
-    title: "お気に入りに保存",
-    message: "保存するスタイル名を入力してください。",
-    defaultValue: style.name,
-    placeholder: "スタイル名",
-    confirmLabel: "保存",
-    cancelLabel: "キャンセル",
-  });
-  if (name === null) return;
-  style.name = String(name).trim() || style.name;
   const styles = readFavoriteStyles().map(normalizeFavoriteStyle);
+  if (style.fontPostScriptName && styles.some((s) => s.fontPostScriptName === style.fontPostScriptName)) {
+    toast("このフォントはすでにお気に入りに登録されています");
+    return;
+  }
   styles.unshift(style);
   writeFavoriteStyles(styles.slice(0, 30));
   renderFavoriteStyles();
@@ -1018,24 +1013,6 @@ function applyFavoriteStyle(style) {
       ?? { postScriptName: s.fontPostScriptName, name: displayFontName(s.fontPostScriptName) };
     commitFont(font);
   }
-  if (Number.isFinite(s.sizePt)) {
-    setTextSize(s.sizePt);
-    commitSizeToSelections(s.sizePt);
-  }
-  if (Number.isFinite(s.leadingPct)) {
-    setLeadingPct(s.leadingPct);
-    commitLeadingToSelections(s.leadingPct);
-  }
-  setStrokeColor(s.strokeColor);
-  setStrokeWidthPx(Number.isFinite(s.strokeWidthPx) ? s.strokeWidthPx : 20);
-  syncStrokeToggle(s.strokeColor);
-  syncStrokeWidthInput(getStrokeWidthPx());
-  commitStrokeFields(s.strokeColor, getStrokeWidthPx());
-  setFillColor(s.fillColor);
-  syncFillToggle(s.fillColor);
-  commitFillField(s.fillColor);
-  commitBoldToSelections(s.syntheticBold === true);
-  syncBoldToggle(s.syntheticBold === true);
   renderFavoriteStyles();
 }
 
@@ -1043,7 +1020,7 @@ function bindFavoriteStyles() {
   renderFavoriteStyles();
   const saveBtn = favoriteStyleSaveBtnEl();
   if (saveBtn) saveBtn.addEventListener("click", () => {
-    void saveCurrentFavoriteStyle();
+    saveCurrentFavoriteStyle();
   });
 }
 
@@ -1165,18 +1142,13 @@ export function bindEditorEvents() {
       const fonts = ref ? collectFontsForRange(ref, sel.start, sel.end) : [];
       updateFontUsageSummary(fonts, "選択範囲");
       if (fonts.length === 1) {
-        rebuildFontOptions(fonts[0]);
+        syncFontInputFromRangeFonts(fonts);
       } else if (fonts.length > 1) {
-        const inputEl = fontEl();
-        if (inputEl && document.activeElement !== inputEl) {
-          inputEl.value = "複数フォント";
-          inputEl.dataset.ps = "";
-        }
-        rebuildWeightSelector();
+        syncFontInputFromRangeFonts(fonts);
       } else {
         const ps = getCharFont(sel.psdPath, targetId, sel.start);
         // override がある → そのフォントを表示
-        rebuildFontOptions(ps);
+        rebuildFontOptions(ps, { force: true });
       }
     });
   }
@@ -1504,6 +1476,42 @@ export function commitBoldToSelections(value) {
   return !!mutated;
 }
 
+export function commitItalicToSelections(value) {
+  const v = !!value;
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  const mutated = withHistoryTransient(() => {
+    let any = false;
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      let cur, hadCharItalics;
+      if (ref.kind === "existing") {
+        const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+        cur = edit.syntheticItalic === true;
+        hadCharItalics = edit.charItalics && Object.keys(edit.charItalics).length > 0;
+      } else {
+        cur = ref.newLayer.syntheticItalic === true;
+        hadCharItalics = ref.newLayer.charItalics && Object.keys(ref.newLayer.charItalics).length > 0;
+      }
+      if (cur === v && !hadCharItalics) continue;
+      const changes = { syntheticItalic: v, charItalics: {} };
+      if (ref.kind === "existing") {
+        setEdit(ref.page.path, ref.layer.id, changes);
+      } else {
+        updateNewLayer(ref.newLayer.tempId, changes);
+      }
+      any = true;
+    }
+    return any || false;
+  });
+  if (mutated) {
+    rebuildLayerList();
+    refreshAllOverlays();
+  }
+  return !!mutated;
+}
+
 // 【v1.22.0】複数選択レイヤーの bold 共通値を計算（混在は null）。
 // 既存 computeCommonStroke / computeCommonFill と同型。
 function computeCommonBold(selections) {
@@ -1525,6 +1533,26 @@ function computeCommonBold(selections) {
 }
 
 export { computeCommonBold };
+
+function computeCommonItalic(selections) {
+  let common;
+  for (const sel of selections) {
+    const ref = resolveLayerRef(sel);
+    if (!ref) continue;
+    let v;
+    if (ref.kind === "existing") {
+      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+      v = edit.syntheticItalic === true;
+    } else {
+      v = ref.newLayer.syntheticItalic === true;
+    }
+    if (common === undefined) common = v;
+    else if (common !== v) return null;
+  }
+  return common ?? null;
+}
+
+export { computeCommonItalic };
 
 // 文字色を選択中の全レイヤーに書き込む。
 function commitFillField(color) {
