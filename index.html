@@ -4,6 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>OPUS</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&family=Noto+Serif+JP:wght@600&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
@@ -111,7 +114,8 @@
       <section id="home-screen" class="home-screen" aria-label="ホーム">
         <div class="home-screen-inner">
           <h2 class="home-title">
-            <img class="home-title-logo" src="/opus_logo.png" alt="OPUS" draggable="false" />
+            <img class="home-title-icon" src="/PsDesign_icon.png" alt="" draggable="false" />
+            <span class="home-title-word">OPUS</span>
           </h2>
           <span id="home-version" class="home-version">Ver -</span>
           <div class="home-start-grid">
@@ -127,7 +131,7 @@
               <div class="home-card-rule" aria-hidden="true"></div>
               <p>画像からテキストを抽出</p>
               <button id="home-transcribe-start-btn" class="home-start-btn" type="button">
-                <span>スタート</span>
+                <span>START</span>
                 <span class="home-start-arrow" aria-hidden="true">▶</span>
               </button>
             </article>
@@ -143,7 +147,7 @@
               <div class="home-card-rule" aria-hidden="true"></div>
               <p>自動配置による写植</p>
               <button id="home-typeset-start-btn" class="home-start-btn" type="button">
-                <span>スタート</span>
+                <span>START</span>
                 <span class="home-start-arrow" aria-hidden="true">▶</span>
               </button>
             </article>
@@ -848,6 +852,7 @@
           <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
           <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">方向キー</button>
           <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">写植設定</button>
+          <button type="button" class="settings-tab" data-tab="themeColor" role="tab" aria-selected="false">テーマカラー</button>
         </div>
         <div class="settings-tab-panel active" id="settings-tab-shortcuts" role="tabpanel">
           <div class="settings-section-header">
@@ -992,6 +997,53 @@
               <label class="settings-default-label" for="default-cloud-shape-font-postscript">中丸ゴシック PostScript 名 (空でフォント差し替えなし)</label>
               <input id="default-cloud-shape-font-postscript" class="settings-default-input" type="text" list="default-font-list" placeholder="DFGMaruGothic-Md" />
             </div>
+          </div>
+        </div>
+        <div class="settings-tab-panel" id="settings-tab-themeColor" role="tabpanel">
+          <div class="settings-section-header">
+            <span>テーマカラー</span>
+          </div>
+          <p class="settings-section-desc">ホーム画面のボカシ色と、ボタン・選択中表示の色を切り替えます。</p>
+          <div class="settings-radio-list">
+            <label class="settings-radio-option" data-value="violetBlue">
+              <input type="radio" name="theme-color" value="violetBlue" />
+              <span class="settings-radio-body">
+                <span class="settings-radio-title">バイオレットブルー</span>
+                <span class="settings-radio-desc">
+                  <span class="settings-theme-swatches" aria-hidden="true">
+                    <span class="settings-theme-swatch" style="background:#182068"></span>
+                    <span class="settings-theme-swatch" style="background:#6076E5"></span>
+                  </span>
+                  ホーム #182068 / 選択 #6076E5
+                </span>
+              </span>
+            </label>
+            <label class="settings-radio-option" data-value="amber">
+              <input type="radio" name="theme-color" value="amber" />
+              <span class="settings-radio-body">
+                <span class="settings-radio-title">アンバー</span>
+                <span class="settings-radio-desc">
+                  <span class="settings-theme-swatches" aria-hidden="true">
+                    <span class="settings-theme-swatch" style="background:#BE8B43"></span>
+                    <span class="settings-theme-swatch" style="background:#D4A55F"></span>
+                  </span>
+                  ホーム #BE8B43 / 選択 #D4A55F
+                </span>
+              </span>
+            </label>
+            <label class="settings-radio-option" data-value="classicBlue">
+              <input type="radio" name="theme-color" value="classicBlue" />
+              <span class="settings-radio-body">
+                <span class="settings-radio-title">クラシックブルー</span>
+                <span class="settings-radio-desc">
+                  <span class="settings-theme-swatches" aria-hidden="true">
+                    <span class="settings-theme-swatch" style="background:#005A9E"></span>
+                    <span class="settings-theme-swatch" style="background:#0078D4"></span>
+                  </span>
+                  ホーム #005A9E / 選択 #0078D4
+                </span>
+              </span>
+            </label>
           </div>
         </div>
       </div>

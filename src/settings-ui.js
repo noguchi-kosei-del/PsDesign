@@ -12,6 +12,7 @@ import {
   getArrowKeyMoveDistance,
   getDefaults,
   getPageDirectionInverted,
+  getThemeColor,
   normalizeKeyName,
   onSettingsChange,
   resetDefaults,
@@ -19,6 +20,7 @@ import {
   setDefault,
   setArrowKeyMoveDistance,
   setPageDirectionInverted,
+  setThemeColor,
   setShortcut,
 } from "./settings.js";
 import { applyToolDefaults, getFonts } from "./state.js";
@@ -38,6 +40,7 @@ function openModal() {
   // 開くたびに最新値で再描画（外部から setPageDirectionInverted が呼ばれた等を反映）。
   renderShortcutList();
   syncPageDirectionUi();
+  syncThemeColorUi();
   syncDefaultsUi();
   // デフォルトはショートカットタブ。
   switchTab("shortcuts");
@@ -101,6 +104,17 @@ function syncPageDirectionUi() {
   }
   const moveInput = $("arrow-key-move-distance");
   if (moveInput) moveInput.value = String(getArrowKeyMoveDistance());
+}
+
+function syncThemeColorUi() {
+  const current = getThemeColor();
+  const opts = document.querySelectorAll('input[name="theme-color"]');
+  for (const inp of opts) {
+    const isOn = inp.value === current;
+    inp.checked = isOn;
+    const wrap = inp.closest(".settings-radio-option");
+    if (wrap) wrap.classList.toggle("selected", isOn);
+  }
 }
 
 // 「写植設定」タブのフィールドを schema として宣言。HTML 要素 ID / settings.js のキー /
@@ -348,6 +362,16 @@ export function initSettingsUi() {
     });
   }
 
+  // テーマカラー。
+  const themeOpts = document.querySelectorAll('input[name="theme-color"]');
+  for (const inp of themeOpts) {
+    inp.addEventListener("change", () => {
+      if (!inp.checked) return;
+      setThemeColor(inp.value);
+      syncThemeColorUi();
+    });
+  }
+
   // キーキャプチャモーダルのボタン群。
   const arrowMoveInput = $("arrow-key-move-distance");
   if (arrowMoveInput) {
@@ -385,6 +409,7 @@ export function initSettingsUi() {
     if (modalOpen) {
       renderShortcutList();
       syncPageDirectionUi();
+      syncThemeColorUi();
       syncDefaultsUi();
     }
   });

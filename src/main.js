@@ -77,6 +77,7 @@ import {
 } from "./services/psd-load.js";
 import {
   findShortcutMatch,
+  applyThemeColor,
   getArrowKeyMoveDistance,
   getDefault,
   getPageDirectionInverted,
@@ -2895,6 +2896,7 @@ async function closeStartupSplash() {
 }
 
 function init() {
+  applyThemeColor();
   void syncHomeVersionLabel();
   document.getElementById("open-folder-btn")?.addEventListener("click", handleOpenFiles);
   document.getElementById("open-pdf-btn")?.addEventListener("click", handleOpenPdf);

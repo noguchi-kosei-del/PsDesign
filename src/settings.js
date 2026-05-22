@@ -9,12 +9,40 @@ const STORAGE_KEY = "psdesign_settings";
 const LEGACY_SYMBOL_FONT_PS = "KozGoPr6N-Regular";
 const DEFAULT_SYMBOL_FONT_PS = "KozGoPro-Heavy";
 
+export const THEME_COLOR_OPTIONS = {
+  violetBlue: {
+    label: "バイオレットブルー",
+    homeBlur: "#182068",
+    homeBlurRgb: "24, 32, 104",
+    accent: "#6076e5",
+    accentRgb: "96, 118, 229",
+    accentHover: "#7488f0",
+  },
+  amber: {
+    label: "アンバー",
+    homeBlur: "#BE8B43",
+    homeBlurRgb: "190, 139, 67",
+    accent: "#D4A55F",
+    accentRgb: "212, 165, 95",
+    accentHover: "#e1b873",
+  },
+  classicBlue: {
+    label: "クラシックブルー",
+    homeBlur: "#005A9E",
+    homeBlurRgb: "0, 90, 158",
+    accent: "#0078D4",
+    accentRgb: "0, 120, 212",
+    accentHover: "#1088e0",
+  },
+};
+
 // デフォルト設定。バージョン番号を持ち、将来の項目追加時に migrate() で穴埋め。
 export const DEFAULT_SETTINGS = {
   // v8: 中丸ゴシック自動切替の閾値を 0.5 (50%) に設定 + UI 側で 10% 刻みの
   //     6 段階バケット (50-59 / 60-69 / 70-79 / 80-89 / 90-99 / 100) で色分け。
   //     旧 v7 以前 (デフォルト閾値 0.9 だった想定) の保存値を破棄して新デフォルト 0.5 を強制反映。
-  version: 16,
+  version: 17,
+  themeColor: "violetBlue",
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
   pageDirectionInverted: false,
   arrowKeyMoveDistance: 6,
@@ -155,6 +183,9 @@ function migrate(old) {
   const sourceVersion = Number.isFinite(old.version) ? old.version : 0;
   if (typeof old.pageDirectionInverted === "boolean") {
     out.pageDirectionInverted = old.pageDirectionInverted;
+  }
+  if (typeof old.themeColor === "string" && THEME_COLOR_OPTIONS[old.themeColor]) {
+    out.themeColor = old.themeColor;
   }
   if (typeof old.arrowKeyMoveDistance === "number" && Number.isFinite(old.arrowKeyMoveDistance)) {
     const migrated = Math.max(0.1, Math.min(100, Math.round(old.arrowKeyMoveDistance * 100) / 100));
@@ -336,6 +367,40 @@ export function getArrowKeyMoveDistance() {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_SETTINGS.arrowKeyMoveDistance;
 }
 
+function homeHeroBg(rgb) {
+  return `radial-gradient(ellipse 76% 125% at center -50%, rgba(${rgb}, 0.78) 0%, rgba(${rgb}, 0.62) 27%, rgba(${rgb}, 0.40) 56%, rgba(17, 17, 17, 0) 84%), linear-gradient(180deg, #151515 0%, #101010 100%)`;
+}
+
+export function getThemeColor() {
+  if (!settings) load();
+  return THEME_COLOR_OPTIONS[settings.themeColor] ? settings.themeColor : DEFAULT_SETTINGS.themeColor;
+}
+
+export function applyThemeColor(themeId = null) {
+  const id = themeId || getThemeColor();
+  const theme = THEME_COLOR_OPTIONS[id] || THEME_COLOR_OPTIONS[DEFAULT_SETTINGS.themeColor];
+  if (typeof document === "undefined" || !document.documentElement) return;
+  const root = document.documentElement;
+  root.style.setProperty("--accent", theme.accent);
+  root.style.setProperty("--accent-hover", theme.accentHover);
+  root.style.setProperty("--accent-rgb", theme.accentRgb);
+  root.style.setProperty("--home-blur-rgb", theme.homeBlurRgb);
+  root.style.setProperty("--home-hero-bg", homeHeroBg(theme.homeBlurRgb));
+  root.style.setProperty("--home-button-hover", `rgba(${theme.accentRgb}, 0.10)`);
+}
+
+export function setThemeColor(themeId) {
+  if (!settings) load();
+  if (!THEME_COLOR_OPTIONS[themeId]) return;
+  if (settings.themeColor === themeId) {
+    applyThemeColor(themeId);
+    return;
+  }
+  settings.themeColor = themeId;
+  applyThemeColor(themeId);
+  save();
+}
+
 export function setArrowKeyMoveDistance(v) {
   if (!settings) load();
   const n = Number(v);
@@ -383,6 +448,7 @@ export function resetDefaults() {
 
 export function resetAll() {
   settings = deepClone(DEFAULT_SETTINGS);
+  applyThemeColor(settings.themeColor);
   save();
 }
 

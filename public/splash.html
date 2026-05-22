@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <link rel="preload" href="/PsDesign_icon.png" as="image" />
-  <link rel="preload" href="/opus_logo.png" as="image" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&display=swap" rel="stylesheet" />
   <style>
     * { box-sizing: border-box; }
     html, body {
@@ -49,12 +51,17 @@
       margin: 0;
       line-height: 1;
     }
-    .brand-logo {
+    .home-title-word {
       display: block;
-      width: 172px;
-      max-width: 100%;
-      height: auto;
+      padding-left: 0.64em;
       opacity: 0;
+      color: #ffffff;
+      font-family: "Cinzel", "Times New Roman", serif;
+      font-size: 58px;
+      font-weight: 600;
+      letter-spacing: 0.64em;
+      line-height: 1;
+      text-shadow: 0 12px 24px rgba(0, 0, 0, 0.52);
       transform: translateY(8px) scale(0.985);
       transition:
         opacity 1.6s 0.08s ease,
@@ -67,13 +74,13 @@
       display: none;
     }
     .splash.is-ready .brand-icon,
-    .splash.is-ready .brand-logo {
+    .splash.is-ready .home-title-word {
       opacity: 1;
       transform: translateY(0) scale(1);
     }
     @media (prefers-reduced-motion: reduce) {
       .brand-icon,
-      .brand-logo {
+      .home-title-word {
         transition: none;
         opacity: 1;
         transform: none;
@@ -86,7 +93,7 @@
     <div class="brand-pane" data-tauri-drag-region>
       <img class="brand-icon" src="/PsDesign_icon.png" alt="OPUS" draggable="false" />
       <h1 class="brand-name" data-tauri-drag-region>
-        <img class="brand-logo" src="/opus_logo.png" alt="OPUS" draggable="false" />
+        <span class="home-title-word">OPUS</span>
       </h1>
     </div>
   </div>
