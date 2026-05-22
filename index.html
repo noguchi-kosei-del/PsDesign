@@ -493,8 +493,8 @@
               </svg>
             </button>
           </div>
-          <div id="ai-actions-row" class="ai-actions-row">
-            <button id="ai-ocr-btn" class="ai-ocr-btn" type="button" title="開いている PDF / 画像から AI でセリフを抽出" aria-label="画像スキャン" disabled>
+          <div id="scan-actions-row" class="scan-actions-row">
+            <button id="scan-extract-btn" class="scan-extract-btn" type="button" title="開いている PDF / 画像から 画像スキャン でセリフを抽出" aria-label="画像スキャン" disabled>
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="M3 7V5a2 2 0 0 1 2-2h2"/>
                 <path d="M17 3h2a2 2 0 0 1 2 2v2"/>
@@ -504,7 +504,7 @@
               </svg>
               <span>画像スキャン</span>
             </button>
-            <button id="ai-place-btn" class="ai-place-btn" type="button" title="検出した吹き出しに TXT のセリフを自動で割り当てて配置" aria-label="自動配置">
+            <button id="scan-place-btn" class="scan-place-btn" type="button" title="検出した吹き出しに TXT のセリフを自動で割り当てて配置" aria-label="自動配置">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                 <path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/>
                 <path d="m14 7 3 3"/>
@@ -517,8 +517,8 @@
               </svg>
               <span>自動配置</span>
             </button>
-            <div class="ai-adjust-dropdown">
-              <button id="ai-adjust-menu-btn" class="ai-adjust-menu-btn" type="button" title="位置調整を選択" aria-label="位置調整を選択" aria-haspopup="dialog" disabled>
+            <div class="scan-adjust-dropdown">
+              <button id="scan-adjust-menu-btn" class="scan-adjust-menu-btn" type="button" title="位置調整を選択" aria-label="位置調整を選択" aria-haspopup="dialog" disabled>
                 <span>位置調整</span>
               </button>
             </div>
@@ -578,13 +578,13 @@
                 </svg>
                 <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
               </div>
-              <div id="ocr-source-panel" class="ocr-source-panel" hidden>
-                <div class="ocr-source-header">
-                  <span class="ocr-source-label">画像スキャン結果</span>
-                  <span id="ocr-source-title" class="ocr-source-title"></span>
+              <div id="extract-source-panel" class="extract-source-panel" hidden>
+                <div class="extract-source-header">
+                  <span class="extract-source-label">画像スキャン結果</span>
+                  <span id="extract-source-title" class="extract-source-title"></span>
                 </div>
-                <div id="ocr-source-summary" class="ocr-source-summary"></div>
-                <div id="ocr-source-viewer" class="ocr-source-viewer"></div>
+                <div id="extract-source-summary" class="extract-source-summary"></div>
+                <div id="extract-source-viewer" class="extract-source-viewer"></div>
               </div>
             </div>
           </section>
@@ -798,13 +798,13 @@
             <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
           </svg>
         </button>
-        <button id="ai-install-btn" class="menu-icon-btn ai-install-menu-btn" type="button" title="スキャンエンジンインストール" aria-label="スキャンエンジンインストール">
+        <button id="scan-install-btn" class="menu-icon-btn scan-install-menu-btn" type="button" title="スキャンエンジンインストール" aria-label="スキャンエンジンインストール">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M12 3v11"/>
             <polyline points="7 10 12 15 17 10"/>
             <path d="M5 17v2a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-2"/>
           </svg>
-          <span class="ai-install-menu-badge" id="ai-install-menu-badge" hidden></span>
+          <span class="scan-install-menu-badge" id="scan-install-menu-badge" hidden></span>
         </button>
       </div>
     </aside>
@@ -1028,89 +1028,89 @@
         </div>
       </div>
     </div>
-    <div class="ai-install-modal" id="ai-install-modal" data-tauri-drag-region hidden>
-      <div class="ai-install-card" role="dialog" aria-modal="true" aria-labelledby="ai-install-title" data-tauri-drag-region>
-        <div class="ai-install-header" data-tauri-drag-region>
-          <span class="ai-install-title" id="ai-install-title" data-tauri-drag-region>スキャンエンジンインストール</span>
-          <button type="button" id="ai-install-close-btn" class="settings-done-btn" title="閉じる" aria-label="閉じる">完了</button>
+    <div class="scan-install-modal" id="scan-install-modal" data-tauri-drag-region hidden>
+      <div class="scan-install-card" role="dialog" aria-modal="true" aria-labelledby="scan-install-title" data-tauri-drag-region>
+        <div class="scan-install-header" data-tauri-drag-region>
+          <span class="scan-install-title" id="scan-install-title" data-tauri-drag-region>スキャンエンジンインストール</span>
+          <button type="button" id="scan-install-close-btn" class="settings-done-btn" title="閉じる" aria-label="閉じる">完了</button>
         </div>
-        <div class="ai-install-intro" data-tauri-drag-region>
-          <p class="ai-install-intro-text" data-tauri-drag-region>
-            漫画のセリフを自動抽出するために、以下のスキャンエンジンを <code>%LOCALAPPDATA%\OPUS\ai-runtime</code> にインストールします（合計 約 3〜5 GB / 10〜30 分）。
+        <div class="scan-install-intro" data-tauri-drag-region>
+          <p class="scan-install-intro-text" data-tauri-drag-region>
+            漫画のセリフを自動抽出するために、以下のスキャンエンジンを <code>%LOCALAPPDATA%\OPUS\scan-runtime</code> にインストールします（合計 約 3〜5 GB / 10〜30 分）。
           </p>
         </div>
-        <div class="ai-install-status">
-          <div class="ai-status-row" id="ai-status-runtime">
-            <span class="ai-status-dot"></span>
-            <span class="ai-status-label">ランタイム状態:</span>
-            <span class="ai-status-value" id="ai-status-runtime-value">未確認</span>
+        <div class="scan-install-status">
+          <div class="scan-status-row" id="scan-status-runtime">
+            <span class="scan-status-dot"></span>
+            <span class="scan-status-label">ランタイム状態:</span>
+            <span class="scan-status-value" id="scan-status-runtime-value">未確認</span>
           </div>
         </div>
-        <div class="ai-install-timing" id="ai-install-timing" hidden>
-          <span class="ai-install-timing-row">
-            <span class="ai-install-timing-label">経過</span>
-            <span class="ai-install-timing-value" id="ai-install-elapsed">0秒</span>
+        <div class="scan-install-timing" id="scan-install-timing" hidden>
+          <span class="scan-install-timing-row">
+            <span class="scan-install-timing-label">経過</span>
+            <span class="scan-install-timing-value" id="scan-install-elapsed">0秒</span>
           </span>
-          <span class="ai-install-timing-row">
-            <span class="ai-install-timing-label">合計目安</span>
-            <span class="ai-install-timing-value">約 10〜20 分</span>
+          <span class="scan-install-timing-row">
+            <span class="scan-install-timing-label">合計目安</span>
+            <span class="scan-install-timing-value">約 10〜20 分</span>
           </span>
         </div>
-        <ul class="ai-phase-list" id="ai-phase-list">
-          <li class="ai-phase-item" data-phase="base">
-            <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">共通基盤 (Python / pip / build prerequisites)<span class="ai-phase-eta">通常 ~1分</span></span>
-            <span class="ai-phase-state" id="ai-phase-base-state">未開始</span>
+        <ul class="scan-phase-list" id="scan-phase-list">
+          <li class="scan-phase-item" data-phase="base">
+            <span class="scan-phase-tick" aria-hidden="true"></span>
+            <span class="scan-phase-label">共通基盤 (Python / pip / build prerequisites)<span class="scan-phase-eta">通常 ~1分</span></span>
+            <span class="scan-phase-state" id="scan-phase-base-state">未開始</span>
           </li>
-          <li class="ai-phase-item" data-phase="ctd">
-            <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">画像スキャンエンジン (吹き出し検出)<span class="ai-phase-eta">通常 ~3分</span></span>
-            <span class="ai-phase-state" id="ai-phase-ctd-state">未開始</span>
+          <li class="scan-phase-item" data-phase="ctd">
+            <span class="scan-phase-tick" aria-hidden="true"></span>
+            <span class="scan-phase-label">画像スキャンエンジン (吹き出し検出)<span class="scan-phase-eta">通常 ~3分</span></span>
+            <span class="scan-phase-state" id="scan-phase-ctd-state">未開始</span>
           </li>
-          <li class="ai-phase-item" data-phase="mocr">
-            <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">画像スキャンエンジン (テキスト抽出)<span class="ai-phase-eta">通常 ~1分</span></span>
-            <span class="ai-phase-state" id="ai-phase-mocr-state">未開始</span>
+          <li class="scan-phase-item" data-phase="mextract">
+            <span class="scan-phase-tick" aria-hidden="true"></span>
+            <span class="scan-phase-label">画像スキャンエンジン (テキスト抽出)<span class="scan-phase-eta">通常 ~1分</span></span>
+            <span class="scan-phase-state" id="scan-phase-mextract-state">未開始</span>
           </li>
-          <li class="ai-phase-item" data-phase="torch">
-            <span class="ai-phase-tick" aria-hidden="true"></span>
-            <span class="ai-phase-label">PyTorch (CUDA) + 検証<span class="ai-phase-eta">通常 ~5〜10分（最も長いフェーズ）</span></span>
-            <span class="ai-phase-state" id="ai-phase-torch-state">未開始</span>
+          <li class="scan-phase-item" data-phase="torch">
+            <span class="scan-phase-tick" aria-hidden="true"></span>
+            <span class="scan-phase-label">PyTorch (CUDA) + 検証<span class="scan-phase-eta">通常 ~5〜10分（最も長いフェーズ）</span></span>
+            <span class="scan-phase-state" id="scan-phase-torch-state">未開始</span>
           </li>
         </ul>
-        <div class="ai-install-progress" id="ai-install-progress" hidden>
-          <div class="ai-install-progress-meta">
-            <span class="ai-install-active-label" id="ai-install-active-label">準備中</span>
-            <span class="ai-install-meta-right">
-              <span id="ai-install-speed" class="ai-meta-badge"></span>
-              <span id="ai-install-eta" class="ai-meta-badge"></span>
+        <div class="scan-install-progress" id="scan-install-progress" hidden>
+          <div class="scan-install-progress-meta">
+            <span class="scan-install-active-label" id="scan-install-active-label">準備中</span>
+            <span class="scan-install-meta-right">
+              <span id="scan-install-speed" class="scan-meta-badge"></span>
+              <span id="scan-install-eta" class="scan-meta-badge"></span>
             </span>
           </div>
-          <div class="ai-install-progress-track">
-            <div class="ai-install-progress-fill" id="ai-install-progress-fill"></div>
+          <div class="scan-install-progress-track">
+            <div class="scan-install-progress-fill" id="scan-install-progress-fill"></div>
           </div>
-          <div class="ai-install-progress-count" id="ai-install-progress-count"></div>
+          <div class="scan-install-progress-count" id="scan-install-progress-count"></div>
         </div>
-        <div class="ai-log-viewer" id="ai-log-viewer" aria-live="polite" data-tauri-drag-region="false">
-          <div class="ai-log-progress" id="ai-log-progress" hidden>
-            <div class="ai-install-progress-meta">
-              <span class="ai-install-active-label" id="ai-log-progress-label">準備中</span>
-              <span class="ai-install-meta-right">
-                <span id="ai-log-progress-speed" class="ai-meta-badge"></span>
-                <span id="ai-log-progress-eta" class="ai-meta-badge"></span>
+        <div class="scan-log-viewer" id="scan-log-viewer" aria-live="polite" data-tauri-drag-region="false">
+          <div class="scan-log-progress" id="scan-log-progress" hidden>
+            <div class="scan-install-progress-meta">
+              <span class="scan-install-active-label" id="scan-log-progress-label">準備中</span>
+              <span class="scan-install-meta-right">
+                <span id="scan-log-progress-speed" class="scan-meta-badge"></span>
+                <span id="scan-log-progress-eta" class="scan-meta-badge"></span>
               </span>
             </div>
-            <div class="ai-install-progress-track">
-              <div class="ai-install-progress-fill" id="ai-log-progress-fill"></div>
+            <div class="scan-install-progress-track">
+              <div class="scan-install-progress-fill" id="scan-log-progress-fill"></div>
             </div>
-            <div class="ai-install-progress-count" id="ai-log-progress-count"></div>
+            <div class="scan-install-progress-count" id="scan-log-progress-count"></div>
           </div>
-          <div class="ai-log-lines" id="ai-log-lines"></div>
+          <div class="scan-log-lines" id="scan-log-lines"></div>
         </div>
-        <div class="ai-install-actions">
-          <button type="button" id="ai-uninstall-btn" class="page-jump-btn page-jump-btn-danger" hidden>アンインストール</button>
-          <button type="button" id="ai-install-start-btn" class="page-jump-btn page-jump-btn-primary">インストール開始</button>
-          <button type="button" id="ai-install-cancel-btn" class="page-jump-btn" hidden>キャンセル</button>
+        <div class="scan-install-actions">
+          <button type="button" id="scan-uninstall-btn" class="page-jump-btn page-jump-btn-danger" hidden>アンインストール</button>
+          <button type="button" id="scan-install-start-btn" class="page-jump-btn page-jump-btn-primary">インストール開始</button>
+          <button type="button" id="scan-install-cancel-btn" class="page-jump-btn" hidden>キャンセル</button>
         </div>
       </div>
     </div>
@@ -1119,7 +1119,7 @@
         <img src="/PsDesign_icon.png" class="welcome-logo" alt="OPUS" />
         <h2 class="welcome-title" id="welcome-title">OPUS へようこそ</h2>
         <p class="welcome-message">
-          本アプリでは AI による画像スキャンエンジンを使った<br>
+          本アプリでは 画像スキャン による画像スキャンエンジンを使った<br>
           テキスト抽出と吹き出し検出が利用できます。<br>
           ご利用前にセットアップが必要です。<br>
           <span class="welcome-message-note">（ダウンロード約 3GB / 所要 10〜20 分）</span>
@@ -1130,25 +1130,25 @@
         </div>
       </div>
     </div>
-    <div class="ai-place-review-modal" id="ai-place-review-modal" hidden>
-      <div class="ai-place-review-card" role="dialog" aria-modal="true" aria-labelledby="ai-place-review-title">
-        <div class="ai-place-review-header">
-          <span class="ai-place-review-title" id="ai-place-review-title">自動配置プラン確認</span>
+    <div class="scan-place-review-modal" id="scan-place-review-modal" hidden>
+      <div class="scan-place-review-card" role="dialog" aria-modal="true" aria-labelledby="scan-place-review-title">
+        <div class="scan-place-review-header">
+          <span class="scan-place-review-title" id="scan-place-review-title">自動配置プラン確認</span>
         </div>
-        <div class="ai-place-review-warning" id="ai-place-review-warning" hidden>
-          <svg class="ai-place-review-warning-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+        <div class="scan-place-review-warning" id="scan-place-review-warning" hidden>
+          <svg class="scan-place-review-warning-icon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
             <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
             <line x1="12" y1="9" x2="12" y2="13"/>
             <line x1="12" y1="17" x2="12.01" y2="17"/>
           </svg>
-          <div class="ai-place-review-warning-body">
-            <div class="ai-place-review-warning-title">ページ数が一致していません</div>
-            <div class="ai-place-review-warning-detail" id="ai-place-review-warning-detail"></div>
+          <div class="scan-place-review-warning-body">
+            <div class="scan-place-review-warning-title">ページ数が一致していません</div>
+            <div class="scan-place-review-warning-detail" id="scan-place-review-warning-detail"></div>
           </div>
         </div>
-        <div class="ai-place-review-actions">
-          <button type="button" id="ai-place-review-cancel" class="page-jump-btn">キャンセル</button>
-          <button type="button" id="ai-place-review-ok" class="page-jump-btn page-jump-btn-primary">配置を実行</button>
+        <div class="scan-place-review-actions">
+          <button type="button" id="scan-place-review-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="scan-place-review-ok" class="page-jump-btn page-jump-btn-primary">配置を実行</button>
         </div>
       </div>
     </div>

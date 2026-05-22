@@ -5,8 +5,8 @@
 // 注: コマ枠 (panel) を見ていないため、左右コマで縦位置が近い吹き出しは
 // 同じ行に誤束ねされる可能性あり。改善は将来別タスクで。
 //
-// 引数: blocks = MokuroBlock[] (各 block は box: [x1,y1,x2,y2] を持つ前提)
-// 戻り値: 読み順に並び替えた MokuroBlock[] (新しい配列、入力は不変)
+// 引数: blocks = ReferenceScanBlock[] (各 block は box: [x1,y1,x2,y2] を持つ前提)
+// 戻り値: 読み順に並び替えた ReferenceScanBlock[] (新しい配列、入力は不変)
 export function sortBlocksMangaOrder(blocks) {
   if (!Array.isArray(blocks) || blocks.length === 0) return [];
   const items = blocks.map((b) => ({

@@ -1787,7 +1787,7 @@ function lineHasSymbolChar(s) {
 // 縦中横の対象ペア: 半角 !! / !? に加え、全角 ！！ / ！？ も拾う（PSD 既存テキストは
 // 全角で組まれていることが多いため）。混在ペア (!！ / !？ / ！! / ！?) は意図しない
 // 入力途中のケースが多いので対象外。
-const TCY_PAIR_REGEX = /!!|!\?|！！|！？/;
+const TCY_P画像スキャンR_REGEX = /!!|!\?|！！|！？/;
 
 // 【v1.x.0】句読点ツメ（mojiZume）の対象。U+3001「、」/ U+3002「。」のみ。
 // Photoshop 側 (jsx_gen.rs applyPunctuationTsume) と同じ char code 集合。
@@ -2151,7 +2151,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
   const fullText = String(text ?? "");
   const trackingHits = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(fullText);
-  const tcyHits = !!tcyOn && TCY_PAIR_REGEX.test(fullText);
+  const tcyHits = !!tcyOn && TCY_P画像スキャンR_REGEX.test(fullText);
   // 【v1.22.0】記号フォント置換: symbolFontPS が指定されており、対象記号が contents に含まれるとき適用。
   const symbolHits = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(fullText);
   // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。punctTsumePct (0..100) → em 量に換算。
@@ -2667,8 +2667,8 @@ function beginMultiLayerDrag(e, ctx) {
           charRubies: nl.charRubies,
           autoFontSwitched: nl.autoFontSwitched,
           autoFontSwitchBucket: nl.autoFontSwitchBucket,
-          lowOcrTextMatch: nl.lowOcrTextMatch,
-          ocrMatchScore: nl.ocrMatchScore,
+          lowExtractTextMatch: nl.lowExtractTextMatch,
+          extractMatchScore: nl.extractMatchScore,
         });
         updateNewLayer(dup.tempId, {
           charSizes: { ...(nl.charSizes ?? {}) },

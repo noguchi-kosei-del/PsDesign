@@ -1,11 +1,11 @@
-// AI セリフ抽出後のテキスト正規化
+// 画像スキャン セリフ抽出後のテキスト正規化
 //
 // 元: serifu-memo/src/normalize.ts (Ina986/serifu-memo v0.1.1)
 // 主な変更点:
-//   - localStorage キーを psdesign-ai-normalize-v1 に変更
+//   - localStorage キーを psdesign-scan-normalize-v1 に変更
 //   - TS → JS への型剥がし
 
-const STORAGE_KEY = "psdesign-ai-normalize-v1";
+const STORAGE_KEY = "psdesign-scan-normalize-v1";
 
 export const DEFAULT_SETTINGS = {
   collapsePeriods: true,

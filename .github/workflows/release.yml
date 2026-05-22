@@ -31,18 +31,44 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      - name: Build & sign
-        env:
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        run: npm run tauri build
-
       - name: Extract version
         id: version
         shell: bash
         run: |
           VERSION="${GITHUB_REF#refs/tags/v}"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Validate release version
+        shell: bash
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          node - <<'NODE'
+          const fs = require("fs");
+
+          const expected = process.env.VERSION;
+          const packageVersion = JSON.parse(fs.readFileSync("package.json", "utf8")).version;
+          const tauriVersion = JSON.parse(fs.readFileSync("src-tauri/tauri.conf.json", "utf8")).version;
+          const cargoToml = fs.readFileSync("src-tauri/Cargo.toml", "utf8");
+          const cargoVersion = cargoToml.match(/^version = "([^"]+)"/m)?.[1];
+          const versions = {
+            "package.json": packageVersion,
+            "src-tauri/tauri.conf.json": tauriVersion,
+            "src-tauri/Cargo.toml": cargoVersion,
+          };
+          const mismatches = Object.entries(versions).filter(([, version]) => version !== expected);
+
+          if (mismatches.length > 0) {
+            console.error(`Tag v${expected} does not match app versions: ${JSON.stringify(versions)}`);
+            process.exit(1);
+          }
+          NODE
+
+      - name: Build & sign
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: npm run tauri build
 
       - name: Generate latest.json for updater
         shell: bash

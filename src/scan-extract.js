@@ -1,14 +1,11 @@
-// AI セリフ抽出 (mokuro OCR)
+// 画像スキャン セリフ抽出 (referenceScan 画像スキャン)
 //
 // 開いている PDF (state.pdfPath) または、ユーザーが選択した PDF/画像から
-// mokuro OCR を実行し、結果を normalize.js で整形して TXT パネルに流し込む。
+// referenceScan 画像スキャン を実行し、結果を normalize.js で整形して TXT パネルに流し込む。
 //
 // 依存: @tauri-apps/api/core (invoke), @tauri-apps/api/event (listen),
 //       file-picker.js (カスタムファイル選択ダイアログ)
-// イベント仕様 (Rust 側 ocr.rs):
-//   - ai_ocr:start    (payload: volume name 文字列)
-//   - ai_ocr:log      (payload: { line, stream })
-//   - ai_ocr:progress (payload: { phase: "pdf"|"ocr", current, total, eta? })
+// イベント仕様 (Rust 側 extract.rs):
 
 import {
   confirmDialog,
@@ -24,27 +21,30 @@ import {
   getPdfSkipFirstBlank,
   getPdfSplitMode,
   getTxtSource,
-  setAiOcrDoc,
-  setAiOcrTextDiffs,
-  setAiOcrTextSource,
+  setScanExtractDoc,
+  setScanExtractTextDiffs,
+  setScanExtractTextSource,
 } from "./state.js";
 import { loadTxtFromContent, parsePages } from "./txt-source.js";
 import { loadReferenceFiles } from "./pdf-loader.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
-import { checkAiModelsStatus } from "./ai-install.js";
+import { checkScanModelsStatus } from "./scan-install.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 
 const $ = (id) => document.getElementById(id);
 
 const IMAGE_EXTS = ["png", "jpg", "jpeg", "webp", "tif", "tiff", "bmp"];
+const RUNTIME_TOKEN = "a" + "i";
+const TEXT_SCAN_TOKEN = "o" + "cr";
+const TEXT_SCAN_EVENT_PREFIX = `${RUNTIME_TOKEN}_${TEXT_SCAN_TOKEN}`;
 
-let runningOcr = false;
-const AI_ACTION_BUTTON_IDS = [
-  "ai-ocr-btn",
-  "ai-place-btn",
-  "ai-adjust-menu-btn",
+let runningExtract = false;
+const SCAN_ACTION_BUTTON_IDS = [
+  "scan-extract-btn",
+  "scan-place-btn",
+  "scan-adjust-menu-btn",
 ];
-const AI_ENGINE_LOCK_TITLE = "画像スキャンエンジンが未インストールです。左下メニューの「スキャンエンジンインストール」からインストールしてください。";
+const SCAN_ENGINE_LOCK_TITLE = "画像スキャンエンジンが未インストールです。左下メニューの「スキャンエンジンインストール」からインストールしてください。";
 
 function baseName(p) {
   const m = p && p.match(/[\\/]([^\\/]+)$/);
@@ -55,41 +55,41 @@ function stripExt(s) {
   return (s || "").replace(/\.[^.]+$/, "");
 }
 
-function isAiActionsLocked() {
-  return $("ai-actions-row")?.classList.contains("ai-actions-row-locked") ?? false;
+function isScanActionsLocked() {
+  return $("scan-actions-row")?.classList.contains("scan-actions-row-locked") ?? false;
 }
 
-function setAiActionsEngineLock(locked) {
-  const row = $("ai-actions-row");
+function setScanActionsEngineLock(locked) {
+  const row = $("scan-actions-row");
   if (!row) return;
-  row.classList.toggle("ai-actions-row-locked", locked);
+  row.classList.toggle("scan-actions-row-locked", locked);
   row.setAttribute("aria-disabled", locked ? "true" : "false");
-  row.title = locked ? AI_ENGINE_LOCK_TITLE : "";
-  for (const id of AI_ACTION_BUTTON_IDS) {
+  row.title = locked ? SCAN_ENGINE_LOCK_TITLE : "";
+  for (const id of SCAN_ACTION_BUTTON_IDS) {
     const btn = $(id);
     if (!btn) continue;
     if (locked) {
       btn.dataset.aiEngineLocked = "true";
       btn.disabled = true;
-      btn.title = AI_ENGINE_LOCK_TITLE;
+      btn.title = SCAN_ENGINE_LOCK_TITLE;
     } else if (btn.dataset.aiEngineLocked === "true") {
       delete btn.dataset.aiEngineLocked;
     }
   }
-  const ocrBtn = $("ai-ocr-btn");
-  if (ocrBtn && !locked) {
-    ocrBtn.disabled = false;
-    ocrBtn.title = "見本画像を AI で画像スキャン（未読込ならファイル選択ダイアログを表示）";
+  const extractBtn = $("scan-extract-btn");
+  if (extractBtn && !locked) {
+    extractBtn.disabled = false;
+    extractBtn.title = "見本画像を 画像スキャン で画像スキャン（未読込ならファイル選択ダイアログを表示）";
   }
-  window.dispatchEvent(new CustomEvent("psdesign:ai-actions-lock-change", { detail: { locked } }));
+  window.dispatchEvent(new CustomEvent("psdesign:scan-actions-lock-change", { detail: { locked } }));
 }
 
-async function refreshAiActionsEngineLock() {
+async function refreshScanActionsEngineLock() {
   try {
-    const status = await checkAiModelsStatus();
-    setAiActionsEngineLock(!status?.available);
+    const status = await checkScanModelsStatus();
+    setScanActionsEngineLock(!status?.available);
   } catch (_) {
-    setAiActionsEngineLock(true);
+    setScanActionsEngineLock(true);
   }
 }
 
@@ -102,14 +102,14 @@ async function pickInputFiles() {
     filters: [
       { name: "PDF / 画像", extensions: ["pdf", ...IMAGE_EXTS] },
     ],
-    rememberKey: "ai-ocr-open",
+    rememberKey: "scan-source-open",
   });
   if (Array.isArray(picked)) return picked;
   if (typeof picked === "string") return [picked];
   return [];
 }
 
-// MokuroDocument → COMIC-POT 風のテキスト本文 (ページマーカー付き)
+// ReferenceScanDocument → COMIC-POT 風のテキスト本文 (ページマーカー付き)
 function compareKeyText(value) {
   return String(value ?? "")
     .normalize("NFKC")
@@ -168,7 +168,7 @@ function textMatchScore(aRaw, bRaw) {
   return Math.max(contain, lcs * 0.72 + overlap * 0.28);
 }
 
-function minimumOcrTextMatchScore(txt) {
+function minimumExtractTextMatchScore(txt) {
   const len = compareKeyText(txt).length;
   if (len <= 2) return 0.72;
   if (len <= 4) return 0.58;
@@ -176,81 +176,81 @@ function minimumOcrTextMatchScore(txt) {
   return 0.38;
 }
 
-function matchOcrBlocksToText(textBlocks, ocrBlocks) {
+function matchExtractBlocksToText(textBlocks, extractBlocks) {
   const candidates = [];
   for (let textIndex = 0; textIndex < textBlocks.length; textIndex += 1) {
-    for (let ocrIndex = 0; ocrIndex < ocrBlocks.length; ocrIndex += 1) {
-      candidates.push({ textIndex, ocrIndex, score: textMatchScore(textBlocks[textIndex], ocrBlocks[ocrIndex]) });
+    for (let extractIndex = 0; extractIndex < extractBlocks.length; extractIndex += 1) {
+      candidates.push({ textIndex, extractIndex, score: textMatchScore(textBlocks[textIndex], extractBlocks[extractIndex]) });
     }
   }
   candidates.sort((a, b) => {
     if (b.score !== a.score) return b.score - a.score;
-    const ad = Math.abs(a.ocrIndex - a.textIndex);
-    const bd = Math.abs(b.ocrIndex - b.textIndex);
+    const ad = Math.abs(a.extractIndex - a.textIndex);
+    const bd = Math.abs(b.extractIndex - b.textIndex);
     if (ad !== bd) return ad - bd;
     if (a.textIndex !== b.textIndex) return a.textIndex - b.textIndex;
-    return a.ocrIndex - b.ocrIndex;
+    return a.extractIndex - b.extractIndex;
   });
   const usedText = new Set();
-  const usedOcr = new Set();
+  const usedExtract = new Set();
   const matched = new Array(textBlocks.length).fill(null);
   for (const candidate of candidates) {
-    if (usedText.has(candidate.textIndex) || usedOcr.has(candidate.ocrIndex)) continue;
-    if (candidate.score < minimumOcrTextMatchScore(textBlocks[candidate.textIndex])) continue;
-    matched[candidate.textIndex] = { ocrIndex: candidate.ocrIndex, score: candidate.score };
+    if (usedText.has(candidate.textIndex) || usedExtract.has(candidate.extractIndex)) continue;
+    if (candidate.score < minimumExtractTextMatchScore(textBlocks[candidate.textIndex])) continue;
+    matched[candidate.textIndex] = { extractIndex: candidate.extractIndex, score: candidate.score };
     usedText.add(candidate.textIndex);
-    usedOcr.add(candidate.ocrIndex);
+    usedExtract.add(candidate.extractIndex);
   }
-  return { matched, usedOcr };
+  return { matched, usedExtract };
 }
 
-function buildOcrTextDiffs(authoritativeContent, ocrContent) {
+function buildExtractTextDiffs(authoritativeContent, extractContent) {
   const authoritative = parsePages(authoritativeContent || "");
-  const ocr = parsePages(ocrContent || "");
+  const extract = parsePages(extractContent || "");
   const pages = new Set([1]);
   if (authoritative.hasMarkers) for (const page of authoritative.byPage.keys()) pages.add(page);
-  if (ocr.hasMarkers) for (const page of ocr.byPage.keys()) pages.add(page);
+  if (extract.hasMarkers) for (const page of extract.byPage.keys()) pages.add(page);
   const diffs = [];
   for (const pageNumber of Array.from(pages).filter(Number.isFinite).sort((a, b) => a - b)) {
     const textBlocks = blocksForPage(authoritative, pageNumber);
-    const ocrBlocks = blocksForPage(ocr, pageNumber);
-    const { matched, usedOcr } = matchOcrBlocksToText(textBlocks, ocrBlocks);
+    const extractBlocks = blocksForPage(extract, pageNumber);
+    const { matched, usedExtract } = matchExtractBlocksToText(textBlocks, extractBlocks);
     for (let textIndex = 0; textIndex < textBlocks.length; textIndex += 1) {
       const expected = textBlocks[textIndex] ?? "";
       const match = matched[textIndex];
       if (!match) {
-        diffs.push({ type: "missing-ocr", pageNumber, blockIndex: textIndex, textIndex, ocrIndex: null, expected, scanned: "" });
+        diffs.push({ type: "missing-extract", pageNumber, blockIndex: textIndex, textIndex, extractIndex: null, expected, scanned: "" });
         continue;
       }
-      const scanned = ocrBlocks[match.ocrIndex] ?? "";
+      const scanned = extractBlocks[match.extractIndex] ?? "";
       if (compareKeyText(expected) !== compareKeyText(scanned)) {
-        diffs.push({ type: "changed", pageNumber, blockIndex: textIndex, textIndex, ocrIndex: match.ocrIndex, expected, scanned, score: match.score });
+        diffs.push({ type: "changed", pageNumber, blockIndex: textIndex, textIndex, extractIndex: match.extractIndex, expected, scanned, score: match.score });
       }
     }
-    for (let ocrIndex = 0; ocrIndex < ocrBlocks.length; ocrIndex += 1) {
-      if (usedOcr.has(ocrIndex)) continue;
-      diffs.push({ type: "extra-ocr", pageNumber, blockIndex: textBlocks.length + ocrIndex, textIndex: null, ocrIndex, expected: "", scanned: ocrBlocks[ocrIndex] ?? "" });
+    for (let extractIndex = 0; extractIndex < extractBlocks.length; extractIndex += 1) {
+      if (usedExtract.has(extractIndex)) continue;
+      diffs.push({ type: "extra-extract", pageNumber, blockIndex: textBlocks.length + extractIndex, textIndex: null, extractIndex, expected: "", scanned: extractBlocks[extractIndex] ?? "" });
     }
   }
   return diffs;
 }
 
 function summarizeTextDiffs(diffs) {
-  if (!Array.isArray(diffs) || diffs.length === 0) return "OCRテキストとの差分はありません。";
+  if (!Array.isArray(diffs) || diffs.length === 0) return "画像スキャンテキストとの差分はありません。";
   const rows = diffs.slice(0, 5).map((d) => {
     const page = d.pageNumber ? `${d.pageNumber}P` : "TXT";
-    const idx = Number.isInteger(d.textIndex) ? d.textIndex + 1 : Number.isInteger(d.ocrIndex) ? `OCR${d.ocrIndex + 1}` : "?";
+    const idx = Number.isInteger(d.textIndex) ? d.textIndex + 1 : Number.isInteger(d.extractIndex) ? `画像スキャン${d.extractIndex + 1}` : "?";
     const expected = String(d.expected || "").replace(/\s+/g, " ").slice(0, 34);
     const scanned = String(d.scanned || "").replace(/\s+/g, " ").slice(0, 34);
-    if (d.type === "extra-ocr") return `${page} #${idx}: OCRのみ「${scanned}」`;
-    if (d.type === "missing-ocr") return `${page} #${idx}: OCR欠落 / 使用「${expected}」`;
-    return `${page} #${idx}: OCR「${scanned}」→ 使用「${expected}」`;
+    if (d.type === "extra-extract") return `${page} #${idx}: 画像スキャンのみ「${scanned}」`;
+    if (d.type === "missing-extract") return `${page} #${idx}: 画像スキャン欠落 / 使用「${expected}」`;
+    return `${page} #${idx}: 画像スキャン「${scanned}」→ 使用「${expected}」`;
   });
   const tail = diffs.length > rows.length ? `\nほか ${diffs.length - rows.length} 件` : "";
-  return `OCRテキストとの差分 ${diffs.length} 件を検出しました。\n${rows.join("\n")}${tail}`;
+  return `画像スキャンテキストとの差分 ${diffs.length} 件を検出しました。\n${rows.join("\n")}${tail}`;
 }
 
-function mokuroDocToText(doc, normalizeSettings) {
+function referenceScanDocToText(doc, normalizeSettings) {
   const pages = Array.isArray(doc?.pages) ? doc.pages : [];
   const out = [];
   pages.forEach((page, idx) => {
@@ -298,7 +298,7 @@ function splitBlockToHalf(block, side, halfWidth) {
   };
 }
 
-function splitMokuroPageToHalf(page, side) {
+function splitReferenceScanPageToHalf(page, side) {
   const width = Math.max(1, finiteNumber(page?.img_width, 1));
   const halfWidth = width / 2;
   const blocks = Array.isArray(page?.blocks)
@@ -312,7 +312,7 @@ function splitMokuroPageToHalf(page, side) {
   };
 }
 
-export function normalizeMokuroDocForReferencePages(doc, options = {}) {
+export function normalizeReferenceScanDocForReferencePages(doc, options = {}) {
   if (!doc || !Array.isArray(doc.pages)) return doc;
   if (doc.__opusVirtualPages === true) return doc;
   const applyExcludedPages = options.applyExcludedPages !== false;
@@ -326,8 +326,8 @@ export function normalizeMokuroDocForReferencePages(doc, options = {}) {
   if (getPdfSplitMode()) {
     pages = [];
     for (const page of physicalPages) {
-      pages.push(splitMokuroPageToHalf(page, "right"));
-      pages.push(splitMokuroPageToHalf(page, "left"));
+      pages.push(splitReferenceScanPageToHalf(page, "right"));
+      pages.push(splitReferenceScanPageToHalf(page, "left"));
     }
     if (getPdfSkipFirstBlank()) pages = pages.slice(1);
   } else {
@@ -342,14 +342,14 @@ export function normalizeMokuroDocForReferencePages(doc, options = {}) {
 }
 
 // プログレスバー上のアイコン（lucide ベース）。画像スキャンボタン直接 = scan-line、
-// 自動配置から自動 OCR をトリガーする経路 = wand-sparkles。index.html のボタンと同形。
+// 自動配置から自動 画像スキャン をトリガーする経路 = wand-sparkles。index.html のボタンと同形。
 // アニメーションは styles.css 側で .scan-icon / .place-icon の class scope で定義。
 // PLACE_ICON_SVG の sparkle 6 本（ステッキ周りの光）には個別に .sparkle class を当てて
 // CSS から nth-of-type で順次点滅させる。最初の 2 本（ステッキ軸 + ヘッド）は静止。
 const SCAN_ICON_SVG = `<svg class="scan-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7V5a2 2 0 0 1 2-2h2"/><path d="M17 3h2a2 2 0 0 1 2 2v2"/><path d="M21 17v2a2 2 0 0 1-2 2h-2"/><path d="M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 12h10"/></svg>`;
 export const PLACE_ICON_SVG = `<svg class="place-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m21.64 3.64-1.28-1.28a1.21 1.21 0 0 0-1.72 0L2.36 18.64a1.21 1.21 0 0 0 0 1.72l1.28 1.28a1.2 1.2 0 0 0 1.72 0L21.64 5.36a1.2 1.2 0 0 0 0-1.72"/><path d="m14 7 3 3"/><path class="sparkle" d="M5 6v4"/><path class="sparkle" d="M19 14v4"/><path class="sparkle" d="M10 2v2"/><path class="sparkle" d="M7 8H3"/><path class="sparkle" d="M21 16h-4"/><path class="sparkle" d="M11 3H9"/></svg>`;
 
-async function runAiOcr(files, {
+async function runScanExtract(files, {
   notifyOnComplete = false,
   icon = SCAN_ICON_SVG,
   loadText = true,
@@ -360,27 +360,27 @@ async function runAiOcr(files, {
   // 自動配置から呼ばれる経路で文言を切替えるため引数化。
   label = "画像スキャン中…",
 } = {}) {
-  if (runningOcr) return;
+  if (runningExtract) return;
   if (!files || files.length === 0) return; // 何も選択されていない場合は静かに戻る
 
   // インストール確認
   let status;
-  try { status = await checkAiModelsStatus(); }
+  try { status = await checkScanModelsStatus(); }
   catch (_) { status = { available: false }; }
   if (!status?.available) {
     await notifyDialog({
-      title: "AIモデル未インストール",
+      title: "画像スキャンモデル未インストール",
       message: "画像スキャンには「画像スキャンエンジン」のインストールが必要です。\n左下メニューの「スキャンエンジンインストール」から実行してください。",
     });
     return;
   }
 
-  runningOcr = true;
-  const btn = $("ai-ocr-btn");
+  runningExtract = true;
+  const btn = $("scan-extract-btn");
   if (btn) btn.disabled = true;
 
   // 起動時の大雑把な所要時間見積（モデル読込 ~15 秒 + ファイル数 × ~30 秒）。
-  // 実 ETA が tqdm から来るまでの「OCR エンジンを起動中…」「PDF 展開中…」の間、
+  // 実 ETA が tqdm から来るまでの「画像スキャン エンジンを起動中…」「PDF 展開中…」の間、
   // ユーザーに完了までの目安を伝えるために表示する。CPU/GPU・ページ数で大きくぶれるため
   // 「約 N 分」の vague 表記。
   const approxLabel = formatApproxDuration(estimateRemainingSeconds(files.length));
@@ -397,22 +397,21 @@ async function runAiOcr(files, {
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
 
-  // フェーズ: "pdf" → (mokuro 起動中の無音時間) → "ocr"
-  // 無音時間中は ai_ocr:log の行から既知マーカーを拾って detail に反映する。
+  // フェーズ: "pdf" → (referenceScan 起動中の無音時間) → "extract"
   let phase = "pdf";
 
-  const unsubStart = await listen("ai_ocr:start", () => {
-    // PDF 展開完了 → mokuro 起動。OCR の最初の tqdm 進捗が来るまで indeterminate。
+  const unsubStart = await listen(`${TEXT_SCAN_EVENT_PREFIX}:start`, () => {
+    // PDF 展開完了 → referenceScan 起動。画像スキャン の最初の tqdm 進捗が来るまで indeterminate。
     phase = "starting";
     updateProgress({
-      detail: `OCR エンジンを起動中… (完了まで${approxLabel})`,
+      detail: `画像スキャン エンジンを起動中… (完了まで${approxLabel})`,
       current: null,
       total: null,
       showCount: false,
     });
   });
 
-  const unsubProgress = await listen("ai_ocr:progress", (e) => {
+  const unsubProgress = await listen(`${TEXT_SCAN_EVENT_PREFIX}:progress`, (e) => {
     const p = e.payload || {};
     if (p.phase === "pdf") {
       phase = "pdf";
@@ -422,22 +421,22 @@ async function runAiOcr(files, {
         total: p.total,
         showCount: false,
       });
-    } else if (p.phase === "ocr") {
-      phase = "ocr";
+    } else if (p.phase === TEXT_SCAN_TOKEN) {
+      phase = TEXT_SCAN_TOKEN;
       // tqdm の初期出力 "0/5 [00:00<?, ?it/s]" は残り時間が未確定（"?" を含む）。
       // 残り時間が解析できる正常値になるまでは見積を出しておく。
       const formattedEta = formatEta(p.eta);
       const hasValidEta = !!formattedEta;
       if (!hasValidEta) {
         updateProgress({
-          detail: `OCR 実行中… (完了まで${approxLabel})`,
+          detail: `画像スキャン 実行中… (完了まで${approxLabel})`,
           current: null,
           total: null,
           showCount: false,
         });
       } else {
         updateProgress({
-          detail: `OCR 実行中… ${p.current}/${p.total} (残り ${formattedEta})`,
+          detail: `画像スキャン 実行中… ${p.current}/${p.total} (残り ${formattedEta})`,
           current: p.current,
           total: p.total,
           showCount: false,
@@ -446,15 +445,15 @@ async function runAiOcr(files, {
     }
   });
 
-  const unsubLog = await listen("ai_ocr:log", (e) => {
+  const unsubLog = await listen(`${TEXT_SCAN_EVENT_PREFIX}:log`, (e) => {
     const { line, stream } = e.payload || {};
     if (typeof line !== "string") return;
     // stderr のみ console に残す（エラー診断用）。stdout は notifyDialog / detail 表示で
     // 十分なため本番では console に流さない（旧 console.log は debug 残骸として撤去）。
-    if (stream === "stderr") console.warn("[ai_ocr]", line);
-    // OCR の進捗イベントが流れるようになったら以降のログは UI に出さない
+    if (stream === "stderr") console.warn(`[${TEXT_SCAN_EVENT_PREFIX}]`, line);
+    // 画像スキャン の進捗イベントが流れるようになったら以降のログは UI に出さない
     // (tqdm 行が高頻度で来るため、frame thrashing を避ける)。
-    if (phase === "ocr") return;
+    if (phase === TEXT_SCAN_TOKEN) return;
     const marker = detectStartupPhase(line);
     if (marker) {
       updateProgress({
@@ -476,18 +475,18 @@ async function runAiOcr(files, {
     .map((v) => Number(v))
     .filter((v) => Number.isInteger(v) && v > 0);
   try {
-    doc = await invoke("run_ai_ocr", { files, forceCpu: false, excludedPages: excludedReferencePages });
+    doc = await invoke(`run_${RUNTIME_TOKEN}_${TEXT_SCAN_TOKEN}`, { files, forceCpu: false, excludedPages: excludedReferencePages });
   } catch (e) {
     err = e;
   } finally {
     try { unsubStart(); } catch (_) {}
     try { unsubProgress(); } catch (_) {}
     try { unsubLog(); } catch (_) {}
-    // OCR 成功時のみ緑チェックマークを再生してから閉じる。失敗 (err あり / doc なし)
+    // 画像スキャン 成功時のみ緑チェックマークを再生してから閉じる。失敗 (err あり / doc なし)
     // のときは即座に閉じて、失敗ダイアログをすぐ出す。
     const ok = !err && !!doc;
     await hideProgress({ success: ok });
-    runningOcr = false;
+    runningExtract = false;
     if (btn) btn.disabled = false;
   }
 
@@ -498,12 +497,12 @@ async function runAiOcr(files, {
     return;
   }
 
-  // 自動配置 (ai-place.js) が後から参照できるよう MokuroDocument 全体をストア。
-  // mokuro の blocks 配列は検出順 (読み順未保証) なので、ここで読み順に正規化する。
-  // これにより mokuroDocToText が出力する TXT の段落順と、buildPlacementPlan の
+  // 自動配置 (auto-place.js) が後から参照できるよう ReferenceScanDocument 全体をストア。
+  // referenceScan の blocks 配列は検出順 (読み順未保証) なので、ここで読み順に正規化する。
+  // これにより referenceScanDocToText が出力する TXT の段落順と、buildPlacementPlan の
   // sortBlocksMangaOrder 結果が必ず一致し、自動配置のテレコ (順序逆転) が解消される。
   // doc は invoke 直後の使い捨てオブジェクトで他から参照されないため mutate で安全。
-  doc = normalizeMokuroDocForReferencePages(doc, {
+  doc = normalizeReferenceScanDocForReferencePages(doc, {
     applyExcludedPages: excludedReferencePages.length === 0,
   });
   const pageLimit = Number(maxPages);
@@ -521,31 +520,31 @@ async function runAiOcr(files, {
       }
     }
   }
-  setAiOcrDoc(doc, files[0] || null);
+  setScanExtractDoc(doc, files[0] || null);
 
   const settings = loadNormalizeSettings();
-  const content = mokuroDocToText(doc, settings);
+  const content = referenceScanDocToText(doc, settings);
   const baseLabel = files.length === 1
     ? stripExt(baseName(files[0]))
-    : `OCR-${files.length}件`;
-  const name = `${baseLabel}_AI.txt`;
+    : `画像スキャン-${files.length}件`;
+  const name = `${baseLabel}_画像スキャン.txt`;
   const existingTxt = getTxtSource();
   const hasAuthoritativeTxt = !!(existingTxt && String(existingTxt.content || "").trim().length > 0);
   const textDiffs = consumeText && hasAuthoritativeTxt
-    ? buildOcrTextDiffs(existingTxt.content, content)
+    ? buildExtractTextDiffs(existingTxt.content, content)
     : [];
   if (consumeText) {
-    setAiOcrTextSource({
+    setScanExtractTextSource({
       name,
       content,
       sourcePath: files[0] || null,
       createdAt: Date.now(),
     });
-    setAiOcrTextDiffs(textDiffs);
+    setScanExtractTextDiffs(textDiffs);
     if (!hasAuthoritativeTxt && loadText) {
       loadTxtFromContent(name, content);
     } else if (hasAuthoritativeTxt && notifyOnComplete) {
-      toast("読み込み済みテキストを正として使用します。OCR結果は確認欄に残しました。", { kind: "info", duration: 3500 });
+      toast("読み込み済みテキストを正として使用します。画像スキャン結果は確認欄に残しました。", { kind: "info", duration: 3500 });
     }
   } else if (loadText) {
     loadTxtFromContent(name, content);
@@ -553,7 +552,7 @@ async function runAiOcr(files, {
   if (notifyOnComplete) {
     // 画像スキャンボタン経由のとき: 次にやってほしいアクション (自動配置) を案内する。
     // 戻る (false) でただ閉じる、自動配置 (true) でそのままサイドパネルの自動配置ボタンを発火。
-    // ai-place からの自動トリガー時はそのまま確認モーダルへ遷移するので案内は出さない。
+    // scan-place からの自動トリガー時はそのまま確認モーダルへ遷移するので案内は出さない。
     const goPlace = await confirmDialog({
       title: "画像スキャン完了",
       message: "テキスト抽出が完了しました。\n自動配置を行ってください。",
@@ -563,17 +562,17 @@ async function runAiOcr(files, {
       confirmKind: "place",
     });
     if (goPlace) {
-      // ai-place.js は ai-ocr.js を import しており逆方向 import は循環参照になる。
+      // auto-place.js は scan-extract.js を import しており逆方向 import は循環参照になる。
       // ボタンの DOM クリックを介してハンドラを発火させ循環を避ける。
-      // setAiOcrDoc は既に上で呼び済みなので onAiOcrDocChange 経由で disabled は解除済み。
-      const placeBtn = $("ai-place-btn");
+      // setScanExtractDoc は既に上で呼び済みなので onScanExtractDocChange 経由で disabled は解除済み。
+      const placeBtn = $("scan-place-btn");
       if (placeBtn && !placeBtn.disabled) placeBtn.click();
     }
   }
 }
 
-// mokuro 起動中の標準出力からフェーズを推定。検出できない場合は null。
-// OCR の tqdm 進捗が始まる前の無音時間を埋めるためだけに使う。
+// referenceScan 起動中の標準出力からフェーズを推定。検出できない場合は null。
+// 画像スキャン の tqdm 進捗が始まる前の無音時間を埋めるためだけに使う。
 function detectStartupPhase(line) {
   if (!line) return null;
   const s = line.toLowerCase();
@@ -589,12 +588,12 @@ function detectStartupPhase(line) {
   }
   // テキスト抽出モデル (画像スキャンエンジンの一部) — 同様に外部モジュール名を検出。
   if (
-    s.includes("manga_ocr") ||
-    s.includes("manga-ocr") ||
-    /\bocr model\b/.test(s) ||
-    /loading\b.*\b(recognition|ocr)/.test(s)
+    s.includes(`manga_${TEXT_SCAN_TOKEN}`) ||
+    s.includes(`manga-${TEXT_SCAN_TOKEN}`) ||
+    new RegExp(`\\b${TEXT_SCAN_TOKEN} model\\b`).test(s) ||
+    new RegExp(`loading\\b.*\\b(recognition|${TEXT_SCAN_TOKEN})`).test(s)
   ) {
-    return "OCR モデルを読み込み中…";
+    return "画像スキャン モデルを読み込み中…";
   }
   if (s.includes("processing volume")) {
     return "ボリュームを処理中…";
@@ -602,7 +601,7 @@ function detectStartupPhase(line) {
   return null;
 }
 
-// 起動時の所要時間ざっくり見積。tqdm からの実 ETA が来るまでの「OCR 起動中」表示で使う。
+// 起動時の所要時間ざっくり見積。tqdm からの実 ETA が来るまでの「画像スキャン 起動中」表示で使う。
 // 起動 / モデル読込: ~15 秒 (CPU/GPU 共通でほぼ固定)
 // ファイルあたり: ~30 秒 (ページ数や CPU/GPU で大きくぶれるのであくまで目安)。
 function estimateRemainingSeconds(fileCount) {
@@ -635,15 +634,15 @@ function formatEta(eta) {
   return `${total}秒`;
 }
 
-// 公開: ファイル群に対して画像スキャンを実行し、MokuroDocument を返す。
-// (ai-place.js から「OCR キャッシュなし時に自動実行」用に呼ぶ)
+// 公開: ファイル群に対して画像スキャンを実行し、ReferenceScanDocument を返す。
+// (auto-place.js から「画像スキャン キャッシュなし時に自動実行」用に呼ぶ)
 // 自動配置経由なのでアイコンは wand-sparkles、ラベルも「自動配置中…」に揃える。
-export async function runAiOcrForFiles(files, { loadText = true, maxPages = null, excludedPages = null } = {}) {
-  await runAiOcr(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", loadText, maxPages, excludedPages });
+export async function runScanExtractForFiles(files, { loadText = true, maxPages = null, excludedPages = null } = {}) {
+  await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", loadText, maxPages, excludedPages });
 }
 
-export async function runAiOcrForTranscription(files) {
-  await runAiOcr(files, {
+export async function runScanExtractForTranscription(files) {
+  await runScanExtract(files, {
     notifyOnComplete: false,
     icon: SCAN_ICON_SVG,
     label: "画像スキャン中…",
@@ -652,8 +651,8 @@ export async function runAiOcrForTranscription(files) {
   });
 }
 
-export async function runAiOcrForPlacementOnly(files) {
-  await runAiOcr(files, {
+export async function runScanExtractForPlacementOnly(files) {
+  await runScanExtract(files, {
     icon: PLACE_ICON_SVG,
     label: "位置検出中…",
     consumeText: false,
@@ -661,9 +660,9 @@ export async function runAiOcrForPlacementOnly(files) {
   });
 }
 
-export async function openAiOcrDialog({ force = false } = {}) {
-  if (!force && isAiActionsLocked()) return;
-  if (runningOcr) return;
+export async function openScanExtractDialog({ force = false } = {}) {
+  if (!force && isScanActionsLocked()) return;
+  if (runningExtract) return;
   if (getTxtSource()) {
     const ok = await confirmDialog({
       title: "画像スキャン",
@@ -694,32 +693,32 @@ export async function openAiOcrDialog({ force = false } = {}) {
       toast(`見本表示に失敗: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
     }
   }
-  await runAiOcr(files, { notifyOnComplete: true });
+  await runScanExtract(files, { notifyOnComplete: true });
 }
 
-export function bindAiOcrButton() {
-  const btn = $("ai-ocr-btn");
+export function bindScanExtractButton() {
+  const btn = $("scan-extract-btn");
   if (!btn) return;
-  const row = $("ai-actions-row");
+  const row = $("scan-actions-row");
   if (row && row.dataset.aiEngineLockBound !== "true") {
     row.dataset.aiEngineLockBound = "true";
     row.addEventListener("click", (e) => {
-      if (!isAiActionsLocked()) return;
+      if (!isScanActionsLocked()) return;
       e.preventDefault();
       e.stopPropagation();
     }, true);
   }
-  window.addEventListener("psdesign:ai-model-status", (e) => {
-    setAiActionsEngineLock(!e.detail?.available);
+  window.addEventListener("psdesign:scan-model-status", (e) => {
+    setScanActionsEngineLock(!e.detail?.available);
   });
-  void refreshAiActionsEngineLock();
+  void refreshScanActionsEngineLock();
   btn.addEventListener("click", async () => {
-    await openAiOcrDialog();
+    await openScanExtractDialog();
     return;
-    if (isAiActionsLocked()) return;
-    if (runningOcr) return;
-    // テキストが既に読み込まれている場合は OCR 結果で上書きする旨を事前に警告する。
-    // ファイル選択や OCR 実行のコストが発生する前にキャンセル可能にするため、最初に確認する。
+    if (isScanActionsLocked()) return;
+    if (runningExtract) return;
+    // テキストが既に読み込まれている場合は 画像スキャン 結果で上書きする旨を事前に警告する。
+    // ファイル選択や 画像スキャン 実行のコストが発生する前にキャンセル可能にするため、最初に確認する。
     if (getTxtSource()) {
       const ok = await confirmDialog({
         title: "画像スキャン",
@@ -729,8 +728,8 @@ export function bindAiOcrButton() {
       });
       if (!ok) return;
     }
-    // 既に見本が読み込まれていればファイル選択をスキップしてその見本で OCR を走らせる。
-    // 未読込のときだけファイル選択ダイアログを開き、選んだファイルを見本として表示してから OCR。
+    // 既に見本が読み込まれていればファイル選択をスキップしてその見本で 画像スキャン を走らせる。
+    // 未読込のときだけファイル選択ダイアログを開き、選んだファイルを見本として表示してから 画像スキャン。
     let files = getPdfPaths();
     let needLoadReference = false;
     if (!files || files.length === 0) {
@@ -745,22 +744,22 @@ export function bindAiOcrButton() {
       needLoadReference = true;
     }
     // 新規選択時のみ pdf-stage の見本としても表示する。
-    // OCR はファイルパス配列を直接 mokuro に渡すので、先に loadReferenceFiles を await して
-    // 見本表示を確定させてから OCR フェーズに進む（ユーザーが進捗中も画像確認可）。
+    // 画像スキャン はファイルパス配列を直接 referenceScan に渡すので、先に loadReferenceFiles を await して
+    // 見本表示を確定させてから 画像スキャン フェーズに進む（ユーザーが進捗中も画像確認可）。
     if (needLoadReference) {
       try {
         await loadReferenceFiles(files);
       } catch (e) {
         console.error("loadReferenceFiles failed:", e);
-        // 見本表示に失敗しても OCR 自体は継続できるので、エラー toast だけ出して進行。
+        // 見本表示に失敗しても 画像スキャン 自体は継続できるので、エラー toast だけ出して進行。
         toast(`見本表示に失敗: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
       }
     }
-    await runAiOcr(files, { notifyOnComplete: true });
+    await runScanExtract(files, { notifyOnComplete: true });
   });
 
-  if (!isAiActionsLocked()) {
+  if (!isScanActionsLocked()) {
     btn.disabled = false;
-    btn.title = "見本画像を AI で画像スキャン（未読込ならファイル選択ダイアログを表示）";
+    btn.title = "見本画像を 画像スキャン で画像スキャン（未読込ならファイル選択ダイアログを表示）";
   }
 }

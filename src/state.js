@@ -7,7 +7,7 @@ import { getDefault, getDefaults } from "./settings.js";
 // state object には:
 //   - 配列 / Map / 複合状態（pages, edits, newLayers, selectedLayers, fonts, txtSource, ...）
 //   - currentPageIndex（ pages.length に依存して clamp が必要、factory では表現しづらい）
-//   - aiOcrDoc / editingContext / pdfDoc 系（複数フィールドが連動）
+//   - scanExtractDoc / editingContext / pdfDoc 系（複数フィールドが連動）
 //   - history（push/restore セマンティクス）
 // のみが残る。
 const state = {
@@ -40,14 +40,13 @@ const state = {
   // 行間コントロールはこれが set のとき per-line override に書き込み、unset のとき global に書く。
   editingContext: null,
   editingContextListeners: new Set(),
-  // AI 画像スキャン (run_ai_ocr) の最新結果。自動配置 (ai-place.js) で参照する。
-  // { doc: MokuroDocument, sourcePath: string } | null
-  aiOcrDoc: null,
-  aiOcrDocListeners: new Set(),
-  aiOcrTextSource: null,
-  aiOcrTextSourceListeners: new Set(),
-  aiOcrTextDiffs: [],
-  aiOcrTextDiffListeners: new Set(),
+  // { doc: ReferenceScanDocument, sourcePath: string } | null
+  scanExtractDoc: null,
+  scanExtractDocListeners: new Set(),
+  scanExtractTextSource: null,
+  scanExtractTextSourceListeners: new Set(),
+  scanExtractTextDiffs: [],
+  scanExtractTextDiffListeners: new Set(),
 };
 
 const HISTORY_MAX = 100;
@@ -151,7 +150,7 @@ const $editorLeftPaneMode = createObservable("proofread", _normEditorLeftPaneMod
 // サイドツールバーの V ボタン直下にあるトグルで切替・localStorage に永続化。
 const $newTextDirection = createObservable("vertical", _normNewTextDir);
 // テキストエディタ用: 現在編集中の TXT の元ファイルパス（読込元 / 上書き先）。
-// 「開く」「別名で保存」で更新。OCR 結果や browser D&D など path が無い経路は null。
+// 「開く」「別名で保存」で更新。画像スキャン 結果や browser D&D など path が無い経路は null。
 const $txtFilePath = createObservable(null, (v) => (v == null ? null : String(v)));
 // テキストエディタ用: 未保存変更フラグ。textarea 入力で true、保存 / 読込で false。
 const $txtDirty = createObservable(false, _normBool);
@@ -178,49 +177,48 @@ export function clearPages() {
   }
   setStrokeColor("none");
   setFillColor("default");
-  // OCR キャッシュ (aiOcrDoc) は PDF に紐付いている。PSD 切替では消さない。
-  // ai-place.js が sourcePath を current PDF と比較し、不一致なら自動で再スキャンする。
+  // 画像スキャン キャッシュ (scanExtractDoc) は PDF に紐付いている。PSD 切替では消さない。
+  // auto-place.js が sourcePath を current PDF と比較し、不一致なら自動で再スキャンする。
   // ツール初期値（フチ太さ・行間・文字サイズ・フォント）はユーザー設定の「デフォルト」を反映。
   applyToolDefaults();
   resetHistoryBaseline();
   // PDF は PSD 再読込から独立させる（ユーザー回転も保持）。ホームに戻る時のみ hamburger-menu 側で clearPdf を呼ぶ。
 }
 
-// ===== AI OCR ドキュメント (mokuro 結果) =====
-// 画像スキャン (run_ai_ocr) の結果を保持し、自動配置機能から参照する。
-export function setAiOcrDoc(doc, sourcePath) {
-  state.aiOcrDoc = { doc, sourcePath: sourcePath || null };
-  for (const fn of state.aiOcrDocListeners) fn(state.aiOcrDoc);
+// ===== 画像スキャン 画像スキャン ドキュメント (referenceScan 結果) =====
+export function setScanExtractDoc(doc, sourcePath) {
+  state.scanExtractDoc = { doc, sourcePath: sourcePath || null };
+  for (const fn of state.scanExtractDocListeners) fn(state.scanExtractDoc);
 }
-export function getAiOcrDoc() { return state.aiOcrDoc; }
-export function clearAiOcrDoc() {
-  if (state.aiOcrDoc === null) return;
-  state.aiOcrDoc = null;
-  for (const fn of state.aiOcrDocListeners) fn(null);
+export function getScanExtractDoc() { return state.scanExtractDoc; }
+export function clearScanExtractDoc() {
+  if (state.scanExtractDoc === null) return;
+  state.scanExtractDoc = null;
+  for (const fn of state.scanExtractDocListeners) fn(null);
 }
-export function onAiOcrDocChange(fn) {
-  state.aiOcrDocListeners.add(fn);
-  return () => state.aiOcrDocListeners.delete(fn);
-}
-
-export function setAiOcrTextSource(source) {
-  state.aiOcrTextSource = source && typeof source === "object" ? source : null;
-  for (const fn of state.aiOcrTextSourceListeners) fn(state.aiOcrTextSource);
-}
-export function getAiOcrTextSource() { return state.aiOcrTextSource; }
-export function onAiOcrTextSourceChange(fn) {
-  state.aiOcrTextSourceListeners.add(fn);
-  return () => state.aiOcrTextSourceListeners.delete(fn);
+export function onScanExtractDocChange(fn) {
+  state.scanExtractDocListeners.add(fn);
+  return () => state.scanExtractDocListeners.delete(fn);
 }
 
-export function setAiOcrTextDiffs(diffs) {
-  state.aiOcrTextDiffs = Array.isArray(diffs) ? diffs : [];
-  for (const fn of state.aiOcrTextDiffListeners) fn(state.aiOcrTextDiffs);
+export function setScanExtractTextSource(source) {
+  state.scanExtractTextSource = source && typeof source === "object" ? source : null;
+  for (const fn of state.scanExtractTextSourceListeners) fn(state.scanExtractTextSource);
 }
-export function getAiOcrTextDiffs() { return state.aiOcrTextDiffs; }
-export function onAiOcrTextDiffsChange(fn) {
-  state.aiOcrTextDiffListeners.add(fn);
-  return () => state.aiOcrTextDiffListeners.delete(fn);
+export function getScanExtractTextSource() { return state.scanExtractTextSource; }
+export function onScanExtractTextSourceChange(fn) {
+  state.scanExtractTextSourceListeners.add(fn);
+  return () => state.scanExtractTextSourceListeners.delete(fn);
+}
+
+export function setScanExtractTextDiffs(diffs) {
+  state.scanExtractTextDiffs = Array.isArray(diffs) ? diffs : [];
+  for (const fn of state.scanExtractTextDiffListeners) fn(state.scanExtractTextDiffs);
+}
+export function getScanExtractTextDiffs() { return state.scanExtractTextDiffs; }
+export function onScanExtractTextDiffsChange(fn) {
+  state.scanExtractTextDiffListeners.add(fn);
+  return () => state.scanExtractTextDiffListeners.delete(fn);
 }
 
 // 環境設定 → 「デフォルト」の値を新規テキストレイヤー用ツール状態に反映する。
@@ -883,8 +881,8 @@ export function addNewLayer({
   autoFontSwitchBucket,
   lineLeadings,
   charRubies,
-  lowOcrTextMatch,
-  ocrMatchScore,
+  lowExtractTextMatch,
+  extractMatchScore,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -921,7 +919,7 @@ export function addNewLayer({
     // タグで描画、Photoshop 保存時は jsx_gen.rs の applyRubies で親レイヤーの直前に新規ルビ
     // レイヤーを追加する。
     charRubies: normalizeCharRubiesMap(charRubies),
-    // 自動配置 (ai-place.js) で生成されたレイヤーは元 TXT 段落への参照を持つ。
+    // 自動配置 (auto-place.js) で生成されたレイヤーは元 TXT 段落への参照を持つ。
     // { pageNumber, paragraphIndex } を保持し、後から TXT が編集されたときに
     // syncPlacedFromTxt が contents を追従させる。手動配置レイヤーは null。
     sourceTxtRef: sourceTxtRef ?? null,
@@ -932,8 +930,8 @@ export function addNewLayer({
     // 0..5 の bucket index (10% 刻み)。-1 は未切替 / 算出不能。
     // CSS 側で auto-font-bucket-N クラス → 6 段階の色グラデーション。
     autoFontSwitchBucket: Number.isInteger(autoFontSwitchBucket) ? autoFontSwitchBucket : -1,
-    lowOcrTextMatch: lowOcrTextMatch === true,
-    ocrMatchScore: Number.isFinite(ocrMatchScore) ? ocrMatchScore : null,
+    lowExtractTextMatch: lowExtractTextMatch === true,
+    extractMatchScore: Number.isFinite(extractMatchScore) ? extractMatchScore : null,
     // 【v1.28.0 移植 (PsDesign-main v1.25.0)】自動配置時の元 sizePt。
     // 位置調整 mode2 / mode3 でサイズ補正を idempotent にするために保存する。
     // layer.sizePt が後から更新されても、補正は sizePtBasis × sizeCorrectionFactor で再計算。

@@ -1,5 +1,5 @@
 import {
-  clearAiOcrDoc,
+  clearScanExtractDoc,
   clearPages,
   clearPdf,
   clearTxtSource,
@@ -21,7 +21,7 @@ import { renderTxtSourceViewer } from "./txt-source.js";
 import { confirmDialog } from "./ui-feedback.js";
 import { openSettingsModal } from "./settings-ui.js";
 import { clearAllGuides, setGuidesLocked } from "./rulers.js";
-import { resetAutoPlaceState } from "./ai-place.js";
+import { resetAutoPlaceState } from "./auto-place.js";
 import { resetStylePaletteState } from "./style-palette.js";
 
 const THEME_KEY = "psdesign_theme";
@@ -117,7 +117,7 @@ async function goHome() {
   setFolder(null);
   clearPages();
   clearTxtSource();
-  clearAiOcrDoc();
+  clearScanExtractDoc();
   setFontPickerStuck(false);
   setGuidesLocked(false);
   clearAllGuides();

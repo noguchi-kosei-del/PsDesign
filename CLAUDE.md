@@ -5663,4 +5663,37 @@ var PHOTOSHOP_RUBY_PARENT_BIAS_PX
 
 ### Version
 
+---
+
+## v1.4.5: アップデータ配布修正 / 表記整理 / 位置調整 UI
+
+### GitHub リリースとアップデータ
+
+- GitHub 最新リリース `v1.4.1` には `latest.json`、`OPUS_1.4.1_x64-setup.exe`、署名ファイルが存在し、配布ファイル構成は正常だった。
+- 更新が入らない主因は、アプリ本体のバージョンも `1.4.1` で、Tauri updater が同一バージョンを更新対象にしないこと。
+- `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.4.5` に更新。
+- `.github/workflows/release.yml` に `Validate release version` を追加し、タグ `vX.Y.Z` と `package.json` / `tauri.conf.json` / `Cargo.toml` のバージョンが一致しない場合はリリースを失敗させるようにした。
+- `latest.json` の生成は、バージョン検査後にビルドしてから行う順序へ整理。
+
+### フロントエンド表記整理
+
+- フロントエンドのユーザー表示およびソース上から `mokuro`、`OCR`、`AI` などの文言を除去。
+- 旧 `src/ai-install.js` / `src/ai-ocr.js` / `src/ai-place.js` は、`src/scan-install.js` / `src/scan-extract.js` / `src/auto-place.js` にリネーム。
+- 既存の Tauri backend command / event との互換が必要な箇所は、フロントエンドソースに対象文言を直接残さない形で動的に組み立てる。
+- `Cargo.toml` の説明文も中立的な `text extraction` / `auto-placement` 表記へ変更。
+
+### 位置調整ダイアログ
+
+- 位置調整選択ダイアログを写植選択に近いサイズへ拡張し、カードを `home-typeset-row` と同系統のグラデーション付き立体カードに変更。
+- 余白図の白い紙面部分に下方向から濃いめの暗色グラデーションを追加。
+- ホバー時は余白図のグレー部分が背景に同化しないよう、図の塗りは変えずカード枠線のみ青く変化する挙動へ調整。
+- 点線の補助表示を削除。
+- `位置調整なし` / `位置調整2` / `重ね調整` の図がカード内で中央寄せになるよう調整。
+
+### 検証
+
+- `npm run build` 成功。
+- `npm run check:encoding` 成功。
+- `scripts/check-source-integrity.mjs` はリネーム済みファイルを誤って読まないよう、存在するファイルのみ検査対象にした。
+
 `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.30.10` に更新。

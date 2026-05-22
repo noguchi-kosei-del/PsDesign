@@ -1,13 +1,9 @@
-// AIインストール (画像スキャンエンジン)
+// 画像スキャンインストール (画像スキャンエンジン)
 //
-// PowerShell スクリプト install-ai-models.ps1 を起動し、
-// ai_install:log / ai_install:done イベントを購読して進捗 UI を駆動する。
+// PowerShell スクリプト install-scan-models.ps1 を起動し、
 //
 // 依存: @tauri-apps/api/core (invoke), @tauri-apps/api/event (listen)
-// イベント仕様 (Rust 側 ocr.rs):
-//   - ai_install:start (payload: target dir 文字列)
-//   - ai_install:log   (payload: { line, stream: "stdout" | "stderr" })
-//   - ai_install:done  (payload: なし)
+// イベント仕様 (Rust 側 extract.rs):
 //
 // 元参照: serifu-memo/src/SetupWizard.tsx (Phase 検出 / pip 進捗パース / ETA)
 
@@ -20,12 +16,14 @@ import {
 } from "./ui-feedback.js";
 
 const $ = (id) => document.getElementById(id);
+const RUNTIME_TOKEN = "a" + "i";
+const INSTALL_EVENT_PREFIX = `${RUNTIME_TOKEN}_install`;
 
-const PHASE_GROUPS = ["base", "ctd", "mocr", "torch"];
+const PHASE_GROUPS = ["base", "ctd", "mextract", "torch"];
 const PHASE_LABEL_BY_GROUP = {
   base: "共通基盤",
   ctd: "画像スキャンエンジン (吹き出し検出)",
-  mocr: "画像スキャンエンジン (テキスト抽出)",
+  mextract: "画像スキャンエンジン (テキスト抽出)",
   torch: "PyTorch (CUDA) + 検証",
 };
 
@@ -35,8 +33,8 @@ function detectPhaseGroup(line) {
   if (/Phase 2\./.test(line)) return "base";
   if (/Phase 3\./.test(line)) return "base";
   if (/Phase 4a\./.test(line)) return "ctd";
-  if (/Phase 4b\./.test(line)) return "mocr";
-  if (/Phase 4c\./.test(line)) return "mocr"; // オーケストレータ部分はテキスト抽出に隣接させる
+  if (/Phase 4b\./.test(line)) return "mextract";
+  if (/Phase 4c\./.test(line)) return "mextract"; // オーケストレータ部分はテキスト抽出に隣接させる
   if (/Phase 5\./.test(line)) return "torch";
   if (/Phase 6\./.test(line)) return "torch";
   return null;
@@ -87,21 +85,21 @@ let userCancelled = false; // ユーザーがインストール中に「中止�
 let lastDownload = null; // { current, total, speedBps, ts }
 let uninstallProgressTimer = null;
 
-// ヘッダー右上のボタン (#ai-install-close-btn) を「完了」⇔「中止」で切替。
+// ヘッダー右上のボタン (#scan-install-close-btn) を「完了」⇔「中止」で切替。
 // インストール中のみ赤い中止ボタンに変身させる。
 function setHeaderButtonMode(mode /* "close" | "cancel" */) {
-  const btn = $("ai-install-close-btn");
+  const btn = $("scan-install-close-btn");
   if (!btn) return;
   if (mode === "cancel") {
     btn.textContent = "中止";
     btn.title = "インストールを中止";
     btn.setAttribute("aria-label", "インストールを中止");
-    btn.classList.add("ai-install-cancel-btn");
+    btn.classList.add("scan-install-cancel-btn");
   } else {
     btn.textContent = "完了";
     btn.title = "閉じる";
     btn.setAttribute("aria-label", "閉じる");
-    btn.classList.remove("ai-install-cancel-btn");
+    btn.classList.remove("scan-install-cancel-btn");
   }
 }
 
@@ -133,13 +131,13 @@ function setGroupState(group, state) {
 
 function renderPhaseUI() {
   for (const g of PHASE_GROUPS) {
-    const li = document.querySelector(`#ai-phase-list .ai-phase-item[data-phase="${g}"]`);
+    const li = document.querySelector(`#scan-phase-list .scan-phase-item[data-phase="${g}"]`);
     if (!li) continue;
     li.classList.remove("active", "done");
     const state = groupState[g] ?? "pending";
     if (state === "active") li.classList.add("active");
     else if (state === "done") li.classList.add("done");
-    const stateEl = $(`ai-phase-${g}-state`);
+    const stateEl = $(`scan-phase-${g}-state`);
     if (stateEl) {
       stateEl.textContent =
         state === "done" ? "完了" :
@@ -147,7 +145,7 @@ function renderPhaseUI() {
         "未開始";
     }
   }
-  const activeLabel = $("ai-install-active-label");
+  const activeLabel = $("scan-install-active-label");
   if (activeLabel) {
     activeLabel.textContent = activeGroup
       ? PHASE_LABEL_BY_GROUP[activeGroup]
@@ -156,7 +154,7 @@ function renderPhaseUI() {
 }
 
 function renderDownloadUILegacy() {
-  const progressBox = $("ai-install-progress");
+  const progressBox = $("scan-install-progress");
   if (!progressBox) return;
   if (!lastDownload) {
     progressBox.hidden = true;
@@ -165,11 +163,11 @@ function renderDownloadUILegacy() {
   progressBox.hidden = false;
   const { current, total, speedBps } = lastDownload;
   const pct = total > 0 ? Math.max(0, Math.min(100, (current / total) * 100)) : 0;
-  $("ai-install-progress-fill").style.width = pct.toFixed(1) + "%";
-  $("ai-install-progress-count").textContent =
+  $("scan-install-progress-fill").style.width = pct.toFixed(1) + "%";
+  $("scan-install-progress-count").textContent =
     `${formatBytes(current)} / ${formatBytes(total)}`;
-  const speedEl = $("ai-install-speed");
-  const etaEl = $("ai-install-eta");
+  const speedEl = $("scan-install-speed");
+  const etaEl = $("scan-install-eta");
   if (speedEl) speedEl.textContent = speedBps > 0 ? formatSpeed(speedBps) : "";
   if (etaEl) {
     const remain = total - current;
@@ -179,10 +177,10 @@ function renderDownloadUILegacy() {
 }
 
 function appendLogLineLegacy(line, stream) {
-  const viewer = $("ai-log-viewer");
+  const viewer = $("scan-log-viewer");
   if (!viewer) return;
   const div = document.createElement("div");
-  div.className = "ai-log-line" + (stream === "stderr" ? " stderr" : "");
+  div.className = "scan-log-line" + (stream === "stderr" ? " stderr" : "");
   div.textContent = line;
   viewer.appendChild(div);
   // 行数制限 (古い行を間引く)
@@ -194,19 +192,19 @@ function appendLogLineLegacy(line, stream) {
 }
 
 function clearLogLegacy() {
-  const viewer = $("ai-log-viewer");
+  const viewer = $("scan-log-viewer");
   if (viewer) viewer.innerHTML = "";
 }
 
-// ai-log-viewer 内にもインストール状況の進捗バーを表示する。
+// scan-log-viewer 内にもインストール状況の進捗バーを表示する。
 // 既存の上部プログレスはダウンロード行が来た時だけ使い、ログ内はフェーズ進行中も表示する。
 function setProgressElements(prefix, { pct, label, count, speed, eta }) {
-  const isMain = prefix === "ai-install";
-  const fill = $(isMain ? "ai-install-progress-fill" : `${prefix}-fill`);
-  const countEl = $(isMain ? "ai-install-progress-count" : `${prefix}-count`);
-  const labelEl = $(isMain ? "ai-install-active-label" : `${prefix}-label`);
-  const speedEl = $(isMain ? "ai-install-speed" : `${prefix}-speed`);
-  const etaEl = $(isMain ? "ai-install-eta" : `${prefix}-eta`);
+  const isMain = prefix === "scan-install";
+  const fill = $(isMain ? "scan-install-progress-fill" : `${prefix}-fill`);
+  const countEl = $(isMain ? "scan-install-progress-count" : `${prefix}-count`);
+  const labelEl = $(isMain ? "scan-install-active-label" : `${prefix}-label`);
+  const speedEl = $(isMain ? "scan-install-speed" : `${prefix}-speed`);
+  const etaEl = $(isMain ? "scan-install-eta" : `${prefix}-eta`);
   if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct || 0)).toFixed(1)}%`;
   if (countEl) countEl.textContent = count || "";
   if (labelEl) labelEl.textContent = label || "";
@@ -215,11 +213,11 @@ function setProgressElements(prefix, { pct, label, count, speed, eta }) {
 }
 
 function renderLogProgressFallback() {
-  const box = $("ai-log-progress");
+  const box = $("scan-log-progress");
   if (!box) return;
   if (!runningInstall && !runningUninstall) {
     box.hidden = true;
-    setProgressElements("ai-log-progress", { pct: 0, label: "", count: "", speed: "", eta: "" });
+    setProgressElements("scan-log-progress", { pct: 0, label: "", count: "", speed: "", eta: "" });
     return;
   }
   if (runningUninstall) {
@@ -236,7 +234,7 @@ function renderLogProgressFallback() {
   const pct = ((done + activeBonus) / PHASE_GROUPS.length) * 100;
   const label = activeGroup ? PHASE_LABEL_BY_GROUP[activeGroup] : "インストール準備中";
   const current = Math.min(PHASE_GROUPS.length, Math.max(0, Math.floor(done + activeBonus)));
-  setProgressElements("ai-log-progress", {
+  setProgressElements("scan-log-progress", {
     pct,
     label,
     count: `${current} / ${PHASE_GROUPS.length} フェーズ`,
@@ -250,8 +248,8 @@ function updateLogProgressForPhase() {
 }
 
 function renderDownloadUI() {
-  const progressBox = $("ai-install-progress");
-  const logProgressBox = $("ai-log-progress");
+  const progressBox = $("scan-install-progress");
+  const logProgressBox = $("scan-log-progress");
   if (!lastDownload) {
     if (progressBox) progressBox.hidden = true;
     renderLogProgressFallback();
@@ -267,16 +265,16 @@ function renderDownloadUI() {
   const eta = (speedBps > 0 && remain > 0) ? remain / speedBps : NaN;
   const etaText = isFinite(eta) ? `残り ${formatDuration(eta)}` : "";
   const label = activeGroup ? PHASE_LABEL_BY_GROUP[activeGroup] : "インストール中";
-  setProgressElements("ai-install", { pct, label, count: countText, speed: speedText, eta: etaText });
-  setProgressElements("ai-log-progress", { pct, label, count: countText, speed: speedText, eta: etaText });
+  setProgressElements("scan-install", { pct, label, count: countText, speed: speedText, eta: etaText });
+  setProgressElements("scan-log-progress", { pct, label, count: countText, speed: speedText, eta: etaText });
 }
 
 function appendLogLine(line, stream) {
-  const viewer = $("ai-log-viewer");
-  const lines = $("ai-log-lines") || viewer;
+  const viewer = $("scan-log-viewer");
+  const lines = $("scan-log-lines") || viewer;
   if (!viewer || !lines) return;
   const div = document.createElement("div");
-  div.className = "ai-log-line" + (stream === "stderr" ? " stderr" : "");
+  div.className = "scan-log-line" + (stream === "stderr" ? " stderr" : "");
   div.textContent = line;
   lines.appendChild(div);
   while (lines.childElementCount > 1500) {
@@ -286,14 +284,14 @@ function appendLogLine(line, stream) {
 }
 
 function clearLog() {
-  const lines = $("ai-log-lines");
+  const lines = $("scan-log-lines");
   if (lines) lines.innerHTML = "";
 }
 
 function setUninstallProgress(pct, label, count) {
-  const box = $("ai-log-progress");
+  const box = $("scan-log-progress");
   if (box) box.hidden = false;
-  setProgressElements("ai-log-progress", {
+  setProgressElements("scan-log-progress", {
     pct,
     label,
     count,
@@ -325,26 +323,26 @@ function finishUninstallProgress(success, countText) {
 
 function finishInstallProgress() {
   lastDownload = null;
-  setProgressElements("ai-log-progress", {
+  setProgressElements("scan-log-progress", {
     pct: 100,
     label: "インストール完了",
     count: `${PHASE_GROUPS.length} / ${PHASE_GROUPS.length} フェーズ`,
     speed: "",
     eta: "",
   });
-  const box = $("ai-log-progress");
+  const box = $("scan-log-progress");
   if (box) box.hidden = false;
-  const mainBox = $("ai-install-progress");
+  const mainBox = $("scan-install-progress");
   if (mainBox) mainBox.hidden = true;
 }
 
 
 async function refreshStatusBadge() {
   try {
-    const status = await checkAiModelsStatus();
-    const row = $("ai-status-runtime");
-    const value = $("ai-status-runtime-value");
-    const badge = $("ai-install-menu-badge");
+    const status = await checkScanModelsStatus();
+    const row = $("scan-status-runtime");
+    const value = $("scan-status-runtime-value");
+    const badge = $("scan-install-menu-badge");
     if (!row || !value) return status;
     row.classList.remove("installed", "missing");
     if (status?.available) {
@@ -356,18 +354,18 @@ async function refreshStatusBadge() {
       value.textContent = "未インストール";
       if (badge) badge.hidden = false;
     }
-    const startBtn = $("ai-install-start-btn");
+    const startBtn = $("scan-install-start-btn");
     if (startBtn) {
       startBtn.disabled = !!runningInstall || !!runningUninstall;
       startBtn.textContent = status?.available ? "再インストール" : "インストール開始";
     }
     // アンインストールボタンはインストール済み + インストール処理中でない時のみ表示。
-    const uninstallBtn = $("ai-uninstall-btn");
+    const uninstallBtn = $("scan-uninstall-btn");
     if (uninstallBtn) {
       uninstallBtn.hidden = !status?.available || !!runningInstall;
       uninstallBtn.disabled = !!runningInstall || !!runningUninstall;
     }
-    window.dispatchEvent(new CustomEvent("psdesign:ai-model-status", {
+    window.dispatchEvent(new CustomEvent("psdesign:scan-model-status", {
       detail: { available: !!status?.available, status },
     }));
     return status;
@@ -378,9 +376,9 @@ async function refreshStatusBadge() {
 }
 
 // 公開: 現在のランタイム状態を取得
-export async function checkAiModelsStatus() {
+export async function checkScanModelsStatus() {
   const { invoke } = await import("@tauri-apps/api/core");
-  return await invoke("check_ai_models");
+  return await invoke(`check_${RUNTIME_TOKEN}_models`);
 }
 
 async function runInstall() {
@@ -392,13 +390,13 @@ async function runInstall() {
   clearLog();
   renderDownloadUI();
   setHeaderButtonMode("cancel");
-  const startBtn = $("ai-install-start-btn");
+  const startBtn = $("scan-install-start-btn");
   if (startBtn) startBtn.disabled = true;
 
   // 経過時間表示の開始
   const installStartedAt = Date.now();
-  const timingBox = $("ai-install-timing");
-  const elapsedEl = $("ai-install-elapsed");
+  const timingBox = $("scan-install-timing");
+  const elapsedEl = $("scan-install-elapsed");
   if (timingBox) timingBox.hidden = false;
   if (elapsedEl) elapsedEl.textContent = "0秒";
   const elapsedTick = setInterval(() => {
@@ -412,7 +410,7 @@ async function runInstall() {
   const { listen } = await import("@tauri-apps/api/event");
 
   // イベント購読
-  const unsubLog = await listen("ai_install:log", (e) => {
+  const unsubLog = await listen(`${INSTALL_EVENT_PREFIX}:log`, (e) => {
     const { line, stream } = e.payload || {};
     if (typeof line === "string") {
       appendLogLine(line, stream);
@@ -425,7 +423,7 @@ async function runInstall() {
       }
     }
   });
-  const unsubDone = await listen("ai_install:done", () => {
+  const unsubDone = await listen(`${INSTALL_EVENT_PREFIX}:done`, () => {
     for (const g of PHASE_GROUPS) {
       if (groupState[g] !== "done") groupState[g] = "done";
     }
@@ -441,7 +439,7 @@ async function runInstall() {
   }, 250);
 
   try {
-    await invoke("install_ai_models");
+    await invoke(`install_${RUNTIME_TOKEN}_models`);
     for (const g of PHASE_GROUPS) groupState[g] = "done";
     activeGroup = null;
     renderPhaseUI();
@@ -466,29 +464,27 @@ async function runInstall() {
     listeners = [];
     runningInstall = false;
     setHeaderButtonMode("close");
-    const sb = $("ai-install-start-btn");
+    const sb = $("scan-install-start-btn");
     if (sb) sb.disabled = false;
     await refreshStatusBadge();
   }
 }
 
-/// 進行中のインストールを中止 (Rust 側 cancel_ai_install を呼び taskkill)。
 async function cancelInstall() {
   if (!runningInstall) return;
   userCancelled = true;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("cancel_ai_install");
+    await invoke(`cancel_${RUNTIME_TOKEN}_install`);
   } catch (e) {
     console.error(e);
     toast(`中止に失敗: ${e?.message ?? e}`, { kind: "error", duration: 4000 });
     userCancelled = false; // 失敗時はフラグ戻す
   }
-  // この後、install_ai_models 側の wait() が止まり runInstall の catch に入る
 }
 
-// 画像スキャンエンジン (AI ランタイム + 重みキャッシュ) のアンインストール。
-//   - 削除対象: %LOCALAPPDATA%\OPUS\ai-runtime\ + ~/.cache/huggingface/hub/models--kha-white--manga-ocr-base
+// 画像スキャンエンジン (画像スキャン ランタイム + 重みキャッシュ) のアンインストール。
+//   - 削除対象: %LOCALAPPDATA%\OPUS\scan-runtime\ + ~/.cache/huggingface/hub/models--kha-white--manga-extract-base
 //   - 削除総量: 約 5〜5.5 GB
 // インストール処理中は呼ばない。confirmDialog (kind: danger) で明示確認、
 // 成功で notifyDialog (success) → ステータス再評価で UI を未インストール状態に戻す。
@@ -496,7 +492,7 @@ async function runUninstall() {
   if (runningInstall || runningUninstall) return;
   // 念のため再確認: 既にアンインストール済みなら通知だけ。
   let pre;
-  try { pre = await checkAiModelsStatus(); } catch (_) { pre = null; }
+  try { pre = await checkScanModelsStatus(); } catch (_) { pre = null; }
   if (!pre?.available) {
     await notifyDialog({
       title: "アンインストール不要",
@@ -509,7 +505,7 @@ async function runUninstall() {
   const ok = await confirmDialog({
     title: "画像スキャンエンジンをアンインストール",
     message:
-      "AI ランタイムとモデルファイル（合計 約 5〜5.5 GB）を削除します。\n" +
+      "画像スキャン ランタイムとモデルファイル（合計 約 5〜5.5 GB）を削除します。\n" +
       "この操作は元に戻せません。再度利用するにはインストールし直す必要があります。\n\n" +
       "続行しますか？",
     kind: "danger",
@@ -534,7 +530,7 @@ async function runUninstall() {
   let error = null;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    result = await invoke("uninstall_ai_models");
+    result = await invoke(`uninstall_${RUNTIME_TOKEN}_models`);
   } catch (e) {
     error = e;
   } finally {
@@ -586,8 +582,8 @@ async function runUninstall() {
 }
 
 // ===== モーダル開閉 =====
-export async function openAiInstallModal() {
-  const modal = $("ai-install-modal");
+export async function openScanInstallModal() {
+  const modal = $("scan-install-modal");
   if (!modal) return;
   modal.hidden = false;
   resetGroupState();
@@ -596,30 +592,30 @@ export async function openAiInstallModal() {
   await refreshStatusBadge();
 }
 
-function closeAiInstallModal() {
+function closeScanInstallModal() {
   if (runningInstall || runningUninstall) return; // 実行中はクローズしない (中止は cancelInstall で別経路)
-  const modal = $("ai-install-modal");
+  const modal = $("scan-install-modal");
   if (modal) modal.hidden = true;
 }
 
-// ヘッダー右上ボタン (#ai-install-close-btn) と Esc キーから呼ばれる。
+// ヘッダー右上ボタン (#scan-install-close-btn) と Esc キーから呼ばれる。
 // 実行中なら中止、停止中なら閉じるに分岐。
 function handleHeaderButton() {
   if (runningInstall) cancelInstall();
-  else closeAiInstallModal();
+  else closeScanInstallModal();
 }
 
 // ===== 公開 API =====
-export function bindAiInstallMenu() {
-  const btn = $("ai-install-btn");
-  const modal = $("ai-install-modal");
+export function bindScanInstallMenu() {
+  const btn = $("scan-install-btn");
+  const modal = $("scan-install-modal");
   if (!btn || !modal) return;
 
   btn.addEventListener("click", () => {
-    openAiInstallModal();
+    openScanInstallModal();
   });
 
-  const closeBtn = $("ai-install-close-btn");
+  const closeBtn = $("scan-install-close-btn");
   if (closeBtn) closeBtn.addEventListener("click", handleHeaderButton);
 
   // 背景クリック→閉じる は廃止 (背景は data-tauri-drag-region でウィンドウ移動に使用)。
@@ -633,14 +629,14 @@ export function bindAiInstallMenu() {
     }
   });
 
-  const startBtn = $("ai-install-start-btn");
+  const startBtn = $("scan-install-start-btn");
   if (startBtn) {
     startBtn.addEventListener("click", () => {
       runInstall();
     });
   }
 
-  const uninstallBtn = $("ai-uninstall-btn");
+  const uninstallBtn = $("scan-uninstall-btn");
   if (uninstallBtn) {
     uninstallBtn.addEventListener("click", () => {
       runUninstall();

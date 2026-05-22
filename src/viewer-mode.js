@@ -123,7 +123,7 @@ function hasOpenDialog() {
     ".key-capture-modal",
     ".font-book-modal",
     ".style-palette-modal",
-    ".ai-adjust-choice-modal",
+    ".scan-adjust-choice-modal",
   ];
   return selectors.some((selector) =>
     Array.from(document.querySelectorAll(selector)).some(isVisibleElement),

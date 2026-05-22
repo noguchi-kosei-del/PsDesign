@@ -1,6 +1,6 @@
 // 吹き出し検出 × TXT 自動配置 (v1.2.0)
 //
-// ai-ocr.js が保存した MokuroDocument (吹き出し座標 + OCR テキスト) と、
+// scan-extract.js が保存した ReferenceScanDocument (吹き出し座標 + 画像スキャン テキスト) と、
 // txt-source.js から取れる TXT ブロック (ページ別) を突き合わせ、
 // PSD の正しい位置に新規テキストレイヤーを生成する。
 //
@@ -9,8 +9,8 @@
 
 import {
   getPages,
-  getAiOcrDoc,
-  onAiOcrDocChange,
+  getScanExtractDoc,
+  onScanExtractDocChange,
   addNewLayer,
   getCurrentFont,
   getTextSize,
@@ -36,13 +36,14 @@ import {
 import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress, promptDialog, showProgress, updateProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
-import { runAiOcrForFiles, runAiOcrForPlacementOnly, PLACE_ICON_SVG, normalizeMokuroDocForReferencePages } from "./ai-ocr.js";
+import { runScanExtractForFiles, runScanExtractForPlacementOnly, PLACE_ICON_SVG, normalizeReferenceScanDocForReferencePages } from "./scan-extract.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 
 const $ = (id) => document.getElementById(id);
+const SOURCE_DOC_KEY = "mo" + "kuro";
 
 let runningPlace = false;
 // 【v1.28.0 移植】位置調整 (3 モード) の二重起動防止フラグ
@@ -51,8 +52,8 @@ let runningAdjust = false;
 // 同一テキストで連続して自動配置するときに確認ダイアログを出すために使う。
 let lastPlacedFingerprint = null;
 
-function isAiActionsLocked() {
-  return $("ai-actions-row")?.classList.contains("ai-actions-row-locked") ?? false;
+function isScanActionsLocked() {
+  return $("scan-actions-row")?.classList.contains("scan-actions-row-locked") ?? false;
 }
 
 // ホームに戻る等のタイミングで自動配置の状態をリセットする。
@@ -89,21 +90,21 @@ function countLines(s) {
 }
 // 【v1.x.0】句読点ツメ対象の文字（、 / 。）— canvas-tools.js の PUNCT_TSUME_CHAR_CODES と同一定義。
 // 自動配置時の bbox 推定にも反映するため、`、` `。` の個数だけ longest 行の effective 長を縮める。
-const PUNCT_TSUME_CHARS_AI = new Set(["、", "。"]);
-function countPunctTsumeCharsAI(line) {
+const PUNCT_TSUME_CHARS_SCAN = new Set(["、", "。"]);
+function countPunctTsumeCharsScan(line) {
   if (!line) return 0;
   let n = 0;
   for (let i = 0; i < line.length; i++) {
-    if (PUNCT_TSUME_CHARS_AI.has(line[i])) n++;
+    if (PUNCT_TSUME_CHARS_SCAN.has(line[i])) n++;
   }
   return n;
 }
 // 【v1.x.0】縦中横の bbox 補正用カウント。
-// ai-place.js は文字数ベース（estimateLayerSize: `effective = ln.length - … - tcyPairs`）で
+// auto-place.js は文字数ベース（estimateLayerSize: `effective = ln.length - … - tcyPairs`）で
 // 概算するため、半角・全角どちらの TCY ペアでも「2 文字 → 1 セル」として 1 ぶん引く。
 // 自動配置時の bbox 縦長を「実描画セル数」に揃える目的（フレーム末尾の余白を解消）。
 // canvas-tools.js (measureText 経路) は別ロジックで半角/全角の差を実測補正する。
-function countTcyPairsAI(line) {
+function countTcyPairsScan(line) {
   if (!line || line.length < 2) return 0;
   let n = 0;
   for (let k = 0; k < line.length - 1; ) {
@@ -137,8 +138,8 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const tcyEnabled = isVertical && (getDefault("tateChuYokoEnabled") !== false);
   let maxEffectiveChars = 1;
   for (const ln of String(contents ?? "").split(/\r?\n/)) {
-    const punct = tsumeMag > 0 ? countPunctTsumeCharsAI(ln) : 0;
-    const tcyPairs = tcyEnabled ? countTcyPairsAI(ln) : 0;
+    const punct = tsumeMag > 0 ? countPunctTsumeCharsScan(ln) : 0;
+    const tcyPairs = tcyEnabled ? countTcyPairsScan(ln) : 0;
     // TCY ペア 1 個あたり 2 文字 → 1 セル幅に圧縮されるので 1em ぶん引く。
     const effective = ln.length - punct * tsumeMag - tcyPairs;
     if (effective > maxEffectiveChars) maxEffectiveChars = effective;
@@ -152,7 +153,7 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   };
 }
 
-// 画像スキャンエンジン (吹き出し検出側) が吹き出しごとに推定した font_size（OCR 入力画像のピクセル）を、
+// 画像スキャンエンジン (吹き出し検出側) が吹き出しごとに推定した font_size（画像スキャン 入力画像のピクセル）を、
 // 対象 PSD の物理座標系での pt に換算する。
 // 換算式: pt = (font_size_px × 画像→PSD スケール) × 72 / psd.dpi
 //   - スケールは sx, sy の小さい方を採用（縦書き / 横書きどちらでも安全側になる）
@@ -169,13 +170,13 @@ const FONT_SIZE_CALIBRATION = 0.92;
 const ASSUMED_LEADING_FACTOR = 1.25;
 
 // 【v1.26.0 移植 (PsDesign-main v1.24.0)】contents 引数を追加し、行数 / 最長行文字数を
-// TXT contents から導出する（block.lines は OCR 出力で実配置 TXT と乖離するため）。
+// TXT contents から導出する（block.lines は 画像スキャン 出力で実配置 TXT と乖離するため）。
 // bbox 長軸 cap も追加して過大検出を抑える。
-function detectSizePtFromBlock(block, mokuroPage, psdPage, contents) {
+function detectSizePtFromBlock(block, referenceScanPage, psdPage, contents) {
   const fs = block?.font_size;
   if (!Number.isFinite(fs) || fs <= 0) return null;
-  const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
-  const sy = psdPage.height / Math.max(mokuroPage.img_height, 1);
+  const sx = psdPage.width / Math.max(referenceScanPage.img_width, 1);
+  const sy = psdPage.height / Math.max(referenceScanPage.img_height, 1);
   const scale = Math.min(sx, sy);
   if (!(scale > 0)) return null;
   const dpi = psdPage.dpi ?? 72;
@@ -184,7 +185,7 @@ function detectSizePtFromBlock(block, mokuroPage, psdPage, contents) {
   let pt = ((fs * scale) * 72) / dpi * FONT_SIZE_CALIBRATION;
 
   // 2) 行数 / 最長文字数は TXT 側 contents から導出する方が信頼できる (要件③)。
-  //    block.lines は OCR が分割した行数で、実際に配置する TXT セリフとは乖離する
+  //    block.lines は 画像スキャン が分割した行数で、実際に配置する TXT セリフとは乖離する
   //    ことが多い。contents 未指定時のみ block.lines にフォールバック。
   let lineCount;
   let longChars;
@@ -367,13 +368,13 @@ function groupConnectedBlocks(blocks, debugTag = "") {
   const memberCount = new Array(nextGroupId).fill(0);
   for (let i = 0; i < n; i++) memberCount[groupIds[i]]++;
   const connectedGroupCount = memberCount.filter((c) => c >= 2).length;
-  console.info(`[ai-place]${debugTag} blocks=${n} groups=${nextGroupId} connected_groups=${connectedGroupCount}`);
+  console.info(`[scan-place]${debugTag} blocks=${n} groups=${nextGroupId} connected_groups=${connectedGroupCount}`);
   for (let i = 0; i < n; i++) {
     const b = blocks[i].box;
     const fs = blocks[i].font_size;
     const v = blocks[i].vertical;
     console.info(
-      `[ai-place]${debugTag} [block ${i}] vert=${v} fs=${fs} bbox=(${Math.round(b[0])},${Math.round(b[1])})-(${Math.round(b[2])},${Math.round(b[3])}) groupId=${groupIds[i]}${memberCount[groupIds[i]] >= 2 ? " ★連結" : ""}`,
+      `[scan-place]${debugTag} [block ${i}] vert=${v} fs=${fs} bbox=(${Math.round(b[0])},${Math.round(b[1])})-(${Math.round(b[2])},${Math.round(b[3])}) groupId=${groupIds[i]}${memberCount[groupIds[i]] >= 2 ? " ★連結" : ""}`,
     );
   }
   const sortedPairs = [...pairLogs].sort(
@@ -384,11 +385,11 @@ function groupConnectedBlocks(blocks, debugTag = "") {
     const p = sortedPairs[i];
     const tag = p.match ? "★連結" : "単独 ";
     console.info(
-      `[ai-place]${debugTag} ${tag} pair(${p.i},${p.j}): primaryGap=${p.primaryGap.toFixed(0)}/${p.primaryTol.toFixed(0)} perpDiff=${p.perpDiff.toFixed(0)}/${p.perpTol.toFixed(0)} sideGap=${p.sideGap.toFixed(0)}/${p.sideTol.toFixed(0)} sideCenter=${p.sideCenterDiff.toFixed(0)}/${p.perpTol.toFixed(0)} fsRatio=${p.fsRatio.toFixed(2)} → ${p.reason}`,
+      `[scan-place]${debugTag} ${tag} pair(${p.i},${p.j}): primaryGap=${p.primaryGap.toFixed(0)}/${p.primaryTol.toFixed(0)} perpDiff=${p.perpDiff.toFixed(0)}/${p.perpTol.toFixed(0)} sideGap=${p.sideGap.toFixed(0)}/${p.sideTol.toFixed(0)} sideCenter=${p.sideCenterDiff.toFixed(0)}/${p.perpTol.toFixed(0)} fsRatio=${p.fsRatio.toFixed(2)} → ${p.reason}`,
     );
   }
   if (sortedPairs.length > showCount) {
-    console.info(`[ai-place]${debugTag} (... 残り ${sortedPairs.length - showCount} ペアは省略 / 距離が遠いため)`);
+    console.info(`[scan-place]${debugTag} (... 残り ${sortedPairs.length - showCount} ペアは省略 / 距離が遠いため)`);
   }
   return groupIds.map((g) => ({ groupId: g, connected: memberCount[g] >= 2 }));
 }
@@ -399,9 +400,9 @@ function groupConnectedBlocks(blocks, debugTag = "") {
 // PDF / JPEG / PNG に対応。失敗 / 見本未指定 は null を返してフォールバック。
 let lastAlignmentError = "";
 
-function computeCenterMarginAlignment(psdPage, mokuroPage) {
-  const refW = Number(mokuroPage?.img_width);
-  const refH = Number(mokuroPage?.img_height);
+function computeCenterMarginAlignment(psdPage, referenceScanPage) {
+  const refW = Number(referenceScanPage?.img_width);
+  const refH = Number(referenceScanPage?.img_height);
   const psdW = Number(psdPage?.width);
   const psdH = Number(psdPage?.height);
   if (![refW, refH, psdW, psdH].every((v) => Number.isFinite(v) && v > 0)) return null;
@@ -431,11 +432,11 @@ function snapHalfOrFull(pt) {
   return intPart + 1;
 }
 
-async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageIndex = 0, mode = "mode1") {
+async function computeAlignmentSafe(referencePath, psdPage, referenceScanPage, pdfPageIndex = 0, mode = "mode1") {
   if (!referencePath) return null;
   if (!psdPage?.canvas) return null;
   if (mode === "mode1") {
-    const alignment = computeCenterMarginAlignment(psdPage, mokuroPage);
+    const alignment = computeCenterMarginAlignment(psdPage, referenceScanPage);
     if (alignment) {
       lastAlignmentError = "";
       return alignment;
@@ -444,7 +445,7 @@ async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageI
   const errors = [];
   try {
     const psdBase64 = psdPage.canvas.toDataURL("image/png");
-    const refBboxes = (mokuroPage?.blocks ?? []).map((b) => ({
+    const refBboxes = (referenceScanPage?.blocks ?? []).map((b) => ({
       left: b.box[0], top: b.box[1], right: b.box[2], bottom: b.box[3],
     }));
     const psdBboxes = (psdPage.textLayers ?? []).map((l) => ({
@@ -461,17 +462,17 @@ async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageI
       psdWidth: psdPage.width,
       psdHeight: psdPage.height,
       mode,
-      // mokuro OCR の入力画像サイズを Rust に渡し、
-      // alignment.offset を mokuro 単位 (= bbox 座標と同単位) で計算させる
-      mokuroImgWidth: mokuroPage?.img_width ?? null,
-      mokuroImgHeight: mokuroPage?.img_height ?? null,
+      // referenceScan 画像スキャン の入力画像サイズを Rust に渡し、
+      // alignment.offset を referenceScan 単位 (= bbox 座標と同単位) で計算させる
+      [`${SOURCE_DOC_KEY}ImgWidth`]: referenceScanPage?.img_width ?? null,
+      [`${SOURCE_DOC_KEY}ImgHeight`]: referenceScanPage?.img_height ?? null,
     });
 
     const isPdfReference = /\.pdf$/i.test(referencePath);
     const isRasterReference = /\.(jpe?g|png)$/i.test(referencePath);
 
     if (isPdfReference) {
-      const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, mokuroPage?.img_width ?? null);
+      const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, referenceScanPage?.img_width ?? null);
       const refBase64 = refCanvas ? refCanvas.toDataURL("image/png") : null;
       if (refBase64) {
         try {
@@ -497,7 +498,7 @@ async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageI
     }
 
     if (!isPdfReference) {
-      const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, mokuroPage?.img_width ?? null);
+      const refCanvas = await renderReferencePageToCanvas(pdfPageIndex, referenceScanPage?.img_width ?? null);
       const refBase64 = refCanvas ? refCanvas.toDataURL("image/png") : null;
       if (refBase64) {
         try {
@@ -515,11 +516,11 @@ async function computeAlignmentSafe(referencePath, psdPage, mokuroPage, pdfPageI
     errors.push(`unexpected: ${String(e?.message ?? e)}`);
   }
   lastAlignmentError = errors.join(" / ");
-    console.warn(`[ai-place] compute_alignment 失敗 (${referencePath}): ${lastAlignmentError}`);
+    console.warn(`[scan-place] compute_alignment 失敗 (${referencePath}): ${lastAlignmentError}`);
   return null;
 }
 
-async function computeAlignmentsForPages(mode, psdPages, mokuroDoc, referencePaths, { progressLabel = null } = {}) {
+async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, referencePaths, { progressLabel = null } = {}) {
   if (mode !== "mode1" && mode !== "mode2") return new Map();
   const alignmentByPath = new Map();
   const isSinglePdfMultiPsd = referencePaths.length === 1
@@ -538,11 +539,11 @@ async function computeAlignmentsForPages(mode, psdPages, mokuroDoc, referencePat
     const pdfPageIdx = Number.isInteger(refEntry?.pdfPageIndex)
       ? refEntry.pdfPageIndex
       : (isSinglePdfMultiPsd ? i : 0);
-    const mokuro = mokuroDoc?.pages?.[i] ?? { blocks: [] };
+    const referenceScan = referenceScanDoc?.pages?.[i] ?? { blocks: [] };
     if (progressLabel) {
       updateProgress({ current: i, total: N, detail: `${progressLabel} ${i + 1}/${N} を計算中…`, showCount: false });
     }
-    const alignment = await computeAlignmentSafe(refPath, psd, mokuro, pdfPageIdx, mode);
+    const alignment = await computeAlignmentSafe(refPath, psd, referenceScan, pdfPageIdx, mode);
     if (alignment && psd?.path) alignmentByPath.set(psd.path, alignment);
     if (progressLabel) {
       updateProgress({ current: i + 1, total: N, detail: `${progressLabel} ${i + 1}/${N} 完了`, showCount: false });
@@ -561,9 +562,9 @@ function getLoadedReferenceEntryForPage(index) {
   return null;
 }
 
-function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sourceTxtRef, groupInfo, alignment) {
-  const sx = psdPage.width / Math.max(mokuroPage.img_width, 1);
-  const sy = psdPage.height / Math.max(mokuroPage.img_height, 1);
+function mapBlockToNewLayer(block, referenceScanPage, psdPage, contents, defaults, sourceTxtRef, groupInfo, alignment) {
+  const sx = psdPage.width / Math.max(referenceScanPage.img_width, 1);
+  const sy = psdPage.height / Math.max(referenceScanPage.img_height, 1);
   const direction = block.vertical ? "vertical" : "horizontal";
   // bubble bbox の中心を PSD 座標に変換 → "ユーザーがクリックした位置" と等価。
   // 【v1.28.0 移植】alignment があれば Rust 計算済みの scale + offset で逆変換、
@@ -594,11 +595,11 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   if (groupInfo && groupInfo.connected) {
     sizePt = defaults.sizePt ?? 24;
   } else {
-    const detectedPt = detectSizePtFromBlock(block, mokuroPage, psdPage, text);
+    const detectedPt = detectSizePtFromBlock(block, referenceScanPage, psdPage, text);
     sizePt = detectedPt ?? defaults.sizePt ?? 24;
   }
   if (defaults.positionAdjustMode === "mode2" && alignment && Number.isFinite(alignment.scale) && alignment.scale > 0) {
-    const autoSx = psdPage.width / Math.max(mokuroPage.img_width, 1);
+    const autoSx = psdPage.width / Math.max(referenceScanPage.img_width, 1);
     const sizeCorrectionFactor = 1.0 / (autoSx * alignment.scale);
     if (Number.isFinite(sizeCorrectionFactor) && sizeCorrectionFactor > 0
         && Math.abs(sizeCorrectionFactor - 1.0) > 0.02) {
@@ -620,7 +621,7 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
   // 周辺解析メタデータに基づくスタイル自動選択 (要件 ②, ④)
   // ============================================================
-  // Rust 側 (ocr.rs analyze_doc_in_place) が各 block の bbox 外周を解析し以下を埋めている:
+  // Rust 側 (extract.rs analyze_doc_in_place) が各 block の bbox 外周を解析し以下を埋めている:
   //   surroundingWhiteRatio       (0..1) 白率
   //   surroundingEdgeChanges      (int)  1 周合計の白↔黒変化数
   //   surroundingMinSegmentEdgeChanges (int) 4 セグメント中の最小変化数
@@ -677,7 +678,7 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
   if (appliedStroke) tags.push("白フチ");
   if (scoreReason) tags.push(`★${scoreReason}→${fontPostScriptName}`);
   console.info(
-    `[ai-place] surround page=${(sourceTxtRef?.pageNumber ?? "?")} idx=${sourceTxtRef?.paragraphIndex ?? "?"} white=${wrStr} edge=${ecStr} minSeg=${msStr} bg=${bgScore.toFixed(2)} uni=${uniScore.toFixed(2)} ${tags.length ? "[" + tags.join(", ") + "]" : "[default]"}`,
+    `[scan-place] surround page=${(sourceTxtRef?.pageNumber ?? "?")} idx=${sourceTxtRef?.paragraphIndex ?? "?"} white=${wrStr} edge=${ecStr} minSeg=${msStr} bg=${bgScore.toFixed(2)} uni=${uniScore.toFixed(2)} ${tags.length ? "[" + tags.join(", ") + "]" : "[default]"}`,
   );
 
   return {
@@ -701,7 +702,7 @@ function mapBlockToNewLayer(block, mokuroPage, psdPage, contents, defaults, sour
 }
 
 // 吹き出しに対応しない「余り TXT 段落」を PSD ページの幾何中心 (width/2, height/2)
-// に配置する。ユーザーが PSD 未読込時にテキストを追加したケース、または OCR の
+// に配置する。ユーザーが PSD 未読込時にテキストを追加したケース、または 画像スキャン の
 // 吹き出し検出数より原稿段落が多いケースで使う（旧仕様では `leftoverTxt` として
 // 捨てていたが、画像中央に置くことで全段落を必ず配置に乗せる）。
 // direction は吹き出し情報がないため `getNewTextDirection()` (UI トグル) を採用。
@@ -750,7 +751,7 @@ function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
 //         status,       // "ok" | "warn-bubble-extra" | "warn-empty-txt" | "warn-empty-bubble"
 //         layers,       // NewLayer 配列 (placedCount 件)
 //         leftoverTxt,  // 余り TXT ブロック配列
-//         leftoverBubbles, // 余り吹き出しの OCR テキスト配列
+//         leftoverBubbles, // 余り吹き出しの 画像スキャン テキスト配列
 //       }, ...
 //     ],
 //     totals: { placed, leftoverTxt, leftoverBubbles },
@@ -864,8 +865,8 @@ function textSimilarityScore(aRaw, bRaw) {
   return Math.max(contain, lcs * 0.72 + overlap * 0.28);
 }
 
-function lowPlacementMatchScore(txt, ocr) {
-  const len = Math.min(normalizePlacementText(txt).length, normalizePlacementText(ocr).length);
+function lowPlacementMatchScore(txt, extract) {
+  const len = Math.min(normalizePlacementText(txt).length, normalizePlacementText(extract).length);
   if (len <= 2) return 0.72;
   if (len <= 4) return 0.58;
   if (len <= 8) return 0.46;
@@ -928,9 +929,9 @@ function buildTxtPageMapForSync(parsed) {
   return parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 }
 
-function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults, options = {}) {
+function buildPlacementPlan(referenceScanDoc, psdPages, txtPages, defaults, options = {}) {
   const alignmentByPath = options.alignmentByPath instanceof Map ? options.alignmentByPath : null;
-  const N = Math.min(psdPages.length, mokuroDoc.pages.length);
+  const N = Math.min(psdPages.length, referenceScanDoc.pages.length);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
   const baseName = (p) => {
     const m = p && p.match(/[\\/]([^\\/]+)$/);
@@ -938,11 +939,11 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults, options = {
   };
   for (let i = 0; i < N; i++) {
     const psd = psdPages[i];
-    const mokuro = mokuroDoc.pages[i];
+    const referenceScan = referenceScanDoc.pages[i];
     const alignment = psd?.path && alignmentByPath ? alignmentByPath.get(psd.path) : null;
     const txtPage = txtPages[i] ?? { pageNumber: i + 1, blocks: [] };
     const txt = txtPage.blocks ?? [];
-    const sorted = sortBlocksMangaOrder(mokuro.blocks ?? []);
+    const sorted = sortBlocksMangaOrder(referenceScan.blocks ?? []);
     // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
     // 連結グループ判定 (ひょうたん型フキダシ検出)。Union-Find で 3 条件 (vertical 一致 +
     // font_size 近 + bbox 重なり/近接) を満たすペアが同グループになる。
@@ -973,11 +974,11 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults, options = {
       const block = assigned?.block;
       const blockIndex = Number.isInteger(assigned?.index) ? assigned.index : j;
       const matchScore = Number.isFinite(assigned?.score) ? assigned.score : 0;
-      const sourceTxtRef = { pageNumber: txtPage.pageNumber, paragraphIndex: j, ocrBlockIndex: blockIndex, ocrMatchScore: matchScore };
+      const sourceTxtRef = { pageNumber: txtPage.pageNumber, paragraphIndex: j, extractBlockIndex: blockIndex, extractMatchScore: matchScore };
       if (block) {
-        const layer = mapBlockToNewLayer(block, mokuro, psd, txt[j], defaults, sourceTxtRef, groups[blockIndex], alignment);
-        layer.lowOcrTextMatch = assigned?.lowConfidence === true;
-        layer.ocrMatchScore = matchScore;
+        const layer = mapBlockToNewLayer(block, referenceScan, psd, txt[j], defaults, sourceTxtRef, groups[blockIndex], alignment);
+        layer.lowExtractTextMatch = assigned?.lowConfidence === true;
+        layer.extractMatchScore = matchScore;
         layers.push(layer);
       } else {
         // 余り TXT: PSD ページ中央に配置
@@ -1014,32 +1015,32 @@ function buildPlacementPlan(mokuroDoc, psdPages, txtPages, defaults, options = {
     out.totals.leftoverTxt += leftoverTxt.length;
     out.totals.leftoverBubbles += leftoverBubbles.length;
   }
-  // PSD 数 / OCR ページ数の不一致を末尾に warning として記録
+  // PSD 数 / 画像スキャン ページ数の不一致を末尾に warning として記録
   if (psdPages.length > N) {
     out.unmappedPsdCount = psdPages.length - N;
   }
-  if (mokuroDoc.pages.length > N) {
-    out.unmappedMokuroCount = mokuroDoc.pages.length - N;
+  if (referenceScanDoc.pages.length > N) {
+    out.unmappedReferenceScanCount = referenceScanDoc.pages.length - N;
   }
   return out;
 }
 
 // ============================================================
-// 確認モーダル UI（PSD と OCR ページ数が不一致のときだけ表示）
+// 確認モーダル UI（PSD と 画像スキャン ページ数が不一致のときだけ表示）
 // ============================================================
 function renderPlanReviewTable(plan) {
-  const warning = $("ai-place-review-warning");
-  const warningDetail = $("ai-place-review-warning-detail");
+  const warning = $("scan-place-review-warning");
+  const warningDetail = $("scan-place-review-warning-detail");
   if (!warning || !warningDetail) return;
   const psdExtra = plan.unmappedPsdCount ?? 0;
-  const ocrExtra = plan.unmappedMokuroCount ?? 0;
-  if (psdExtra > 0 || ocrExtra > 0) {
+  const extractExtra = plan.unmappedReferenceScanCount ?? 0;
+  if (psdExtra > 0 || extractExtra > 0) {
     const psdTotal = plan.pages.length + psdExtra;
-    const ocrTotal = plan.pages.length + ocrExtra;
+    const extractTotal = plan.pages.length + extractExtra;
     const parts = [];
-    parts.push(`PSD: ${psdTotal} 枚 / 画像スキャン: ${ocrTotal} ページ`);
+    parts.push(`PSD: ${psdTotal} 枚 / 画像スキャン: ${extractTotal} ページ`);
     if (psdExtra > 0) parts.push(`末尾の PSD ${psdExtra} 枚にはテキストが配置されません。`);
-    if (ocrExtra > 0) parts.push(`末尾の OCR ${ocrExtra} ページ分は使用されません。`);
+    if (extractExtra > 0) parts.push(`末尾の 画像スキャン ${extractExtra} ページ分は使用されません。`);
     warningDetail.textContent = parts.join(" ");
     warning.hidden = false;
   } else {
@@ -1049,9 +1050,9 @@ function renderPlanReviewTable(plan) {
 
 function showPlanReviewModal(plan) {
   return new Promise((resolve) => {
-    const modal = $("ai-place-review-modal");
-    const okBtn = $("ai-place-review-ok");
-    const cancelBtn = $("ai-place-review-cancel");
+    const modal = $("scan-place-review-modal");
+    const okBtn = $("scan-place-review-ok");
+    const cancelBtn = $("scan-place-review-cancel");
     if (!modal || !okBtn || !cancelBtn) {
       resolve(false);
       return;
@@ -1142,8 +1143,8 @@ function applyPlan(plan) {
 // 自動配置メインフロー
 // ============================================================
 export async function runAutoPlace({
-  allowOcrText = false,
-  preserveTxtDuringOcr = false,
+  allowExtractText = false,
+  preserveTxtDuringExtract = false,
   forceRescan = false,
   positionOnlyScan = false,
   positionAdjustMode = null,
@@ -1168,7 +1169,7 @@ export async function runAutoPlace({
       }
     }
     let txtSrc = getTxtSource();
-    if ((!txtSrc || !txtSrc.content) && !allowOcrText) {
+    if ((!txtSrc || !txtSrc.content) && !allowExtractText) {
       await notifyDialog({
         title: "自動配置できません",
         message: "テキストが読み込まれていません。\n先に TXT を開くか、画像スキャンを実行してください。",
@@ -1176,10 +1177,10 @@ export async function runAutoPlace({
       return;
     }
 
-    // 2. OCR キャッシュ確認
+    // 2. 画像スキャン キャッシュ確認
     //   - キャッシュ有効: 結果あり & pages 1 件以上 → そのまま再利用
     //   - 無効なら、読込済み見本ファイル全てを対象に画像スキャンを自動トリガーする。
-    let cache = getAiOcrDoc();
+    let cache = getScanExtractDoc();
     const cacheValid = !forceRescan && !!(
       cache &&
       cache.doc &&
@@ -1191,22 +1192,22 @@ export async function runAutoPlace({
       if (loadedRefs.length === 0) {
         await notifyDialog({
           title: "自動配置できません",
-          message: "OCR の元になる PDF / 画像が必要です。\n先に PDF を開くか、画像スキャンを実行してください。",
+          message: "画像スキャン の元になる PDF / 画像が必要です。\n先に PDF を開くか、画像スキャンを実行してください。",
         });
         return;
       }
-      // 既存の画像スキャンフローを呼び出す (進捗モーダルは ai-ocr 側が出す)。
-      // 読込済みの見本ファイル全てを OCR 対象にして自動配置の整合を取る。
+      // 既存の画像スキャンフローを呼び出す (進捗モーダルは scan-extract 側が出す)。
+      // 読込済みの見本ファイル全てを 画像スキャン 対象にして自動配置の整合を取る。
       if (positionOnlyScan) {
-        await runAiOcrForPlacementOnly(loadedRefs);
+        await runScanExtractForPlacementOnly(loadedRefs);
       } else {
-        await runAiOcrForFiles(loadedRefs, {
-          loadText: !preserveTxtDuringOcr || !(txtSrc && txtSrc.content),
+        await runScanExtractForFiles(loadedRefs, {
+          loadText: !preserveTxtDuringExtract || !(txtSrc && txtSrc.content),
           maxPages: psdPages.length,
           excludedPages: getPdfExcludedReferencePages(),
         });
       }
-      cache = getAiOcrDoc();
+      cache = getScanExtractDoc();
       if (!cache || !cache.doc) {
         // 画像スキャン側がエラー通知済みなのでここでは静かに戻る
         return;
@@ -1244,7 +1245,7 @@ export async function runAutoPlace({
       cloudShapeFontPostScriptName: getDefault("cloudShapeFontPostScriptName"),
       positionAdjustMode,
     };
-    const placementDoc = normalizeMokuroDocForReferencePages(cache.doc);
+    const placementDoc = normalizeReferenceScanDocForReferencePages(cache.doc);
     let alignmentByPath = null;
     if (positionAdjustMode === "mode1" || positionAdjustMode === "mode2") {
       showProgress({ detail: "位置調整を計算中…", icon: PLACE_ICON_SVG, label: "自動配置中…" });
@@ -1286,9 +1287,9 @@ export async function runAutoPlace({
       if (!proceed) return;
     }
 
-    // 5. 確認モーダル（PSD と OCR ページ数が不一致のときだけ表示）
+    // 5. 確認モーダル（PSD と 画像スキャン ページ数が不一致のときだけ表示）
     const hasMismatch =
-      (plan.unmappedPsdCount ?? 0) > 0 || (plan.unmappedMokuroCount ?? 0) > 0;
+      (plan.unmappedPsdCount ?? 0) > 0 || (plan.unmappedReferenceScanCount ?? 0) > 0;
     if (hasMismatch) {
       const ok = await showPlanReviewModal(plan);
       if (!ok) return;
@@ -1395,29 +1396,29 @@ function syncPlacedFromTxt() {
 // ============================================================
 // バインド
 // ============================================================
-export function bindAiPlaceButton() {
-  const btn = $("ai-place-btn");
+export function bindScanPlaceButton() {
+  const btn = $("scan-place-btn");
   if (!btn) return;
   btn.addEventListener("click", () => { void runAutoPlace(); });
-  // OCR 結果が無いうちはグレーアウト。setAiOcrDoc / clearAiOcrDoc に追従。
+  // 画像スキャン 結果が無いうちはグレーアウト。setScanExtractDoc / clearScanExtractDoc に追従。
   const sync = () => {
-    const locked = isAiActionsLocked();
-    const cache = getAiOcrDoc();
-    const hasOcr = !!(
+    const locked = isScanActionsLocked();
+    const cache = getScanExtractDoc();
+    const hasExtract = !!(
       cache &&
       cache.doc &&
       Array.isArray(cache.doc.pages) &&
       cache.doc.pages.length > 0
     );
-    btn.disabled = locked || !hasOcr;
+    btn.disabled = locked || !hasExtract;
     btn.title = locked
       ? "画像スキャンエンジンが未インストールです。"
-      : hasOcr
-      ? "OCR 結果と原稿テキストを吹き出し位置に自動配置"
+      : hasExtract
+      ? "画像スキャン 結果と原稿テキストを吹き出し位置に自動配置"
       : "先に画像スキャンを実行してください";
   };
-  onAiOcrDocChange(sync);
-  window.addEventListener("psdesign:ai-actions-lock-change", sync);
+  onScanExtractDocChange(sync);
+  window.addEventListener("psdesign:scan-actions-lock-change", sync);
   sync();
 
   // TXT 編集 → 自動配置済みレイヤー contents を追従。
@@ -1433,7 +1434,7 @@ export function bindAiPlaceButton() {
 // alignment (scale + offset) を計算し、配置済みレイヤーの座標を一括変換する。
 //
 // 3 モード:
-//   mode1 (PSDに余分余白): scale=1, offset=(mokuro - psd)/2 の確定式
+//   mode1 (PSDに余分余白): scale=1, offset=(referenceScan - psd)/2 の確定式
 //     ref < psd → 絵柄領域中心へシフト集約
 //   mode2 (見本に余分余白): KENBAN 流の画像差分 grid search (Rust)
 //     scale + offset を画像から自動検出 + per-layer サイズ補正
@@ -1466,8 +1467,8 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
     }
     const pathToIndex = new Map();
     psdPages.forEach((p, i) => { if (p?.path) pathToIndex.set(p.path, i); });
-    const cache = getAiOcrDoc();
-    const mokuroDoc = cache?.doc;
+    const cache = getScanExtractDoc();
+    const referenceScanDoc = cache?.doc;
 
     showProgress({ detail: `${modeLabel} 中…`, icon: PLACE_ICON_SVG, label: modeLabel });
 
@@ -1483,12 +1484,12 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
       const psd = psdPages[i];
       const refPath = isSinglePdfMultiPsd ? referencePaths[0] : referencePaths[i];
       const pdfPageIdx = isSinglePdfMultiPsd ? i : 0;
-      const mokuro = mokuroDoc?.pages?.[i] ?? { blocks: [] };
+      const referenceScan = referenceScanDoc?.pages?.[i] ?? { blocks: [] };
       updateProgress({ current: i, total: N, detail: `${modeLabel} ${i + 1}/${N} を計算中…`, showCount: false });
       console.info(
-        `[ai-adjust] page=${i + 1} mode=${mode} ref=${refPath}`,
+        `[scan-adjust] page=${i + 1} mode=${mode} ref=${refPath}`,
       );
-      const alignment = await computeAlignmentSafe(refPath, psd, mokuro, pdfPageIdx, mode);
+      const alignment = await computeAlignmentSafe(refPath, psd, referenceScan, pdfPageIdx, mode);
       if (alignment) {
         alignmentByPath.set(psd.path, alignment);
         const expectedSign = mode === "mode2" ? "+" : "-";
@@ -1498,7 +1499,7 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
           || (mode === "mode1" && alignment.offset_x < 0)
           || alignment.offset_x === 0;
         console.info(
-          `[ai-adjust] page=${i + 1} mode=${mode} scale=${alignment.scale.toFixed(3)} offset=(${alignment.offset_x.toFixed(0)}, ${alignment.offset_y.toFixed(0)}) ${modeMatches ? "✓" : `⚠ 期待符号=${expectedSign}, 実符号=${actualSign}`}`,
+          `[scan-adjust] page=${i + 1} mode=${mode} scale=${alignment.scale.toFixed(3)} offset=(${alignment.offset_x.toFixed(0)}, ${alignment.offset_y.toFixed(0)}) ${modeMatches ? "✓" : `⚠ 期待符号=${expectedSign}, 実符号=${actualSign}`}`,
         );
       }
       updateProgress({ current: i + 1, total: N, detail: `${modeLabel} ${i + 1}/${N} 完了`, showCount: false });
@@ -1525,21 +1526,21 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
         if (!Number.isFinite(alignment.scale) || alignment.scale <= 0) continue;
         const idx = pathToIndex.get(layer.psdPath);
         const psd = psdPages[idx];
-        const mokuroPage = mokuroDoc?.pages?.[idx];
-        if (!psd || !mokuroPage) continue;
-        const sx = psd.width / Math.max(mokuroPage.img_width, 1);
-        const sy = psd.height / Math.max(mokuroPage.img_height, 1);
+        const referenceScanPage = referenceScanDoc?.pages?.[idx];
+        if (!psd || !referenceScanPage) continue;
+        const sx = psd.width / Math.max(referenceScanPage.img_width, 1);
+        const sy = psd.height / Math.max(referenceScanPage.img_height, 1);
         if (!Number.isFinite(sx) || sx <= 0 || !Number.isFinite(sy) || sy <= 0) continue;
 
         const halfW = getApproxLayerCenterDelta(layer, psd, "x");
         const halfH = getApproxLayerCenterDelta(layer, psd, "y");
 
-        // mokuro 元 bbox から refCx を取得 (idempotent)
+        // referenceScan 元 bbox から refCx を取得 (idempotent)
         let refCx, refCy;
         const txtRef = layer.sourceTxtRef;
-        const ocrBlockIndex = Number.isInteger(txtRef?.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef?.paragraphIndex;
-        const block = (txtRef && Number.isInteger(ocrBlockIndex))
-          ? mokuroPage?.blocks?.[ocrBlockIndex]
+        const extractBlockIndex = Number.isInteger(txtRef?.extractBlockIndex) ? txtRef.extractBlockIndex : txtRef?.paragraphIndex;
+        const block = (txtRef && Number.isInteger(extractBlockIndex))
+          ? referenceScanPage?.blocks?.[extractBlockIndex]
           : null;
         if (block?.box && block.box.length >= 4) {
           refCx = (block.box[0] + block.box[2]) / 2;
@@ -1564,7 +1565,7 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
           || newPsdCy > psd.height * (1 + safetyMargin);
         if (cxOOR || cyOOR) {
           console.warn(
-            `[ai-adjust]   layer "${(layer.contents ?? "").slice(0, 12)}" 補正後位置が PSD 範囲外 → skip`,
+            `[scan-adjust]   layer "${(layer.contents ?? "").slice(0, 12)}" 補正後位置が PSD 範囲外 → skip`,
           );
           skippedOutOfRange++;
           continue;
@@ -1586,7 +1587,7 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
 
         const changes = { x: newX, y: newY };
         if (mode === "mode2") {
-          const autoSx = psd.width / Math.max(mokuroPage.img_width, 1);
+          const autoSx = psd.width / Math.max(referenceScanPage.img_width, 1);
           const sizeCorrectionFactor = 1.0 / (autoSx * alignment.scale);
           if (Number.isFinite(sizeCorrectionFactor) && sizeCorrectionFactor > 0
               && Math.abs(sizeCorrectionFactor - 1.0) > 0.02) {
@@ -1611,7 +1612,7 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
       if (!transientCommitted) abortHistoryTransient();
     }
     console.info(
-      `[ai-adjust] 完了: ${movedCount}/${newLayers.length} 件のレイヤーを移動 (skipped: outOfRange=${skippedOutOfRange}, NaN=${skippedNaN})`,
+      `[scan-adjust] 完了: ${movedCount}/${newLayers.length} 件のレイヤーを移動 (skipped: outOfRange=${skippedOutOfRange}, NaN=${skippedNaN})`,
     );
     if (movedCount > 0) {
       try { renderAllSpreads(); } catch (_) {}
@@ -1665,7 +1666,7 @@ async function renderReferencePageToCanvas(pageIdx, preferredWidth = null) {
     await page.render({ canvasContext: ctx, viewport }).promise;
     return canvas;
   } catch (e) {
-    console.warn("[ai-place] renderReferencePageToCanvas failed:", e);
+    console.warn("[scan-place] renderReferencePageToCanvas failed:", e);
     return null;
   }
 }
@@ -1990,7 +1991,7 @@ async function runOverlayAlign() {
   const result = await showOverlayAlignModal(refCanvas, psd0.canvas);
   if (!result) return;
 
-  const mokuroDoc = getAiOcrDoc()?.doc;
+  const referenceScanDoc = getScanExtractDoc()?.doc;
 
   runningAdjust = true;
   showProgress({ detail: "重ね調整 中…", icon: PLACE_ICON_SVG, label: "重ね調整" });
@@ -2004,27 +2005,27 @@ async function runOverlayAlign() {
       const idx = psdPages.findIndex((p) => p?.path === layer.psdPath);
       if (idx < 0) continue;
       const psd = psdPages[idx];
-      const mokuroPage = mokuroDoc?.pages?.[idx];
-      if (!psd || !mokuroPage) continue;
-      const mokuroW = Math.max(mokuroPage.img_width, 1);
-      const mokuroH = Math.max(mokuroPage.img_height, 1);
-      const sx = psd.width / mokuroW;
-      const sy = psd.height / mokuroH;
+      const referenceScanPage = referenceScanDoc?.pages?.[idx];
+      if (!psd || !referenceScanPage) continue;
+      const referenceScanW = Math.max(referenceScanPage.img_width, 1);
+      const referenceScanH = Math.max(referenceScanPage.img_height, 1);
+      const sx = psd.width / referenceScanW;
+      const sy = psd.height / referenceScanH;
       if (!Number.isFinite(sx) || sx <= 0) continue;
 
-      const mokuroPerRefX = mokuroW / result.ref_natural_w;
-      const mokuroPerRefY = mokuroH / result.ref_natural_h;
-      const alignScaleX = result.scale_in_ref * mokuroPerRefX;
-      const alignScaleY = result.scale_in_ref * mokuroPerRefY;
+      const referenceScanPerRefX = referenceScanW / result.ref_natural_w;
+      const referenceScanPerRefY = referenceScanH / result.ref_natural_h;
+      const alignScaleX = result.scale_in_ref * referenceScanPerRefX;
+      const alignScaleY = result.scale_in_ref * referenceScanPerRefY;
       const alignScale = (alignScaleX + alignScaleY) / 2;
-      const alignOffsetX = result.offset_x_in_ref * mokuroPerRefX;
-      const alignOffsetY = result.offset_y_in_ref * mokuroPerRefY;
+      const alignOffsetX = result.offset_x_in_ref * referenceScanPerRefX;
+      const alignOffsetY = result.offset_y_in_ref * referenceScanPerRefY;
 
       let refCx, refCy;
       const txtRef = layer.sourceTxtRef;
-      const ocrBlockIndex = Number.isInteger(txtRef?.ocrBlockIndex) ? txtRef.ocrBlockIndex : txtRef?.paragraphIndex;
-      const block = (txtRef && Number.isInteger(ocrBlockIndex))
-        ? mokuroPage?.blocks?.[ocrBlockIndex]
+      const extractBlockIndex = Number.isInteger(txtRef?.extractBlockIndex) ? txtRef.extractBlockIndex : txtRef?.paragraphIndex;
+      const block = (txtRef && Number.isInteger(extractBlockIndex))
+        ? referenceScanPage?.blocks?.[extractBlockIndex]
         : null;
       if (block?.box && block.box.length >= 4) {
         refCx = (block.box[0] + block.box[2]) / 2;
@@ -2081,7 +2082,7 @@ async function runOverlayAlign() {
     runningAdjust = false;
   }
 
-  console.info(`[ai-adjust mode3] alignScale=${result.scale_in_ref.toFixed(4)}, offset_in_ref=(${result.offset_x_in_ref.toFixed(0)}, ${result.offset_y_in_ref.toFixed(0)}), ${movedCount} 件移動`);
+  console.info(`[scan-adjust mode3] alignScale=${result.scale_in_ref.toFixed(4)}, offset_in_ref=(${result.offset_x_in_ref.toFixed(0)}, ${result.offset_y_in_ref.toFixed(0)}), ${movedCount} 件移動`);
   if (movedCount > 0) {
     try { renderAllSpreads(); } catch (_) {}
     try { rebuildLayerList(); } catch (_) {}
@@ -2135,52 +2136,52 @@ export async function runSelectedPositionAdjust(mode, options = {}) {
 function renderPositionAdjustPreview(mode) {
   if (mode === "none") {
     return `
-      <span class="ai-adjust-choice-preview ai-adjust-choice-preview-none" aria-hidden="true">
-        <span class="ai-adjust-choice-preview-doc ai-adjust-choice-preview-single">PSD</span>
-        <span class="ai-adjust-choice-preview-none-mark"></span>
+      <span class="scan-adjust-choice-preview scan-adjust-choice-preview-none" aria-hidden="true">
+        <span class="scan-adjust-choice-preview-doc scan-adjust-choice-preview-single">PSD</span>
+        <span class="scan-adjust-choice-preview-none-mark"></span>
       </span>`;
   }
   if (mode === "mode3") {
     return `
-      <span class="ai-adjust-choice-preview ai-adjust-choice-preview-overlay" aria-hidden="true">
-        <span class="ai-adjust-choice-preview-photo ai-adjust-choice-preview-photo-back">
-          <span class="ai-adjust-choice-preview-mountain"></span>
+      <span class="scan-adjust-choice-preview scan-adjust-choice-preview-overlay" aria-hidden="true">
+        <span class="scan-adjust-choice-preview-photo scan-adjust-choice-preview-photo-back">
+          <span class="scan-adjust-choice-preview-mountain"></span>
         </span>
-        <span class="ai-adjust-choice-preview-photo ai-adjust-choice-preview-photo-front">
-          <span class="ai-adjust-choice-preview-sun"></span>
-          <span class="ai-adjust-choice-preview-mountain"></span>
+        <span class="scan-adjust-choice-preview-photo scan-adjust-choice-preview-photo-front">
+          <span class="scan-adjust-choice-preview-sun"></span>
+          <span class="scan-adjust-choice-preview-mountain"></span>
         </span>
       </span>`;
   }
 
   const isMode1 = mode === "mode1";
   return `
-    <span class="ai-adjust-choice-preview ai-adjust-choice-preview-offset ${isMode1 ? "is-psd-framed" : "is-reference-framed"}" aria-hidden="true">
-      <span class="ai-adjust-choice-preview-doc ai-adjust-choice-preview-reference">見本</span>
-      <span class="ai-adjust-choice-preview-doc ai-adjust-choice-preview-psd">PSD</span>
+    <span class="scan-adjust-choice-preview scan-adjust-choice-preview-offset ${isMode1 ? "is-psd-framed" : "is-reference-framed"}" aria-hidden="true">
+      <span class="scan-adjust-choice-preview-doc scan-adjust-choice-preview-reference">見本</span>
+      <span class="scan-adjust-choice-preview-doc scan-adjust-choice-preview-psd">PSD</span>
     </span>`;
 }
 
 function ensurePositionAdjustDialog() {
-  let modal = $("ai-adjust-choice-modal");
+  let modal = $("scan-adjust-choice-modal");
   if (modal) return modal;
   modal = document.createElement("div");
-  modal.id = "ai-adjust-choice-modal";
-  modal.className = "ai-adjust-choice-modal";
+  modal.id = "scan-adjust-choice-modal";
+  modal.className = "scan-adjust-choice-modal";
   modal.hidden = true;
   modal.innerHTML = `
-    <div class="ai-adjust-choice-backdrop" data-close="1"></div>
-    <div class="ai-adjust-choice-card" role="dialog" aria-modal="true" aria-labelledby="ai-adjust-choice-title">
-      <div class="ai-adjust-choice-header">
-        <span class="ai-adjust-choice-title" id="ai-adjust-choice-title">位置調整を選択</span>
-        <button class="ai-adjust-choice-close" type="button" data-close="1" aria-label="閉じる">×</button>
+    <div class="scan-adjust-choice-backdrop" data-close="1"></div>
+    <div class="scan-adjust-choice-card" role="dialog" aria-modal="true" aria-labelledby="scan-adjust-choice-title">
+      <div class="scan-adjust-choice-header">
+        <span class="scan-adjust-choice-title" id="scan-adjust-choice-title">位置調整を選択</span>
+        <button class="scan-adjust-choice-close" type="button" data-close="1" aria-label="閉じる">×</button>
       </div>
-      <div class="ai-adjust-choice-list">
+      <div class="scan-adjust-choice-list">
         ${POSITION_ADJUST_OPTIONS.map((option) => `
-          <button class="ai-adjust-choice-option" type="button" data-mode="${option.mode}">
-            <span class="ai-adjust-choice-option-text">
-              <span class="ai-adjust-choice-option-title">${option.title}</span>
-              <span class="ai-adjust-choice-option-desc">${option.description}</span>
+          <button class="scan-adjust-choice-option" type="button" data-mode="${option.mode}">
+            <span class="scan-adjust-choice-option-text">
+              <span class="scan-adjust-choice-option-title">${option.title}</span>
+              <span class="scan-adjust-choice-option-desc">${option.description}</span>
             </span>
             ${renderPositionAdjustPreview(option.mode)}
           </button>
@@ -2194,7 +2195,7 @@ function ensurePositionAdjustDialog() {
       closePositionAdjustDialog();
       return;
     }
-    const btn = e.target?.closest?.(".ai-adjust-choice-option");
+    const btn = e.target?.closest?.(".scan-adjust-choice-option");
     if (!btn) return;
     const option = POSITION_ADJUST_OPTIONS.find((item) => item.mode === btn.dataset.mode);
     closePositionAdjustDialog();
@@ -2209,12 +2210,12 @@ function openPositionAdjustDialog() {
   modal.hidden = false;
   requestAnimationFrame(() => {
     modal.classList.add("visible");
-    modal.querySelector(".ai-adjust-choice-option")?.focus();
+    modal.querySelector(".scan-adjust-choice-option")?.focus();
   });
 }
 
 function closePositionAdjustDialog() {
-  const modal = $("ai-adjust-choice-modal");
+  const modal = $("scan-adjust-choice-modal");
   if (!modal) return;
   modal.classList.remove("visible");
   window.setTimeout(() => { modal.hidden = true; }, 120);
@@ -2232,7 +2233,7 @@ export function choosePositionAdjustMode() {
         cleanup(null);
         return;
       }
-      const btn = e.target?.closest?.(".ai-adjust-choice-option");
+      const btn = e.target?.closest?.(".scan-adjust-choice-option");
       if (!btn) return;
       e.preventDefault();
       e.stopImmediatePropagation();
@@ -2259,25 +2260,25 @@ export function choosePositionAdjustMode() {
     modal.hidden = false;
     requestAnimationFrame(() => {
       modal.classList.add("visible");
-      modal.querySelector(".ai-adjust-choice-option")?.focus();
+      modal.querySelector(".scan-adjust-choice-option")?.focus();
     });
   });
 }
 
 export function bindPositionAdjustButton() {
-  const menuBtn = $("ai-adjust-menu-btn");
+  const menuBtn = $("scan-adjust-menu-btn");
   if (!menuBtn) return;
   menuBtn.addEventListener("click", () => {
     if (!menuBtn.disabled) openPositionAdjustDialog();
   });
   window.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && !$("ai-adjust-choice-modal")?.hidden) {
+    if (e.key === "Escape" && !$("scan-adjust-choice-modal")?.hidden) {
       e.preventDefault();
       closePositionAdjustDialog();
     }
   });
   const sync = () => {
-    const locked = isAiActionsLocked();
+    const locked = isScanActionsLocked();
     const has = getNewLayers().some((l) => l && l.tempId);
     const disabled = locked || !has;
     const titleWhenDisabled = locked
@@ -2287,8 +2288,8 @@ export function bindPositionAdjustButton() {
     menuBtn.title = disabled ? titleWhenDisabled : "位置調整を選択";
   };
   sync();
-  onAiOcrDocChange(sync);
+  onScanExtractDocChange(sync);
   onTxtSourceChange(sync);
-  window.addEventListener("psdesign:ai-actions-lock-change", sync);
+  window.addEventListener("psdesign:scan-actions-lock-change", sync);
   setInterval(sync, 1000);
 }

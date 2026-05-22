@@ -1,5 +1,5 @@
 // PSD ファイル選択 / 読込のフロー。pickPsdFiles / loadPsdFilesByPaths を提供する。
-// 旧 main.js から切り出し、ai-place.js が main.js を動的 import で参照していた循環参照を解消。
+// 旧 main.js から切り出し、auto-place.js が main.js を動的 import で参照していた循環参照を解消。
 //
 // loadPsdFilesByPaths が main.js 内の UI 更新関数（updatePageNav / updatePsdRotateVisibility
 // / updatePsdGuidesLockVisibility）を直接呼ぶと逆向きの循環が生じるため、読込終了時に
@@ -35,7 +35,7 @@ export async function listPsdFilesInFolder(folder) {
 
 // options.icon: 進捗ダイアログに出すアイコン SVG 文字列（省略可）。
 //   通常の「PSD を開く」フローは未指定 → アイコン無し。
-//   自動配置から呼ばれるときは ai-place.js が PLACE_ICON_SVG を渡す。
+//   自動配置から呼ばれるときは auto-place.js が PLACE_ICON_SVG を渡す。
 // options.label: アイコン直下のラベル文言（省略時は "PSD を読み込み中"）。
 //   自動配置経由は "自動配置中…" を渡してプロセス全体の文脈を維持する。
 export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み込み中" } = {}) {

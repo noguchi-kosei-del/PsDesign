@@ -372,7 +372,7 @@ export async function loadReferenceFiles(paths, options = {}) {
     setPdfSplitMode(isLandscape);
     setPdfSkipFirstBlank(skipFirstBlankPage && hasPdf);
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
-    // 画像スキャンや自動配置が複数ファイルを OCR 対象にできるようにする。
+    // 画像スキャンや自動配置が複数ファイルを 画像スキャン 対象にできるようにする。
     setPdf(compositeDoc, sorted[0], sorted);
     setPdfExcludedReferencePages(excludedPages);
 

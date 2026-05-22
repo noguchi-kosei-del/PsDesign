@@ -1,17 +1,16 @@
-// アプリ初回起動時に AI インストールへ誘導するウェルカムモーダル。
+// アプリ初回起動時に 画像スキャン インストールへ誘導するウェルカムモーダル。
 //
 // 仕様:
 //  - localStorage `psdesign_setup_seen` が "1" なら表示しない（一度で永続スキップ）。
-//  - AI ランタイムが既にインストール済み (check_ai_models が available:true) なら、
 //    ウェルカムは出さずフラグだけ立てて静かに通過する。
 //  - 「あとで」「Esc」のいずれかでフラグを立てて閉じる挙動。
 //    背景クリックでは閉じない（ユーザーが「インストール開始 / あとで」のどちらか
 //    を明示的に選ぶよう仕向けるため）。
-//  - 「今すぐインストール」を押すとウェルカムを閉じてから既存の AI インストールモーダル
-//    (openAiInstallModal) を開く。
+//  - 「今すぐインストール」を押すとウェルカムを閉じてから既存の 画像スキャン インストールモーダル
+//    (openScanInstallModal) を開く。
 //  - ハンバーガーメニューの再インストールボタンは無変更（フラグに関係なく常時起動可能）。
 
-import { checkAiModelsStatus, openAiInstallModal } from "./ai-install.js";
+import { checkScanModelsStatus, openScanInstallModal } from "./scan-install.js";
 import { showModalAnimated, hideModalAnimated, MODAL_ANIM_MS } from "./ui-feedback.js";
 
 const SETUP_SEEN_KEY = "psdesign_setup_seen";
@@ -49,12 +48,12 @@ function closeWelcome(modal) {
 }
 
 async function openWelcomeAndInstall(modal) {
-  // ウェルカム close アニメ完了を待ってから AI インストールモーダルを起動。
+  // ウェルカム close アニメ完了を待ってから 画像スキャン インストールモーダルを起動。
   markSeen();
   hideModalAnimated(modal);
   detachDismissListeners(modal);
   await new Promise((r) => setTimeout(r, MODAL_ANIM_MS));
-  try { await openAiInstallModal(); } catch (e) { console.error(e); }
+  try { await openScanInstallModal(); } catch (e) { console.error(e); }
 }
 
 // 公開: 起動時に 1 回呼ぶ。ボタン配線のみ行い、表示判定は maybeShowFirstRunSetup に委ねる。
@@ -70,9 +69,9 @@ export function bindFirstRunSetup() {
 // 公開: 起動シーケンス末尾で呼ぶ。await しない想定（モーダルは UI に乗るだけで他処理は通常起動）。
 export async function maybeShowFirstRunSetup() {
   if (alreadySeen()) return;
-  // AI が既にインストール済みなら静かにフラグだけ立てて終了。
+  // 画像スキャン が既にインストール済みなら静かにフラグだけ立てて終了。
   let status;
-  try { status = await checkAiModelsStatus(); } catch (_) { status = null; }
+  try { status = await checkScanModelsStatus(); } catch (_) { status = null; }
   if (status?.available) {
     markSeen();
     return;

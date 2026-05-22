@@ -31,16 +31,16 @@ import {
   unifySelectedTextSize,
 } from "./text-editor.js";
 import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
-import { bindAiInstallMenu } from "./ai-install.js";
+import { bindScanInstallMenu } from "./scan-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
-import { bindAiOcrButton, PLACE_ICON_SVG, runAiOcrForTranscription } from "./ai-ocr.js";
+import { bindScanExtractButton, PLACE_ICON_SVG, runScanExtractForTranscription } from "./scan-extract.js";
 import {
-  bindAiPlaceButton,
+  bindScanPlaceButton,
   bindPositionAdjustButton,
   choosePositionAdjustMode,
   runAutoPlace,
   runSelectedPositionAdjust,
-} from "./ai-place.js";
+} from "./auto-place.js";
 import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread } from "./proofread.js";
@@ -99,7 +99,7 @@ import {
   canRedo,
   canUndo,
   clearAllEdits,
-  clearAiOcrDoc,
+  clearScanExtractDoc,
   clearPages,
   getActivePane,
   getCurrentPageIndex,
@@ -2710,7 +2710,7 @@ async function startHomeTypesetFlow() {
   if (positionAdjustMode == null) return;
   await transitionFromHome();
   try {
-    clearAiOcrDoc();
+    clearScanExtractDoc();
     await loadReferenceFiles(picked.referencePaths, {
       skipFirstBlankPage: false,
       excludedPages: picked.hiddenReferencePages,
@@ -2719,8 +2719,8 @@ async function startHomeTypesetFlow() {
     if (!getPages().length) return;
     if (picked.txtPath) await loadTxtFromPath(picked.txtPath);
     const placed = await runAutoPlace({
-      allowOcrText: true,
-      preserveTxtDuringOcr: !!picked.txtPath,
+      allowExtractText: true,
+      preserveTxtDuringExtract: !!picked.txtPath,
       positionAdjustMode,
     });
     if (!placed) return;
@@ -2749,9 +2749,9 @@ async function startHomeTranscribeFlow() {
 
   await transitionFromHome();
   try {
-    clearAiOcrDoc();
+    clearScanExtractDoc();
     await loadReferenceFiles(files);
-    await runAiOcrForTranscription(files);
+    await runScanExtractForTranscription(files);
     setParallelViewMode("editor");
     setEditorLeftPaneMode("pdf");
     setActivePane("pdf");
@@ -2814,10 +2814,10 @@ function init() {
   bindHomeScreen();
   bindPageJumpDialog();
   initTxtSource();
-  bindAiInstallMenu();
+  bindScanInstallMenu();
   bindFirstRunSetup();
-  bindAiOcrButton();
-  bindAiPlaceButton();
+  bindScanExtractButton();
+  bindScanPlaceButton();
   bindPositionAdjustButton();
   bindProofreadUi();
   bindAutoUpdater();

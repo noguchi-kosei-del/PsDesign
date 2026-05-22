@@ -39,7 +39,7 @@ const DEFAULT_SPINNER_HTML = `<div class="progress-spinner">${
 }</div>`;
 
 // 直前の hideProgress 閉じアニメをキャンセルするためのタイマー ID。
-// 閉じ→即開く（loadReferenceFiles 完了直後に runAiOcr が show する等）の連続呼び出しで
+// 閉じ→即開く（loadReferenceFiles 完了直後に runScanExtract が show する等）の連続呼び出しで
 // 古い setTimeout が後から発火して新しい表示を hidden にしてしまう事故を防ぐ。
 let pendingHideTimer = null;
 
@@ -75,7 +75,7 @@ export function setProgressIcon(svgString) {
 }
 
 // showCount: 既定 true。false を渡したときは detail があれば detail を、なければ空を
-//            進捗バー内テキストに表示する（OCR の "残り 30 秒" など独自整形向け）。
+//            進捗バー内テキストに表示する（画像スキャン の "残り 30 秒" など独自整形向け）。
 // バー幅は current/total から計算し fill.style.width に直接反映する（実進捗駆動）。
 // 現在/総数が無い場合は .indeterminate を付与してバー満タン表示にし、フラッシュで進行感を出す。
 //
@@ -236,7 +236,7 @@ function applyTitleIcon(titleEl, title, kind) {
 //   - "warning" → タイトルオレンジ + 警告アイコン
 // confirmKind: OK ボタンのスタイル切替
 //   - "primary"（既定）→ 青塗り (.page-jump-btn-primary)
-//   - "place"          → サイドバーの自動配置ボタン (.ai-place-btn) と同じ緑枠スタイル
+//   - "place"          → サイドバーの自動配置ボタン (.scan-place-btn) と同じ緑枠スタイル
 export function confirmDialog({
   title = "確認",
   message = "",

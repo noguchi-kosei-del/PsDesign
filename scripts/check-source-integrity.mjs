@@ -1,5 +1,5 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 
 const tracked = execFileSync("git", ["ls-files", "--cached", "--others", "--exclude-standard"], { encoding: "utf8" })
   .split(/\r?\n/)
@@ -8,7 +8,10 @@ const tracked = execFileSync("git", ["ls-files", "--cached", "--others", "--excl
 const sourceExtensions = /\.(js|mjs|html|css|rs)$/i;
 const ignored = /^(dist|node_modules|public\/pdfjs)\//;
 
-const targets = tracked.filter((file) => sourceExtensions.test(file) && !ignored.test(file.replace(/\\/g, "/")));
+const targets = tracked.filter((file) => {
+  const normalized = file.replace(/\\/g, "/");
+  return existsSync(file) && sourceExtensions.test(file) && !ignored.test(normalized);
+});
 
 const mojibakeMarkers = [
   0xfffd,

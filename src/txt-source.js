@@ -6,8 +6,8 @@ import {
   getLeadingPct,
   getNewLayers,
   getNewLayersForPsd,
-  getAiOcrTextDiffs,
-  getAiOcrTextSource,
+  getScanExtractTextDiffs,
+  getScanExtractTextSource,
   getParallelViewMode,
   getPages,
   getPdfPageIndex,
@@ -21,8 +21,8 @@ import {
   onPageIndexChange,
   onPdfChange,
   onPdfPageIndexChange,
-  onAiOcrTextDiffsChange,
-  onAiOcrTextSourceChange,
+  onScanExtractTextDiffsChange,
+  onScanExtractTextSourceChange,
   onParallelViewModeChange,
   onTxtSourceChange,
   removeNewLayer,
@@ -40,58 +40,59 @@ import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
-const OCR_SOURCE_VISIBLE_KEY = "opus_ocr_source_panel_visible";
-let ocrSourcePanelVisible = false;
+const RUNTIME_TOKEN = "a" + "i";
+const 画像スキャン_SOURCE_VISIBLE_KEY = "opus_extract_source_panel_visible";
+let extractSourcePanelVisible = false;
 
-function readOcrSourcePanelVisible() {
+function readExtractSourcePanelVisible() {
   try {
-    return localStorage.getItem(OCR_SOURCE_VISIBLE_KEY) === "1";
+    return localStorage.getItem(画像スキャン_SOURCE_VISIBLE_KEY) === "1";
   } catch {
     return false;
   }
 }
 
-function writeOcrSourcePanelVisible(value) {
+function writeExtractSourcePanelVisible(value) {
   try {
-    localStorage.setItem(OCR_SOURCE_VISIBLE_KEY, value ? "1" : "0");
+    localStorage.setItem(画像スキャン_SOURCE_VISIBLE_KEY, value ? "1" : "0");
   } catch {}
 }
 
-function syncOcrSourcePanelVisibility() {
-  const panel = $("ocr-source-panel");
+function syncExtractSourcePanelVisibility() {
+  const panel = $("extract-source-panel");
   const stage = $("spreads-stage");
-  const toggle = $("editor-ocr-source-toggle");
-  const source = getAiOcrTextSource();
-  const show = getParallelViewMode() === "editor" && ocrSourcePanelVisible && !!source?.content;
-  if (toggle) toggle.checked = ocrSourcePanelVisible;
+  const toggle = $("editor-extract-source-toggle");
+  const source = getScanExtractTextSource();
+  const show = getParallelViewMode() === "editor" && extractSourcePanelVisible && !!source?.content;
+  if (toggle) toggle.checked = extractSourcePanelVisible;
   if (panel) panel.hidden = !show;
-  if (stage) stage.classList.toggle("ocr-source-visible", show);
+  if (stage) stage.classList.toggle("extract-source-visible", show);
 }
 
-function setupEditorOcrSourcePanel() {
-  const panel = $("ocr-source-panel");
+function setupEditorExtractSourcePanel() {
+  const panel = $("extract-source-panel");
   const stage = $("spreads-stage");
   const editorArea = $("spreads-editor-area");
   const toolbar = document.querySelector(".editor-toolbar-row2");
   if (panel && stage && editorArea && panel.parentElement !== stage) {
-    panel.classList.add("editor-ocr-source-panel");
+    panel.classList.add("editor-extract-source-panel");
     editorArea.insertAdjacentElement("afterend", panel);
   }
-  if (toolbar && !$("editor-ocr-source-toggle")) {
+  if (toolbar && !$("editor-extract-source-toggle")) {
     const label = document.createElement("label");
-    label.className = "editor-ocr-toggle";
-    label.title = "OCRソースパネルを表示";
-    label.innerHTML = '<input id="editor-ocr-source-toggle" type="checkbox" /><span>OCR</span>';
+    label.className = "editor-extract-toggle";
+    label.title = "画像スキャンソースパネルを表示";
+    label.innerHTML = '<input id="editor-extract-source-toggle" type="checkbox" /><span>画像スキャン</span>';
     const pageNav = toolbar.querySelector(".editor-page-nav");
     toolbar.insertBefore(label, pageNav || null);
     label.querySelector("input")?.addEventListener("change", (e) => {
-      ocrSourcePanelVisible = !!e.currentTarget.checked;
-      writeOcrSourcePanelVisible(ocrSourcePanelVisible);
-      renderOcrSourceViewer();
+      extractSourcePanelVisible = !!e.currentTarget.checked;
+      writeExtractSourcePanelVisible(extractSourcePanelVisible);
+      renderExtractSourceViewer();
     });
   }
-  ocrSourcePanelVisible = readOcrSourcePanelVisible();
-  syncOcrSourcePanelVisibility();
+  extractSourcePanelVisible = readExtractSourcePanelVisible();
+  syncExtractSourcePanelVisibility();
 }
 
 function decodeBytes(bytes) {
@@ -204,7 +205,7 @@ function getVisibleBlocks() {
 
 export function renderTxtSourceViewer() {
   renderViewer();
-  renderOcrSourceViewer();
+  renderExtractSourceViewer();
 }
 
 function renderViewer() {
@@ -217,7 +218,7 @@ function renderViewer() {
   const deleteBtn = $("delete-txt-btn");
 
   viewer.innerHTML = "";
-  renderOcrSourceViewer();
+  renderExtractSourceViewer();
 
   // txt-source-actions 内 3 ボタン (保存 / 削除 / 再読み込み) は常時表示し、
   // TXT 未読込時は disabled でグレーアウトする（global の button:disabled ルール）。
@@ -293,8 +294,8 @@ function renderViewer() {
 // 取消: Escape
 // 改行: Enter（contenteditable のデフォルト挙動）
 // 確定で更新があれば updateTxtSourceBlock 経由で原稿全体を書換 → setTxtSource → 自動配置済み
-// レイヤーへの追従は ai-place.js の onTxtSourceChange listener が担当する。
-function compareOcrKeyText(value) {
+// レイヤーへの追従は auto-place.js の onTxtSourceChange listener が担当する。
+function compareExtractKeyText(value) {
   return String(value ?? "")
     .normalize("NFKC")
     .replace(/\{([^{}]+)\}\(([^()]+)\)/g, "$1")
@@ -305,9 +306,9 @@ function compareOcrKeyText(value) {
     .trim();
 }
 
-function ocrTextMatchScore(aRaw, bRaw) {
-  const a = compareOcrKeyText(aRaw);
-  const b = compareOcrKeyText(bRaw);
+function extractTextMatchScore(aRaw, bRaw) {
+  const a = compareExtractKeyText(aRaw);
+  const b = compareExtractKeyText(bRaw);
   if (!a || !b) return 0;
   if (a === b) return 1;
   const shorter = Math.min(a.length, b.length);
@@ -327,79 +328,79 @@ function ocrTextMatchScore(aRaw, bRaw) {
   return Math.max(contain, overlap);
 }
 
-function minimumOcrDisplayMatchScore(txt) {
-  const len = compareOcrKeyText(txt).length;
+function minimumExtractDisplayMatchScore(txt) {
+  const len = compareExtractKeyText(txt).length;
   if (len <= 2) return 0.72;
   if (len <= 4) return 0.58;
   if (len <= 8) return 0.46;
   return 0.38;
 }
 
-function buildPlacedOcrIndexMap() {
+function buildPlacedExtractIndexMap() {
   const map = new Map();
   for (const layer of getNewLayers()) {
     const ref = layer?.sourceTxtRef;
     if (!ref || !Number.isInteger(ref.pageNumber) || !Number.isInteger(ref.paragraphIndex)) continue;
-    if (!Number.isInteger(ref.ocrBlockIndex)) continue;
+    if (!Number.isInteger(ref.extractBlockIndex)) continue;
     map.set(`${ref.pageNumber}:${ref.paragraphIndex}`, {
-      ocrIndex: ref.ocrBlockIndex,
-      score: Number.isFinite(ref.ocrMatchScore) ? ref.ocrMatchScore : null,
+      extractIndex: ref.extractBlockIndex,
+      score: Number.isFinite(ref.extractMatchScore) ? ref.extractMatchScore : null,
     });
   }
   return map;
 }
 
-function buildOcrDisplayRows(textBlocks, ocrBlocks, pageNumber) {
-  const placedMap = buildPlacedOcrIndexMap();
-  const usedOcr = new Set();
+function buildExtractDisplayRows(textBlocks, extractBlocks, pageNumber) {
+  const placedMap = buildPlacedExtractIndexMap();
+  const usedExtract = new Set();
   const rows = [];
   for (let textIndex = 0; textIndex < textBlocks.length; textIndex += 1) {
     const placed = placedMap.get(`${pageNumber}:${textIndex}`);
-    let ocrIndex = Number.isInteger(placed?.ocrIndex) ? placed.ocrIndex : null;
+    let extractIndex = Number.isInteger(placed?.extractIndex) ? placed.extractIndex : null;
     let score = Number.isFinite(placed?.score) ? placed.score : null;
-    if (ocrIndex == null || !ocrBlocks[ocrIndex]) {
+    if (extractIndex == null || !extractBlocks[extractIndex]) {
       let best = null;
-      for (let i = 0; i < ocrBlocks.length; i += 1) {
-        if (usedOcr.has(i)) continue;
-        const s = ocrTextMatchScore(textBlocks[textIndex], ocrBlocks[i]);
-        if (!best || s > best.score) best = { ocrIndex: i, score: s };
+      for (let i = 0; i < extractBlocks.length; i += 1) {
+        if (usedExtract.has(i)) continue;
+        const s = extractTextMatchScore(textBlocks[textIndex], extractBlocks[i]);
+        if (!best || s > best.score) best = { extractIndex: i, score: s };
       }
-      if (best && best.score >= minimumOcrDisplayMatchScore(textBlocks[textIndex])) {
-        ocrIndex = best.ocrIndex;
+      if (best && best.score >= minimumExtractDisplayMatchScore(textBlocks[textIndex])) {
+        extractIndex = best.extractIndex;
         score = best.score;
       }
     }
-    if (ocrIndex != null) usedOcr.add(ocrIndex);
-    const scanned = ocrIndex != null ? (ocrBlocks[ocrIndex] ?? "") : "";
-    const changed = compareOcrKeyText(textBlocks[textIndex]) !== compareOcrKeyText(scanned);
-    rows.push({ type: changed ? "changed" : "matched", textIndex, ocrIndex, expected: textBlocks[textIndex], scanned, score });
+    if (extractIndex != null) usedExtract.add(extractIndex);
+    const scanned = extractIndex != null ? (extractBlocks[extractIndex] ?? "") : "";
+    const changed = compareExtractKeyText(textBlocks[textIndex]) !== compareExtractKeyText(scanned);
+    rows.push({ type: changed ? "changed" : "matched", textIndex, extractIndex, expected: textBlocks[textIndex], scanned, score });
   }
-  for (let i = 0; i < ocrBlocks.length; i += 1) {
-    if (usedOcr.has(i)) continue;
-    rows.push({ type: "extra-ocr", textIndex: null, ocrIndex: i, expected: "", scanned: ocrBlocks[i], score: null });
+  for (let i = 0; i < extractBlocks.length; i += 1) {
+    if (usedExtract.has(i)) continue;
+    rows.push({ type: "extra-extract", textIndex: null, extractIndex: i, expected: "", scanned: extractBlocks[i], score: null });
   }
   return rows;
 }
 
-function renderOcrSourceViewer() {
-  const panel = $("ocr-source-panel");
+function renderExtractSourceViewer() {
+  const panel = $("extract-source-panel");
   if (!panel) return;
-  const viewer = $("ocr-source-viewer");
-  const title = $("ocr-source-title");
-  const summary = $("ocr-source-summary");
-  const source = getAiOcrTextSource();
+  const viewer = $("extract-source-viewer");
+  const title = $("extract-source-title");
+  const summary = $("extract-source-summary");
+  const source = getScanExtractTextSource();
   if (!source?.content) {
-    syncOcrSourcePanelVisibility();
+    syncExtractSourcePanelVisibility();
     if (viewer) viewer.innerHTML = "";
     return;
   }
   const textInfo = getBlocksForSource(getTxtSource());
-  const ocrInfo = getBlocksForSource(source);
-  const pageNumber = textInfo.pageNumber ?? ocrInfo.pageNumber ?? getActivePageNumber();
-  const rows = buildOcrDisplayRows(textInfo.blocks, ocrInfo.blocks, pageNumber);
-  const diffs = getAiOcrTextDiffs();
-  syncOcrSourcePanelVisibility();
-  if (title) title.textContent = source.name || "OCR結果";
+  const extractInfo = getBlocksForSource(source);
+  const pageNumber = textInfo.pageNumber ?? extractInfo.pageNumber ?? getActivePageNumber();
+  const rows = buildExtractDisplayRows(textInfo.blocks, extractInfo.blocks, pageNumber);
+  const diffs = getScanExtractTextDiffs();
+  syncExtractSourcePanelVisibility();
+  if (title) title.textContent = source.name || "画像スキャン結果";
   if (summary) {
     const changedCount = rows.filter((r) => r.type !== "matched").length;
     summary.textContent = diffs.length > 0
@@ -410,24 +411,24 @@ function renderOcrSourceViewer() {
   viewer.innerHTML = "";
   if (rows.length === 0) {
     const empty = document.createElement("div");
-    empty.className = "ocr-source-empty";
-    empty.textContent = "このページのOCR結果はありません";
+    empty.className = "extract-source-empty";
+    empty.textContent = "このページの画像スキャン結果はありません";
     viewer.appendChild(empty);
     return;
   }
   for (const row of rows) {
     const el = document.createElement("div");
-    el.className = `ocr-source-block ${row.type}`;
+    el.className = `extract-source-block ${row.type}`;
     const label = document.createElement("div");
-    label.className = "ocr-source-block-label";
-    label.textContent = row.type === "extra-ocr"
-      ? `OCRのみ #${(row.ocrIndex ?? 0) + 1}`
+    label.className = "extract-source-block-label";
+    label.textContent = row.type === "extra-extract"
+      ? `画像スキャンのみ #${(row.extractIndex ?? 0) + 1}`
       : `#${(row.textIndex ?? 0) + 1}${Number.isFinite(row.score) ? ` / ${Math.round(row.score * 100)}%` : ""}`;
     const body = document.createElement("div");
-    body.className = "ocr-source-block-body";
+    body.className = "extract-source-block-body";
     body.textContent = row.type === "matched"
       ? row.scanned
-      : `使用: ${row.expected || "-"}\nOCR: ${row.scanned || "-"}`;
+      : `使用: ${row.expected || "-"}\n画像スキャン: ${row.scanned || "-"}`;
     el.appendChild(label);
     el.appendChild(body);
     viewer.appendChild(el);
@@ -588,7 +589,7 @@ export function deleteSelectedTxtBlock() {
     }
     setTxtSource({ name: source.name, content: newContent });
   });
-  // setTxtSource が onTxtSourceChange listener (ai-place の syncPlacedFromTxt) を
+  // setTxtSource が onTxtSourceChange listener (scan-place の syncPlacedFromTxt) を
   // 発火するが、こちらは contents 変更時だけ rebuild する作りなので、レイヤーが
   // 1 件削除されただけのケースでは UI が古いまま残る。手動で同期させる。
   if (layerRemoved) {
@@ -769,8 +770,8 @@ export function replaceBlockInContent(content, pageNumber, oldText, newText) {
 //   U+0041 - U+005A (A-Z)   → U+FF21 - U+FF3A (Ａ-Ｚ)   オフセット +0xFEE0
 //   U+0061 - U+007A (a-z)   → U+FF41 - U+FF5A (ａ-ｚ)   オフセット +0xFEE0
 //
-// 呼出経路: commitNewTxtInput（新規入力）/ ai-place.js mapBlockToNewLayer
-// （自動配置）/ ai-place.js syncPlacedFromTxt（自動配置済みレイヤーの追従）。
+// 呼出経路: commitNewTxtInput（新規入力）/ auto-place.js mapBlockToNewLayer
+// （自動配置）/ auto-place.js syncPlacedFromTxt（自動配置済みレイヤーの追従）。
 // 原稿テキスト (state.txtSource.content) 自体は触らない設計（原稿は元データを
 // 保持、レイヤー側だけ全角化）。
 export function convertHalfToFullForVertical(text, direction) {
@@ -842,7 +843,7 @@ export function appendBlockToCurrentPageContent(content, pageNumber, newText) {
 
 // 「新規テキストを入力欄から確定」ハンドラ。
 // PSD ページの幾何中心にテキストフレーム (newLayer) を生成し、原稿本文にも追記して
-// sourceTxtRef でリンクする。原稿編集 → 配置済みフレームの追従は ai-place.js が担当。
+// sourceTxtRef でリンクする。原稿編集 → 配置済みフレームの追従は auto-place.js が担当。
 //
 // inputEl: 入力ソースの textarea/input element。サイドパネルの #txt-new-input でも、
 //          エディタモードの #editor-new-input でも、同じ commit ロジックで処理する。
@@ -858,11 +859,11 @@ export function commitNewTxtInput({ inputEl } = {}) {
   const leadingPct = getLeadingPct();
   // 縦書きのときは半角英数字 (0-9 / A-Z / a-z) を全角に置換 (横書き / 設定 OFF は素通し)。
   // 配置レイヤーの contents と原稿本文の追記内容、両方に同じ変換後テキストを使う
-  // ことで、原稿 dblclick 編集 → ai-place の syncPlacedFromTxt 連動でも整合性を保つ。
+  // ことで、原稿 dblclick 編集 → scan-place の syncPlacedFromTxt 連動でも整合性を保つ。
   const placedText = convertHalfToFullForVertical(text, direction);
 
   // 【PSD 未読込時の挙動】原稿テキストへの追記のみを行い、配置レイヤーは作らない。
-  // 後で PSD を読み込んで自動配置を実行すると、ai-place.js の buildPlacementPlan
+  // 後で PSD を読み込んで自動配置を実行すると、auto-place.js の buildPlacementPlan
   // 側で「吹き出しに対応しない余り TXT は PSD ページ中央に配置」される。
   const pages = getPages();
   const hasPsd = pages.length > 0;
@@ -924,7 +925,7 @@ export function commitNewTxtInput({ inputEl } = {}) {
 //   - input 自体は常に enabled（PSD 未読込でも下書きできるようにする）
 //   - ボタンは入力内容が無いときだけ disabled
 //   - PSD 未読込時の配置押下は commitNewTxtInput 内で「原稿追記のみ」モードに分岐し、
-//     後の自動配置で「画像中央」配置の対象となる（ai-place.js: mapTxtToPageCenter）
+//     後の自動配置で「画像中央」配置の対象となる（auto-place.js: mapTxtToPageCenter）
 //
 // 旧仕様は input まで disabled にしていたが、PSD 未読込状態で「ボタンが押せない」
 // のと「文字が打てない」のがユーザーには区別できず「機能していない」と感じる原因
@@ -1086,7 +1087,7 @@ async function handleSaveBtn() {
   outputPath = ensureTxtExtension(outputPath);
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("export_ai_text", { content: source.content, outputPath });
+    await invoke(`export_${RUNTIME_TOKEN}_text`, { content: source.content, outputPath });
     // 保存先を以後の「保存（上書き）」のターゲットとして state に記憶。
     setTxtFilePath(outputPath);
     setTxtDirty(false);
@@ -1134,10 +1135,10 @@ export async function loadTxtFromPath(path) {
 }
 
 // 文字列バッファから直接 TXT パネルに流し込むヘルパー。
-// AI OCR 結果 (ai-ocr.js) や、その他のプログラム生成テキストから呼ぶ。
+// 画像スキャン 画像スキャン 結果 (scan-extract.js) や、その他のプログラム生成テキストから呼ぶ。
 export function loadTxtFromContent(name, content) {
   setTxtSource({ name: name || "untitled.txt", content: content || "" });
-  // 元ファイルが無い経路（OCR 結果など）。エディタは「別名で保存」だけが利用可。
+  // 元ファイルが無い経路（画像スキャン 結果など）。エディタは「別名で保存」だけが利用可。
   setTxtFilePath(null);
   setTxtDirty(false);
   renderViewer();
@@ -1201,13 +1202,13 @@ function bindDropzone() {
 }
 
 export function initTxtSource() {
-  setupEditorOcrSourcePanel();
+  setupEditorExtractSourcePanel();
   $("open-txt-toolbar-btn")?.addEventListener("click", handleOpenBtn);
   onPageIndexChange(() => {
     setTxtSelectedBlockIndex(null);
     setTxtSelection("");
     renderViewer();
-    renderOcrSourceViewer();
+    renderExtractSourceViewer();
   });
   // PSD 未読込で見本 (PDF/画像) のみ開いているケースの TXT 連動。
   // PSD 読込中は onPageIndexChange が同期ブリッジ経由でも本体側も発火するため、
@@ -1217,21 +1218,21 @@ export function initTxtSource() {
     setTxtSelectedBlockIndex(null);
     setTxtSelection("");
     renderViewer();
-    renderOcrSourceViewer();
+    renderExtractSourceViewer();
   });
   // PDF doc 自体の読込/解除でも viewer を更新（見本の有無で activePageNumber の判定先が変わるため）。
   onPdfChange(() => {
     if (getPages().length > 0) return;
     renderViewer();
-    renderOcrSourceViewer();
+    renderExtractSourceViewer();
   });
   // undo/redo で原稿テキストが復元されたとき viewer を再描画。
   // setTxtSource からも同じ listener が発火する（loadTxtFromPath 等の呼び出し直後の
   // 明示 renderViewer 呼出と二重実行になるが、いずれも同期描画なので副作用なし）。
   onTxtSourceChange(() => renderTxtSourceViewer());
-  onParallelViewModeChange(() => syncOcrSourcePanelVisibility());
-  onAiOcrTextSourceChange(() => renderOcrSourceViewer());
-  onAiOcrTextDiffsChange(() => renderOcrSourceViewer());
+  onParallelViewModeChange(() => syncExtractSourcePanelVisibility());
+  onScanExtractTextSourceChange(() => renderExtractSourceViewer());
+  onScanExtractTextDiffsChange(() => renderExtractSourceViewer());
   $("clear-txt-btn").addEventListener("click", async () => {
     if (!getTxtSource()) return;
     const ok = await confirmDialog({

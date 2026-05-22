@@ -93,7 +93,7 @@ export const DEFAULT_SETTINGS = {
 
     // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置で吹き出し外周の白率が低い
     // (= フキダシ外 / フキダシ内に絵柄あり) 場合に白フチを自動付与するか。Rust 側
-    // (ocr.rs analyze_doc_in_place) が各 block の周辺白率 (0..1) を計算済み。
+    // (extract.rs analyze_doc_in_place) が各 block の周辺白率 (0..1) を計算済み。
     // ユーザーが手動で別の strokeColor を選んでいる場合は上書きせず尊重。
     // scope: creation-only (自動配置で新規作成されるレイヤーにのみ反映)
     autoStrokeEnabled: true,
@@ -101,7 +101,7 @@ export const DEFAULT_SETTINGS = {
 
     // 【v1.26.0 移植】自動配置で「背景上 (フキダシ無し)」または「ウニフラッシュ吹き出し」
     // を検出したら指定フォントに切り替えるか (デフォルト ON)。
-    // ai-place.js で 0..1 の合成スコアを算出し、cloudShapeScoreThreshold 以上で切替。
+    // auto-place.js で 0..1 の合成スコアを算出し、cloudShapeScoreThreshold 以上で切替。
     //   背景スコア = 1 - white_ratio                        (周囲が黒いほど高い)
     //   ウニスコア = min(min_seg_edge_changes / 6, 1.0)     (全周分布の凹凸ほど高い)
     //   max(背景, ウニ) >= 閾値 (デフォルト 0.5 = 50%) で発火。
