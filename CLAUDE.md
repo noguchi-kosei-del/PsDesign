@@ -5665,13 +5665,13 @@ var PHOTOSHOP_RUBY_PARENT_BIAS_PX
 
 ---
 
-## v1.4.5: アップデータ配布修正 / 表記整理 / 位置調整 UI
+## v2.0.0: アップデータ配布修正 / 表記整理 / 位置調整 UI
 
 ### GitHub リリースとアップデータ
 
 - GitHub 最新リリース `v1.4.1` には `latest.json`、`OPUS_1.4.1_x64-setup.exe`、署名ファイルが存在し、配布ファイル構成は正常だった。
-- 更新が入らない主因は、アプリ本体のバージョンも `1.4.1` で、Tauri updater が同一バージョンを更新対象にしないこと。
-- `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `1.4.5` に更新。
+- 更新が入らない主因は、既存インストールが `1.30.x` 系の場合に `1.4.x` 系が semver 上で古いバージョンとして扱われ、Tauri updater が更新対象にしないこと。
+- `package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.0.0` に更新。
 - `.github/workflows/release.yml` に `Validate release version` を追加し、タグ `vX.Y.Z` と `package.json` / `tauri.conf.json` / `Cargo.toml` のバージョンが一致しない場合はリリースを失敗させるようにした。
 - `latest.json` の生成は、バージョン検査後にビルドしてから行う順序へ整理。
 
