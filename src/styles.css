@@ -134,6 +134,16 @@ html, body, #app {
   height: 100vh;
   width: 100vw;
   overflow: hidden;
+  cursor: default;
+  user-select: none;
+  -webkit-user-select: none;
+}
+input,
+textarea,
+[contenteditable="true"] {
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
 }
 #app {
   display: grid;
@@ -1118,6 +1128,69 @@ body.home-starting .home-screen {
   width: min(756px, calc(100vw - 120px));
   margin-top: clamp(142px, 20vh, 228px);
 }
+.home-scan-engine-warning {
+  position: absolute;
+  z-index: 2;
+  top: calc(clamp(280px, 45vh, 462px) + 44px);
+  left: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  width: min(560px, calc(100vw - 80px));
+  min-height: 42px;
+  padding: 8px 12px 8px 14px;
+  border: 1px solid rgba(248, 113, 113, 0.58);
+  border-radius: 8px;
+  background: rgba(52, 14, 18, 0.86);
+  color: #ffe1e1;
+  box-shadow:
+    0 18px 34px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  transform: translateX(-50%);
+  backdrop-filter: blur(10px);
+}
+.home-scan-engine-warning[hidden] {
+  display: none;
+}
+.home-scan-engine-warning-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  color: #fb7185;
+}
+.home-scan-engine-warning-icon svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.home-scan-engine-warning-text {
+  min-width: 0;
+  color: #ffe4e6;
+  font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.home-scan-engine-install-btn {
+  flex: 0 0 auto;
+  min-width: 94px;
+  height: 28px;
+  padding: 0 12px;
+  border: 1px solid rgba(248, 113, 113, 0.72);
+  border-radius: 6px;
+  background: rgba(248, 113, 113, 0.16);
+  color: #ffe4e6;
+  font-size: 12px;
+  font-weight: 800;
+}
+.home-scan-engine-install-btn:hover {
+  background: rgba(59, 130, 246, 0.28);
+  border-color: rgba(96, 165, 250, 0.95);
+  color: #93c5fd;
+}
 .home-start-card {
   min-height: 206px;
   border: 1.5px solid var(--home-card-border, rgba(255, 255, 255, 0.28));
@@ -1128,6 +1201,13 @@ body.home-starting .home-screen {
   box-shadow:
     var(--home-card-shadow, 0 22px 34px rgba(0, 0, 0, 0.38)),
     inset 0 1px 0 var(--home-card-highlight, rgba(255, 255, 255, 0.14));
+}
+.home-start-card.engine-missing {
+  opacity: 0.42;
+  filter: grayscale(1) saturate(0.35);
+}
+.home-start-card.engine-missing .home-start-btn {
+  cursor: not-allowed;
 }
 .home-start-card h3 {
   display: flex;
@@ -1202,7 +1282,7 @@ body.home-starting .home-screen {
   align-items: center;
   justify-content: center;
   padding: 24px;
-  background: rgba(0, 0, 0, 0.56);
+  background: rgba(0, 0, 0, 0.9);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.22s ease;
@@ -1459,7 +1539,7 @@ body.home-starting .home-screen {
   background: #3a3a39;
 }
 .home-typeset-modal {
-  background: rgba(0, 0, 0, 0.56);
+  background: rgba(0, 0, 0, 0.9);
 }
 .home-typeset-card {
   background: var(--home-bg);
@@ -4320,7 +4400,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.54);
+  background: rgba(0, 0, 0, 0.9);
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.12s ease;
@@ -6182,6 +6262,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   order: 3;
   display: block;
   text-align: center;
+  font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
   font-size: 16px;
   font-weight: 700;
   color: #ffffff;
@@ -6367,7 +6448,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   position: static;  /* バー外なので絶対配置を解除 */
   display: block;
   text-align: center;
-  font-family: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
   font-weight: 700;
   font-size: 14px;
   letter-spacing: 0.12em;
@@ -6394,10 +6475,13 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   order: 2;
   height: 6px;
   margin: 4px 0 2px;
+  background: transparent;
+  overflow: visible;
 }
 #progress-modal .progress-title,
 #progress-modal .progress-detail {
   order: 3;
+  font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
 }
 #progress-modal .progress-loading-text {
   order: 4;
@@ -6416,9 +6500,44 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   left: 0;
   bottom: 0;
   width: 0%;
-  /* 左 → 右 で薄い青から濃い青に変化。進捗が進むほど右端の濃い色が露わになる。 */
-  background: linear-gradient(90deg, #6fb1ff 0%, #1d4f9e 100%);
+  background:
+    linear-gradient(90deg, rgba(var(--accent-rgb), 0.82) 0%, var(--accent-hover) 100%);
+  box-shadow:
+    0 0 8px rgba(var(--accent-rgb), 0.58),
+    0 0 18px rgba(var(--accent-rgb), 0.28);
+  filter: blur(0.25px);
   transition: width 0.3s ease-out;
+}
+.progress-fill::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -11px;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background:
+    radial-gradient(circle at center, rgba(255, 255, 255, 0.42) 0%, rgba(255, 255, 255, 0.22) 22%, rgba(var(--accent-rgb), 0.62) 46%, rgba(var(--accent-rgb), 0.28) 68%, rgba(var(--accent-rgb), 0) 90%);
+  box-shadow:
+    0 0 14px rgba(255, 255, 255, 0.28),
+    0 0 34px rgba(var(--accent-rgb), 0.82),
+    0 0 62px rgba(var(--accent-rgb), 0.64);
+  transform: translateY(-50%);
+  filter: blur(2.4px);
+  pointer-events: none;
+}
+.progress-fill::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  right: -34px;
+  width: 68px;
+  height: 68px;
+  border-radius: 50%;
+  background: radial-gradient(circle at center, rgba(255, 255, 255, 0.66) 0%, rgba(var(--accent-rgb), 0.88) 24%, rgba(var(--accent-rgb), 0.34) 48%, rgba(var(--accent-rgb), 0) 72%);
+  filter: blur(8px);
+  transform: translateY(-50%);
+  pointer-events: none;
 }
 /* track 背景と同色で初期は透明。青いバーが下を通過した部分だけ
    「青背景 × グレー文字」のコントラストで自然に浮き上がる。 */
@@ -7377,11 +7496,13 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   position: relative;
   width: min(980px, calc(100vw - 56px));
   max-height: calc(100vh - 56px);
-  background: var(--home-bg);
+  background:
+    linear-gradient(180deg, rgba(28, 28, 28, 0.92) 0%, rgba(14, 14, 14, 0.88) 100%);
   color: var(--home-text);
   border: 1px solid var(--home-card-border, rgba(255, 255, 255, 0.28));
   border-radius: 20px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.44);
+  backdrop-filter: blur(8px);
   overflow: auto;
   transform: translateY(6px);
   transition: transform 0.12s ease;
@@ -7610,14 +7731,27 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   }
 }
 :root[data-theme="light"] .scan-adjust-choice-modal {
-  background: rgba(15, 23, 42, 0.32);
+  background: rgba(0, 0, 0, 0.9);
 }
 :root[data-theme="light"] .scan-adjust-choice-preview-none {
   --scan-adjust-preview-ink: #050505;
 }
 :root[data-theme="light"] .scan-adjust-choice-card {
-  background: var(--home-bg);
-  box-shadow: 0 24px 60px rgba(30, 41, 59, 0.22);
+  background:
+    linear-gradient(180deg, rgba(28, 28, 28, 0.92) 0%, rgba(14, 14, 14, 0.88) 100%);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.32);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.36);
+}
+:root[data-theme="light"] .scan-adjust-choice-header {
+  border-bottom-color: rgba(255, 255, 255, 0.24);
+}
+:root[data-theme="light"] .scan-adjust-choice-title {
+  color: #fff;
+}
+:root[data-theme="light"] .scan-adjust-choice-close {
+  color: rgba(255, 255, 255, 0.84);
+  border-color: rgba(255, 255, 255, 0.24);
 }
 .scan-place-review-modal {
   position: fixed;
@@ -8731,4 +8865,9 @@ button.overlay-align-btn-primary:hover:not(:disabled) svg {
 .window-controls .window-ctrl-btn.window-ctrl-close:hover:not(:disabled) svg {
   color: #fff;
   stroke: currentColor;
+}
+
+button.home-scan-engine-install-btn:hover,
+button.home-scan-engine-install-btn:hover:not(:disabled) {
+  color: #60a5fa;
 }

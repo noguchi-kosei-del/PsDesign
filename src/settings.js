@@ -34,6 +34,14 @@ export const THEME_COLOR_OPTIONS = {
     accentRgb: "0, 120, 212",
     accentHover: "#1088e0",
   },
+  tealGreen: {
+    label: "Teal Green",
+    homeBlur: "#3F8278",
+    homeBlurRgb: "63, 130, 120",
+    accent: "#5A9B91",
+    accentRgb: "90, 155, 145",
+    accentHover: "#5A9B91",
+  },
 };
 
 // デフォルト設定。バージョン番号を持ち、将来の項目追加時に migrate() で穴埋め。

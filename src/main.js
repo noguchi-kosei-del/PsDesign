@@ -7,8 +7,10 @@ import {
   deleteSelectedLayers,
   commitActiveInPlaceEdit,
   nudgeSelectedLayers,
+  resizeSelectedLayers,
   showRotationHandlesForSelectedLayers,
   refreshAllOverlays,
+  restoreSelectedLayerBadges,
   snapNextSize,
   getLastInplaceSelection,
   onInplaceSelectionChange,
@@ -36,7 +38,7 @@ import {
   unifySelectedTextSize,
 } from "./text-editor.js";
 import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
-import { bindScanInstallMenu } from "./scan-install.js";
+import { bindScanInstallMenu, checkScanModelsStatus } from "./scan-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
 import { bindScanExtractButton, PLACE_ICON_SVG, runScanExtractForTranscription } from "./scan-extract.js";
 import {
@@ -191,6 +193,7 @@ import {
 let homeTypesetDropHandler = null;
 let homeTypesetDragOverHandler = null;
 let homeTypesetDragLeaveHandler = null;
+let homeScanEngineAvailable = null;
 
 async function handleOpenPdf() {
   const paths = await pickReferenceFiles();
@@ -401,6 +404,26 @@ let panPreviousTool = null;
 let panSpaceActive = false;
 let selectionAdornmentChordActive = false;
 let selectionAdornmentChordHadOtherKey = false;
+let selectedLayerBadgeRestoreTimer = null;
+
+function cancelSelectedLayerBadgeRestore() {
+  if (selectedLayerBadgeRestoreTimer == null) return;
+  clearTimeout(selectedLayerBadgeRestoreTimer);
+  selectedLayerBadgeRestoreTimer = null;
+}
+
+function scheduleSelectedLayerBadgeRestore() {
+  cancelSelectedLayerBadgeRestore();
+  selectedLayerBadgeRestoreTimer = window.setTimeout(() => {
+    selectedLayerBadgeRestoreTimer = null;
+    restoreSelectedLayerBadges();
+  }, 180);
+}
+
+function restoreSelectedLayerBadgesNow() {
+  cancelSelectedLayerBadgeRestore();
+  restoreSelectedLayerBadges();
+}
 
 function runShortcut(id) {
   const inv = getPageDirectionInverted();
@@ -473,11 +496,7 @@ function handleSelectionAdornmentChordKeyup(e) {
   }
   if (!shouldToggle) return false;
 
-  const visible = toggleSelectionAdornmentsVisible();
-  toast(visible ? "選択表示を表示しました" : "選択表示を非表示にしました", {
-    kind: "info",
-    duration: 1200,
-  });
+  toggleSelectionAdornmentsVisible();
   e.preventDefault();
   return true;
 }
@@ -657,6 +676,30 @@ function bindTools() {
       e.key === "ArrowLeft" || e.key === "ArrowRight" ||
       e.key === "ArrowUp" || e.key === "ArrowDown";
 
+    if (
+      isArrowKey &&
+      (e.ctrlKey || e.metaKey) &&
+      !e.altKey &&
+      (e.key === "ArrowUp" || e.key === "ArrowDown")
+    ) {
+      const t = e.target;
+      const isPlainInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA");
+      const sel = getLastInplaceSelection();
+      const hasRangeSelection = !!(sel && sel.end > sel.start);
+      if (!isPlainInput && (hasRangeSelection || getSelectedLayers().length > 0)) {
+        const sign = e.key === "ArrowUp" ? +1 : -1;
+        const multiplier = e.shiftKey ? 10 : 1;
+        const changed = hasRangeSelection
+          ? stepTextPointSize(sign, multiplier)
+          : resizeSelectedLayers(1, sign, multiplier);
+        if (changed) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
+    }
+
     if (isArrowKey && e.altKey && !e.ctrlKey && !e.metaKey) {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
@@ -682,6 +725,7 @@ function bindTools() {
           else if (e.key === "ArrowUp") dy = -step;
           else if (e.key === "ArrowDown") dy = +step;
           if (nudgeSelectedLayers(dx, dy)) {
+            cancelSelectedLayerBadgeRestore();
             e.preventDefault();
             return;
           }
@@ -752,6 +796,13 @@ function bindTools() {
   window.addEventListener("keyup", (e) => {
     if (handleSelectionAdornmentChordKeyup(e)) return;
 
+    if (
+      e.key === "ArrowLeft" || e.key === "ArrowRight" ||
+      e.key === "ArrowUp" || e.key === "ArrowDown"
+    ) {
+      scheduleSelectedLayerBadgeRestore();
+    }
+
     if (e.code === "Space" && panSpaceActive) {
       panSpaceActive = false;
       if (panPreviousTool) {
@@ -762,6 +813,7 @@ function bindTools() {
   });
 
   window.addEventListener("blur", () => {
+    restoreSelectedLayerBadgesNow();
     if (panSpaceActive) {
       panSpaceActive = false;
       if (panPreviousTool) {
@@ -1447,6 +1499,12 @@ function stepTextSize(sign, multiplier = 1) {
   const baseStep = getSizeStep();
   const next = snapNextSize(getTextSize(), baseStep, sign, multiplier);
   applyTextSize(next);
+}
+
+function stepTextPointSize(sign, multiplier = 1) {
+  const next = snapNextSize(getTextSize(), 1, sign, multiplier);
+  applyTextSize(next);
+  return true;
 }
 
 function bindBoldToggle() {
@@ -2216,6 +2274,75 @@ function hideHomeScreen() {
   document.body.classList.remove("home-mode");
 }
 
+function setHomeScanEngineState(available) {
+  homeScanEngineAvailable = available;
+  const missing = available === false;
+  document.body.classList.toggle("home-scan-engine-missing", missing);
+  const homeInner = document.querySelector("#home-screen .home-screen-inner");
+  const grid = document.querySelector("#home-screen .home-start-grid");
+  let warning = document.getElementById("home-scan-engine-warning");
+  if (missing && homeInner && grid) {
+    if (!warning) {
+      warning = document.createElement("div");
+      warning.id = "home-scan-engine-warning";
+      warning.className = "home-scan-engine-warning";
+      warning.setAttribute("role", "status");
+      warning.innerHTML = `
+        <span class="home-scan-engine-warning-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 9v4"/>
+            <path d="M12 17h.01"/>
+            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          </svg>
+        </span>
+        <span class="home-scan-engine-warning-text">画像スキャンエンジンが未インストールです</span>
+        <button type="button" class="home-scan-engine-install-btn">インストール</button>
+      `;
+      warning.querySelector(".home-scan-engine-install-btn")?.addEventListener("click", () => {
+        document.getElementById("scan-install-btn")?.click();
+      });
+      homeInner.insertBefore(warning, grid);
+    }
+    warning.hidden = false;
+  } else if (warning) {
+    warning.hidden = true;
+  }
+
+  for (const id of ["home-transcribe-start-btn", "home-typeset-start-btn"]) {
+    const btn = document.getElementById(id);
+    const card = btn?.closest(".home-start-card");
+    if (!btn || !card) continue;
+    btn.disabled = missing;
+    btn.setAttribute("aria-disabled", missing ? "true" : "false");
+    btn.title = missing ? "画像スキャンエンジンをインストールしてください" : "";
+    card.classList.toggle("engine-missing", missing);
+  }
+}
+
+async function refreshHomeScanEngineState() {
+  try {
+    const status = await checkScanModelsStatus();
+    setHomeScanEngineState(!!status?.available);
+    return !!status?.available;
+  } catch (e) {
+    console.warn("scan engine status check failed:", e);
+    setHomeScanEngineState(false);
+    return false;
+  }
+}
+
+async function ensureHomeScanEngineReady() {
+  if (homeScanEngineAvailable === true) return true;
+  const available = await refreshHomeScanEngineState();
+  if (available) return true;
+  await notifyDialog({
+    title: "画像スキャンエンジンが未インストールです",
+    message: "ホーム画面左下のメニューから画像スキャンエンジンをインストールしてください。",
+    kind: "warning",
+  });
+  return false;
+}
+
 function homeFlowBaseName(path) {
   if (!path) return "";
   const normalized = String(path).replace(/\\/g, "/");
@@ -2798,6 +2925,7 @@ async function transitionFromHome() {
 }
 
 async function startHomeTypesetFlow() {
+  if (!(await ensureHomeScanEngineReady())) return;
   const picked = await openHomeTypesetDialog();
   if (!picked) return;
   const positionAdjustMode = await choosePositionAdjustMode();
@@ -2839,6 +2967,7 @@ async function startHomeTypesetFlow() {
 }
 
 async function startHomeTranscribeFlow() {
+  if (!(await ensureHomeScanEngineReady())) return;
   let files = [];
   try {
     files = await pickReferenceFiles();
@@ -2870,6 +2999,10 @@ async function startHomeTranscribeFlow() {
 function bindHomeScreen() {
   document.getElementById("home-transcribe-start-btn")?.addEventListener("click", () => { void startHomeTranscribeFlow(); });
   document.getElementById("home-typeset-start-btn")?.addEventListener("click", () => { void startHomeTypesetFlow(); });
+  window.addEventListener("psdesign:scan-model-status", (e) => {
+    setHomeScanEngineState(!!e.detail?.available);
+  });
+  void refreshHomeScanEngineState();
   showHomeScreen();
 }
 

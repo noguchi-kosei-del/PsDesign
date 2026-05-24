@@ -64,7 +64,15 @@ let rotateHandlesVisible = false;
 let selectionAdornmentsVisible = true;
 
 function showSelectedLayerBadges() {
+  const wasHidden = hideSelectedLayerBadges;
   hideSelectedLayerBadges = false;
+  return wasHidden;
+}
+
+export function restoreSelectedLayerBadges() {
+  if (!showSelectedLayerBadges()) return false;
+  refreshAllOverlays();
+  return true;
 }
 
 function clearAutoFontMarkerForNewLayer(tempId, layer) {
