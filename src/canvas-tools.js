@@ -60,6 +60,8 @@ const TEXT_BBOX_LONG_SAFETY_EM = 0.4;
 const TEXT_BBOX_HEURISTIC_LONG_SCALE = 1.05;
 const LAYER_DRAG_THRESHOLD_PX = 5;
 let hideSelectedLayerBadges = false;
+let userHiddenLayerBadges = false;
+let temporaryMultiSelectionAdornmentsVisible = false;
 let rotateHandlesVisible = false;
 let selectionAdornmentsVisible = true;
 
@@ -67,6 +69,37 @@ function showSelectedLayerBadges() {
   const wasHidden = hideSelectedLayerBadges;
   hideSelectedLayerBadges = false;
   return wasHidden;
+}
+
+function handleSelectedLayerBadgeVisibilityClick(e) {
+  if (!e?.ctrlKey || e.shiftKey || e.metaKey || e.altKey) return false;
+  temporaryMultiSelectionAdornmentsVisible = false;
+  setSelectionAdornmentsVisible(false);
+  userHiddenLayerBadges = true;
+  hideSelectedLayerBadges = false;
+  return true;
+}
+
+export function setSelectedLayerBadgesUserHidden(hidden) {
+  userHiddenLayerBadges = hidden === true;
+  temporaryMultiSelectionAdornmentsVisible = false;
+  hideSelectedLayerBadges = false;
+  refreshAllOverlays();
+}
+
+export function clearTemporaryMultiSelectionAdornments() {
+  if (!temporaryMultiSelectionAdornmentsVisible) return false;
+  temporaryMultiSelectionAdornmentsVisible = false;
+  refreshAllOverlays();
+  return true;
+}
+
+export function revealLayerAdornmentsForTemporaryMultiSelection() {
+  if (getSelectedLayers().length <= 1) return false;
+  temporaryMultiSelectionAdornmentsVisible = true;
+  hideSelectedLayerBadges = false;
+  refreshAllOverlays();
+  return true;
 }
 
 export function restoreSelectedLayerBadges() {
@@ -116,6 +149,12 @@ function hideRotateHandles(ctx = null) {
 // 参照できるよう listener API で通知する。
 let _lastInplaceSelection = null;
 const _selectionChangeListeners = new Set();
+let lastPointerDownTarget = null;
+if (typeof document !== "undefined") {
+  document.addEventListener("pointerdown", (e) => {
+    lastPointerDownTarget = e.target;
+  }, true);
+}
 export function getLastInplaceSelection() { return _lastInplaceSelection; }
 export function onInplaceSelectionChange(fn) {
   _selectionChangeListeners.add(fn);
@@ -189,6 +228,144 @@ export function restoreInplaceSelection(sel) {
   }
 }
 
+function shouldKeepInPlaceEditForTarget(target) {
+  return !!(target && typeof target.closest === "function"
+    && target.closest(".editor, .side-panel .editor, .ruby-panel-floating, .side-panel-tabs, .side-panel-tab"));
+}
+
+export function showInplaceSelectionHighlightOnly(sel = _lastInplaceSelection) {
+  const selection = window.getSelection?.();
+  selection?.removeAllRanges?.();
+  return syncInplaceSelectionHighlight(sel);
+}
+
+export function refreshActiveInPlaceEditPreview(sel = _lastInplaceSelection) {
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return false;
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
+  if (!inner) return false;
+  const pages = getPages();
+  const page = pages.find((p) => p.path === sel?.psdPath) ?? pages[getCurrentPageIndex()];
+  if (!page) return false;
+
+  if (sel?.layerId != null) {
+    const layerId = Number(sel.layerId);
+    const layer = page.textLayers?.find((l) => Number(l.id) === layerId);
+    if (!layer) return false;
+    const edit = getEdit(page.path, layer.id) ?? {};
+    const rect = layerRectForExisting(page, layer, edit);
+    const defaultLeadPct = Number.isFinite(edit.leadingPct) ? edit.leadingPct : 105;
+    const tcyEnabled = getDefault("tateChuYokoEnabled") !== false;
+    const symbolFontPS = getDefault("symbolFontReplaceEnabled") !== false
+      ? String(getDefault("symbolFontPostScriptName") || "")
+      : "";
+    const punctTsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
+    const existingSizePt = getExistingLayerEffectiveSizePt(page, layer, edit);
+    renderInnerText(
+      inner, rect.previewText, defaultLeadPct, edit.lineLeadings, 0, 0,
+      tcyEnabled && rect.isVertical,
+      rect.isVertical,
+      { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) }, existingSizePt, edit.charFonts ?? layer.charFonts,
+      symbolFontPS,
+      edit.charBolds,
+      edit.charItalics,
+      punctTsumePct,
+      edit.charRubies,
+    );
+    inner.contentEditable = "true";
+    return syncInplaceSelectionHighlight(sel);
+  }
+
+  if (sel?.tempId != null) {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.tempId);
+    if (!nl) return false;
+    const rect = layerRectForNew(page, nl);
+    const dashMille = Number(getDefault("dashRunTrackingMille")) || 0;
+    const tildeMille = Number(getDefault("tildeRunKerningMille")) || 0;
+    const tcyEnabledNew = getDefault("tateChuYokoEnabled") !== false;
+    const symbolFontPSNew = getDefault("symbolFontReplaceEnabled") !== false
+      ? String(getDefault("symbolFontPostScriptName") || "")
+      : "";
+    const punctTsumePctNew = Number(getDefault("punctuationTsumePercent")) || 0;
+    renderInnerText(
+      inner, nl.contents, nl.leadingPct ?? 125, nl.lineLeadings, dashMille, tildeMille,
+      tcyEnabledNew && rect.isVertical,
+      rect.isVertical,
+      nl.charSizes, nl.sizePt ?? 24, nl.charFonts,
+      symbolFontPSNew,
+      nl.charBolds,
+      nl.charItalics,
+      punctTsumePctNew,
+      nl.charRubies,
+    );
+    inner.contentEditable = "true";
+    return syncInplaceSelectionHighlight(sel);
+  }
+  return false;
+}
+
+function rectFromEditingBoxStyle(box, page, fallbackRect) {
+  if (!box || !page?.width || !page?.height) return fallbackRect;
+  const leftPct = Number.parseFloat(box.style.left);
+  const topPct = Number.parseFloat(box.style.top);
+  const widthPct = Number.parseFloat(box.style.width);
+  const heightPct = Number.parseFloat(box.style.height);
+  if (![leftPct, topPct, widthPct, heightPct].every(Number.isFinite)) return fallbackRect;
+  return {
+    left: (leftPct / 100) * page.width,
+    top: (topPct / 100) * page.height,
+    width: (widthPct / 100) * page.width,
+    height: (heightPct / 100) * page.height,
+  };
+}
+
+function applyEditingBoxRect(box, page, rect) {
+  if (!box || !page?.width || !page?.height || !rect) return;
+  box.style.left = `${(rect.left / page.width) * 100}%`;
+  box.style.top = `${(rect.top / page.height) * 100}%`;
+  box.style.width = `${(rect.width / page.width) * 100}%`;
+  box.style.height = `${(rect.height / page.height) * 100}%`;
+}
+
+export function recenterActiveInPlaceEditBox(sel = _lastInplaceSelection) {
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing || !sel) return false;
+  const pages = getPages();
+  const page = pages.find((p) => p.path === sel.psdPath) ?? pages[getCurrentPageIndex()];
+  if (!page) return false;
+
+  if (sel.layerId != null) {
+    const layerId = Number(sel.layerId);
+    const layer = page.textLayers?.find((l) => Number(l.id) === layerId);
+    if (!layer) return false;
+    const edit = getEdit(page.path, layer.id) ?? {};
+    const newRect = layerRectForExisting(page, layer, edit);
+    const currentRect = rectFromEditingBoxStyle(editing, page, newRect);
+    const centerX = currentRect.left + currentRect.width / 2;
+    const centerY = currentRect.top + currentRect.height / 2;
+    const left = centerX - newRect.width / 2;
+    const top = centerY - newRect.height / 2;
+    setEdit(page.path, layer.id, { dx: left - (layer.left ?? 0), dy: top - (layer.top ?? 0) });
+    applyEditingBoxRect(editing, page, { left, top, width: newRect.width, height: newRect.height });
+    return true;
+  }
+
+  if (sel.tempId != null) {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.tempId);
+    if (!nl) return false;
+    const newRect = layerRectForNew(page, nl);
+    const currentRect = rectFromEditingBoxStyle(editing, page, newRect);
+    const centerX = currentRect.left + currentRect.width / 2;
+    const centerY = currentRect.top + currentRect.height / 2;
+    const left = centerX - newRect.width / 2;
+    const top = centerY - newRect.height / 2;
+    updateNewLayer(nl.tempId, { x: left, y: top });
+    applyEditingBoxRect(editing, page, { left, top, width: newRect.width, height: newRect.height });
+    return true;
+  }
+  return false;
+}
+
 let panState = null;
 // マーキー（V ツールの矩形選択）状態。
 let marqueeState = null;
@@ -235,6 +412,8 @@ export function mountPageInteraction({ pageEl, canvas, overlay, page, pageIndex 
 export function unmountAll() {
   rotateHandlesVisible = false;
   hideSelectedLayerBadges = false;
+  userHiddenLayerBadges = false;
+  temporaryMultiSelectionAdornmentsVisible = false;
   mounts.clear();
   for (const ro of resizeObservers) ro.disconnect();
   resizeObservers.clear();
@@ -301,7 +480,12 @@ export function applyEditModeStyleToRange(start, end, styleProps) {
   // 新規 span でラップ
   const span = document.createElement("span");
   for (const [k, v] of Object.entries(styleProps)) {
-    if (v != null && v !== "") span.style[k] = v;
+    if (v == null || v === "") continue;
+    if (k === "fontSize") {
+      span.style[k] = normalizeEditFontSize(inner, v);
+    } else {
+      span.style[k] = v;
+    }
   }
   try {
     range2.surroundContents(span);
@@ -629,6 +813,14 @@ export function showRotationHandlesForSelectedLayers() {
   return true;
 }
 
+function normalizeEditFontSize(inner, value) {
+  if (typeof value !== "string" || !value.trim().endsWith("em")) return value;
+  const ratio = Number.parseFloat(value);
+  const basePx = Number.parseFloat(window.getComputedStyle(inner).fontSize);
+  if (!Number.isFinite(ratio) || !Number.isFinite(basePx) || basePx <= 0) return value;
+  return `${ratio * basePx}px`;
+}
+
 // 矢印キー ↑/↓ で現在ページ内のテキストレイヤー選択を順送り / 逆送りする。
 // 順序は text-editor.js rebuildLayerList と同じ「既存レイヤー → 新規レイヤー」。
 // 末尾で wrap (last → first / first → last)。delta: +1 次へ / -1 前へ。
@@ -890,7 +1082,8 @@ export function layerRectForExisting(page, layer, edit) {
   const tcyEnabledExisting = (getDefault("tateChuYokoEnabled") !== false) && isVertical;
   // 【v1.16.0】measureMaxLineExtentEm はここで sizePt が確定してから呼ぶ（per-char override も反映）。
   const charFontsExisting = edit.charFonts ?? layer.charFonts ?? {};
-  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, edit.charSizes, charFontsExisting, punctTsumePctExisting, tcyEnabledExisting);
+  const existingCharSizes = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
+  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, existingCharSizes, charFontsExisting, punctTsumePctExisting, tcyEnabledExisting);
   const THICK_SAFETY = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM;
   const LONG_SAFETY = TEXT_BBOX_LONG_SAFETY_EM;
   const LONG_SCALE = TEXT_BBOX_HEURISTIC_LONG_SCALE;
@@ -898,7 +1091,7 @@ export function layerRectForExisting(page, layer, edit) {
   // 行 N の override = 行 N-1 と行 N の隙間（marginBlockStart）。行 0 は「前の行」がないので無視。
   // per-char サイズ override がある行はその行の最大文字サイズで line-height をスケール。
   const lineLeadings = edit.lineLeadings ?? {};
-  const charSizesMap = edit.charSizes ?? {};
+  const charSizesMap = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
   const linesArrE = previewText.split(/\r?\n/);
   const lineStartsE = getLineStartOffsets(previewText);
   let thickSum = 0;
@@ -1050,7 +1243,10 @@ function renderOverlay(ctx) {
   const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
   // 複数選択 (2 件以上) の判定。.multi-selected クラスで CSS 側が水色点線 + 青バッジに切替える。
   const isMultiSelect = getSelectedLayers().length > 1;
-  const showSelectionAdornments = selectionAdornmentsVisible;
+  const hasTemporaryMultiAdornments = userHiddenLayerBadges
+    && temporaryMultiSelectionAdornmentsVisible
+    && getSelectedLayers().length > 1;
+  const showSelectionAdornments = selectionAdornmentsVisible || hasTemporaryMultiAdornments;
   overlay.classList.toggle("selection-adornments-hidden", !showSelectionAdornments);
 
   for (const layer of page.textLayers) {
@@ -1087,7 +1283,7 @@ function renderOverlay(ctx) {
       inner, rect.previewText, defaultLeadPct, edit.lineLeadings, 0, 0,
       tcyEnabled && rect.isVertical,
       rect.isVertical,
-      edit.charSizes, existingSizePt, edit.charFonts ?? layer.charFonts,
+      { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) }, existingSizePt, edit.charFonts ?? layer.charFonts,
       symbolFontPS,
       edit.charBolds,
       edit.charItalics,
@@ -1118,10 +1314,11 @@ function renderOverlay(ctx) {
       if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
-      if (showSelectionAdornments && !hideSelectedLayerBadges) {
+      if (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments)) {
         const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
+        const charSizes = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
         const badge = createSizeBadge(
-          effectivePt,
+          collectLayerSizeValues(effectivePt, charSizes),
           page,
           edit.fontPostScriptName ?? layer.font ?? null,
           edit.strokeColor ?? layer.strokeColor ?? "none",
@@ -1200,9 +1397,9 @@ function renderOverlay(ctx) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
       if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
-      if (showSelectionAdornments && !hideSelectedLayerBadges) {
+      if (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments)) {
         const newBadge = createSizeBadge(
-          nl.sizePt ?? 24,
+          collectLayerSizeValues(nl.sizePt ?? 24, nl.charSizes),
           page,
           nl.fontPostScriptName ?? null,
           nl.strokeColor ?? "none",
@@ -2495,6 +2692,34 @@ function createStrokeBadgeSwatches(strokeColor, strokeWidthPx) {
   return wrap;
 }
 
+function collectLayerSizeValues(defaultSizePt, charSizes) {
+  const values = [];
+  const seen = new Set();
+  const add = (pt) => {
+    const n = Number(pt);
+    if (!Number.isFinite(n)) return;
+    const key = String(Math.round(n * 100) / 100);
+    if (seen.has(key)) return;
+    seen.add(key);
+    values.push(n);
+  };
+  add(defaultSizePt);
+  for (const value of Object.values(charSizes ?? {})) add(value);
+  return values;
+}
+
+function formatBadgeSizeLabel(sizePtOrValues, page) {
+  const values = Array.isArray(sizePtOrValues) ? sizePtOrValues : [sizePtOrValues];
+  return values
+    .filter((pt) => Number.isFinite(Number(pt)))
+    .map((pt) => {
+      const display = toDisplaySizePt(Number(pt), page);
+      const rounded = Math.round((display ?? 0) * 100) / 100;
+      return `${rounded}pt`;
+    })
+    .join("/");
+}
+
 function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none", strokeWidthPx = 20) {
   // 環境設定（デフォルトタブ）でフォント名・文字サイズの表示/非表示を一括切替。
   // OFF の場合はバッジ自体を生成せず null を返し、呼び出し側で append をスキップする。
@@ -2502,9 +2727,8 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
 
   const el = document.createElement("div");
   el.className = "layer-size-badge";
-  // 基準PSD 比で換算した pt を表示。基準が 1 ページ目（または未読込）の場合は素のまま。
-  const display = toDisplaySizePt(sizePt ?? 0, page);
-  const rounded = Math.round((display ?? 0) * 100) / 100;
+  // 基準PSD 比で換算した pt を表示。複数サイズ混在時は 13pt/15pt のように列挙する。
+  const sizeLabel = formatBadgeSizeLabel(sizePt, page);
   const fontName = fontPostScriptName ? (getFontDisplayName(fontPostScriptName) ?? fontPostScriptName) : "";
   // フォント名と文字サイズを 2 行に分けて表示（フォント上 / サイズ下）。
   if (fontName) {
@@ -2515,7 +2739,7 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
   }
   const sizeEl = document.createElement("div");
   sizeEl.className = "layer-size-badge-size";
-  sizeEl.textContent = `${rounded}pt`;
+  sizeEl.textContent = sizeLabel;
   el.appendChild(sizeEl);
   const strokeBadge = createStrokeBadgeSwatches(strokeColor, strokeWidthPx);
   if (strokeBadge) el.appendChild(strokeBadge);
@@ -2838,7 +3062,6 @@ function enterInPlaceEditFromMove(ctx, target) {
 }
 
 function onExistingLayerMouseDown(e, ctx, layer) {
-  showSelectedLayerBadges();
   const tool = getTool();
   if (tool !== "move") return;
   // 【v1.21.0】編集中レイヤー (.editing) のクリックは contenteditable のキャレット移動に
@@ -2847,6 +3070,14 @@ function onExistingLayerMouseDown(e, ctx, layer) {
   if (e.currentTarget && e.currentTarget.classList.contains("editing")) return;
   e.stopPropagation();
   e.preventDefault();
+  if (handleSelectedLayerBadgeVisibilityClick(e)) {
+    setSelectedLayer(ctx.pageIndex, layer.id);
+    renderOverlay(ctx);
+    if (!maybeApplyStickyFont()) rebuildLayerList();
+    return;
+  }
+  temporaryMultiSelectionAdornmentsVisible = false;
+  showSelectedLayerBadges();
   if (isLayerDoubleClick(ctx.pageIndex, layer.id)) {
     enterInPlaceEditFromMove(ctx, { kind: "existing", layer });
     return;
@@ -2866,13 +3097,20 @@ function onExistingLayerMouseDown(e, ctx, layer) {
 }
 
 function onNewLayerMouseDown(e, ctx, nl) {
-  showSelectedLayerBadges();
   const tool = getTool();
   if (tool !== "move") return;
   // 編集中レイヤーのクリックは contenteditable に委ねる（上記 onExistingLayerMouseDown と同パターン）。
   if (e.currentTarget && e.currentTarget.classList.contains("editing")) return;
   e.stopPropagation();
   e.preventDefault();
+  if (handleSelectedLayerBadgeVisibilityClick(e)) {
+    setSelectedLayer(ctx.pageIndex, nl.tempId);
+    renderOverlay(ctx);
+    if (!maybeApplyStickyFont()) rebuildLayerList();
+    return;
+  }
+  temporaryMultiSelectionAdornmentsVisible = false;
+  showSelectedLayerBadges();
   if (isLayerDoubleClick(ctx.pageIndex, nl.tempId)) {
     enterInPlaceEditFromMove(ctx, { kind: "new", nl });
     return;
@@ -2976,7 +3214,7 @@ function beginMultiLayerDrag(e, ctx) {
           charRubies: edit.charRubies,
         });
         updateNewLayer(dup.tempId, {
-          charSizes: { ...(edit.charSizes ?? {}) },
+          charSizes: { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) },
           charFonts: { ...(edit.charFonts ?? layer.charFonts ?? {}) },
           charBolds: { ...(edit.charBolds ?? {}) },
           charItalics: { ...(edit.charItalics ?? {}) },
@@ -3255,6 +3493,7 @@ function finalizeMarquee() {
 
   const tinyClick = Math.abs(currentX - startX) < 2 && Math.abs(currentY - startY) < 2;
   if (tinyClick) {
+    temporaryMultiSelectionAdornmentsVisible = false;
     if (!additive) {
       setSelectedLayers([]);
       renderOverlay(ctx);
@@ -3282,6 +3521,11 @@ function finalizeMarquee() {
     final = hits;
   }
   setSelectedLayers(final);
+  if (final.length > 1) {
+    revealLayerAdornmentsForTemporaryMultiSelection();
+  } else {
+    temporaryMultiSelectionAdornmentsVisible = false;
+  }
   renderOverlay(ctx);
   if (!maybeApplyStickyFont()) rebuildLayerList();
 }
@@ -3436,11 +3680,20 @@ function startContentEditableEdit(ctx, target, options = {}) {
     ? { ...(startEdit.lineLeadings ?? {}) }
     : { ...(target.nl.lineLeadings ?? {}) };
   const startCharSizes = isExisting
-    ? { ...(startEdit.charSizes ?? {}) }
+    ? { ...(target.layer.charSizes ?? {}), ...(startEdit.charSizes ?? {}) }
     : { ...(target.nl.charSizes ?? {}) };
   const startCharFonts = isExisting
     ? { ...(startEdit.charFonts ?? target.layer.charFonts ?? {}) }
     : { ...(target.nl.charFonts ?? {}) };
+  const startCharBolds = isExisting
+    ? { ...(startEdit.charBolds ?? {}) }
+    : { ...(target.nl.charBolds ?? {}) };
+  const startCharItalics = isExisting
+    ? { ...(startEdit.charItalics ?? {}) }
+    : { ...(target.nl.charItalics ?? {}) };
+  const startCharRubies = isExisting
+    ? { ...(startEdit.charRubies ?? {}) }
+    : { ...(target.nl.charRubies ?? {}) };
   // 位置（x,y / dx,dy）も snapshot。recenterBox が edit 中に書き換えるので、
   // cancel 時に元の位置に戻すために必要。
   const startDx = isExisting ? (startEdit.dx ?? 0) : null;
@@ -3449,10 +3702,44 @@ function startContentEditableEdit(ctx, target, options = {}) {
   const startY = isExisting ? null : (target.nl.y ?? 0);
 
   // 3. per-char span 構造を解除し plain text 化
-  if (startContents) {
-    inner.textContent = startContents;
+  if (isExisting) {
+    const defaultLeadPct = Number.isFinite(startEdit.leadingPct) ? startEdit.leadingPct : 105;
+    const tcyEnabled = getDefault("tateChuYokoEnabled") !== false;
+    const symbolFontPS = getDefault("symbolFontReplaceEnabled") !== false
+      ? String(getDefault("symbolFontPostScriptName") || "")
+      : "";
+    const punctTsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
+    const existingSizePt = getExistingLayerEffectiveSizePt(page, target.layer, startEdit);
+    renderInnerText(
+      inner, startContents, defaultLeadPct, startLineLeadings, 0, 0,
+      tcyEnabled && editDirection === "vertical",
+      editDirection === "vertical",
+      startCharSizes, existingSizePt, startCharFonts,
+      symbolFontPS,
+      startCharBolds,
+      startCharItalics,
+      punctTsumePct,
+      startCharRubies,
+    );
   } else {
-    inner.innerHTML = "";
+    const dashMille = Number(getDefault("dashRunTrackingMille")) || 0;
+    const tildeMille = Number(getDefault("tildeRunKerningMille")) || 0;
+    const tcyEnabled = getDefault("tateChuYokoEnabled") !== false;
+    const symbolFontPS = getDefault("symbolFontReplaceEnabled") !== false
+      ? String(getDefault("symbolFontPostScriptName") || "")
+      : "";
+    const punctTsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
+    renderInnerText(
+      inner, startContents, target.nl.leadingPct ?? 125, startLineLeadings, dashMille, tildeMille,
+      tcyEnabled && editDirection === "vertical",
+      editDirection === "vertical",
+      startCharSizes, target.nl.sizePt ?? 24, startCharFonts,
+      symbolFontPS,
+      startCharBolds,
+      startCharItalics,
+      punctTsumePct,
+      startCharRubies,
+    );
   }
 
   // 【v1.21.0】編集前の bbox 中心を握っておく。文字数変化（特に改行追加）で bbox の
@@ -3506,7 +3793,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     if (isExisting) {
       const e = getEdit(page.path, target.layer.id) ?? {};
       return {
-        charSizes: e.charSizes ?? {},
+        charSizes: { ...(target.layer.charSizes ?? {}), ...(e.charSizes ?? {}) },
         charFonts: e.charFonts ?? target.layer.charFonts ?? {},
         charBolds: e.charBolds ?? {},
         charItalics: e.charItalics ?? {},
@@ -4036,8 +4323,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
   // blur: editor パネル内クリックなら維持、それ以外なら commit
   const onBlur = (e) => {
     const next = e.relatedTarget;
-    if (next && typeof next.closest === "function"
-        && next.closest(".editor, .side-panel .editor, .ruby-panel-floating")) {
+    if (shouldKeepInPlaceEditForTarget(next) || shouldKeepInPlaceEditForTarget(lastPointerDownTarget)) {
       return;
     }
     finalize(true);

@@ -772,14 +772,15 @@ function parseRubyAnnotatedText(raw) {
   const charRubies = {};
   let text = "";
   let last = 0;
-  const re = /\{([^{}]+)\}\(([^()]+)\)/g;
+  const re = /｛([^｛｝]+)｝（([^（）]+)）|\{([^{}]+)\}\(([^()]+)\)|\[([^\[\]]+)\]\(([^()]+)\)/g;
   let match;
   while ((match = re.exec(input)) !== null) {
     text += input.slice(last, match.index);
-    const parentText = String(match[1] ?? "").replace(/[ \t\u3000]+/g, "");
-    const rubyRaw = String(match[2] ?? "");
+    const parentRaw = match[1] ?? match[3] ?? match[5] ?? match[7] ?? "";
+    const rubyRaw = String(match[2] ?? match[4] ?? match[6] ?? match[8] ?? "");
+    const parentText = String(parentRaw).replace(/[ \t\u3000]+/g, "");
     const rubyText = rubyRaw.trim().replace(/[\t\u3000]+/g, " ").replace(/ +/g, " ");
-    if (parentText && rubyText) {
+    if (parentText && rubyText && rubyText !== "...") {
       const start = text.length;
       text += parentText;
       const rubyParts = rubyText.split(/[ \u3000]+/).filter(Boolean);

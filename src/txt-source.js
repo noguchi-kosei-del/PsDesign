@@ -15,6 +15,7 @@ import {
   getStrokeWidthPx,
   getTextSize,
   getNewTextDirection,
+  getTxtFilePath,
   getTxtSelectedBlockIndex,
   getTxtSelection,
   getTxtSource,
@@ -34,15 +35,20 @@ import {
   updateNewLayer,
   withHistoryTransient,
 } from "./state.js";
-import { confirmDialog, toast } from "./ui-feedback.js";
+import { confirmDialog, notifyDialog, toast } from "./ui-feedback.js";
 import { centerTopLeft, refreshAllOverlays } from "./canvas-tools.js";
 import { rebuildLayerList } from "./text-editor.js";
+import {
+  appendTextWithStyleMarkers,
+  getStyleOverrideRangesForTxtRef,
+} from "./text-style-markers.js";
 import { getDefault } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
 const RUNTIME_TOKEN = "a" + "i";
 const 画像スキャン_SOURCE_VISIBLE_KEY = "opus_extract_source_panel_visible";
 let extractSourcePanelVisible = false;
+let txtSourceSaveInflight = false;
 
 function readExtractSourcePanelVisible() {
   try {
@@ -237,7 +243,7 @@ function renderViewer() {
   empty.hidden = true;
   name.textContent = source.name;
   clearBtn.disabled = false;
-  if (saveBtn) saveBtn.disabled = false;
+  if (saveBtn) saveBtn.disabled = txtSourceSaveInflight;
   if (deleteBtn) deleteBtn.disabled = getTxtSelectedBlockIndex() == null;
 
   const { blocks, hasMarkers, pageNumber } = getVisibleBlocks();
@@ -271,7 +277,11 @@ function renderViewer() {
     const el = document.createElement("div");
     el.className = "txt-block";
     el.dataset.blockIndex = String(idx);
-    el.textContent = paragraph;
+    appendTextWithStyleMarkers(
+      el,
+      paragraph,
+      getStyleOverrideRangesForTxtRef(pageNumber, idx),
+    );
     if (idx === selectedIdx) el.classList.add("selected");
     if (autoBucketByPara.has(idx)) {
       el.classList.add("auto-font-switched");
@@ -1133,6 +1143,55 @@ export function ensureTxtExtension(path) {
 async function handleSaveBtn() {
   const source = getTxtSource();
   if (!source) return;
+  if (txtSourceSaveInflight) {
+    toast("保存処理中です。完了までお待ちください", { kind: "info", duration: 1800 });
+    return;
+  }
+  txtSourceSaveInflight = true;
+  const saveBtn = $("save-txt-btn");
+  if (saveBtn) saveBtn.disabled = true;
+  let scriptOutputPath;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const defaultName = source.name || (getTxtFilePath() ? baseName(getTxtFilePath()) : "") || "untitled.txt";
+    scriptOutputPath = await invoke("save_editor_text_to_script_output", {
+      content: source.content,
+      defaultName,
+    });
+    setTxtFilePath(scriptOutputPath);
+    setTxtDirty(false);
+  } catch (e) {
+    console.error(e);
+    toast(`保存失敗: ${e?.message ?? e}`, { kind: "error" });
+    txtSourceSaveInflight = false;
+    if (saveBtn) saveBtn.disabled = !getTxtSource();
+    return;
+  }
+
+  txtSourceSaveInflight = false;
+  if (saveBtn) saveBtn.disabled = !getTxtSource();
+
+  const displayName = baseName(scriptOutputPath);
+  await notifyDialog({
+    title: "保存が完了しました",
+    message: `${displayName}\n${scriptOutputPath}`,
+    okLabel: "閉じる",
+    kind: "success",
+    primaryAction: {
+      label: "ProGenを開く",
+      kind: "place",
+      onClick: async () => {
+        try {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("launch_progen_with_text", { textPath: scriptOutputPath });
+        } catch (e) {
+          console.error(e);
+          toast(`ProGen起動失敗: ${e?.message ?? e}`, { kind: "error" });
+        }
+      },
+    },
+  });
+  return;
   let outputPath;
   try {
     outputPath = await pickTxtSavePath(source.name);

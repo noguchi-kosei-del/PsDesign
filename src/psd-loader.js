@@ -127,11 +127,13 @@ function effectiveFontSize(rawFontSize, transform) {
   return rawFontSize * scale;
 }
 
-function extractStyleRunFonts(textData, baseFont) {
+function extractStyleRunStyles(textData, baseFont, baseRawFontSize, transform) {
   const text = textData?.text ?? "";
   const runs = Array.isArray(textData?.styleRuns) ? textData.styleRuns : [];
   const charFonts = {};
+  const charSizes = {};
   const usedFonts = [];
+  const baseEffectiveSize = effectiveFontSize(baseRawFontSize, transform);
   const addUsed = (font) => {
     if (!font || usedFonts.includes(font)) return;
     usedFonts.push(font);
@@ -142,15 +144,20 @@ function extractStyleRunFonts(textData, baseFont) {
   for (const run of runs) {
     const len = Math.max(0, Math.floor(Number(run?.length) || 0));
     const font = run?.style?.font?.name || baseFont || "";
+    const rawSize = Number.isFinite(run?.style?.fontSize) ? run.style.fontSize : baseRawFontSize;
+    const size = effectiveFontSize(rawSize, transform);
     if (font) addUsed(font);
     const end = Math.min(text.length, pos + len);
     if (font && font !== baseFont) {
       for (let i = pos; i < end; i++) charFonts[i] = font;
     }
+    if (Number.isFinite(size) && Number.isFinite(baseEffectiveSize) && Math.abs(size - baseEffectiveSize) > 0.01) {
+      for (let i = pos; i < end; i++) charSizes[i] = size;
+    }
     pos += len;
     if (pos >= text.length) break;
   }
-  return { charFonts, usedFonts };
+  return { charFonts, charSizes, usedFonts };
 }
 
 // 【v1.26.0 移植 (PsDesign-main v1.24.0)】非表示判定を統一する。
@@ -176,15 +183,22 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
       const { strokeColor, strokeWidthPx } = extractStroke(layer);
       const fillColor = extractFillColor(layer);
       const baseFont = style.font?.name ?? "";
-      const { charFonts, usedFonts } = extractStyleRunFonts(layer.text, baseFont);
+      const baseFontSize = effectiveFontSize(style.fontSize, layer.text.transform);
+      const { charFonts, charSizes, usedFonts } = extractStyleRunStyles(
+        layer.text,
+        baseFont,
+        style.fontSize,
+        layer.text.transform,
+      );
       out.push({
         id: layer.id,
         name: layer.name ?? "",
         text: layer.text.text ?? "",
         font: baseFont,
         charFonts,
+        charSizes,
         usedFonts,
-        fontSize: effectiveFontSize(style.fontSize, layer.text.transform),
+        fontSize: baseFontSize,
         left: layer.left ?? 0,
         top: layer.top ?? 0,
         right: layer.right ?? 0,

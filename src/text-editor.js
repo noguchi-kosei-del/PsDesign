@@ -38,6 +38,7 @@ import {
   addEditOffset,
 } from "./state.js";
 import {
+  clearTemporaryMultiSelectionAdornments,
   refreshAllOverlays,
   getExistingLayerEffectiveSizePt,
   maybeApplyStickyFont,
@@ -50,6 +51,8 @@ import {
   // 【v1.26.0 移植 (PsDesign-main v1.24.0)】commit 系の中心固定で bbox 再計算用
   layerRectForExisting,
   layerRectForNew,
+  setSelectedLayerBadgesUserHidden,
+  setSelectionAdornmentsVisible,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
@@ -60,9 +63,9 @@ const fontEl = () => document.getElementById("edit-font");
 const fontComboboxEl = () => document.getElementById("edit-font-combobox");
 const fontToggleEl = () => document.getElementById("edit-font-toggle");
 const fontListEl = () => document.getElementById("edit-font-list");
-const fontUsageSummaryEl = () => document.getElementById("font-usage-summary");
 const favoriteStyleListEl = () => document.getElementById("favorite-style-list");
 const favoriteStyleSaveBtnEl = () => document.getElementById("favorite-style-save-btn");
+const sizeInputEl = () => document.getElementById("size-input");
 const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
@@ -176,19 +179,59 @@ function collectFontsForRange(ref, start, end) {
   return fonts;
 }
 
-function updateFontUsageSummary(fonts, label = "使用フォント") {
-  const el = fontUsageSummaryEl();
-  if (!el) return;
-  const values = (fonts ?? []).filter(Boolean);
-  if (!values.length) {
-    el.hidden = true;
-    el.innerHTML = "";
-    return;
+function layerDefaultSize(ref, page, layer, edit) {
+  if (!ref) return null;
+  if (ref.kind === "existing") return getExistingLayerEffectiveSizePt(page, layer, edit ?? {}) ?? null;
+  return ref.newLayer.sizePt ?? null;
+}
+
+function charSizeAt(ref, index, defaultSizePt) {
+  if (!ref || !Number.isInteger(index)) return defaultSizePt;
+  if (ref.kind === "existing") {
+    const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+    const v = { ...(ref.layer.charSizes ?? {}), ...(edit.charSizes ?? {}) }[index];
+    return Number.isFinite(v) ? v : defaultSizePt;
   }
-  el.hidden = false;
-  el.innerHTML = values
-    .map((ps) => `<span class="font-usage-chip" title="${escapeHtml(ps)}">${escapeHtml(displayFontName(ps))}</span>`)
-    .join("");
+  const v = ref.newLayer.charSizes?.[index];
+  return Number.isFinite(v) ? v : defaultSizePt;
+}
+
+function collectSizesForRange(ref, start, end, defaultSizePt) {
+  const sizes = [];
+  const seen = new Set();
+  const add = (pt) => {
+    const n = Number(pt);
+    if (!Number.isFinite(n)) return;
+    const key = String(Math.round(n * 100) / 100);
+    if (seen.has(key)) return;
+    seen.add(key);
+    sizes.push(n);
+  };
+  const text = ref?.kind === "existing"
+    ? (getEdit(ref.page.path, ref.layer.id)?.contents ?? ref.layer.text ?? "")
+    : (ref?.newLayer?.contents ?? "");
+  const len = text.length;
+  const from = Math.max(0, Math.min(len, Number.isInteger(start) ? start : 0));
+  const to = Math.max(from, Math.min(len, Number.isInteger(end) ? end : len));
+  if (to === from) {
+    add(charSizeAt(ref, Math.max(0, Math.min(len - 1, from)), defaultSizePt));
+  } else {
+    for (let i = from; i < to; i++) add(charSizeAt(ref, i, defaultSizePt));
+  }
+  return sizes;
+}
+
+function syncSizeInputMixedDisplay(sizes, page) {
+  const input = sizeInputEl();
+  if (!input || document.activeElement === input) return;
+  const values = (sizes ?? []).filter(Number.isFinite);
+  if (values.length <= 1) return;
+  input.value = values.map((pt) => formatDisplayPt(pt, page)).filter(Boolean).join("/");
+}
+
+function refreshTextStyleMarkerViews() {
+  import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
+  import("./bind/editor-pane.js").then((mod) => mod.refreshEditorPaneViewer?.()).catch(() => {});
 }
 
 // widthPx === null は混在。input を空にして placeholder で示す。
@@ -326,9 +369,15 @@ function selectLayer(pageIndex, layerId, event) {
   if (getCurrentPageIndex() !== pageIndex) {
     setCurrentPageIndex(pageIndex);
   }
-  if (event?.shiftKey) {
+  const handledBadgeVisibility = event?.ctrlKey && !event.shiftKey && !event.metaKey && !event.altKey;
+  if (handledBadgeVisibility) {
+    setSelectionAdornmentsVisible(false);
+    setSelectedLayerBadgesUserHidden(true);
+    setSelectedLayer(pageIndex, layerId);
+  } else if (event?.shiftKey) {
     toggleLayerSelected(pageIndex, layerId);
   } else {
+    clearTemporaryMultiSelectionAdornments();
     setSelectedLayer(pageIndex, layerId);
   }
   // ブラシモード（fontPickerStuck）: スタイルパレットや edit-font で選んだフォントを
@@ -445,6 +494,7 @@ function populateEditor() {
   const editor = editorEl();
   const selections = getSelectedLayers();
   updateDeleteButtonVisibility();
+  if (!editor) return;
 
   // 編集パネルは選択の有無に関わらず常時表示。
   // 選択 0 件のときは「次に配置するテキストの既定値」を編集する UI として機能する。
@@ -466,7 +516,6 @@ function populateEditor() {
     // 【v1.22.0】B トグルは選択 0 件で disabled。
     syncBoldToggle(undefined);
     syncItalicToggle(undefined);
-    updateFontUsageSummary([]);
     return;
   }
 
@@ -476,32 +525,36 @@ function populateEditor() {
       let effectiveSize = null;
       let effectiveFont = null;
       let effectiveLeading = null;
+      let mixedSizes = [];
+      let mixedSizesPage = null;
       if (resolved.kind === "existing") {
         const { page, layer } = resolved;
         const edit = getEdit(page.path, layer.id) ?? {};
         // bounds 逆算後の実効 pt をサイズ入力にも反映（transform で縮められた写植テキスト対応）
-        effectiveSize = getExistingLayerEffectiveSizePt(page, layer, edit);
+        effectiveSize = layerDefaultSize(resolved, page, layer, edit);
         effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
         // 既存レイヤーは PSD から行間を読み戻していないため、edit に明示があれば
         // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
         effectiveLeading = edit.leadingPct ?? 125;
         rebuildFontOptions(effectiveFont);
-        updateFontUsageSummary(collectFontsForRange(resolved, 0, (edit.contents ?? layer.text ?? "").length));
+        mixedSizes = collectSizesForRange(resolved, 0, (edit.contents ?? layer.text ?? "").length, effectiveSize);
+        mixedSizesPage = page;
       } else {
         const { newLayer } = resolved;
-        effectiveSize = newLayer.sizePt ?? null;
+        effectiveSize = layerDefaultSize(resolved);
         effectiveFont = newLayer.fontPostScriptName ?? null;
         effectiveLeading = newLayer.leadingPct ?? 125;
         rebuildFontOptions(effectiveFont ?? "");
-        updateFontUsageSummary(collectFontsForRange(resolved, 0, (newLayer.contents ?? "").length));
+        mixedSizes = collectSizesForRange(resolved, 0, (newLayer.contents ?? "").length, effectiveSize);
+        mixedSizesPage = getPages()[resolved.pageIndex] ?? null;
       }
 
       if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
       if (effectiveFont) setCurrentFont(effectiveFont);
       if (Number.isFinite(effectiveLeading)) setLeadingPct(effectiveLeading);
+      syncSizeInputMixedDisplay(mixedSizes, mixedSizesPage);
     }
   } else {
-    updateFontUsageSummary([]);
   }
 
   // フチ/文字色は単独/複数いずれでも共通値を表示。
@@ -705,6 +758,8 @@ function commitFont(font) {
   if (!input) return;
   input.value = font.name || font.postScriptName;
   input.dataset.ps = font.postScriptName;
+  input.dataset.fontSearchCleared = "false";
+  input.dataset.fontSearchDirty = "false";
   // フォントロードは非同期で開始（fire-and-forget）。await はしない。
   // 未ロード状態で renderOverlay が走ると bbox は「1em per char」の保守的フォールバックで
   // 計算されるので改行は起きず、ロード完了後に onFontsRegistered → refreshAllOverlays で
@@ -723,6 +778,7 @@ function commitFont(font) {
     refreshAllOverlays();
     rebuildLayerList();
     rebuildFontOptions(font.postScriptName);
+    refreshTextStyleMarkerViews();
   } else {
     setCurrentFont(font.postScriptName);
     setFontPickerStuck(true);
@@ -1094,8 +1150,23 @@ export function bindEditorEvents() {
   // フォント検索コンボボックスの配線。
   const input = fontEl();
   if (input) {
-    input.addEventListener("focus", () => openCombo());
+    const resetFontSearchForTyping = () => {
+      if (input.dataset.fontSearchCleared === "true") return;
+      input.dataset.fontSearchRestoreValue = input.value || "";
+      input.dataset.fontSearchCleared = "true";
+      input.dataset.fontSearchDirty = "false";
+      input.value = "";
+      if (comboOpen) filterCombo("");
+    };
+    input.addEventListener("focus", () => {
+      resetFontSearchForTyping();
+      openCombo(true);
+    });
+    input.addEventListener("mousedown", () => {
+      if (document.activeElement === input) resetFontSearchForTyping();
+    });
     input.addEventListener("input", () => {
+      input.dataset.fontSearchDirty = "true";
       if (!comboOpen) openCombo();
       else filterCombo(input.value);
     });
@@ -1125,6 +1196,16 @@ export function bindEditorEvents() {
       setTimeout(() => {
         const active = document.activeElement;
         if (!active || !fontComboboxEl()?.contains(active)) closeCombo();
+        if (
+          document.activeElement !== input
+          && input.dataset.fontSearchCleared === "true"
+          && input.dataset.fontSearchDirty !== "true"
+          && input.value === ""
+        ) {
+          input.value = input.dataset.fontSearchRestoreValue || "";
+        }
+        input.dataset.fontSearchCleared = "false";
+        input.dataset.fontSearchDirty = "false";
       }, 120);
     });
     const toggleBtn = fontToggleEl();
@@ -1172,8 +1253,14 @@ export function bindEditorEvents() {
       const targetId = sel.tempId ?? sel.layerId;
       const pageIndex = getPages().findIndex((p) => p.path === sel.psdPath);
       const ref = pageIndex >= 0 ? resolveLayerRef({ pageIndex, layerId: targetId }) : null;
+      const rangeDefaultSize = ref?.kind === "existing"
+        ? layerDefaultSize(ref, ref.page, ref.layer, getEdit(ref.page.path, ref.layer.id) ?? {})
+        : layerDefaultSize(ref);
+      const rangeSizes = ref ? collectSizesForRange(ref, sel.start, sel.end, rangeDefaultSize) : [];
+      const rangePage = ref?.page ?? getPages()[pageIndex] ?? null;
+      if (rangeSizes.length === 1) setTextSize(rangeSizes[0]);
+      syncSizeInputMixedDisplay(rangeSizes, rangePage);
       const fonts = ref ? collectFontsForRange(ref, sel.start, sel.end) : [];
-      updateFontUsageSummary(fonts, "選択範囲");
       if (fonts.length === 1) {
         syncFontInputFromRangeFonts(fonts);
       } else if (fonts.length > 1) {
@@ -1432,7 +1519,7 @@ export function commitFontToSelections(ps) {
   if (mutated) {
     rebuildLayerList();
     refreshAllOverlays();
-    import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
+    refreshTextStyleMarkerViews();
   }
   return !!mutated;
 }
@@ -1479,7 +1566,7 @@ function commitSingleFieldToSelections(field, value) {
     rebuildLayerList();
     refreshAllOverlays();
     if (field === "sizePt") {
-      import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
+      refreshTextStyleMarkerViews();
     }
   }
   return !!mutated;

@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import packageInfo from "../package.json";
 import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
 import {
+  clearTemporaryMultiSelectionAdornments,
   cycleLayerSelection,
   deleteSelectedLayers,
   commitActiveInPlaceEdit,
@@ -10,16 +11,20 @@ import {
   resizeSelectedLayers,
   showRotationHandlesForSelectedLayers,
   refreshAllOverlays,
+  revealLayerAdornmentsForTemporaryMultiSelection,
   restoreSelectedLayerBadges,
+  setSelectedLayerBadgesUserHidden,
+  setSelectionAdornmentsVisible,
   snapNextSize,
   getLastInplaceSelection,
   onInplaceSelectionChange,
   applyEditModeStyleToRange,
+  recenterActiveInPlaceEditBox,
+  refreshActiveInPlaceEditPreview,
   restoreInplaceSelection,
+  showInplaceSelectionHighlightOnly,
   applyEditModeRubyToRange,
   removeEditModeRubyFromRange,
-  getExistingLayerEffectiveSizePt,
-  toggleSelectionAdornmentsVisible,
 } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh } from "./spread-view.js";
@@ -53,6 +58,7 @@ import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import { bindStylePalette } from "./style-palette.js";
+import { bindFindChangeMode } from "./find-change.js";
 import { initFontBookPanel } from "./font-book.js";
 import {
   confirmDialog,
@@ -70,7 +76,7 @@ import {
   setHasSavedThisSession,
   updateSaveButton,
 } from "./bind/save.js";
-import { bindEditorPane, focusEditor } from "./bind/editor-pane.js";
+import { bindEditorPane, focusEditor, refreshEditorPaneViewer } from "./bind/editor-pane.js";
 import {
   handleOpenFiles,
   listPsdFilesInFolder,
@@ -402,8 +408,7 @@ async function loadFontsFromBackend() {
 
 let panPreviousTool = null;
 let panSpaceActive = false;
-let selectionAdornmentChordActive = false;
-let selectionAdornmentChordHadOtherKey = false;
+let ctrlShiftBadgeRevealActive = false;
 let selectedLayerBadgeRestoreTimer = null;
 
 function cancelSelectedLayerBadgeRestore() {
@@ -450,10 +455,6 @@ function isCtrlLikeKey(e) {
   return e.key === "Control" || e.code === "ControlLeft" || e.code === "ControlRight";
 }
 
-function isMetaKey(e) {
-  return e.key === "Meta" || e.code === "MetaLeft" || e.code === "MetaRight";
-}
-
 function isShiftKey(e) {
   return e.key === "Shift" || e.code === "ShiftLeft" || e.code === "ShiftRight";
 }
@@ -463,40 +464,24 @@ function isCtrlShiftAdornmentChord(e) {
 }
 
 function handleSelectionAdornmentChordKeydown(e) {
-  if (selectionAdornmentChordActive) {
-    if (isMetaKey(e) || !isCtrlShiftAdornmentChord(e) || (!isCtrlLikeKey(e) && !isShiftKey(e))) {
-      selectionAdornmentChordHadOtherKey = true;
-    }
-  }
-
   if (!isCtrlShiftAdornmentChord(e) || (!isCtrlLikeKey(e) && !isShiftKey(e))) {
     return false;
   }
 
-  if (!selectionAdornmentChordActive) {
-    selectionAdornmentChordActive = true;
-    selectionAdornmentChordHadOtherKey = false;
-  }
+  setSelectionAdornmentsVisible(true);
+  setSelectedLayerBadgesUserHidden(false);
+  restoreSelectedLayerBadgesNow();
+  ctrlShiftBadgeRevealActive = true;
   e.preventDefault();
   return true;
 }
 
 function handleSelectionAdornmentChordKeyup(e) {
-  if (!selectionAdornmentChordActive) return false;
-  if (isMetaKey(e)) {
-    selectionAdornmentChordHadOtherKey = true;
-    return false;
-  }
+  if (!ctrlShiftBadgeRevealActive) return false;
   if (!isCtrlLikeKey(e) && !isShiftKey(e)) return false;
-
-  const shouldToggle = !selectionAdornmentChordHadOtherKey && getSelectedLayers().length > 0;
-  if (!e.ctrlKey || !e.shiftKey || e.metaKey) {
-    selectionAdornmentChordActive = false;
-    selectionAdornmentChordHadOtherKey = false;
+  if (!e.ctrlKey || !e.shiftKey) {
+    ctrlShiftBadgeRevealActive = false;
   }
-  if (!shouldToggle) return false;
-
-  toggleSelectionAdornmentsVisible();
   e.preventDefault();
   return true;
 }
@@ -595,6 +580,11 @@ function bindTools() {
     }
     if (selections.length === 0) return;
     setSelectedLayers(selections);
+    if (selections.length > 1) {
+      revealLayerAdornmentsForTemporaryMultiSelection();
+    } else {
+      clearTemporaryMultiSelectionAdornments();
+    }
     rebuildLayerList();
     refreshAllOverlays();
   };
@@ -821,8 +811,7 @@ function bindTools() {
         panPreviousTool = null;
       }
     }
-    selectionAdornmentChordActive = false;
-    selectionAdornmentChordHadOtherKey = false;
+    ctrlShiftBadgeRevealActive = false;
   });
 }
 
@@ -904,6 +893,7 @@ function bindCollapseToggles() {
 }
 
 const SIDE_PANEL_TAB_KEY = "psdesign_side_panel_tab";
+let pendingSidePanelInplaceSelection = null;
 function loadSidePanelTab() {
   try {
     const v = localStorage.getItem(SIDE_PANEL_TAB_KEY);
@@ -941,6 +931,8 @@ function syncTextEditorTabLock() {
 function setSidePanelTab(tab) {
   if (tab !== "txt" && tab !== "editor") tab = "txt";
   if (tab === "editor" && !hasTextForEditorTab()) tab = "txt";
+  const inplaceSelection = pendingSidePanelInplaceSelection ?? getLastInplaceSelection();
+  pendingSidePanelInplaceSelection = null;
   for (const btn of document.querySelectorAll(".side-panel-tab")) {
     const isActive = btn.dataset.tab === tab;
     btn.classList.toggle("active", isActive);
@@ -950,12 +942,19 @@ function setSidePanelTab(tab) {
     sec.hidden = sec.dataset.section !== tab;
   }
   try { localStorage.setItem(SIDE_PANEL_TAB_KEY, tab); } catch (_) {}
+  if (inplaceSelection) {
+    requestAnimationFrame(() => restoreInplaceSelection(inplaceSelection));
+  }
 }
 function bindSidePanelTabs() {
   const tabs = document.querySelectorAll(".side-panel-tab");
   if (!tabs.length) return;
   for (const btn of tabs) {
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("mousedown", (e) => {
+      const sel = getLastInplaceSelection();
+      pendingSidePanelInplaceSelection = sel && sel.end > sel.start ? { ...sel } : null;
+      e.preventDefault();
+    });
     btn.addEventListener("click", () => {
       if (btn.disabled) return;
       setSidePanelTab(btn.dataset.tab);
@@ -1445,42 +1444,19 @@ function applyTextSize(n) {
     const v = clampSize(n);
     const targetId = sel.tempId ?? sel.layerId;
     setCharSizesRange(sel.psdPath, targetId, sel.start, sel.end, v);
-    const defaultSizePt = resolveLayerDefaultSizePt(sel);
-    if (defaultSizePt > 0) {
-      const ratio = v / defaultSizePt;
-      applyEditModeStyleToRange(sel.start, sel.end, { fontSize: `${ratio}em` });
-    }
+    recenterActiveInPlaceEditBox(sel);
+    refreshActiveInPlaceEditPreview(sel);
     refreshAllOverlays();
     rebuildLayerList();
-    restoreInplaceSelection(sel);
-    requestAnimationFrame(() => restoreInplaceSelection(sel));
+    import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
+    refreshEditorPaneViewer();
+    showInplaceSelectionHighlightOnly(sel);
+    requestAnimationFrame(() => showInplaceSelectionHighlightOnly(sel));
     setTextSize(v);
     return;
   }
   setTextSize(n);
   commitSizeToSelections(getTextSize());
-}
-
-function resolveLayerDefaultSizePt(sel) {
-  if (!sel) return 0;
-  const pages = getPages();
-  for (let pi = 0; pi < pages.length; pi++) {
-    const page = pages[pi];
-    if (page.path !== sel.psdPath) continue;
-    if (typeof sel.layerId === "number") {
-      const layer = page.textLayers.find((l) => l.id === sel.layerId);
-      if (!layer) return 0;
-      const edit = getEdit(page.path, layer.id) ?? {};
-      return getExistingLayerEffectiveSizePt(page, layer, edit) || 0;
-    }
-    if (typeof sel.tempId === "string") {
-      const nl = page.textLayers;
-      const list = (typeof getNewLayersForPsd === "function") ? getNewLayersForPsd(page.path) : [];
-      const item = list.find((l) => l.tempId === sel.tempId);
-      return item?.sizePt ?? 0;
-    }
-  }
-  return 0;
 }
 
 function clampSize(n) {
@@ -3045,6 +3021,7 @@ function init() {
   bindZoomTool();
   bindPageChange();
   bindStylePalette();
+  bindFindChangeMode();
   initFontBookPanel();
   bindEditorEvents();
   bindWindowControls();

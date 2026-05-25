@@ -126,6 +126,23 @@ function resolveFontPsName(displayName) {
   return null;
 }
 
+function resolvePresetFontName(preset) {
+  return resolveFontPsName(preset?.rawFontName || preset?.fontDisplayName || preset?.name);
+}
+
+function refreshPresetFontResolution() {
+  if (!presets.length) return;
+  let changed = false;
+  for (const preset of presets) {
+    const resolved = resolvePresetFontName(preset);
+    if ((preset.fontName || null) !== (resolved || null)) {
+      preset.fontName = resolved;
+      changed = true;
+    }
+  }
+  if (changed) renderList();
+}
+
 function escapeHtml(s) {
   return String(s ?? "").replace(/[&<>"']/g, (c) => ({
     "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
@@ -168,7 +185,9 @@ function parsePresetJson(raw) {
         displayName,
         name: p.name,
         subName: p.subName || null,
-        fontName: p.font,
+        rawFontName: p.font || p.fontName || p.postScriptName || p.name,
+        fontDisplayName: p.font || p.fontName || p.postScriptName || p.name,
+        fontName: resolveFontPsName(p.font || p.fontName || p.postScriptName || p.name),
         description: p.description || "",
         category: setName,
       });
@@ -228,7 +247,7 @@ function createPresetItem(preset) {
   const isUnresolved = !preset.fontName;
   if (isUnresolved) item.classList.add("style-palette-item--unresolved");
   item.title = isUnresolved
-    ? `フォント未インストール: ${preset.name}`
+    ? `フォント未インストール: ${preset.fontDisplayName || preset.name}`
     : (preset.description || preset.displayName);
 
   const main = document.createElement("div");
@@ -324,6 +343,8 @@ function loadDefaults() {
     displayName: `${seed.subName} / ${seed.name}`,
     name: seed.name,
     subName: seed.subName,
+    rawFontName: seed.name,
+    fontDisplayName: seed.name,
     fontName: resolveFontPsName(seed.name), // null 可（未インストール）
     description: "",
     category: "デフォルト",
@@ -679,5 +700,6 @@ export function bindStylePalette() {
   // テンプレ表示中は no-op、defaults フォールバック中なら再描画して灰色解除。
   onFontsRegistered(() => {
     if (activeSource === "default") loadDefaults();
+    else refreshPresetFontResolution();
   });
 }

@@ -1,4 +1,4 @@
-﻿:root,
+:root,
 :root[data-theme="dark"] {
   --bg: #1e1e1e;
   --panel: #252526;
@@ -3400,9 +3400,19 @@ body.home-starting .home-screen {
   outline: none;
   user-select: text;
   -webkit-user-select: text;
+  white-space: pre;
+  overflow-wrap: normal;
+  word-break: normal;
   /* contenteditable 中は文字が枠を超えても見えるようにする（後置 auto-fit で枠も伸びる） */
   overflow: visible;
   caret-color: var(--accent);
+}
+.layer-box.editing .new-layer-text::selection,
+.layer-box.editing .existing-layer-text::selection,
+.layer-box.editing .new-layer-text *::selection,
+.layer-box.editing .existing-layer-text *::selection {
+  background: rgba(0, 122, 255, 0.1);
+  color: inherit;
 }
 /* 既存レイヤーは通常 opacity 0.35 で canvas-baked 上の薄い重ね。
    編集中だけ opacity 1.0 に上げて、編集テキストが見やすくする。
@@ -5027,6 +5037,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .txt-source-empty-text { margin: 0; }
 .txt-source-empty[hidden] { display: none; }
+
+.text-style-override-marker {
+  background: rgba(255, 214, 10, 0.32);
+  color: inherit;
+  box-shadow: 0 0 0 1px rgba(255, 214, 10, 0.45);
+  border-radius: 2px;
+}
 .extract-source-panel {
   margin: 8px 10px 10px;
   border: 1px solid var(--border);
@@ -5547,31 +5564,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   color: #fff;
   box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25);
 }
-.font-usage-summary {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  align-items: center;
-  margin-top: 4px;
-  color: var(--text-muted);
-  font-size: 10px;
-  line-height: 1.4;
-}
-.font-usage-summary[hidden] { display: none; }
-.font-usage-label {
-  flex: 0 0 auto;
-}
-.font-usage-chip {
-  max-width: 100%;
-  padding: 2px 6px;
-  border: 1px solid var(--border);
-  border-radius: 999px;
-  background: var(--bg);
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .favorite-style-panel {
   margin-top: 8px;
   padding-top: 8px;
@@ -5870,12 +5862,18 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 /* PostScript 名が解決できなかった (フォント未インストール) エントリは灰色化 + クリック無反応。
    :not(.selected) は念のため。loadDefaults では未解決項目に selected が付くことはない。 */
 .style-palette-item--unresolved {
-  opacity: 0.45;
   cursor: not-allowed;
-  color: var(--text-muted);
+  color: var(--danger);
+  background: rgba(248, 81, 73, 0.08);
+  border-left: 3px solid rgba(248, 81, 73, 0.85);
+  padding-left: 7px;
+}
+.style-palette-item--unresolved .style-palette-item-name,
+.style-palette-item--unresolved .style-palette-item-sub {
+  color: var(--danger);
 }
 .style-palette-item--unresolved:hover {
-  background: transparent;
+  background: rgba(248, 81, 73, 0.12);
 }
 /* スタイルパレット用フォルダブラウザモーダル。校正パネルの browser と同じ視覚言語。 */
 #style-palette-browser-modal .style-palette-browser-card {
@@ -6568,7 +6566,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   display: flex;
   flex-direction: column;
   gap: 8px;
-  z-index: 200;
+  z-index: 10050;
   pointer-events: none;
 }
 .toast {
@@ -6637,6 +6635,151 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
     opacity: 0;
     box-shadow: inset 0 0 24px rgba(var(--accent-rgb), 0);
   }
+}
+/* ===== 検索置換 / 全変換 ===== */
+.find-change-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 230;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(2px);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease;
+}
+.find-change-modal[hidden] { display: none; }
+.find-change-modal.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.find-change-card {
+  width: 480px;
+  max-width: 92vw;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  transform: scale(0.92);
+  transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
+}
+.find-change-modal.visible .find-change-card { transform: scale(1); }
+.find-change-header,
+.find-change-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 16px;
+}
+.find-change-header {
+  border-bottom: 1px solid var(--border);
+}
+.find-change-footer {
+  border-top: 1px solid var(--border);
+  justify-content: flex-end;
+}
+.find-change-title {
+  font-size: 13px;
+  font-weight: 700;
+}
+.find-change-close {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.find-change-close:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background: var(--panel-hover);
+}
+.find-change-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+}
+.find-change-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text);
+}
+.find-change-input {
+  width: 100%;
+  min-height: 30px;
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-body);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.find-change-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.18);
+}
+.find-change-checkrow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+}
+.find-change-checkrow input {
+  width: 14px;
+  height: 14px;
+  accent-color: var(--accent);
+}
+.find-change-grid {
+  display: grid;
+  grid-template-columns: 130px 1fr;
+  gap: 10px;
+  align-items: center;
+}
+.find-change-summary {
+  padding-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.find-change-btn {
+  min-width: 92px;
+  min-height: 30px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-hover);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+.find-change-btn:hover {
+  border-color: var(--accent);
+}
+.find-change-btn-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+.find-change-btn-primary:hover {
+  background: var(--accent);
 }
 /* ===== 環境設定モーダル ===== */
 /* ハンバーガー (z-index 151) より手前。キャプチャモーダルはさらに上。 */
@@ -8676,7 +8819,7 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 .char-selection-indicator[hidden] { display: none; }
 
 ::highlight(opus-inplace-selection) {
-  background: rgba(0, 122, 255, 0.28);
+  background: rgba(0, 122, 255, 0.1);
 }
 /* ========================================================================
    【v1.28.0 移植 (PsDesign-main v1.25.0)】

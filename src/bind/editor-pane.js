@@ -29,6 +29,10 @@ import {
   syncNewInputAvailabilityFor,
 } from "../txt-source.js";
 import { notifyDialog, promptDialog, toast } from "../ui-feedback.js";
+import {
+  appendTextWithStyleMarkers,
+  getStyleOverrideRangesForTxtRef,
+} from "../text-style-markers.js";
 
 const $ = (id) => document.getElementById(id);
 const EDITOR_PAGE_MODE_KEY = "psdesign_editor_page_mode";
@@ -36,6 +40,8 @@ const PAGE_MARKER_RE = /<<\s*([0-9\uFF10-\uFF19]+)\s*Page\s*>>/gi;
 
 let editorPageMode = loadEditorPageMode();
 let editingBlock = false;
+let lastEditorBlockSelection = null;
+const editorTextMappings = new WeakMap();
 
 function getEls() {
   return {
@@ -185,6 +191,109 @@ function replaceBlockAtOffset(offset, originalText, newText) {
   return true;
 }
 
+function replaceSourceRange(absStart, absEnd, originalText, replacement) {
+  if (!Number.isInteger(absStart) || !Number.isInteger(absEnd) || absEnd <= absStart) return false;
+  const source = getTxtSource();
+  if (!source) return false;
+  const content = (source.content ?? "").replace(/\r\n?/g, "\n");
+  const original = String(originalText ?? "").replace(/\r\n?/g, "\n");
+  const next = String(replacement ?? "").replace(/\r\n?/g, "\n");
+  if (!original || next === original || original.includes("\n") || next.includes("\n")) return false;
+  if (content.slice(absStart, absEnd) !== original) return false;
+  const nextContent = content.slice(0, absStart) + next + content.slice(absEnd);
+  setTxtSource({ name: source.name, content: nextContent });
+  setTxtDirty(true);
+  return true;
+}
+
+function displayRubySource(raw) {
+  const input = String(raw ?? "");
+  const displayToRaw = [];
+  let text = "";
+  let last = 0;
+  const re = /｛([^｛｝]+)｝（([^（）]+)）|\{([^{}]+)\}\(([^()]+)\)|\[([^\[\]]+)\]\(([^)]+)\)/g;
+
+  function appendRaw(start, end) {
+    for (let i = start; i < end; i += 1) {
+      text += input[i];
+      displayToRaw.push(i);
+    }
+  }
+
+  function appendMapped(value, rawStart) {
+    const chars = Array.from(String(value ?? ""));
+    chars.forEach((ch, idx) => {
+      text += ch;
+      displayToRaw.push(rawStart + idx);
+    });
+  }
+
+  let match;
+  while ((match = re.exec(input)) !== null) {
+    appendRaw(last, match.index);
+
+    const parent = match[1] ?? match[3] ?? match[5] ?? "";
+    const ruby = match[2] ?? match[4] ?? match[6] ?? "";
+    if (!parent || !ruby) {
+      appendRaw(match.index, match.index + match[0].length);
+      last = match.index + match[0].length;
+      continue;
+    }
+
+    const parentStart = match.index + 1;
+    const rubyOpenIndex = match.index + 1 + parent.length + 1;
+    const rubyStart = rubyOpenIndex + 1;
+    appendMapped(parent, parentStart);
+    text += "（";
+    displayToRaw.push(rubyOpenIndex);
+    appendMapped(ruby, rubyStart);
+    text += "）";
+    displayToRaw.push(match.index + match[0].length - 1);
+    last = match.index + match[0].length;
+  }
+
+  appendRaw(last, input.length);
+  return { text, displayToRaw };
+}
+
+function updateEditorBlockSelectionFromDom() {
+  const sel = window.getSelection?.();
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  let startEl = range.startContainer;
+  if (startEl && startEl.nodeType !== Node.ELEMENT_NODE) startEl = startEl.parentElement;
+  const block = startEl?.closest?.(".editor-page-paragraph-text");
+  if (!block) return;
+  let endEl = range.endContainer;
+  if (endEl && endEl.nodeType !== Node.ELEMENT_NODE) endEl = endEl.parentElement;
+  if (!endEl?.closest || endEl.closest(".editor-page-paragraph-text") !== block) return;
+
+  const beforeStart = document.createRange();
+  beforeStart.selectNodeContents(block);
+  beforeStart.setEnd(range.startContainer, range.startOffset);
+  const startInBlock = beforeStart.toString().length;
+  const beforeEnd = document.createRange();
+  beforeEnd.selectNodeContents(block);
+  beforeEnd.setEnd(range.endContainer, range.endOffset);
+  const endInBlock = beforeEnd.toString().length;
+  if (startInBlock === endInBlock) return;
+
+  const blockText = block.textContent ?? "";
+  const selectedText = blockText.slice(startInBlock, endInBlock);
+  if (!selectedText || selectedText.includes("\n")) return;
+  const blockOffset = Number(block.dataset.offset);
+  if (!Number.isInteger(blockOffset)) return;
+  const displayToRaw = editorTextMappings.get(block);
+  const rawStartInBlock = displayToRaw?.[startInBlock] ?? startInBlock;
+  const rawEndAnchor = displayToRaw?.[endInBlock - 1];
+  const rawEndInBlock = rawEndAnchor == null ? endInBlock : rawEndAnchor + 1;
+  lastEditorBlockSelection = {
+    absStart: blockOffset + rawStartInBlock,
+    absEnd: blockOffset + rawEndInBlock,
+    text: selectedText,
+  };
+}
+
 function getCurrentActivePageNumber() {
   return getActivePageNumber();
 }
@@ -245,7 +354,14 @@ function buildSection(pageNumber, blocks, activeNum, options = {}) {
       textEl.dataset.pageNumber = String(pageNumber ?? 0);
       textEl.dataset.offset = String(block.offset);
       textEl.dataset.originalText = block.text;
-      textEl.textContent = block.text;
+      const display = displayRubySource(block.text);
+      textEl.dataset.originalDisplayText = display.text;
+      appendTextWithStyleMarkers(
+        textEl,
+        display.text,
+        getStyleOverrideRangesForTxtRef(markerless ? null : pageNumber, idx),
+      );
+      editorTextMappings.set(textEl, display.displayToRaw);
       el.appendChild(textEl);
       bindParagraphEdit(textEl);
       body.appendChild(el);
@@ -331,12 +447,14 @@ function bindParagraphEdit(el) {
   el.addEventListener("blur", () => {
     editingBlock = false;
     const original = el.dataset.originalText ?? "";
+    const originalDisplay = el.dataset.originalDisplayText ?? original;
     if (aborted) {
-      el.textContent = original;
+      el.textContent = originalDisplay;
       aborted = false;
       return;
     }
     const newText = (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n");
+    if (newText === originalDisplay) return;
     const changed = replaceBlockAtOffset(Number(el.dataset.offset), original, newText);
     if (!changed) renderViewer();
   });
@@ -457,33 +575,26 @@ async function handleSaveAuto() {
 }
 
 async function handleAddRuby() {
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) {
-    toast("ルビを付けたい文字列を選択してください", { kind: "info", duration: 2000 });
+  updateEditorBlockSelectionFromDom();
+  const picked = lastEditorBlockSelection;
+  if (!picked || !picked.text || picked.text.includes("\n")) {
+    toast("ルビを付けたい文字を1行内で選択してください", { kind: "info", duration: 2000 });
     return;
   }
-  const range = sel.getRangeAt(0);
-  const parent = range.commonAncestorContainer.nodeType === Node.TEXT_NODE
-    ? range.commonAncestorContainer.parentElement
-    : range.commonAncestorContainer;
-  const paragraph = parent && parent.closest && parent.closest(".editor-page-paragraph-text");
-  if (!paragraph) {
-    toast("段落内のテキストを選択してください", { kind: "info", duration: 2000 });
-    return;
-  }
-  const parentText = sel.toString();
-  if (!parentText) return;
+  const parentText = picked.text;
   const ruby = await promptDialog({
     title: "ルビ付け",
-    message: `「${parentText}」のふりがなを入力`,
+    message: `「${parentText}」のルビを入力`,
     placeholder: "ふりがな",
   });
   if (ruby == null || ruby === "") return;
-  range.deleteContents();
-  range.insertNode(document.createTextNode(`${parentText}（${ruby}）`));
-  sel.removeAllRanges();
-  paragraph.focus();
-  paragraph.blur();
+  const replacement = `｛${parentText}｝（${ruby}）`;
+  const changed = replaceSourceRange(picked.absStart, picked.absEnd, parentText, replacement);
+  if (!changed) {
+    toast("選択範囲を更新できませんでした。もう一度選択してください", { kind: "warning", duration: 2400 });
+    return;
+  }
+  lastEditorBlockSelection = null;
 }
 
 function handleCommitNewInput() {
@@ -587,6 +698,7 @@ export function bindEditorPane() {
   els.viewer.addEventListener("keydown", onViewerKeydown);
 
   bindNewInput();
+  document.addEventListener("selectionchange", updateEditorBlockSelectionFromDom);
   document.addEventListener("keydown", onEditorPageNavShortcut, true);
 
   onTxtSourceChange(() => {
@@ -631,4 +743,10 @@ export function focusEditor() {
     const first = (active || viewer).querySelector(".editor-page-paragraph-text");
     if (first) first.focus();
   });
+}
+
+export function refreshEditorPaneViewer() {
+  renderViewer({ scrollToActive: editorPageMode === "all" });
+  syncFromState();
+  syncPageNav();
 }
