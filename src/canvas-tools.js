@@ -972,7 +972,18 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
     for (const target of targets) {
       if (target.kind === "new") {
         const { sel, page, nl, cur } = target;
-        if (next === cur) continue;
+        const shouldClearAutoFontMarker = nl.autoFontSwitched === true;
+        if (Math.abs(next - cur) < 1e-9) {
+          if (shouldClearAutoFontMarker) {
+            updateNewLayer(sel.layerId, {
+              autoFontSwitched: false,
+              autoFontSwitchBucket: -1,
+            });
+            clearedAutoFontMarker = true;
+            any = true;
+          }
+          continue;
+        }
         const oldRect = layerRectForNew(page, nl);
         const newRect = layerRectForNew(page, { ...nl, sizePt: next });
         const dx = (oldRect.width - newRect.width) / 2;
@@ -984,7 +995,7 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
           autoFontSwitched: false,
           autoFontSwitchBucket: -1,
         });
-        if (nl.autoFontSwitched) clearedAutoFontMarker = true;
+        if (shouldClearAutoFontMarker) clearedAutoFontMarker = true;
         any = true;
       } else {
         const { sel, page, layer, edit, cur } = target;
@@ -1192,6 +1203,7 @@ const HEX_FILL_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 // fillColor === "default" はプレビュー上も編集前の表示を維持するため何も設定しない。
 // white/black/HEX のときだけ CSS color を上書きする。
 function applyFillPreview(inner, fillColor) {
+  inner.classList.add("text-preview-no-white-shadow");
   if (fillColor === "white") inner.style.color = "#fff";
   else if (fillColor === "black") inner.style.color = "#000";
   else if (typeof fillColor === "string" && HEX_FILL_COLOR_RE.test(fillColor)) {
@@ -1212,6 +1224,7 @@ function appendStrokePreviewUnderlay(box, inner, strokeColor, strokeWidthPx, pxP
   underlay.style.strokeLinejoin = "round";
   underlay.style.strokeLinecap = "round";
   underlay.style.webkitTextStrokeLinejoin = "round";
+  underlay.style.textShadow = "none";
   underlay.style.filter = `blur(${Math.min(0.8, Math.max(0.25, w * 0.08))}px)`;
   // paint-order を指定して、塗りが上・ストロークが下（外側近似）。
   underlay.style.paintOrder = "stroke fill";

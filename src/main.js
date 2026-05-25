@@ -1,4 +1,4 @@
-import { buildReferencePageCards, countReferencePages, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
+import { buildReferencePageCards, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { getVersion } from "@tauri-apps/api/app";
 import packageInfo from "../package.json";
 import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
@@ -719,11 +719,6 @@ function bindTools() {
             e.preventDefault();
             return;
           }
-        } else if (getTool() === "move" && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
-          const delta = e.key === "ArrowDown" ? +1 : -1;
-          cycleLayerSelection(delta);
-          e.preventDefault();
-          return;
         }
       }
     }
@@ -863,15 +858,20 @@ function applyPanelCollapsed(el, collapsed, btn, expandedTitle, collapsedTitle) 
   }
 }
 
-function bindPanelToggle(panelEl, btn, storageKey, expandedTitle, collapsedTitle) {
+function bindPanelToggle(panelEl, btn, storageKey, expandedTitle, collapsedTitle, afterToggle = null) {
   if (!panelEl || !btn) return;
   let collapsed = false;
   try { collapsed = localStorage.getItem(storageKey) === "1"; } catch (_) {}
   applyPanelCollapsed(panelEl, collapsed, btn, expandedTitle, collapsedTitle);
   btn.addEventListener("click", () => {
+    const beforeCenter = {
+      psd: capturePsdViewportCenter(),
+      pdf: capturePdfViewportCenter(),
+    };
     collapsed = !collapsed;
     applyPanelCollapsed(panelEl, collapsed, btn, expandedTitle, collapsedTitle);
     try { localStorage.setItem(storageKey, collapsed ? "1" : "0"); } catch (_) {}
+    afterToggle?.({ collapsed, beforeCenter });
   });
 }
 
@@ -882,6 +882,10 @@ function bindCollapseToggles() {
     SIDE_TOOLBAR_COLLAPSED_KEY,
     "ツールバーを折り畳む",
     "ツールバーを展開",
+    ({ beforeCenter }) => {
+      schedulePsdStageLayoutRefresh({ recenter: !beforeCenter.psd, viewportCenter: beforeCenter.psd });
+      schedulePdfStageLayoutRefresh({ recenter: !beforeCenter.pdf, viewportCenter: beforeCenter.pdf });
+    },
   );
   bindPanelToggle(
     document.querySelector(".side-panel"),
@@ -889,6 +893,14 @@ function bindCollapseToggles() {
     SIDE_PANEL_COLLAPSED_KEY,
     "サイドバーを折り畳む",
     "サイドバーを展開",
+    ({ beforeCenter }) => {
+      schedulePsdStageLayoutRefresh({ recenter: !beforeCenter.psd, viewportCenter: beforeCenter.psd });
+      schedulePdfStageLayoutRefresh({ recenter: !beforeCenter.pdf, viewportCenter: beforeCenter.pdf });
+      setTimeout(() => {
+        schedulePsdStageLayoutRefresh({ recenter: !beforeCenter.psd, viewportCenter: beforeCenter.psd });
+        schedulePdfStageLayoutRefresh({ recenter: !beforeCenter.pdf, viewportCenter: beforeCenter.pdf });
+      }, 320);
+    },
   );
 }
 
@@ -2348,6 +2360,32 @@ function normalizeHomeFlowPaths(value) {
     .filter(Boolean);
 }
 
+function samePathList(a, b) {
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const sort = (list) => normalizeHomeFlowPaths(list)
+    .sort((x, y) => collator.compare(homeFlowBaseName(x), homeFlowBaseName(y)));
+  const aa = sort(a);
+  const bb = sort(b);
+  if (aa.length !== bb.length) return false;
+  return aa.every((path, i) => path === bb[i]);
+}
+
+function sameNumberSet(a, b) {
+  const aa = new Set(Array.from(a || []).map(Number).filter((v) => Number.isInteger(v)));
+  const bb = new Set(Array.from(b || []).map(Number).filter((v) => Number.isInteger(v)));
+  if (aa.size !== bb.size) return false;
+  for (const v of aa) {
+    if (!bb.has(v)) return false;
+  }
+  return true;
+}
+
+function referenceSelectionMatchesLoaded(paths, hiddenPages) {
+  return !!getPdfDoc()
+    && samePathList(getPdfPaths(), paths)
+    && sameNumberSet(getPdfExcludedReferencePages(), hiddenPages);
+}
+
 async function homeFlowResolveDroppedPaths(paths, kind) {
   const direct = homeFlowFilterPaths(paths, kind);
   const list = (Array.isArray(paths) ? paths : [paths])
@@ -2533,9 +2571,8 @@ function openHomeTypesetDialog() {
     let settled = false;
     let pickingFile = false;
     let referencePageCount = null;
-    let referenceCountToken = 0;
     let hiddenReferencePages = new Set();
-    let referenceCounting = false;
+    let referenceLoading = false;
     const modal = document.createElement("div");
     modal.className = "home-typeset-modal";
     modal.hidden = true;
@@ -2625,27 +2662,33 @@ function openHomeTypesetDialog() {
     );
     const startBtn = modal.querySelector(".home-typeset-start");
     const getReferenceDisplayCount = () => Number.isFinite(referencePageCount) ? referencePageCount : referencePaths.length;
-    const refreshReferencePageCount = async () => {
-      const token = ++referenceCountToken;
+    const loadSelectedReference = async () => {
       const paths = [...referencePaths];
-      referenceCounting = paths.length > 0;
+      if (paths.length === 0) {
+        referencePageCount = null;
+        return 0;
+      }
+      if (referenceSelectionMatchesLoaded(paths, hiddenReferencePages)) {
+        referencePageCount = Math.max(0, getPdfVirtualPageCount());
+        update();
+        return getReferenceDisplayCount();
+      }
+      referenceLoading = true;
       update();
       try {
-        const count = await countReferencePages(paths, {
+        await loadReferenceFiles(paths, {
           skipFirstBlankPage: false,
           excludedPages: hiddenReferencePages,
         });
-        if (token !== referenceCountToken) return getReferenceDisplayCount();
-        referencePageCount = Number.isFinite(count) ? count : paths.length;
+        referencePageCount = referenceSelectionMatchesLoaded(paths, hiddenReferencePages)
+          ? Math.max(0, getPdfVirtualPageCount())
+          : paths.length;
       } catch (e) {
-        console.error("countReferencePages failed:", e);
-        if (token !== referenceCountToken) return getReferenceDisplayCount();
+        console.error("loadReferenceFiles failed:", e);
         referencePageCount = paths.length;
       } finally {
-        if (token === referenceCountToken) {
-          referenceCounting = false;
-          update();
-        }
+        referenceLoading = false;
+        update();
       }
       return getReferenceDisplayCount();
     };
@@ -2674,12 +2717,12 @@ function openHomeTypesetDialog() {
           countEl.textContent = count > 0 ? String(count) : "";
           countEl.hidden = count === 0;
         }
-        row.classList.toggle("loading", slot === "reference" && referenceCounting);
+        row.classList.toggle("loading", slot === "reference" && referenceLoading);
         row.classList.toggle("selected", active);
       }
       const hideBtn = modal.querySelector("[data-reference-hide]");
       if (hideBtn) {
-        hideBtn.disabled = referencePaths.length === 0 || referenceCounting;
+        hideBtn.disabled = referencePaths.length === 0 || referenceLoading;
         hideBtn.classList.toggle("selected", hiddenReferencePages.size > 0);
         if (hiddenReferencePages.size > 0) {
           hideBtn.textContent = `非表示 ${hiddenReferencePages.size}`;
@@ -2687,7 +2730,7 @@ function openHomeTypesetDialog() {
           hideBtn.textContent = "非表示選択";
         }
       }
-      if (startBtn) startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0;
+      if (startBtn) startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading;
     };
 
     const applyDroppedPaths = async (paths, slot = null) => {
@@ -2700,7 +2743,7 @@ function openHomeTypesetDialog() {
           referencePaths = filtered;
           hiddenReferencePages = new Set();
           referencePageCount = null;
-          void refreshReferencePageCount();
+          await loadSelectedReference();
         }
         else if (kind === "psd") psdPaths = filtered;
         else if (kind === "txt") txtPath = filtered[0] ?? null;
@@ -2813,13 +2856,13 @@ function openHomeTypesetDialog() {
     modal.querySelector(".home-typeset-close")?.addEventListener("click", () => cleanup(null));
     modal.querySelector(".home-typeset-cancel")?.addEventListener("click", () => cleanup(null));
     modal.querySelector("[data-reference-hide]")?.addEventListener("click", async () => {
-      if (referencePaths.length === 0 || referenceCounting) return;
+      if (referencePaths.length === 0 || referenceLoading) return;
       const next = await openReferenceHiddenPicker(referencePaths, hiddenReferencePages);
       if (!next) return;
       hiddenReferencePages = next.hiddenPages instanceof Set ? next.hiddenPages : new Set(next.hiddenPages || []);
       referencePageCount = null;
       update();
-      void refreshReferencePageCount();
+      await loadSelectedReference();
     });
     modal.addEventListener("mousedown", (e) => {
       if (pickingFile) return;
@@ -2835,7 +2878,7 @@ function openHomeTypesetDialog() {
           referencePaths = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickReferenceFiles()));
           hiddenReferencePages = new Set();
           referencePageCount = null;
-          void refreshReferencePageCount();
+          await loadSelectedReference();
         } else if (kind === "psd") {
           psdPaths = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickPsdFiles()));
         } else if (kind === "txt") {
@@ -2869,8 +2912,8 @@ function openHomeTypesetDialog() {
       });
     }
     startBtn?.addEventListener("click", async () => {
-      if (referencePaths.length === 0 || psdPaths.length === 0) return;
-      const referenceCount = await refreshReferencePageCount();
+      if (referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading) return;
+      const referenceCount = getReferenceDisplayCount();
       if (referenceCount < psdPaths.length) {
         await notifyDialog({
           title: "見本が不足しています",
@@ -2909,11 +2952,13 @@ async function startHomeTypesetFlow() {
   await transitionFromHome();
   try {
     clearScanExtractDoc();
-    await loadReferenceFiles(picked.referencePaths, {
-      skipFirstBlankPage: false,
-      excludedPages: picked.hiddenReferencePages,
-      keepProgressOpen: true,
-    });
+    if (!referenceSelectionMatchesLoaded(picked.referencePaths, picked.hiddenReferencePages)) {
+      await loadReferenceFiles(picked.referencePaths, {
+        skipFirstBlankPage: false,
+        excludedPages: picked.hiddenReferencePages,
+        keepProgressOpen: true,
+      });
+    }
     await loadPsdFilesByPaths(picked.psdPaths, { icon: PLACE_ICON_SVG, label: "自動配置中…", keepProgressOpen: true });
     if (!getPages().length) {
       await hideProgress();

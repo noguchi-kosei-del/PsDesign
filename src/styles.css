@@ -2981,6 +2981,35 @@ body.home-starting .home-screen {
   border-bottom: 1px solid var(--border);
   background: var(--panel);
 }
+.pdf-font-book-controls {
+  flex: 0 0 auto;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-body);
+}
+.pdf-font-book-controls .font-book-sample-input {
+  width: 100%;
+  min-width: 0;
+}
+.pdf-font-book-list-header {
+  flex: 0 0 auto;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel-body);
+}
+.pdf-font-book-list-header:empty {
+  display: none;
+}
+.pdf-font-book-list-header .font-book-list-header {
+  position: static;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+}
 .pdf-font-book-stage .font-book-list {
   flex: 1 1 auto;
   min-height: 0;
@@ -3199,6 +3228,10 @@ body.home-starting .home-screen {
 /* 【v1.26.0】ルビが含まれる layer は overflow を visible に切り替えて、<ruby> の <rt> や
    in-edit プレビューの ::after 疑似要素を bbox 外側まで表示できるようにする。
    renderInnerText / applyEditModeRubyToRange が has-ruby クラスを付け外しする。 */
+.new-layer-text.text-preview-no-white-shadow,
+.existing-layer-text.text-preview-no-white-shadow {
+  text-shadow: none;
+}
 .new-layer-text.has-ruby,
 .existing-layer-text.has-ruby {
   overflow: visible;
@@ -4629,6 +4662,18 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   margin: 0 0 8px;
   padding-bottom: 8px;
   background: var(--panel-body);
+}
+.font-book-list-header.has-source-title {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr);
+  align-items: center;
+  gap: 8px;
+}
+.font-book-list-header.has-source-title .font-book-source-title {
+  margin: 0;
+}
+.font-book-list-header.no-source-title .font-book-search {
+  width: 100%;
 }
 .font-book-group {
   border: 1px solid var(--border);
@@ -7619,10 +7664,10 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.54);
+  background: rgba(0, 0, 0, 0.9);
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.12s ease;
+  transition: opacity 0.22s ease;
 }
 .scan-adjust-choice-modal[hidden] {
   display: none;
@@ -7638,7 +7683,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .scan-adjust-choice-card {
   position: relative;
   width: min(980px, calc(100vw - 56px));
-  max-height: calc(100vh - 56px);
+  height: min(612px, calc(100vh - 56px));
   background:
     linear-gradient(180deg, rgba(28, 28, 28, 0.92) 0%, rgba(14, 14, 14, 0.88) 100%);
   color: var(--home-text);
@@ -7646,12 +7691,14 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   border-radius: 20px;
   box-shadow: 0 24px 60px rgba(0, 0, 0, 0.44);
   backdrop-filter: blur(8px);
-  overflow: auto;
-  transform: translateY(6px);
-  transition: transform 0.12s ease;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  transform: scale(0.96);
+  transition: transform 0.22s ease;
 }
 .scan-adjust-choice-modal.visible .scan-adjust-choice-card {
-  transform: translateY(0);
+  transform: scale(1);
 }
 .scan-adjust-choice-header {
   display: flex;
@@ -7660,6 +7707,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   gap: 10px;
   padding: 18px 22px 14px;
   border-bottom: 1px solid var(--home-card-border, rgba(255, 255, 255, 0.22));
+  flex: 0 0 auto;
 }
 .scan-adjust-choice-title {
   font-size: 16px;
@@ -7689,8 +7737,12 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .scan-adjust-choice-list {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
+  align-items: center;
   gap: 14px;
   padding: 20px 22px 28px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 .scan-adjust-choice-option {
   position: relative;
@@ -8132,7 +8184,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   position: fixed;
   inset: 0;
   z-index: 250;
-  background: rgba(0, 0, 0, 0.55);
+  background: rgba(0, 0, 0, 0.9);
   display: flex;
   align-items: center;
   justify-content: center;

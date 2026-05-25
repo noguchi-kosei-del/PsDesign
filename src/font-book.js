@@ -60,6 +60,11 @@ function fontBookCategoryWraps() {
   return Array.from(document.querySelectorAll(".font-book-category-menu-wrap"));
 }
 
+function fontBookHeaderHostForList(list) {
+  if (list?.id === "pdf-font-book-list") return $("pdf-font-book-list-header");
+  return null;
+}
+
 function escapeHtml(s) {
   return String(s ?? "")
     .replace(/&/g, "&amp;")
@@ -786,25 +791,31 @@ function renderFontBook() {
   const groups = filteredGroups();
   renderCategories(allGroups);
 
-  const heading = state.selectedBookFolderName
+  const hasSourceTitle = !!state.selectedBookFolderName;
+  const heading = hasSourceTitle
     ? `<div class="font-book-source-title" title="${escapeHtml(state.selectedJsonPath || state.dir || "")}">${escapeHtml(state.selectedBookFolderName)}</div>`
     : "";
   const listHeader = `
-    <div class="font-book-list-header">
+    <div class="font-book-list-header ${hasSourceTitle ? "has-source-title" : "no-source-title"}">
       ${heading}
       <input class="font-book-search" type="search" placeholder="フォント名で検索..." autocomplete="off" value="${escapeHtml(state.query)}" />
     </div>`;
-  const bodyHtml = groups.length === 0
+  const bodyContent = groups.length === 0
     ? `
-        ${listHeader}
         <div class="font-book-empty">
           <div class="font-book-empty-icon">Aa</div>
           <div>表示できるフォントがありません。</div>
         </div>`
-    : `${listHeader}${groups.map(renderGroup).join("")}`;
+    : groups.map(renderGroup).join("");
   for (const list of lists) {
+    const headerHost = fontBookHeaderHostForList(list);
     list.dataset.size = state.previewSize;
-    list.innerHTML = bodyHtml;
+    if (headerHost) {
+      headerHost.innerHTML = listHeader;
+      list.innerHTML = bodyContent;
+    } else {
+      list.innerHTML = `${listHeader}${bodyContent}`;
+    }
   }
   bindRenderedCards();
 }
