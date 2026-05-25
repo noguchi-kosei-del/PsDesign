@@ -153,49 +153,6 @@ function renderPhaseUI() {
   }
 }
 
-function renderDownloadUILegacy() {
-  const progressBox = $("scan-install-progress");
-  if (!progressBox) return;
-  if (!lastDownload) {
-    progressBox.hidden = true;
-    return;
-  }
-  progressBox.hidden = false;
-  const { current, total, speedBps } = lastDownload;
-  const pct = total > 0 ? Math.max(0, Math.min(100, (current / total) * 100)) : 0;
-  $("scan-install-progress-fill").style.width = pct.toFixed(1) + "%";
-  $("scan-install-progress-count").textContent =
-    `${formatBytes(current)} / ${formatBytes(total)}`;
-  const speedEl = $("scan-install-speed");
-  const etaEl = $("scan-install-eta");
-  if (speedEl) speedEl.textContent = speedBps > 0 ? formatSpeed(speedBps) : "";
-  if (etaEl) {
-    const remain = total - current;
-    const eta = (speedBps > 0 && remain > 0) ? remain / speedBps : NaN;
-    etaEl.textContent = isFinite(eta) ? `残り ${formatDuration(eta)}` : "";
-  }
-}
-
-function appendLogLineLegacy(line, stream) {
-  const viewer = $("scan-log-viewer");
-  if (!viewer) return;
-  const div = document.createElement("div");
-  div.className = "scan-log-line" + (stream === "stderr" ? " stderr" : "");
-  div.textContent = line;
-  viewer.appendChild(div);
-  // 行数制限 (古い行を間引く)
-  while (viewer.childElementCount > 1500) {
-    viewer.removeChild(viewer.firstChild);
-  }
-  // 自動スクロール
-  viewer.scrollTop = viewer.scrollHeight;
-}
-
-function clearLogLegacy() {
-  const viewer = $("scan-log-viewer");
-  if (viewer) viewer.innerHTML = "";
-}
-
 // scan-log-viewer 内にもインストール状況の進捗バーを表示する。
 // 既存の上部プログレスはダウンロード行が来た時だけ使い、ログ内はフェーズ進行中も表示する。
 function setProgressElements(prefix, { pct, label, count, speed, eta }) {

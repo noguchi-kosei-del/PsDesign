@@ -1,5 +1,18 @@
 import { readPsd } from "ag-psd";
 
+export class UnsupportedBitmapPsdError extends Error {
+  constructor(path) {
+    super("モノクロ2階調のPSDは読み込めません");
+    this.name = "UnsupportedBitmapPsdError";
+    this.code = "UNSUPPORTED_BITMAP_PSD";
+    this.path = path;
+  }
+}
+
+function isBitmapPsd(psd) {
+  return psd?.colorMode === 0;
+}
+
 // ag-psd の返す effects.stroke は Photoshop 側のバージョンや PSD の保存時期で
 // 形状が揺れる。以下を吸収して堅牢に読み戻す:
 //   - 配列 / 単体オブジェクトの両方
@@ -428,55 +441,6 @@ function rebuildCanvasMaskingHidden(psd) {
   }
 }
 
-// 各「非表示レイヤー canvas」のアルファをマスクとして、psd.canvas の
-// 該当ピクセル（= 実際にそのレイヤーが寄与している形状の画素）だけを
-// 白で塗りつぶしたコピーを返す。矩形ではなく「文字の輪郭ぴったり」
-// で消すので、レイヤーの裏側にあった絵柄は欠けない。
-//
-// 仕組み:
-//   1) main canvas に psd.canvas をコピー
-//   2) レイヤーごとに同サイズの一時 canvas を用意
-//   3) 一時 canvas を白で塗る
-//   4) globalCompositeOperation = "destination-in" + そのレイヤーの canvas を描画
-//      → 一時 canvas は「白×レイヤー alpha」になる（テキスト形状のみ白で残る）
-//   5) 一時 canvas を main canvas の (left, top) に重ね描画
-function maskHiddenLayersOnComposite(psd, hiddenLayers) {
-  try {
-    const src = psd.canvas;
-    if (!src || !src.width || !src.height) return null;
-    const canvas = document.createElement("canvas");
-    canvas.width = src.width;
-    canvas.height = src.height;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return null;
-    ctx.drawImage(src, 0, 0);
-
-    for (const item of hiddenLayers) {
-      const lc = item.canvas;
-      if (!lc || lc.width === 0 || lc.height === 0) continue;
-
-      // レイヤーと同サイズの一時 canvas に「白で塗る → destination-in でレイヤー
-      // 形状にクリップ」した画像を作る
-      const tmp = document.createElement("canvas");
-      tmp.width = lc.width;
-      tmp.height = lc.height;
-      const tctx = tmp.getContext("2d");
-      if (!tctx) continue;
-      tctx.fillStyle = "#ffffff";
-      tctx.fillRect(0, 0, tmp.width, tmp.height);
-      tctx.globalCompositeOperation = "destination-in";
-      tctx.drawImage(lc, 0, 0);
-
-      // main canvas の該当位置に重ね描き
-      ctx.drawImage(tmp, item.left, item.top);
-    }
-    return canvas;
-  } catch (e) {
-    console.warn("maskHiddenLayersOnComposite failed:", e);
-    return null;
-  }
-}
-
 export async function loadPsdFromPath(path) {
   const bytes = await readFileBytes(path);
   const psd = readPsd(bytes, {
@@ -484,6 +448,9 @@ export async function loadPsdFromPath(path) {
     skipThumbnail: true,
     useImageData: false,
   });
+  if (isBitmapPsd(psd)) {
+    throw new UnsupportedBitmapPsdError(path);
+  }
   const textLayers = [];
   if (Array.isArray(psd.children)) {
     for (const child of psd.children) collectTextLayers(child, textLayers, true);

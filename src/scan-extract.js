@@ -236,21 +236,6 @@ function buildExtractTextDiffs(authoritativeContent, extractContent) {
   return diffs;
 }
 
-function summarizeTextDiffs(diffs) {
-  if (!Array.isArray(diffs) || diffs.length === 0) return "画像スキャンテキストとの差分はありません。";
-  const rows = diffs.slice(0, 5).map((d) => {
-    const page = d.pageNumber ? `${d.pageNumber}P` : "TXT";
-    const idx = Number.isInteger(d.textIndex) ? d.textIndex + 1 : Number.isInteger(d.extractIndex) ? `画像スキャン${d.extractIndex + 1}` : "?";
-    const expected = String(d.expected || "").replace(/\s+/g, " ").slice(0, 34);
-    const scanned = String(d.scanned || "").replace(/\s+/g, " ").slice(0, 34);
-    if (d.type === "extra-extract") return `${page} #${idx}: 画像スキャンのみ「${scanned}」`;
-    if (d.type === "missing-extract") return `${page} #${idx}: 画像スキャン欠落 / 使用「${expected}」`;
-    return `${page} #${idx}: 画像スキャン「${scanned}」→ 使用「${expected}」`;
-  });
-  const tail = diffs.length > rows.length ? `\nほか ${diffs.length - rows.length} 件` : "";
-  return `画像スキャンテキストとの差分 ${diffs.length} 件を検出しました。\n${rows.join("\n")}${tail}`;
-}
-
 function referenceScanDocToText(doc, normalizeSettings) {
   const pages = Array.isArray(doc?.pages) ? doc.pages : [];
   const out = [];
@@ -361,6 +346,7 @@ async function runScanExtract(files, {
   // 進捗ダイアログのアイコン直下ラベル。直接呼ばれる「画像スキャン」と
   // 自動配置から呼ばれる経路で文言を切替えるため引数化。
   label = "画像スキャン中…",
+  variant = "scan",
 } = {}) {
   if (runningExtract) return;
   if (!files || files.length === 0) return; // 何も選択されていない場合は静かに戻る
@@ -394,6 +380,7 @@ async function runScanExtract(files, {
     total: 1,
     showCount: false,
     icon,
+    variant,
   });
 
   const { invoke } = await import("@tauri-apps/api/core");
@@ -639,7 +626,7 @@ function formatEta(eta) {
 // (auto-place.js から「画像スキャン キャッシュなし時に自動実行」用に呼ぶ)
 // 自動配置経由なのでアイコンは wand-sparkles、ラベルも「自動配置中…」に揃える。
 export async function runScanExtractForFiles(files, { loadText = true, maxPages = null, excludedPages = null, keepProgressOpen = false } = {}) {
-  await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", loadText, maxPages, excludedPages, keepProgressOpen });
+  await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place", loadText, maxPages, excludedPages, keepProgressOpen });
 }
 
 export async function runScanExtractForTranscription(files) {
@@ -647,6 +634,7 @@ export async function runScanExtractForTranscription(files) {
     notifyOnComplete: false,
     icon: SCAN_ICON_SVG,
     label: "画像スキャン中…",
+    variant: "scan",
     loadText: true,
     consumeText: false,
   });
@@ -656,6 +644,7 @@ export async function runScanExtractForPlacementOnly(files, { keepProgressOpen =
   await runScanExtract(files, {
     icon: PLACE_ICON_SVG,
     label: "位置検出中…",
+    variant: "place",
     consumeText: false,
     loadText: false,
     keepProgressOpen,

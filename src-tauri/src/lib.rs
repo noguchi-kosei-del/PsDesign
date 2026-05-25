@@ -465,9 +465,7 @@ fn extract_face_from_ttc(ttc: &[u8], face_index: u32) -> Option<Vec<u8>> {
         }
         out.extend_from_slice(&ttc[off..off + len]);
         let pad = pad4(len) - len;
-        for _ in 0..pad {
-            out.push(0);
-        }
+        out.resize(out.len() + pad, 0);
     }
 
     // head テーブルの checkSumAdjustment を再計算する。
@@ -506,9 +504,7 @@ fn extract_face_from_ttc(ttc: &[u8], face_index: u32) -> Option<Vec<u8>> {
             if idx < out.len() {
                 let mut tail = [0u8; 4];
                 let n = out.len() - idx;
-                for k in 0..n {
-                    tail[k] = out[idx + k];
-                }
+                tail[..n].copy_from_slice(&out[idx..idx + n]);
                 let v = u32::from_be_bytes(tail);
                 sum = sum.wrapping_add(v);
             }
@@ -746,7 +742,7 @@ async fn path_info(path: String) -> Result<PathInfo, String> {
 
 fn update_splash_progress(app: &tauri::AppHandle, value: u32) {
     if let Some(splash_window) = app.get_webview_window("splash") {
-        let _ = splash_window.eval(&format!(
+        let _ = splash_window.eval(format!(
             "if(window.__splashSetProgress)window.__splashSetProgress({});",
             value
         ));
@@ -767,11 +763,11 @@ fn apply_app_icon(window: &tauri::WebviewWindow) {
 async fn close_splash(window: tauri::Window) -> Result<(), String> {
     let app = window.app_handle();
 
-    update_splash_progress(&app, 72);
+    update_splash_progress(app, 72);
     std::thread::sleep(std::time::Duration::from_millis(180));
-    update_splash_progress(&app, 88);
+    update_splash_progress(app, 88);
     std::thread::sleep(std::time::Duration::from_millis(160));
-    update_splash_progress(&app, 100);
+    update_splash_progress(app, 100);
     std::thread::sleep(std::time::Duration::from_millis(900));
 
     if let Some(main_window) = app.get_webview_window("main") {

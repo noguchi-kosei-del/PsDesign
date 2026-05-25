@@ -32,7 +32,6 @@ const ICONS = {
 };
 
 let modalEl = null;
-let cardEl = null;
 let iconEl = null;
 let titleEl = null;
 let versionEl = null;
@@ -70,7 +69,6 @@ function isLegacyUpdateFromBeforeVersionReset(currentVersion, updateVersion) {
 function ensureRefs() {
   if (modalEl) return true;
   modalEl = document.getElementById("update-modal");
-  cardEl = modalEl?.querySelector(".update-modal-card");
   iconEl = document.getElementById("update-modal-icon");
   titleEl = document.getElementById("update-modal-title");
   versionEl = document.getElementById("update-modal-version");

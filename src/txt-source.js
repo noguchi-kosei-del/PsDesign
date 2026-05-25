@@ -17,7 +17,6 @@ import {
   getNewTextDirection,
   getTxtFilePath,
   getTxtSelectedBlockIndex,
-  getTxtSelection,
   getTxtSource,
   onPageIndexChange,
   onPdfChange,

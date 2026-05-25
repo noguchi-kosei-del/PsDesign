@@ -11,6 +11,7 @@ import {
   getAllShortcuts,
   getArrowKeyMoveDistance,
   getDefaults,
+  getFixedShortcuts,
   getPageDirectionInverted,
   getThemeColor,
   normalizeKeyName,
@@ -73,24 +74,56 @@ function renderShortcutList() {
   if (!list) return;
   const shortcuts = getAllShortcuts();
   const frag = document.createDocumentFragment();
+  frag.appendChild(createShortcutSectionTitle("変更できるショートカット"));
   for (const [id, sc] of Object.entries(shortcuts)) {
-    const row = document.createElement("div");
-    row.className = "shortcut-item";
-    const label = document.createElement("span");
-    label.className = "shortcut-label";
-    label.textContent = sc.description || id;
-    const btn = document.createElement("button");
-    btn.type = "button";
-    btn.className = "shortcut-key-btn";
-    btn.textContent = formatShortcutDisplay(sc) || "未設定";
-    btn.title = "クリックして変更";
-    btn.addEventListener("click", () => openKeyCapture(id, sc));
-    row.appendChild(label);
-    row.appendChild(btn);
-    frag.appendChild(row);
+    frag.appendChild(createEditableShortcutRow(id, sc));
+  }
+  frag.appendChild(createShortcutSectionTitle("固定ショートカット"));
+  for (const sc of getFixedShortcuts()) {
+    frag.appendChild(createFixedShortcutRow(sc));
   }
   list.innerHTML = "";
   list.appendChild(frag);
+}
+
+function createShortcutSectionTitle(text) {
+  const title = document.createElement("div");
+  title.className = "shortcut-section-title";
+  title.textContent = text;
+  return title;
+}
+
+function createShortcutRowBase(description) {
+  const row = document.createElement("div");
+  row.className = "shortcut-item";
+  const label = document.createElement("span");
+  label.className = "shortcut-label";
+  label.textContent = description;
+  row.appendChild(label);
+  return row;
+}
+
+function createEditableShortcutRow(id, sc) {
+  const row = createShortcutRowBase(sc.description || id);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "shortcut-key-btn";
+  btn.textContent = formatShortcutDisplay(sc) || "未設定";
+  btn.title = "クリックして変更";
+  btn.addEventListener("click", () => openKeyCapture(id, sc));
+  row.appendChild(btn);
+  return row;
+}
+
+function createFixedShortcutRow(sc) {
+  const row = createShortcutRowBase(sc.description || sc.id);
+  row.classList.add("shortcut-item-fixed");
+  const key = document.createElement("span");
+  key.className = "shortcut-key-btn shortcut-key-static";
+  key.textContent = sc.shortcut || "固定";
+  key.title = "固定ショートカット";
+  row.appendChild(key);
+  return row;
 }
 
 function syncPageDirectionUi() {

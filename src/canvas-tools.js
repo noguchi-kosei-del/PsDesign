@@ -16,7 +16,6 @@ import {
   getNewTextDirection,
   getPages,
   getPsdRotation,
-  getSelectedLayer,
   getSelectedLayers,
   getStrokeColor,
   getStrokeWidthPx,
@@ -26,13 +25,11 @@ import {
   isLayerSelected,
   onToolChange,
   removeNewLayer,
-  setCurrentPageIndex,
   setEdit,
   setEditingContext,
   setSelectedLayer,
   setSelectedLayers,
   setTxtSource,
-  setTool,
   toDisplaySizePt,
   toggleLayerSelected,
   updateNewLayer,
@@ -47,7 +44,6 @@ import {
   cascadeRemoveTxtForLayers,
   renderTxtSourceViewer,
   syncPlacedLayerTextToSource,
-  syncTxtSelectionToLayer,
 } from "./txt-source.js";
 
 const mounts = new Map();
@@ -225,6 +221,40 @@ export function restoreInplaceSelection(sel) {
     return true;
   } catch (_) {
     return false;
+  }
+}
+
+export function getInplaceSelectionRect(sel = _lastInplaceSelection) {
+  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return null;
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return null;
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
+  if (!inner) return null;
+  const startPos = charIndexToNodeOffset(inner, sel.start);
+  const endPos = charIndexToNodeOffset(inner, sel.end);
+  if (!startPos || !endPos) return null;
+  let range = null;
+  try {
+    range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    const rects = Array.from(range.getClientRects())
+      .filter((rect) => rect && rect.width > 0 && rect.height > 0);
+    const source = rects.length ? rects : [range.getBoundingClientRect()]
+      .filter((rect) => rect && rect.width > 0 && rect.height > 0);
+    if (!source.length) return null;
+    return source.reduce((acc, rect) => ({
+      left: Math.min(acc.left, rect.left),
+      top: Math.min(acc.top, rect.top),
+      right: Math.max(acc.right, rect.right),
+      bottom: Math.max(acc.bottom, rect.bottom),
+      width: Math.max(acc.right, rect.right) - Math.min(acc.left, rect.left),
+      height: Math.max(acc.bottom, rect.bottom) - Math.min(acc.top, rect.top),
+    }));
+  } catch (_) {
+    return null;
+  } finally {
+    range?.detach?.();
   }
 }
 
@@ -821,45 +851,6 @@ function normalizeEditFontSize(inner, value) {
   return `${ratio * basePx}px`;
 }
 
-// 矢印キー ↑/↓ で現在ページ内のテキストレイヤー選択を順送り / 逆送りする。
-// 順序は text-editor.js rebuildLayerList と同じ「既存レイヤー → 新規レイヤー」。
-// 末尾で wrap (last → first / first → last)。delta: +1 次へ / -1 前へ。
-// レイヤーが 0 件のときは false、そうでなければ選択を切替えて true。
-// 現選択が別ページのレイヤーなら無視して現ページの先頭/末尾から開始する。
-export function cycleLayerSelection(delta) {
-  showSelectedLayerBadges();
-  const pages = getPages();
-  const pageIdx = getCurrentPageIndex();
-  if (pageIdx < 0 || pageIdx >= pages.length) return false;
-  const page = pages[pageIdx];
-  if (!page) return false;
-  // ordered ID list: 既存 → 新規
-  const ids = [];
-  for (const layer of page.textLayers) ids.push(layer.id);
-  for (const nl of getNewLayersForPsd(page.path)) ids.push(nl.tempId);
-  if (ids.length === 0) return false;
-  const selections = getSelectedLayers();
-  // 現選択が現ページにあるか確認 (複数選択でも先頭で代表する)
-  const cur = selections.find((s) => s.pageIndex === pageIdx);
-  let nextIdx;
-  if (cur) {
-    const curIdx = ids.findIndex((id) => id === cur.layerId);
-    nextIdx = curIdx < 0
-      ? (delta > 0 ? 0 : ids.length - 1)
-      : (curIdx + delta + ids.length) % ids.length;
-  } else {
-    // 現ページに選択なし → 方向に応じて先頭 / 末尾を選ぶ
-    nextIdx = delta > 0 ? 0 : ids.length - 1;
-  }
-  setSelectedLayer(pageIdx, ids[nextIdx]);
-  refreshAllOverlays();
-  rebuildLayerList();
-  // 自動配置済みレイヤー（sourceTxtRef あり）の場合は txt-source-viewer の選択 / フォーカスも追従。
-  // 紐付け無しのレイヤーが選ばれた場合は viewer 側の選択を解除する（同関数内で処理）。
-  syncTxtSelectionToLayer(pageIdx, ids[nextIdx]);
-  return true;
-}
-
 // 選択中のレイヤーを削除する（Delete / Backspace から呼ばれる想定）。
 // 新規追加レイヤーのみ削除可能。PSD 既存テキストレイヤーは選択から外すだけで残す
 // （PSD バイナリからの削除は edit モデル外のため未対応）。
@@ -874,9 +865,6 @@ export function deleteSelectedLayers() {
   // 削除前のレイヤースナップショットを取り、sourceTxtRef を持つものは TXT 側からも消す
   // ための情報として保持する（自動配置レイヤー → 原稿テキスト の cascade）。
   const tempIdSet = new Set(tempIds);
-  const newLayersAll = (typeof window !== "undefined" ? null : null) || [];
-  // モジュールスコープに getNewLayers が無いので getNewLayersForPsd 経由で取得する代わりに、
-  // selection の page から layer を解決する。
   const deletedLayerSnapshots = [];
   for (const sel of selections) {
     if (typeof sel.layerId !== "string") continue;
@@ -1465,62 +1453,6 @@ function centerOfRect(rect) {
   };
 }
 
-function unionDomRects(rects) {
-  let left = Infinity;
-  let top = Infinity;
-  let right = -Infinity;
-  let bottom = -Infinity;
-  for (const rect of rects) {
-    if (!rect || rect.width <= 0 || rect.height <= 0) continue;
-    left = Math.min(left, rect.left);
-    top = Math.min(top, rect.top);
-    right = Math.max(right, rect.right);
-    bottom = Math.max(bottom, rect.bottom);
-  }
-  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom)) {
-    return null;
-  }
-  return {
-    left,
-    top,
-    right,
-    bottom,
-    width: right - left,
-    height: bottom - top,
-  };
-}
-
-function isInsideRubyText(node) {
-  const el = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-  return !!el?.closest?.(".ruby-text");
-}
-
-function textContentRectWithoutRuby(element) {
-  if (!element) return null;
-  const rects = [];
-  const walker = document.createTreeWalker(
-    element,
-    NodeFilter.SHOW_TEXT,
-    {
-      acceptNode(node) {
-        if (!node.nodeValue || node.nodeValue.trim() === "") return NodeFilter.FILTER_REJECT;
-        if (isInsideRubyText(node)) return NodeFilter.FILTER_REJECT;
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    },
-  );
-  const range = document.createRange();
-  try {
-    while (walker.nextNode()) {
-      range.selectNodeContents(walker.currentNode);
-      rects.push(...Array.from(range.getClientRects()));
-    }
-  } finally {
-    range.detach?.();
-  }
-  return unionDomRects(rects);
-}
-
 function layoutRectWithoutRuby(element) {
   if (!element?.getBoundingClientRect) return null;
   const rubyTexts = Array.from(element.querySelectorAll?.(".ruby-text") ?? []);
@@ -1979,14 +1911,6 @@ export function cssFontFamily(psName) {
   return parts.join(", ");
 }
 
-function longestLine(s) {
-  if (!s) return 0;
-  const lines = String(s).split(/\r?\n/);
-  let max = 0;
-  for (const line of lines) if (line.length > max) max = line.length;
-  return max;
-}
-
 function countLines(s) {
   if (!s) return 0;
   return String(s).split(/\r?\n/).length;
@@ -2183,10 +2107,6 @@ const SYMBOL_CHAR_CODES = new Set([
   0x25C7, 0x25C6,                   // ◇ ◆
   0x2660, 0x2663, 0x2666,           // ♠ ♣ ♦
 ]);
-function isSymbolReplaceChar(ch) {
-  if (typeof ch !== "string" || ch.length === 0) return false;
-  return SYMBOL_CHAR_CODES.has(ch.charCodeAt(0));
-}
 function lineHasSymbolChar(s) {
   if (typeof s !== "string") return false;
   for (let i = 0; i < s.length; i++) {
@@ -2218,10 +2138,6 @@ const OPENING_PUNCT_TSUME_CHAR_CODES = new Set([
   0x300C, // 「
   0x301D, // 〝
 ]);
-function isPunctTsumeChar(ch) {
-  if (typeof ch !== "string" || ch.length === 0) return false;
-  return PUNCT_TSUME_CHAR_CODES.has(ch.charCodeAt(0));
-}
 function lineHasPunctTsumeChar(s) {
   if (typeof s !== "string") return false;
   for (let i = 0; i < s.length; i++) {
@@ -2263,10 +2179,6 @@ function repeatedTargetGroup(ch) {
   if (TILDE_CHARS.has(ch)) return "tilde";
   return null;
 }
-function isRepeatedTargetChar(ch) {
-  return repeatedTargetGroup(ch) !== null;
-}
-
 // 1 行を [{text, group}] のセグメント列に分解する。
 // 例: "あ―――い" → [{text:"あ", group:null}, {text:"―――", group:"dash"}, {text:"い", group:null}]
 // 例: "―〜―あ" → dash / tilde / dash を別ラン扱い。

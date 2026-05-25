@@ -6,7 +6,6 @@ import { toast } from "./ui-feedback.js";
 const STORAGE_SAMPLE = "opus_font_book_sample_text";
 const FONT_BOOK_ROOT_PATH = "G:/共有ドライブ/CLLENN/編集部フォルダ/編集企画部/写植・校正用テキストログ";
 const FONT_BOOK_DIR_NAME = "フォント帳";
-const PRESET_JSON_ROOT_PATH = "G:/共有ドライブ/CLLENN/編集部フォルダ/編集企画部/編集＿画_C班(AT業務推進)/DTP制作部/JSONフォルダ";
 const DEFAULT_SAMPLE_TEXT = "永字八法 あいうえお ABC 123";
 const FOLDER_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
 const FILE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
@@ -96,44 +95,6 @@ function entryKeyFor(dir, id) {
   return `${cleanPath(dir)}::${id}`;
 }
 
-function safePathPart(part) {
-  return String(part ?? "").trim().replace(/[\\/:*?"<>|]/g, "_");
-}
-
-function fontBookDirForWork(label, title) {
-  const safeLabel = safePathPart(label);
-  const safeTitle = safePathPart(title);
-  if (!safeLabel || !safeTitle) return "";
-  return joinPath(FONT_BOOK_ROOT_PATH, safeLabel, safeTitle, FONT_BOOK_DIR_NAME);
-}
-
-function extractWorkInfoFromPresetJson(data, fallback = {}) {
-  const workInfo = data?.presetData?.workInfo || data?.workInfo || {};
-  const label = String(workInfo.label || fallback.label || "").trim();
-  const title = String(workInfo.title || fallback.title || "").trim();
-  return { label, title };
-}
-
-function extractPresetFontsFromPresetJson(data, fallback = {}) {
-  const presets = data?.presetData?.presets || data?.presets || {};
-  const out = [];
-  for (const setEntries of Object.values(presets)) {
-    if (!Array.isArray(setEntries)) continue;
-    for (const item of setEntries) {
-      const fontPostScript = String(item?.font || item?.fontPostScript || "").trim();
-      if (!fontPostScript) continue;
-      out.push({
-        fontPostScript,
-        displayName: String(item?.name || item?.fontDisplayName || fontPostScript),
-        subName: String(item?.subName || ""),
-        workLabel: String(fallback.label || ""),
-        workTitle: String(fallback.title || ""),
-      });
-    }
-  }
-  return out;
-}
-
 function normalizeEntry(entry, sourceDir = "") {
   if (!entry || typeof entry !== "object") return null;
   const id = String(entry.id ?? "").trim();
@@ -180,45 +141,6 @@ async function tryReadFontBookDir(dir) {
   } catch (_) {
     return null;
   }
-}
-
-async function collectPresetJsonFiles(root, depth = 0, out = []) {
-  if (!root || depth > 3) return out;
-  let entries = [];
-  try {
-    entries = await listDirectoryItems(root);
-  } catch (_) {
-    return out;
-  }
-  for (const entry of entries) {
-    const fullPath = dirPath(entry, root);
-    if (entry.isDirectory) {
-      await collectPresetJsonFiles(fullPath, depth + 1, out);
-      continue;
-    }
-    if (!entry.isFile || !/\.json$/i.test(entry.name || fullPath)) continue;
-    if (/_scandata\.json$/i.test(entry.name || fullPath)) continue;
-    out.push(fullPath);
-  }
-  return out;
-}
-
-async function readPresetJsonInfo(path) {
-  const content = await invoke("read_text_file", { path });
-  const data = JSON.parse(content);
-  const normalized = String(path || "").replace(/\\/g, "/");
-  const parts = normalized.split("/");
-  const fileName = parts.pop() || "";
-  const fallbackTitle = fileName.replace(/\.json$/i, "");
-  const fallbackLabel = parts[parts.length - 1] || "";
-  const work = extractWorkInfoFromPresetJson(data, { label: fallbackLabel, title: fallbackTitle });
-  return {
-    path,
-    data,
-    label: work.label,
-    title: work.title,
-    presetFonts: extractPresetFontsFromPresetJson(data, work),
-  };
 }
 
 function dirPath(entry, fallbackParent) {
@@ -436,44 +358,6 @@ async function loadFontBookFromJsonChoice(choice) {
   }
 }
 
-async function loadFontBookFromWorkFolder(folder) {
-  if (!folder?.path) return false;
-  state.navigatorLoading = true;
-  state.selectedWorkPath = folder.path;
-  state.selectedWorkName = folder.name || "";
-  try {
-    const book = await readFontBookFromWorkFolder(folder.path);
-    if (!book) {
-      state.dir = cleanPath(folder.path);
-      state.entries = [];
-      state.selectedBookFolderName = "";
-      state.presetFonts = [];
-      state.loadedBookCount = 0;
-      state.scannedJsonCount = 0;
-      renderFontBook();
-      toast("fontbook.json が見つかりませんでした", { kind: "warning" });
-      return false;
-    }
-    const entriesByKey = new Map();
-    for (const entry of book.entries) entriesByKey.set(entry.key, entry);
-    state.dir = book.dir;
-    state.sourceMode = "gdrive-folder";
-    state.entries = Array.from(entriesByKey.values());
-    state.selectedBookFolderName = bookDisplayFolderName(joinPath(book.dir, "fontbook.json"));
-    state.presetFonts = [];
-    state.loadedBookCount = 1;
-    state.scannedJsonCount = 0;
-    state.category = "";
-    renderFontBook();
-    return true;
-  } catch (e) {
-    toast(`fontbook.json を読み込めませんでした: ${e}`, { kind: "error" });
-    return false;
-  } finally {
-    state.navigatorLoading = false;
-  }
-}
-
 function ensureFontBookSelectModal() {
   let modal = $("font-book-select-modal");
   if (modal) return modal;
@@ -585,80 +469,6 @@ function bindFontBookSelectModalEvents(modal) {
       });
     }
   };
-}
-
-async function scanGDriveFontBooks() {
-  const books = [];
-  const seenDirs = new Set();
-  const presetFontsByKey = new Map();
-  let scannedJsonCount = 0;
-  const pushBook = (book) => {
-    if (!book || seenDirs.has(book.dir)) return;
-    seenDirs.add(book.dir);
-    books.push(book);
-  };
-
-  const presetJsonFiles = await collectPresetJsonFiles(PRESET_JSON_ROOT_PATH);
-  for (const jsonPath of presetJsonFiles) {
-    let info = null;
-    try {
-      info = await readPresetJsonInfo(jsonPath);
-    } catch (_) {
-      continue;
-    }
-    scannedJsonCount += 1;
-    for (const preset of info.presetFonts) {
-      const key = `${preset.fontPostScript}::${preset.subName}`;
-      if (!presetFontsByKey.has(key)) presetFontsByKey.set(key, preset);
-    }
-    const dir = fontBookDirForWork(info.label, info.title);
-    if (dir) pushBook(await tryReadFontBookDir(dir));
-  }
-
-  // JSON にまだ紐づいていない既存フォント帳も拾うフォールバック。
-  pushBook(await tryReadFontBookDir(FONT_BOOK_ROOT_PATH));
-  const labels = await listDirectories(FONT_BOOK_ROOT_PATH);
-  for (const label of labels) {
-    const labelPath = dirPath(label, FONT_BOOK_ROOT_PATH);
-    pushBook(await tryReadFontBookDir(joinPath(labelPath, FONT_BOOK_DIR_NAME)));
-
-    let titles = [];
-    try {
-      titles = await listDirectories(labelPath);
-    } catch (_) {
-      continue;
-    }
-    for (const title of titles) {
-      const titlePath = dirPath(title, labelPath);
-      pushBook(await tryReadFontBookDir(joinPath(titlePath, FONT_BOOK_DIR_NAME)));
-    }
-  }
-  return { books, presetFonts: Array.from(presetFontsByKey.values()), scannedJsonCount };
-}
-
-async function loadFontBooksFromGDrive({ notify = true } = {}) {
-  try {
-    const { books, presetFonts, scannedJsonCount } = await scanGDriveFontBooks();
-    const entriesByKey = new Map();
-    for (const book of books) {
-      for (const entry of book.entries) {
-        entriesByKey.set(entry.key, entry);
-      }
-    }
-    state.dir = FONT_BOOK_ROOT_PATH;
-    state.sourceMode = "gdrive";
-    state.entries = Array.from(entriesByKey.values());
-    state.presetFonts = presetFonts;
-    state.loadedBookCount = books.length;
-    state.scannedJsonCount = scannedJsonCount;
-    renderFontBook();
-    if (notify) {
-    }
-    return books.length > 0;
-  } catch (e) {
-    if (notify) toast(`Gドライブのフォント帳を読み込めませんでした: ${e}`, { kind: "error" });
-    return false;
-  }
 }
 
 function fontLabel(font) {

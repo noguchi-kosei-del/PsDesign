@@ -7,13 +7,26 @@
 // 1 度だけリスナーを張り、必要な update 関数群を呼ぶ。
 
 import { addPage, clearPages, hasEdits, setFolder } from "../state.js";
-import { confirmDialog, hideProgress, showProgress, toast, updateProgress } from "../ui-feedback.js";
+import { confirmDialog, hideProgress, notifyDialog, showProgress, toast, updateProgress } from "../ui-feedback.js";
 import { renderAllSpreads } from "../spread-view.js";
 import { rebuildLayerList } from "../text-editor.js";
-import { loadPsdFromPath } from "../psd-loader.js";
+import { UnsupportedBitmapPsdError, loadPsdFromPath } from "../psd-loader.js";
 import { setHasSavedThisSession, updateSaveButton } from "../bind/save.js";
 import { baseName, parentDir } from "../utils/path.js";
 import { setGuidesLocked } from "../rulers.js";
+
+function isUnsupportedBitmapPsdError(error) {
+  return error instanceof UnsupportedBitmapPsdError || error?.code === "UNSUPPORTED_BITMAP_PSD";
+}
+
+function formatUnsupportedBitmapMessage(paths) {
+  if (paths.length === 1) {
+    return `「${baseName(paths[0])}」はモノクロ2階調のPSDのため読み込めません。RGBカラーまたはグレースケールに変換してから開いてください。`;
+  }
+  const shown = paths.slice(0, 10).map((path) => `・${baseName(path)}`).join("\n");
+  const rest = paths.length > 10 ? `\nほか ${paths.length - 10} 件` : "";
+  return `以下のPSDはモノクロ2階調のため読み込めません。\n\n${shown}${rest}\n\nRGBカラーまたはグレースケールに変換してから開いてください。`;
+}
 
 export async function pickPsdFiles() {
   const { openFileDialog } = await import("../file-picker.js");
@@ -38,7 +51,7 @@ export async function listPsdFilesInFolder(folder) {
 //   自動配置から呼ばれるときは auto-place.js が PLACE_ICON_SVG を渡す。
 // options.label: アイコン直下のラベル文言（省略時は "PSD を読み込み中"）。
 //   自動配置経由は "自動配置中…" を渡してプロセス全体の文脈を維持する。
-export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み込み中", keepProgressOpen = false } = {}) {
+export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み込み中", keepProgressOpen = false, variant = null } = {}) {
   if (!files || files.length === 0) return;
   // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
   // のいずれもページ番号順 (page1 → page2 → page10) で先頭から並ぶようにする。
@@ -69,6 +82,7 @@ export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み�
     current: 0,
     total: files.length,
     icon,
+    variant,
   });
 
   clearPages();
@@ -77,6 +91,7 @@ export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み�
   window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
 
   const failures = [];
+  const unsupportedBitmapFiles = [];
   for (let i = 0; i < files.length; i++) {
     const path = files[i];
     updateProgress({
@@ -92,7 +107,11 @@ export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み�
       window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
     } catch (e) {
       console.error(e);
-      failures.push({ path, error: e });
+      if (isUnsupportedBitmapPsdError(e)) {
+        unsupportedBitmapFiles.push(path);
+      } else {
+        failures.push({ path, error: e });
+      }
     }
     updateProgress({
       detail: baseName(path),
@@ -104,9 +123,16 @@ export async function loadPsdFilesByPaths(files, { icon, label = "PSD を読み�
   updateSaveButton();
   window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
   // 全件失敗のときは緑チェック演出をスキップ。1 件でも成功していれば success 表示。
-  const allFailed = failures.length === files.length;
+  const allFailed = failures.length + unsupportedBitmapFiles.length === files.length;
   if (!keepProgressOpen || allFailed) {
     await hideProgress({ success: !allFailed });
+  }
+  if (unsupportedBitmapFiles.length) {
+    await notifyDialog({
+      title: "モノクロ2階調のPSDは読み込めません",
+      message: formatUnsupportedBitmapMessage(unsupportedBitmapFiles),
+      kind: "warning",
+    });
   }
   if (failures.length) {
     const first = failures[0];

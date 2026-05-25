@@ -53,7 +53,6 @@ const DEFAULT_PRESETS_SEED = [
 let presets = [];                  // Array<Preset>
 let categoryMap = null;            // {[category]: Preset[]}
 let categoryOrder = [];            // 表示順保持（Object.keys は挿入順）
-let activeCategory = null;         // 現在表示中のカテゴリ名（null = flat 表示）
 let selectedPresetIndex = -1;      // クリック選択中の preset の originalIndex（-1 = 未選択）
 let lastLoadedJsonPath = null;
 
@@ -66,7 +65,6 @@ let activeSource = "default";
 // テンプレ JSON 一覧（dropdown 用）と、スキャン状態。
 // scanTemplates() で起動時に 1 回だけ取得しキャッシュする。
 let templateList = [];             // Array<{ name, displayLabel, path }>
-let templateScanState = "idle";    // "idle" | "loading" | "ready" | "error"
 
 // 起動時の自動テンプレ読込が完了済みかどうか（goHome リセット時に false に戻して再実行する）。
 let initialAutoloadDone = false;
@@ -223,7 +221,6 @@ function renderList() {
 
   // category dropdown は populateTemplateDropdown 専任なのでここでは触らない。
   // JSON 内に複数 category がある場合も全件 flat 表示（内部 category 切替は廃止）。
-  activeCategory = null;
   renderItems(presets);
 }
 
@@ -328,7 +325,6 @@ async function loadJsonFromPath(path, { source = "browser" } = {}) {
   }
   rebuildCategoryMap();
   selectedPresetIndex = -1;
-  activeCategory = null;
   activeSource = source;
   lastLoadedJsonPath = path;
   updateFilenameDisplay(path);
@@ -351,7 +347,6 @@ function loadDefaults() {
   }));
   rebuildCategoryMap();
   selectedPresetIndex = -1;
-  activeCategory = null;
   activeSource = "default";
   lastLoadedJsonPath = null;
   updateFilenameDisplay(null);
@@ -366,7 +361,6 @@ function loadDefaults() {
 // 2) STYLE_PALETTE_LABEL_TEMPLATE_PATH (\_レーベルテンプレ\) 直下の全 .json → group: "レーベルテンプレ"
 // どちらの取得失敗もデフォルトプリセットの動作を阻害しない（warn のみ）。
 async function scanTemplates() {
-  templateScanState = "loading";
   const collator = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
 
   // メインフォルダ: ファイル名に「テンプレ」を含む JSON のみ採用
@@ -404,7 +398,6 @@ async function scanTemplates() {
   }
 
   templateList = [...mainEntries, ...labelEntries];
-  templateScanState = templateList.length > 0 ? "ready" : "error";
 
   populateTemplateDropdown();
   // スキャン後に初回限定で既定テンプレを自動読込。
@@ -487,7 +480,6 @@ export function resetStylePaletteState() {
   presets = [];
   categoryMap = null;
   categoryOrder = [];
-  activeCategory = null;
   selectedPresetIndex = -1;
   lastLoadedJsonPath = null;
   updateFilenameDisplay(null);

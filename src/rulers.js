@@ -15,7 +15,6 @@ import {
   getPages,
   getCurrentPageIndex,
   getPsdRotation,
-  getPsdZoom,
   onPsdRotationChange,
   onPsdZoomChange,
   onPageIndexChange,
@@ -245,7 +244,6 @@ let stageEl = null;      // #psd-stage
 let rulersDiv = null;    // .psd-rulers
 let topCanvas = null;    // #psd-ruler-top
 let leftCanvas = null;   // #psd-ruler-left
-let cornerEl = null;     // .psd-ruler-corner
 let guidesLayer = null;  // .psd-guides-layer
 let mounted = false;
 
@@ -256,7 +254,6 @@ export function initRulers() {
   rulersDiv = document.getElementById("psd-rulers");
   topCanvas = document.getElementById("psd-ruler-top");
   leftCanvas = document.getElementById("psd-ruler-left");
-  cornerEl = rulersDiv?.querySelector(".psd-ruler-corner");
   guidesLayer = document.getElementById("psd-guides-layer");
   if (!paneEl || !stageEl || !rulersDiv || !topCanvas || !leftCanvas || !guidesLayer) return;
   mounted = true;
@@ -438,11 +435,9 @@ function drawRulerOnCanvas(canvas, w, h, dpr, cs, geom, side) {
 
   // この ruler が表すペイン内 px 範囲（canvas の bbox）。それ以外の領域には目盛りを描かない。
   const startInPane = side === "top" ? geom.canvasLeftInPane : geom.canvasTopInPane;
-  const endInPane   = side === "top" ? geom.canvasRightInPane : geom.canvasBottomInPane;
   // ルーラー帯は pane の左上から伸びるが、上ルーラーは X = ruler_thick から始まる（左ルーラーぶん）。
   // クリップ範囲（ruler 内座標）に変換：
   const localStart = side === "top" ? startInPane - RULER_THICK : startInPane - RULER_THICK;
-  const localEnd   = side === "top" ? endInPane - RULER_THICK : endInPane - RULER_THICK;
 
   // 軸とサイン
   const map = axisMappingForRotation(geom.rotation);

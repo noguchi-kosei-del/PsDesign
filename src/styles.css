@@ -908,7 +908,6 @@ button.overlay-align-btn-primary:hover:not(:disabled) svg {
 }
 
 button#confirm-modal-cancel:hover:not(:disabled),
-button#resync-cancel:hover:not(:disabled),
 button#page-jump-cancel:hover:not(:disabled),
 button#guides-apply-cancel:hover:not(:disabled),
 button#key-capture-cancel:hover:not(:disabled),
@@ -925,7 +924,6 @@ button.page-jump-btn-danger:hover:not(:disabled) {
 }
 
 button#confirm-modal-cancel:hover:not(:disabled) svg,
-button#resync-cancel:hover:not(:disabled) svg,
 button#page-jump-cancel:hover:not(:disabled) svg,
 button#guides-apply-cancel:hover:not(:disabled) svg,
 button#key-capture-cancel:hover:not(:disabled) svg,
@@ -5487,6 +5485,13 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .font-panel-floating .style-palette {
   max-height: 300px;
 }
+.font-source-sidebar-placeholder {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 auto;
+  min-height: 0;
+  pointer-events: none;
+}
 .editor-tabs-section > .editor-tab-panel + .editor-tab-panel {
   margin-top: 4px;
   padding-top: 4px;
@@ -6680,6 +6685,432 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .progress-fill.indeterminate {
   width: 100%;
 }
+
+/* OPUS constellation progress — 画像スキャン / 自動配置 専用 */
+#progress-modal.opus-progress-active {
+  --opus-brass: #d4a55f;
+  --opus-brass-pale: #f4e4c5;
+  --opus-brass-glow: rgba(212, 165, 95, 0.55);
+  --opus-sky-near: #050811;
+  --opus-sky-far: #020306;
+  --opus-toolbar-height: 37px;
+  top: var(--opus-toolbar-height);
+  bottom: 0;
+  left: 0;
+  right: 0;
+  align-items: stretch;
+  justify-content: stretch;
+}
+#progress-modal.opus-progress-active::before {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+#progress-modal.opus-progress-active .progress-bg {
+  background: rgba(2, 3, 6, 0.76);
+}
+#progress-modal.opus-progress-active .progress-card {
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  min-width: 0;
+  padding: 0;
+  gap: 0;
+  align-items: stretch;
+  justify-content: stretch;
+  transform: none;
+}
+#progress-modal.opus-progress-active .progress-icon {
+  display: none;
+}
+#progress-modal.opus-progress-active .progress-title {
+  display: none;
+}
+#progress-modal.opus-progress-active .progress-detail {
+  display: none;
+}
+#progress-modal.opus-progress-active .progress-loading-text {
+  display: none;
+}
+#progress-modal.opus-progress-active .progress-track {
+  display: none;
+}
+#progress-modal.opus-progress-active .progress-fill {
+  background: linear-gradient(90deg, rgba(190, 139, 67, 0.82), var(--opus-brass-pale));
+  box-shadow:
+    0 0 12px rgba(212, 165, 95, 0.68),
+    0 0 30px rgba(212, 165, 95, 0.32);
+  border-radius: 999px;
+}
+#progress-modal.opus-progress-active .progress-fill.indeterminate {
+  width: var(--opus-progress-pct, 0%);
+  min-width: 18px;
+}
+#progress-modal.opus-progress-active .progress-fill::before {
+  right: -9px;
+  width: 18px;
+  height: 18px;
+  background: radial-gradient(circle, rgba(255, 255, 255, 0.86), rgba(212, 165, 95, 0.76) 40%, rgba(212, 165, 95, 0) 76%);
+  box-shadow: 0 0 22px rgba(244, 228, 197, 0.82), 0 0 48px rgba(212, 165, 95, 0.62);
+}
+#progress-modal.opus-progress-active .progress-fill::after {
+  right: -28px;
+  width: 56px;
+  height: 56px;
+  background: radial-gradient(circle, rgba(244, 228, 197, 0.72), rgba(212, 165, 95, 0.28) 44%, rgba(212, 165, 95, 0) 72%);
+}
+.opus-progress-stage {
+  display: none;
+}
+#progress-modal.opus-progress-active .opus-progress-stage {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 0;
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  border: none;
+  border-radius: 0;
+  background:
+    radial-gradient(ellipse 45% 55% at 35% 40%, rgba(35, 22, 70, 0.50) 0%, transparent 65%),
+    radial-gradient(ellipse 38% 48% at 72% 65%, rgba(60, 25, 85, 0.42) 0%, transparent 65%),
+    radial-gradient(ellipse 30% 40% at 50% 30%, rgba(25, 30, 90, 0.30) 0%, transparent 60%),
+    radial-gradient(ellipse at 50% 50%, var(--opus-sky-near) 0%, var(--opus-sky-far) 80%);
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.04) inset,
+    0 28px 70px rgba(0, 0, 0, 0.58);
+}
+.opus-progress-stage::before,
+.opus-progress-stage::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.opus-progress-stage::before {
+  z-index: 0;
+  background-image: radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.026) 1px, transparent 0);
+  background-size: 30px 30px;
+}
+.opus-progress-stage::after {
+  z-index: 12;
+  opacity: 0;
+  background:
+    linear-gradient(90deg, transparent 0, rgba(244, 228, 197, 0.22) 48%, rgba(244, 228, 197, 0.36) 50%, rgba(244, 228, 197, 0.22) 52%, transparent 100%),
+    rgba(10, 10, 11, 0.74);
+  transform: scaleX(0);
+  transform-origin: 50% 50%;
+}
+.opus-progress-stage.is-final::after {
+  animation: opus-final-curtain 1.1s cubic-bezier(0.55, 0.05, 0.4, 1) forwards;
+}
+.opus-cosmic-clouds,
+.opus-milky-glow,
+.opus-bg-stars,
+.opus-constellation-svg,
+.opus-star-field,
+.opus-top-banner {
+  position: absolute;
+  inset: 0;
+}
+.opus-cosmic-clouds {
+  z-index: 1;
+  opacity: 0.68;
+  pointer-events: none;
+}
+.opus-cloud,
+.opus-cloud-bulge {
+  position: absolute;
+  pointer-events: none;
+  mix-blend-mode: screen;
+}
+.opus-cloud {
+  filter: blur(34px);
+}
+.opus-cloud-purple {
+  width: 90%;
+  height: 90%;
+  top: -16%;
+  left: 18%;
+  background: radial-gradient(ellipse 55% 40% at center, rgba(155, 95, 220, 0.32) 0%, rgba(115, 65, 185, 0.18) 32%, rgba(85, 45, 145, 0.08) 56%, transparent 78%);
+  transform: rotate(-18deg);
+  animation: opus-cloud-drift-1 70s ease-in-out infinite;
+}
+.opus-cloud-pink {
+  width: 75%;
+  height: 70%;
+  top: 12%;
+  left: 8%;
+  background: radial-gradient(ellipse 50% 45% at center, rgba(235, 140, 195, 0.24) 0%, rgba(205, 105, 165, 0.14) 42%, transparent 78%);
+  transform: rotate(-26deg);
+  animation: opus-cloud-drift-2 88s ease-in-out infinite;
+}
+.opus-cloud-teal {
+  width: 65%;
+  height: 75%;
+  top: 0;
+  left: -12%;
+  background: radial-gradient(ellipse 50% 50% at center, rgba(95, 200, 230, 0.20) 0%, rgba(75, 165, 210, 0.10) 46%, transparent 80%);
+  transform: rotate(-20deg);
+  animation: opus-cloud-drift-3 96s ease-in-out infinite;
+}
+.opus-cloud-bulge {
+  filter: blur(20px);
+}
+.opus-bulge-1 {
+  width: 210px;
+  height: 210px;
+  top: 26%;
+  left: 42%;
+  background: radial-gradient(circle, rgba(255, 230, 195, 0.42) 0%, rgba(255, 195, 165, 0.20) 30%, rgba(220, 145, 175, 0.10) 60%, transparent 85%);
+  animation: opus-cloud-bulge 64s ease-in-out infinite;
+}
+.opus-bulge-2 {
+  width: 150px;
+  height: 150px;
+  top: 54%;
+  left: 21%;
+  background: radial-gradient(circle, rgba(220, 175, 255, 0.32) 0%, rgba(175, 135, 230, 0.16) 40%, transparent 80%);
+  animation: opus-cloud-bulge 74s ease-in-out infinite reverse;
+}
+.opus-milky-glow {
+  z-index: 2;
+  opacity: 0;
+  pointer-events: none;
+  background:
+    linear-gradient(135deg, transparent 18%, rgba(75, 105, 175, 0.10) 30%, rgba(120, 155, 220, 0.30) 42%, rgba(165, 195, 240, 0.42) 50%, rgba(120, 155, 220, 0.30) 58%, rgba(75, 105, 175, 0.10) 70%, transparent 82%),
+    linear-gradient(135deg, transparent 30%, rgba(180, 130, 220, 0.14) 50%, transparent 70%);
+  filter: blur(24px);
+  mix-blend-mode: screen;
+  transform: translateY(3%);
+  transition: opacity 0.8s ease;
+}
+.opus-bg-stars {
+  z-index: 3;
+  pointer-events: none;
+}
+.opus-bg-star {
+  position: absolute;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+  transition: opacity 0.9s ease;
+}
+.opus-bg-star.is-pending {
+  opacity: 0 !important;
+}
+.opus-constellation-svg {
+  z-index: 5;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.opus-star-field {
+  z-index: 6;
+  pointer-events: none;
+}
+.opus-star {
+  position: absolute;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--opus-brass);
+  box-shadow: 0 0 8px var(--opus-brass-glow);
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0);
+  animation:
+    opus-star-appear 0.7s cubic-bezier(0.16, 1, 0.3, 1) forwards,
+    opus-star-twinkle var(--twinkle-dur, 5s) ease-in-out 0.8s infinite;
+}
+.opus-star.is-key {
+  width: 6px;
+  height: 6px;
+}
+.opus-star.is-key::before,
+.opus-star.is-key::after {
+  content: "";
+  position: absolute;
+  background: var(--opus-brass-pale);
+  opacity: 0.42;
+}
+.opus-star.is-key::before {
+  width: 18px;
+  height: 1px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.opus-star.is-key::after {
+  width: 1px;
+  height: 18px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.opus-connection {
+  stroke: var(--opus-brass);
+  stroke-width: 1;
+  fill: none;
+  opacity: 0;
+  filter: drop-shadow(0 0 2px var(--opus-brass-glow));
+  animation: opus-line-draw 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.opus-detection-dot {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border: 1.5px solid var(--opus-brass);
+  border-radius: 50%;
+  opacity: 0;
+  transform: translate(-50%, -50%) scale(0.5);
+  animation: opus-detection-pulse 1.2s ease-out forwards;
+}
+.opus-constellation-pulse {
+  width: 7px;
+  height: 7px;
+  border-color: var(--opus-brass-pale);
+  animation-duration: 1.4s;
+}
+.opus-shooting-star {
+  position: absolute;
+  z-index: 7;
+  height: 2px;
+  border-radius: 1px;
+  pointer-events: none;
+  opacity: 0;
+  transform-origin: 0 50%;
+  background: linear-gradient(90deg, transparent 0%, rgba(255, 245, 220, 0.18) 25%, rgba(255, 250, 230, 0.78) 62%, rgba(255, 240, 200, 1) 88%, transparent 100%);
+  filter: drop-shadow(0 0 7px rgba(255, 245, 220, 0.82));
+  animation: opus-shooting-fly 2.2s linear forwards;
+}
+.opus-top-banner {
+  z-index: 8;
+  bottom: auto;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  padding: 22px 28px;
+  pointer-events: none;
+}
+.opus-chapter {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  text-shadow: 0 4px 14px rgba(0, 0, 0, 0.72);
+}
+.opus-chapter-num {
+  font-family: "Times New Roman", "Noto Serif JP", serif;
+  font-style: italic;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.32em;
+  color: var(--opus-brass);
+  text-transform: uppercase;
+  text-shadow: 0 0 10px var(--opus-brass-glow);
+}
+.opus-chapter-name {
+  font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
+  font-size: 18px;
+  font-weight: 700;
+  color: #fff;
+}
+.opus-chapter-name-en {
+  font-family: "Times New Roman", "Noto Serif JP", serif;
+  font-style: italic;
+  font-size: 10px;
+  letter-spacing: 0.18em;
+  color: rgba(212, 212, 212, 0.72);
+  text-transform: uppercase;
+}
+.opus-counter {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-family: "Times New Roman", "Noto Serif JP", serif;
+  line-height: 1;
+  text-shadow: 0 4px 14px rgba(0, 0, 0, 0.72);
+}
+.opus-counter-current {
+  font-size: 36px;
+  font-weight: 500;
+  color: var(--opus-brass-pale);
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 12px rgba(244, 228, 197, 0.36);
+}
+.opus-counter-sep,
+.opus-counter-total {
+  font-size: 18px;
+  color: rgba(212, 165, 95, 0.68);
+  font-variant-numeric: tabular-nums;
+}
+
+@keyframes opus-cloud-drift-1 {
+  0%, 100% { transform: rotate(-18deg) translate(0, 0); }
+  50% { transform: rotate(-18deg) translate(20px, -12px); }
+}
+@keyframes opus-cloud-drift-2 {
+  0%, 100% { transform: rotate(-26deg) translate(0, 0); }
+  50% { transform: rotate(-26deg) translate(-18px, 22px); }
+}
+@keyframes opus-cloud-drift-3 {
+  0%, 100% { transform: rotate(-20deg) translate(0, 0); }
+  50% { transform: rotate(-20deg) translate(25px, 15px); }
+}
+@keyframes opus-cloud-bulge {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(-10px, 10px) scale(1.08); }
+}
+@keyframes opus-bg-star-twinkle {
+  0%, 100% { opacity: 0.35; }
+  50% { opacity: 1; }
+}
+@keyframes opus-star-appear {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0); box-shadow: 0 0 0 var(--opus-brass-glow); }
+  60% { opacity: 1; transform: translate(-50%, -50%) scale(1.8); box-shadow: 0 0 16px var(--opus-brass-pale); }
+  100% { opacity: 0.85; transform: translate(-50%, -50%) scale(1); box-shadow: 0 0 8px var(--opus-brass-glow); }
+}
+@keyframes opus-star-twinkle {
+  0%, 100% { opacity: 0.5; box-shadow: 0 0 6px var(--opus-brass-glow); }
+  50% { opacity: 1; box-shadow: 0 0 12px var(--opus-brass-pale); }
+}
+@keyframes opus-line-draw {
+  0% { opacity: 0; stroke-dashoffset: var(--len, 100); }
+  30% { opacity: 0.7; }
+  100% { opacity: 0.55; stroke-dashoffset: 0; }
+}
+@keyframes opus-detection-pulse {
+  0% { opacity: 0; transform: translate(-50%, -50%) scale(0.5); border-width: 2px; }
+  30% { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+  100% { opacity: 0; transform: translate(-50%, -50%) scale(2.5); border-width: 0.5px; }
+}
+@keyframes opus-shooting-fly {
+  0% { opacity: 0; width: 0; transform: rotate(var(--angle, 30deg)) translateX(0); }
+  10% { opacity: 0.85; width: 70px; }
+  45% { opacity: 1; width: 150px; }
+  80% { opacity: 0.7; width: 120px; }
+  100% { opacity: 0; width: 40px; transform: rotate(var(--angle, 30deg)) translateX(var(--travel, 620px)); }
+}
+@keyframes opus-final-curtain {
+  0% { opacity: 0; transform: scaleX(0); }
+  34% { opacity: 1; transform: scaleX(1); }
+  70% { opacity: 1; transform: scaleX(1); }
+  100% { opacity: 0; transform: scaleX(1); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .opus-cloud-purple,
+  .opus-cloud-pink,
+  .opus-cloud-teal,
+  .opus-cloud-bulge,
+  .opus-star,
+  .opus-connection,
+  .opus-detection-dot,
+  .opus-shooting-star,
+  .opus-bg-star {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
 .toast-container {
   position: fixed;
   top: 56px;
@@ -7050,6 +7481,14 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   border-radius: 4px;
   min-height: 0;
 }
+.shortcut-section-title {
+  padding: 7px 12px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
 .shortcut-item {
   display: flex;
   justify-content: space-between;
@@ -7066,6 +7505,9 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   color: var(--text);
 }
 .shortcut-key-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   min-width: 140px;
   padding: 5px 10px;
   background: var(--bg);
@@ -7080,6 +7522,15 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .shortcut-key-btn:hover {
   border-color: var(--accent);
   color: var(--accent);
+}
+.shortcut-key-static {
+  cursor: default;
+  background: var(--panel);
+  color: var(--text-muted);
+}
+.shortcut-key-static:hover {
+  border-color: var(--border);
+  color: var(--text-muted);
 }
 /* デフォルト値（新規テキストの初期値）入力欄 */
 .settings-defaults-list {

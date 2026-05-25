@@ -24,8 +24,6 @@ import {
   deleteTxtBlockByIndex,
   getActivePageNumber,
   getTxtPageCount,
-  ensureTxtExtension,
-  pickTxtSavePath,
   syncNewInputAvailabilityFor,
 } from "../txt-source.js";
 import { notifyDialog, promptDialog, toast } from "../ui-feedback.js";
@@ -484,48 +482,6 @@ function syncFromState() {
 async function writeTxtFile(content, defaultName) {
   const { invoke } = await import("@tauri-apps/api/core");
   return await invoke("save_editor_text_to_script_output", { content, defaultName });
-}
-
-async function handleSave() {
-  await handleSaveAuto();
-  return;
-  const source = getTxtSource();
-  const path = getTxtFilePath();
-  if (!source || !path) return;
-  try {
-    await writeTxtFile(path, source.content);
-    setTxtDirty(false);
-    toast("テキストを保存しました", { kind: "success", duration: 1800 });
-  } catch (e) {
-    console.error(e);
-    toast(`保存失敗: ${e?.message ?? e}`, { kind: "error" });
-  }
-}
-
-async function handleSaveAs() {
-  await handleSaveAuto();
-  return;
-  const source = getTxtSource();
-  if (!source) return;
-  let outputPath;
-  try {
-    outputPath = await pickTxtSavePath(source.name);
-  } catch (e) {
-    console.error(e);
-    toast(`保存先選択失敗: ${e?.message ?? e}`, { kind: "error" });
-    return;
-  }
-  if (!outputPath) return;
-  outputPath = ensureTxtExtension(outputPath);
-  try {
-    await writeTxtFile(outputPath, source.content);
-    setTxtFilePath(outputPath);
-    setTxtDirty(false);
-    toast("テキストを保存しました", { kind: "success", duration: 1800 });
-  } catch (e) {
-    console.error(e);
-    toast(`保存失敗: ${e?.message ?? e}`, { kind: "error" });
-  }
 }
 
 async function launchProgenWithText(savedPath) {

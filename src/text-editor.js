@@ -12,7 +12,6 @@ import {
   getSelectedLayers,
   getStrokeColor,
   getStrokeWidthPx,
-  getLeadingPct,
   onCurrentFontChange,
   onFillColorChange,
   removeNewLayer,
@@ -26,7 +25,6 @@ import {
   setSelectedLayers,
   setStrokeColor,
   setStrokeWidthPx,
-  getTextSize,
   setTextSize,
   toDisplaySizePt,
   toggleLayerSelected,
@@ -589,7 +587,6 @@ function syncBoldToggle(value) {
     btn.setAttribute("aria-pressed", value === true ? "true" : "false");
   }
 }
-export { syncBoldToggle };
 
 function syncItalicToggle(value) {
   const btn = document.getElementById("italic-toggle-btn");
@@ -602,7 +599,6 @@ function syncItalicToggle(value) {
     btn.setAttribute("aria-pressed", value === true ? "true" : "false");
   }
 }
-export { syncItalicToggle };
 
 // ========== フォント検索コンボボックス ==========
 // editor-tabs-section の上に配置されたインストール済み全フォント検索 UI。
@@ -743,6 +739,11 @@ let layerFontPanel = null;
 let layerFontPanelAnchor = null;
 let layerFontPanelBound = false;
 let layerFontPanelPlaceholder = null;
+let layerFontPanelSidebarPlaceholder = null;
+let layerFontSourceNodes = [];
+let layerFontPanelSelectionRef = null;
+let layerFontPanelSelectionSyncRaf = 0;
+let layerFontPanelLastAnchorRect = null;
 let layerFontLabelWasHidden = null;
 let layerSizePanel = null;
 let layerSizePanelAnchor = null;
@@ -752,19 +753,126 @@ let layerStrokePanelAnchor = null;
 let layerStrokePanelPlaceholder = null;
 
 function fontSourceNodes() {
-  const tabs = document.querySelector(".font-source-tabs");
-  const panels = Array.from(document.querySelectorAll(".font-source-panel"));
+  const editor = document.querySelector(".side-panel .editor");
+  const tabs = editor?.querySelector(":scope > .font-source-tabs");
+  const panels = editor ? Array.from(editor.querySelectorAll(":scope > .font-source-panel")) : [];
   return tabs && panels.length ? [tabs, ...panels] : [];
+}
+
+function scrubFontSourcePlaceholder(root) {
+  root.removeAttribute("id");
+  root.removeAttribute("for");
+  root.querySelectorAll("[id]").forEach((el) => el.removeAttribute("id"));
+  root.querySelectorAll("[for]").forEach((el) => el.removeAttribute("for"));
+  root.querySelectorAll("input, button, select, textarea, a").forEach((el) => {
+    el.setAttribute("tabindex", "-1");
+  });
+  root.querySelectorAll(".font-combobox-list").forEach((el) => {
+    el.hidden = true;
+  });
+}
+
+function createFontSourceSidebarPlaceholder(nodes) {
+  const placeholder = document.createElement("div");
+  placeholder.className = "font-source-sidebar-placeholder";
+  placeholder.setAttribute("aria-hidden", "true");
+  placeholder.inert = true;
+  for (const node of nodes) {
+    const clone = node.cloneNode(true);
+    scrubFontSourcePlaceholder(clone);
+    placeholder.appendChild(clone);
+  }
+  return placeholder;
+}
+
+function currentSelectionRef() {
+  const selections = getSelectedLayers();
+  if (selections.length !== 1) return null;
+  const sel = selections[0];
+  return { pageIndex: sel.pageIndex, layerId: sel.layerId };
+}
+
+function sameSelectionRef(a, b) {
+  return !!a && !!b && a.pageIndex === b.pageIndex && a.layerId === b.layerId;
+}
+
+function cssEscape(value) {
+  if (typeof CSS !== "undefined" && typeof CSS.escape === "function") return CSS.escape(String(value));
+  return String(value).replace(/["\\]/g, "\\$&");
+}
+
+function resolveLayerFontAnchorElement(ref = layerFontPanelSelectionRef) {
+  if (!ref) return null;
+  const layerId = ref.layerId;
+  const selector = typeof layerId === "string"
+    ? `.layer-box-new[data-temp-id="${cssEscape(layerId)}"]`
+    : `.layer-box-existing[data-layer-id="${cssEscape(layerId)}"]`;
+  const boxes = Array.from(document.querySelectorAll(selector));
+  const box = boxes.find((el) => el.classList.contains("selected")) ?? boxes[0] ?? null;
+  if (!box) return null;
+  const candidates = [
+    box.querySelector(".layer-size-badge-font"),
+    box.querySelector(".layer-size-badge"),
+    box,
+  ].filter(Boolean);
+  return candidates.find((el) => usableRectSnapshot(el.getBoundingClientRect?.())) ?? box;
+}
+
+function usableRectSnapshot(rect) {
+  if (!rect) return null;
+  const values = [rect.left, rect.top, rect.right, rect.bottom, rect.width, rect.height];
+  if (!values.every(Number.isFinite)) return null;
+  if (rect.width <= 0 || rect.height <= 0) return null;
+  return {
+    left: rect.left,
+    top: rect.top,
+    right: rect.right,
+    bottom: rect.bottom,
+    width: rect.width,
+    height: rect.height,
+  };
+}
+
+function createLayerFontPanelAnchor(ref, fallbackRect) {
+  return {
+    getBoundingClientRect: () => {
+      const el = resolveLayerFontAnchorElement(ref);
+      const rect = usableRectSnapshot(el?.getBoundingClientRect?.());
+      if (rect) {
+        layerFontPanelLastAnchorRect = rect;
+        return rect;
+      }
+      return fallbackRect ?? layerFontPanelLastAnchorRect;
+    },
+    contains: (target) => {
+      const el = resolveLayerFontAnchorElement(ref);
+      return !!el?.contains?.(target);
+    },
+  };
+}
+
+function fontForSelectionRef(ref) {
+  if (!ref) return "";
+  const resolved = resolveLayerRef(ref);
+  if (!resolved) return "";
+  if (resolved.kind === "existing") {
+    const edit = getEdit(resolved.page.path, resolved.layer.id) ?? {};
+    return edit.fontPostScriptName ?? resolved.layer.font ?? "";
+  }
+  return resolved.newLayer.fontPostScriptName ?? "";
 }
 
 function restoreFontSourceNodes() {
   if (!layerFontPanelPlaceholder?.parentNode) return;
-  const nodes = fontSourceNodes();
+  const nodes = layerFontSourceNodes;
+  layerFontPanelSidebarPlaceholder?.remove();
+  layerFontPanelSidebarPlaceholder = null;
   for (const node of nodes) {
     layerFontPanelPlaceholder.parentNode.insertBefore(node, layerFontPanelPlaceholder);
   }
   layerFontPanelPlaceholder.remove();
   layerFontPanelPlaceholder = null;
+  layerFontSourceNodes = [];
   const label = document.querySelector(".font-combobox-label");
   if (label && layerFontLabelWasHidden != null) {
     label.hidden = layerFontLabelWasHidden;
@@ -812,6 +920,8 @@ function closeLayerFontPanel() {
   if (layerFontPanel) layerFontPanel.remove();
   layerFontPanel = null;
   layerFontPanelAnchor = null;
+  layerFontPanelSelectionRef = null;
+  layerFontPanelLastAnchorRect = null;
 }
 
 function positionLayerFontPanel() {
@@ -823,7 +933,9 @@ function positionLayerFontPanel() {
   const viewportW = window.innerWidth;
   const viewportH = window.innerHeight;
   panel.style.maxHeight = `${Math.max(160, viewportH - margin * 2)}px`;
-  const r = anchor.getBoundingClientRect();
+  const r = usableRectSnapshot(anchor.getBoundingClientRect()) ?? layerFontPanelLastAnchorRect;
+  if (!r) return;
+  layerFontPanelLastAnchorRect = r;
   const measured = panel.getBoundingClientRect();
   const panelW = Math.max(250, Math.min(320, measured.width || panel.offsetWidth || 280));
   const panelH = Math.max(180, measured.height || panel.offsetHeight || 320);
@@ -870,6 +982,37 @@ function ensureLayerFontPanelGlobalHandlers() {
   };
   window.addEventListener("resize", repos);
   window.addEventListener("scroll", repos, true);
+  window.addEventListener("psdesign:selection-changed", () => {
+    if (!layerFontPanel || layerFontPanelSelectionSyncRaf) return;
+    layerFontPanelSelectionSyncRaf = requestAnimationFrame(() => {
+      layerFontPanelSelectionSyncRaf = 0;
+      syncLayerFontPanelToSelection();
+    });
+  });
+}
+
+function syncLayerFontPanelToSelection() {
+  if (!layerFontPanel) return;
+  const ref = currentSelectionRef();
+  if (!ref) {
+    closeLayerFontPanel();
+    return;
+  }
+  if (!sameSelectionRef(ref, layerFontPanelSelectionRef)) {
+    layerFontPanelSelectionRef = ref;
+    const anchorEl = resolveLayerFontAnchorElement(ref);
+    const fallbackRect = usableRectSnapshot(anchorEl?.getBoundingClientRect?.()) ?? layerFontPanelLastAnchorRect;
+    layerFontPanelAnchor = createLayerFontPanelAnchor(ref, fallbackRect);
+    closeCombo();
+  }
+  const fontPs = fontForSelectionRef(ref);
+  if (fontPs) {
+    setCurrentFont(fontPs);
+    ensureFontLoaded(fontPs);
+    rebuildFontOptions(fontPs, { force: true });
+  }
+  positionLayerFontPanel();
+  requestAnimationFrame(positionLayerFontPanel);
 }
 
 function positionFloatingPanel(panel, anchor, widthFallback = 280, heightFallback = 140) {
@@ -921,8 +1064,17 @@ export function openLayerFontPanel(anchor, currentPs = "") {
   document.body.appendChild(panel);
   layerFontPanel = panel;
   const originalParent = nodes[0].parentNode;
+  layerFontPanelSelectionRef = currentSelectionRef();
+  const fallbackRect = usableRectSnapshot(anchor.getBoundingClientRect?.());
+  layerFontPanelLastAnchorRect = fallbackRect;
+  if (layerFontPanelSelectionRef) {
+    layerFontPanelAnchor = createLayerFontPanelAnchor(layerFontPanelSelectionRef, fallbackRect);
+  }
+  layerFontSourceNodes = nodes;
   layerFontPanelPlaceholder = document.createComment("font-source-home");
   originalParent.insertBefore(layerFontPanelPlaceholder, nodes[0]);
+  layerFontPanelSidebarPlaceholder = createFontSourceSidebarPlaceholder(nodes);
+  originalParent.insertBefore(layerFontPanelSidebarPlaceholder, layerFontPanelPlaceholder);
   for (const node of nodes) panel.appendChild(node);
   const label = panel.querySelector(".font-combobox-label");
   if (label) {
@@ -1934,8 +2086,6 @@ function computeCommonBold(selections) {
   return common ?? null;
 }
 
-export { computeCommonBold };
-
 function computeCommonItalic(selections) {
   let common;
   for (const sel of selections) {
@@ -1953,8 +2103,6 @@ function computeCommonItalic(selections) {
   }
   return common ?? null;
 }
-
-export { computeCommonItalic };
 
 // 文字色を選択中の全レイヤーに書き込む。
 function commitFillField(color) {
@@ -1996,10 +2144,6 @@ function commitField(field, value) {
   }
   rebuildLayerList();
   refreshAllOverlays();
-}
-
-export function commitSelectedLayerField(field, value) {
-  commitField(field, value);
 }
 
 export function hasSelection() {

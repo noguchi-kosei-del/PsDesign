@@ -148,22 +148,40 @@ export const DEFAULT_SETTINGS = {
     cloudShapeFontPostScriptName: "DFGMaruGothic-Md", // 中丸ゴシック (環境依存。空ならフォント差し替えしない)
   },
   shortcuts: {
-    save:       { key: "s",          modifiers: ["ctrl"],          description: "上書き保存" },
-    saveAs:     { key: "s",          modifiers: ["ctrl", "shift"], description: "別名で保存" },
-    pagePrev:   { key: "ArrowLeft",  modifiers: [],                description: "前ページ" },
-    pageNext:   { key: "ArrowRight", modifiers: [],                description: "次ページ" },
-    pageFirst:  { key: "ArrowLeft",  modifiers: ["ctrl"],          description: "最初のページ" },
-    pageLast:   { key: "ArrowRight", modifiers: ["ctrl"],          description: "最後のページ" },
-    pageJump:   { key: "j",          modifiers: ["ctrl"],          description: "ページジャンプ" },
+    save:       { key: "s",          modifiers: ["ctrl"],          description: "保存" },
+    saveAs:     { key: "s",          modifiers: ["ctrl", "shift"], description: "保存（互換）" },
+    pagePrev:   { key: "ArrowLeft",  modifiers: [],                description: "前ページ（アクティブペイン）" },
+    pageNext:   { key: "ArrowRight", modifiers: [],                description: "次ページ（アクティブペイン）" },
+    pageFirst:  { key: "ArrowLeft",  modifiers: ["ctrl"],          description: "最初のページ（アクティブペイン）" },
+    pageLast:   { key: "ArrowRight", modifiers: ["ctrl"],          description: "最後のページ（アクティブペイン）" },
+    pageJump:   { key: "j",          modifiers: ["ctrl"],          description: "ページジャンプ（アクティブペイン）" },
     toolSelect: { key: "v",          modifiers: [],                description: "選択ツール" },
-    zoomIn:     { key: "=",          modifiers: ["ctrl"],          description: "ズームイン" },
-    zoomOut:    { key: "-",          modifiers: ["ctrl"],          description: "ズームアウト" },
-    zoomReset:  { key: "0",          modifiers: ["ctrl"],          description: "ズームを画面フィットに戻す" },
-    sizeUp:     { key: "]",          modifiers: [],                description: "文字サイズを大きく" },
-    sizeDown:   { key: "[",          modifiers: [],                description: "文字サイズを小さく" },
+    zoomIn:     { key: "=",          modifiers: ["ctrl"],          description: "ズームイン（アクティブペイン）" },
+    zoomOut:    { key: "-",          modifiers: ["ctrl"],          description: "ズームアウト（アクティブペイン）" },
+    zoomReset:  { key: "0",          modifiers: ["ctrl"],          description: "ズームを画面フィットに戻す（アクティブペイン）" },
+    sizeUp:     { key: "]",          modifiers: [],                description: "文字サイズを大きく（選択/既定）" },
+    sizeDown:   { key: "[",          modifiers: [],                description: "文字サイズを小さく（選択/既定）" },
     toggleRulers: { key: "r",        modifiers: ["ctrl"],          description: "定規の表示切替" },
   },
 };
+
+export const FIXED_SHORTCUTS = [
+  { id: "undo", shortcut: "Ctrl + Z", description: "元に戻す" },
+  { id: "redo", shortcut: "Ctrl + Y / Ctrl + Shift + Z", description: "やり直し" },
+  { id: "clearAllEdits", shortcut: "Ctrl + Delete", description: "編集をすべて削除" },
+  { id: "selectAllTextFrames", shortcut: "Ctrl + A", description: "現在ページのテキストをすべて選択" },
+  { id: "deleteSelection", shortcut: "Delete / Backspace", description: "選択中のテキストを削除" },
+  { id: "nudgeLayer", shortcut: "← / ↑ / → / ↓", description: "選択レイヤーを移動" },
+  { id: "nudgeLayerLarge", shortcut: "Shift + ← / ↑ / → / ↓", description: "選択レイヤーを大きく移動" },
+  { id: "sizeByArrow", shortcut: "Ctrl + ↑ / Ctrl + ↓", description: "選択文字・レイヤーのサイズ変更" },
+  { id: "sizeByArrowLarge", shortcut: "Ctrl + Shift + ↑ / Ctrl + Shift + ↓", description: "選択文字・レイヤーのサイズを大きく変更" },
+  { id: "rotateHandles", shortcut: "Ctrl + T", description: "回転ハンドルを表示" },
+  { id: "cycleTxtBlock", shortcut: "Alt + ↑ / Alt + ↓", description: "原稿テキストの選択を切替" },
+  { id: "temporaryPan", shortcut: "Space 長押し", description: "パンツールに一時切替" },
+  { id: "toggleTextProperties", shortcut: "Ctrl + Shift", description: "テキストプロパティの表示切替" },
+  { id: "viewerMode", shortcut: "Esc", description: "閲覧モードの表示/終了" },
+  { id: "commitTextInput", shortcut: "Ctrl + Enter", description: "テキスト入力を配置 / 編集確定" },
+];
 
 let settings = null;
 const listeners = new Set();
@@ -343,6 +361,10 @@ export function onSettingsChange(fn) {
 export function getAllShortcuts() {
   if (!settings) load();
   return settings.shortcuts;
+}
+
+export function getFixedShortcuts() {
+  return FIXED_SHORTCUTS.map((item) => ({ ...item }));
 }
 
 export function getShortcut(id) {

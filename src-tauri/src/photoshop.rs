@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -209,7 +209,7 @@ fn progress_path_for(ts: u128) -> PathBuf {
     path
 }
 
-fn path_for_jsx(p: &PathBuf) -> String {
+fn path_for_jsx(p: &Path) -> String {
     p.to_string_lossy().replace('\\', "/")
 }
 
@@ -263,10 +263,8 @@ pub fn find_photoshop_executable() -> Option<PathBuf> {
             if let Ok(app_dir) = path {
                 let mut full = PathBuf::from(app_dir);
                 full.push("Photoshop.exe");
-                if full.exists() {
-                    if best.as_ref().map_or(true, |(v, _)| version > *v) {
-                        best = Some((version, full));
-                    }
+                if full.exists() && best.as_ref().map_or(true, |(v, _)| version > *v) {
+                    best = Some((version, full));
                 }
             }
         }

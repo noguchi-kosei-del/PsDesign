@@ -90,6 +90,7 @@ fn is_pdf_path(path: &str) -> bool {
 ///   psd_text_bboxes: PSD 上のテキスト bbox 一覧 (PSD px 座標)
 ///   psd_width / psd_height: PSD の元寸法 (px)
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn compute_alignment(
     app: AppHandle,
     reference_path: String,
@@ -201,6 +202,16 @@ pub async fn compute_alignment(
         let mut best_ox: i32 = 0;
         let mut best_oy: i32 = 0;
         let mut tested = 0u32;
+        let psd_view = GrayImageView {
+            data: &psd_gray,
+            width: psd_w,
+            height: psd_h,
+        };
+        let ref_view = GrayImageView {
+            data: &ref_gray,
+            width: ref_w,
+            height: ref_h,
+        };
 
         for &s in &scale_steps {
             if !s.is_finite() || s <= 0.0 { continue; }
@@ -208,7 +219,7 @@ pub async fn compute_alignment(
             while ox <= max_offset_x {
                 let mut oy = -max_offset_y;
                 while oy <= max_offset_y {
-                    let d = compute_diff(&psd_gray, psd_w, psd_h, &ref_gray, ref_w, ref_h, s, ox, oy);
+                    let d = compute_diff(psd_view, ref_view, s, ox, oy);
                     tested += 1;
                     if d < best_diff {
                         best_diff = d;
@@ -233,7 +244,7 @@ pub async fn compute_alignment(
             if !ds.is_finite() || ds <= 0.0 { continue; }
             for ox in (coarse_ox - refine_range)..=(coarse_ox + refine_range) {
                 for oy in (coarse_oy - refine_range)..=(coarse_oy + refine_range) {
-                    let d = compute_diff(&psd_gray, psd_w, psd_h, &ref_gray, ref_w, ref_h, ds, ox, oy);
+                    let d = compute_diff(psd_view, ref_view, ds, ox, oy);
                     tested += 1;
                     if d < best_diff {
                         best_diff = d;
@@ -348,7 +359,7 @@ pub async fn compute_alignment(
         );
     }
 
-    return Ok(Alignment {
+    Ok(Alignment {
         scale,
         offset_x,
         offset_y,
@@ -358,7 +369,7 @@ pub async fn compute_alignment(
         ref_bbox: [0.0, 0.0, ref_w_f, ref_h_f],
         psd_full_size: [psd_w_f, psd_h_f],
         ref_full_size: [ref_w_f, ref_h_f],
-    });
+    })
 }
 /// 画像を grayscale 化 + テキスト bbox を mask (= 平均輝度に置換) して u8 配列を返す。
 /// テキスト位置を中性値で埋めることで、テキストの有無による差分を抑える。
@@ -398,18 +409,27 @@ fn make_masked_grayscale(
 
 /// PSD ダウンサンプル画像を見本ダウンサンプル画像座標系にマップして、
 /// オーバーラップ領域の絶対差分の平均を返す。0 が完全一致。
+#[derive(Clone, Copy)]
+struct GrayImageView<'a> {
+    data: &'a [u8],
+    width: u32,
+    height: u32,
+}
+
 fn compute_diff(
-    psd: &[u8], psd_w: u32, psd_h: u32,
-    refr: &[u8], ref_w: u32, ref_h: u32,
-    scale: f64, ox: i32, oy: i32,
+    psd: GrayImageView<'_>,
+    refr: GrayImageView<'_>,
+    scale: f64,
+    ox: i32,
+    oy: i32,
 ) -> f64 {
     let mut total: u64 = 0;
     let mut count: u64 = 0;
-    let psd_w_f = psd_w as f64;
-    let psd_h_f = psd_h as f64;
+    let psd_w_f = psd.width as f64;
+    let psd_h_f = psd.height as f64;
     // 見本側ピクセルを走査 (ref_w x ref_h)、PSD 側に対応する点を逆算
-    for ry in 0..ref_h {
-        for rx in 0..ref_w {
+    for ry in 0..refr.height {
+        for rx in 0..refr.width {
             // PSD 座標 = (見本座標 - offset) / scale
             let px_f = ((rx as i32 - ox) as f64) / scale;
             let py_f = ((ry as i32 - oy) as f64) / scale;
@@ -418,14 +438,14 @@ fn compute_diff(
             }
             let px = px_f as u32;
             let py = py_f as u32;
-            let ref_v = refr[(ry * ref_w + rx) as usize] as i32;
-            let psd_v = psd[(py * psd_w + px) as usize] as i32;
+            let ref_v = refr.data[(ry * refr.width + rx) as usize] as i32;
+            let psd_v = psd.data[(py * psd.width + px) as usize] as i32;
             // 【v1.24.x 改良】テキスト mask 部分は **片方でも mask** されていれば比較スキップ。
             // 旧: 両方 mask のみ skip → PSD 側にテキスト未配置だと「128 vs 背景白 (250)」の
             //     差分が大きく出て、見本のテキスト位置が正しく除外されず alignment が悪化。
             // 新: || で「テキスト位置に該当する全画素を確実に比較対象外」にする。
             if ref_v == 128 || psd_v == 128 { continue; }
-            total += (ref_v - psd_v).abs() as u64;
+            total += (ref_v - psd_v).unsigned_abs() as u64;
             count += 1;
         }
     }

@@ -34,7 +34,7 @@ import {
   setPsdZoom,
 } from "./state.js";
 import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
-import { notifyDialog, confirmDialog, hideProgress, promptDialog, showProgress, updateProgress } from "./ui-feedback.js";
+import { notifyDialog, confirmDialog, hideProgress, showProgress, updateProgress } from "./ui-feedback.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runScanExtractForFiles, runScanExtractForPlacementOnly, PLACE_ICON_SVG, normalizeReferenceScanDocForReferencePages } from "./scan-extract.js";
 import { renderAllSpreads } from "./spread-view.js";
@@ -45,7 +45,6 @@ import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 const $ = (id) => document.getElementById(id);
 const SOURCE_DOC_KEY = "mo" + "kuro";
 
-let runningPlace = false;
 let runningPlacePromise = null;
 // 【v1.28.0 移植】位置調整 (3 モード) の二重起動防止フラグ
 let runningAdjust = false;
@@ -1162,7 +1161,6 @@ export async function runAutoPlace({
   positionAdjustMode = null,
 } = {}) {
   if (runningPlacePromise) return runningPlacePromise;
-  runningPlace = true;
   runningPlacePromise = (async () => {
   let progressOpenForAutoPlace = false;
   const closeAutoPlaceProgress = async (options) => {
@@ -1180,7 +1178,7 @@ export async function runAutoPlace({
       if (!files || files.length === 0) return;
       // 自動配置から呼ばれる PSD 読込なので進捗バーには wand-sparkles アイコンと
       // 「自動配置中…」ラベルを出し、ユーザーの操作文脈を維持する。
-      await loadPsdFilesByPaths(files, { icon: PLACE_ICON_SVG, label: "自動配置中…" });
+      await loadPsdFilesByPaths(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place" });
       psdPages = getPages();
       if (!psdPages || psdPages.length === 0) {
         // 読み込みが全件失敗 (loadPsdFilesByPaths が内部で notifyDialog を出す) 等
@@ -1232,6 +1230,7 @@ export async function runAutoPlace({
         title: "自動配置中…",
         detail: "自動配置を準備中…",
         icon: PLACE_ICON_SVG,
+        variant: "place",
         current: null,
         total: null,
         showCount: false,
@@ -1280,7 +1279,7 @@ export async function runAutoPlace({
     let alignmentByPath = null;
     if (positionAdjustMode === "mode1" || positionAdjustMode === "mode2") {
       progressOpenForAutoPlace = true;
-      showProgress({ title: "自動配置中…", detail: "位置調整を計算中…", icon: PLACE_ICON_SVG });
+      showProgress({ title: "自動配置中…", detail: "位置調整を計算中…", icon: PLACE_ICON_SVG, variant: "place" });
       alignmentByPath = await computeAlignmentsForPages(
         positionAdjustMode,
         psdPages,
@@ -1356,7 +1355,6 @@ export async function runAutoPlace({
       message: String(e?.message ?? e ?? "不明なエラー"),
     });
   } finally {
-    runningPlace = false;
     runningPlacePromise = null;
   }
   })();
@@ -1518,7 +1516,7 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
     const cache = getScanExtractDoc();
     const referenceScanDoc = cache?.doc;
 
-    showProgress({ detail: `${modeLabel} 中…`, icon: PLACE_ICON_SVG, label: modeLabel });
+    showProgress({ detail: `${modeLabel} 中…`, icon: PLACE_ICON_SVG, label: modeLabel, variant: "place" });
 
     const alignmentByPath = new Map();
     const isSinglePdfMultiPsd = referencePaths.length === 1
@@ -2042,7 +2040,7 @@ async function runOverlayAlign() {
   const referenceScanDoc = getScanExtractDoc()?.doc;
 
   runningAdjust = true;
-  showProgress({ detail: "重ね調整 中…", icon: PLACE_ICON_SVG, label: "重ね調整" });
+  showProgress({ detail: "重ね調整 中…", icon: PLACE_ICON_SVG, label: "重ね調整", variant: "place" });
 
   beginHistoryTransient();
   let movedCount = 0;

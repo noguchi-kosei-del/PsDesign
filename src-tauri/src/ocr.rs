@@ -304,17 +304,39 @@ fn is_pdf(p: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn render_pdf_pages(
-    app: &AppHandle,
-    pdfium: &Pdfium,
-    pdf_path: &Path,
-    out_dir: &Path,
-    out_index: &mut usize,
-    source_index: &mut u32,
-    excluded_pages: &HashSet<u32>,
+struct RenderPdfPagesArgs<'a> {
+    app: &'a AppHandle,
+    pdfium: &'a Pdfium,
+    pdf_path: &'a Path,
+    out_dir: &'a Path,
+    excluded_pages: &'a HashSet<u32>,
     overall_total: u32,
     pad: usize,
+}
+
+struct RenderPdfPagesCounters<'a> {
+    out_index: &'a mut usize,
+    source_index: &'a mut u32,
+}
+
+fn render_pdf_pages(
+    args: RenderPdfPagesArgs<'_>,
+    counters: RenderPdfPagesCounters<'_>,
 ) -> Result<usize, String> {
+    let RenderPdfPagesArgs {
+        app,
+        pdfium,
+        pdf_path,
+        out_dir,
+        excluded_pages,
+        overall_total,
+        pad,
+    } = args;
+    let RenderPdfPagesCounters {
+        out_index,
+        source_index,
+    } = counters;
+
     let doc = pdfium
         .load_pdf_from_file(pdf_path, None)
         .map_err(|e| format!("PDF読み込み失敗 {}: {:?}", pdf_path.display(), e))?;
@@ -459,15 +481,19 @@ fn make_temp_volume(
         if is_pdf(&src_path) {
             let pdfium_ref = pdfium.as_ref().expect("pdfium when PDFs present");
             let _ = render_pdf_pages(
-                app,
-                pdfium_ref,
-                &src_path,
-                &volume_dir,
-                &mut idx,
-                &mut source_index,
-                &excluded_pages,
-                overall_total,
-                pad,
+                RenderPdfPagesArgs {
+                    app,
+                    pdfium: pdfium_ref,
+                    pdf_path: &src_path,
+                    out_dir: &volume_dir,
+                    excluded_pages: &excluded_pages,
+                    overall_total,
+                    pad,
+                },
+                RenderPdfPagesCounters {
+                    out_index: &mut idx,
+                    source_index: &mut source_index,
+                },
             )?;
         } else {
             source_index += 1;
@@ -811,8 +837,8 @@ fn analyze_block_surroundings(image: &image::DynamicImage, block: &MokuroBlock) 
         samples.push(is_white(x2, y));
     }
     // 下辺: 右→左 (角を重複させないため x2-1 から)
-    if x2 - 1 >= x1 {
-        for x in (x1..=(x2 - 1)).rev() {
+    if x2 > x1 {
+        for x in (x1..x2).rev() {
             samples.push(is_white(x, y2));
         }
     }
@@ -1059,8 +1085,18 @@ fn clear_readonly_recursive(path: &Path) {
 
     let mut perms = meta.permissions();
     if perms.readonly() {
-        perms.set_readonly(false);
-        let _ = std::fs::set_permissions(path, perms);
+        #[cfg(windows)]
+        {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            let _ = std::fs::set_permissions(path, perms);
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            perms.set_mode(perms.mode() | 0o200);
+            let _ = std::fs::set_permissions(path, perms);
+        }
     }
 }
 

@@ -324,13 +324,6 @@ function updateConfirmState() {
   }
 }
 
-function clearSelection() {
-  selectedPaths.clear();
-  lastClickIndex = -1;
-  syncRowSelectionDom();
-  updateConfirmState();
-}
-
 function onRowClick(ev, index, entry) {
   if (currentOpts.mode === "openFolder" && !entry.isDirectory) return;
 

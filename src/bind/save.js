@@ -4,7 +4,7 @@
 // に書き出す。フロント側で空きフォルダ名を確定してから Rust に渡す。
 // 外向き API: bindSaveMenu / handleSave / 保存可能フラグの get/set。
 
-import { exportEdits, getFolder, getPages, hasEdits } from "../state.js";
+import { exportEdits, getPages, hasEdits } from "../state.js";
 import {
   hideProgress,
   notifyDialog,
@@ -129,13 +129,6 @@ async function runSaveWithMode({ saveMode, targetDir }) {
   }
 }
 
-// 旧 handleOverwriteSave は廃止。Ctrl+S からの呼出経路の互換のため、handleSave への
-// alias を残しておく（main.js の runShortcut("save") / runShortcut("saveAs") 両方が
-// handleSave を呼ぶようになっている）。
-export async function handleOverwriteSave() {
-  await handleSave();
-}
-
 // 親フォルダ直下の全 entry を返す。例外時は空配列。
 async function listEntriesIn(parent) {
   try {
@@ -195,9 +188,6 @@ export async function handleSave() {
   // create_dir_all で再帰的に作られるので、フロント側での明示作成は不要。
   await runSaveWithMode({ saveMode: "saveAs", targetDir });
 }
-
-// 旧名互換のため alias を残す（main.js が `handleSaveAs` を import している）。
-export const handleSaveAs = handleSave;
 
 // 旧バージョンの保存ドロップダウン（上書き保存 / 別名で保存 2 項目）は撤去。
 // save-btn は単独でクリックされ、handleSave を呼ぶだけのシンプルな構造になった。

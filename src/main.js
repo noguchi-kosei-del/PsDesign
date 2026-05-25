@@ -4,7 +4,6 @@ import packageInfo from "../package.json";
 import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
 import {
   clearTemporaryMultiSelectionAdornments,
-  cycleLayerSelection,
   deleteSelectedLayers,
   commitActiveInPlaceEdit,
   nudgeSelectedLayers,
@@ -14,9 +13,10 @@ import {
   revealLayerAdornmentsForTemporaryMultiSelection,
   restoreSelectedLayerBadges,
   setSelectedLayerBadgesUserHidden,
-  setSelectionAdornmentsVisible,
+  toggleSelectionAdornmentsVisible,
   snapNextSize,
   getLastInplaceSelection,
+  getInplaceSelectionRect,
   onInplaceSelectionChange,
   applyEditModeStyleToRange,
   recenterActiveInPlaceEditBox,
@@ -33,13 +33,9 @@ import {
   commitBoldToSelections,
   commitItalicToSelections,
   commitLeadingToSelections,
-  commitSelectedLayerField,
   commitSizeToSelections,
-  computeCommonBold,
   hasSelection,
   rebuildLayerList,
-  syncBoldToggle,
-  syncItalicToggle,
   unifySelectedTextSize,
 } from "./text-editor.js";
 import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
@@ -66,19 +62,14 @@ import {
   hideProgress,
   notifyDialog,
   showModalAnimated,
-  showProgress,
   toast,
 } from "./ui-feedback.js";
 import {
   bindSaveMenu,
-  handleOverwriteSave,
-  handleSaveAs,
-  setHasSavedThisSession,
-  updateSaveButton,
+  handleSave,
 } from "./bind/save.js";
 import { bindEditorPane, focusEditor, refreshEditorPaneViewer } from "./bind/editor-pane.js";
 import {
-  handleOpenFiles,
   listPsdFilesInFolder,
   loadPsdFilesByPaths,
   pickPsdFiles,
@@ -109,12 +100,10 @@ import {
   guidesMatchCurrent,
 } from "./rulers.js";
 import {
-  addPage,
   canRedo,
   canUndo,
   clearAllEdits,
   clearScanExtractDoc,
-  clearPages,
   getActivePane,
   getCurrentPageIndex,
   getNewLayersForPsd,
@@ -157,10 +146,8 @@ import {
   setParallelSyncMode,
   setParallelViewMode,
   setPdfPageIndex,
-  setPdfExcludedReferencePages,
   setSelectedLayers,
   setPdfRotation,
-  setPdfSkipFirstBlank,
   setPdfZoom,
   setPsdRotation,
   setPsdZoom,
@@ -183,7 +170,6 @@ import {
   getCharRubyAt,
   rangeHasAnyRuby,
   withHistoryTransient,
-  getEdit,
   getSelectedLayers,
   getNewTextDirection,
   setNewTextDirection,
@@ -191,7 +177,6 @@ import {
   applyToolDefaults,
 } from "./state.js";
 import {
-  getPdfVirtualIndexForPhysicalPage,
   getPdfVirtualPageAt,
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
@@ -200,12 +185,6 @@ let homeTypesetDropHandler = null;
 let homeTypesetDragOverHandler = null;
 let homeTypesetDragLeaveHandler = null;
 let homeScanEngineAvailable = null;
-
-async function handleOpenPdf() {
-  const paths = await pickReferenceFiles();
-  if (!paths.length) return;
-  await loadReferenceFiles(paths);
-}
 
 function bindPdfWorkspaceToggle() {
   const rotateBtn = document.getElementById("pdf-rotate-btn");
@@ -408,7 +387,8 @@ async function loadFontsFromBackend() {
 
 let panPreviousTool = null;
 let panSpaceActive = false;
-let ctrlShiftBadgeRevealActive = false;
+let ctrlShiftBadgeChordActive = false;
+let ctrlShiftBadgeChordCancelled = false;
 let selectedLayerBadgeRestoreTimer = null;
 
 function cancelSelectedLayerBadgeRestore() {
@@ -433,8 +413,8 @@ function restoreSelectedLayerBadgesNow() {
 function runShortcut(id) {
   const inv = getPageDirectionInverted();
   switch (id) {
-    case "save":       handleOverwriteSave(); break;
-    case "saveAs":     handleSaveAs(); break;
+    case "save":       handleSave(); break;
+    case "saveAs":     handleSave(); break;
     case "pagePrev":   advancePage(inv ? +1 : -1); break;
     case "pageNext":   advancePage(inv ? -1 : +1); break;
     case "pageFirst":  jumpToEdge(inv ? "last" : "first"); break;
@@ -464,24 +444,33 @@ function isCtrlShiftAdornmentChord(e) {
 }
 
 function handleSelectionAdornmentChordKeydown(e) {
+  if (ctrlShiftBadgeChordActive && isCtrlShiftAdornmentChord(e) && !isCtrlLikeKey(e) && !isShiftKey(e)) {
+    ctrlShiftBadgeChordCancelled = true;
+    return false;
+  }
   if (!isCtrlShiftAdornmentChord(e) || (!isCtrlLikeKey(e) && !isShiftKey(e))) {
     return false;
   }
 
-  setSelectionAdornmentsVisible(true);
-  setSelectedLayerBadgesUserHidden(false);
-  restoreSelectedLayerBadgesNow();
-  ctrlShiftBadgeRevealActive = true;
+  if (!e.repeat && !ctrlShiftBadgeChordActive) {
+    ctrlShiftBadgeChordActive = true;
+    ctrlShiftBadgeChordCancelled = false;
+  }
   e.preventDefault();
   return true;
 }
 
 function handleSelectionAdornmentChordKeyup(e) {
-  if (!ctrlShiftBadgeRevealActive) return false;
+  if (!ctrlShiftBadgeChordActive) return false;
   if (!isCtrlLikeKey(e) && !isShiftKey(e)) return false;
-  if (!e.ctrlKey || !e.shiftKey) {
-    ctrlShiftBadgeRevealActive = false;
+  if (!ctrlShiftBadgeChordCancelled) {
+    const visible = toggleSelectionAdornmentsVisible();
+    setSelectedLayerBadgesUserHidden(!visible);
+    if (visible) restoreSelectedLayerBadgesNow();
+    else cancelSelectedLayerBadgeRestore();
   }
+  ctrlShiftBadgeChordActive = false;
+  ctrlShiftBadgeChordCancelled = false;
   e.preventDefault();
   return true;
 }
@@ -806,7 +795,8 @@ function bindTools() {
         panPreviousTool = null;
       }
     }
-    ctrlShiftBadgeRevealActive = false;
+    ctrlShiftBadgeChordActive = false;
+    ctrlShiftBadgeChordCancelled = false;
   });
 }
 
@@ -1199,45 +1189,6 @@ function bindActivePaneTracking() {
   onParallelSyncModeChange(apply);
   onActivePaneChange(apply);
   apply();
-}
-
-let resyncResolver = null;
-function openResyncModal() {
-  const modal = document.getElementById("resync-modal");
-  if (!modal) return Promise.resolve(null);
-  showModalAnimated(modal);
-  return new Promise((resolve) => {
-    resyncResolver = resolve;
-  });
-}
-function closeResyncModal(result) {
-  const modal = document.getElementById("resync-modal");
-  if (modal) hideModalAnimated(modal);
-  if (resyncResolver) {
-    const r = resyncResolver;
-    resyncResolver = null;
-    r(result);
-  }
-}
-function bindResyncModal() {
-  const modal = document.getElementById("resync-modal");
-  const cancel = document.getElementById("resync-cancel");
-  const keep = document.getElementById("resync-keep");
-  const match = document.getElementById("resync-match");
-  if (!modal || !cancel || !keep || !match) return;
-  cancel.addEventListener("click", () => closeResyncModal("cancel"));
-  keep.addEventListener("click", () => closeResyncModal("keep"));
-  match.addEventListener("click", () => closeResyncModal("match"));
-  modal.addEventListener("mousedown", (e) => {
-    if (e.target === modal) closeResyncModal("cancel");
-  });
-  document.addEventListener("keydown", (e) => {
-    if (modal.hidden) return;
-    if (e.key === "Escape") {
-      e.preventDefault();
-      closeResyncModal("cancel");
-    }
-  });
 }
 
 function bindViewModeControls() {
@@ -1633,7 +1584,7 @@ function bindRubyTool() {
     const viewportH = window.innerHeight;
     panelEl.style.maxHeight = `${Math.max(120, viewportH - margin * 2)}px`;
     panelEl.style.overflowY = "auto";
-    const r = anchor.getBoundingClientRect();
+    const r = getInplaceSelectionRect(target) ?? anchor.getBoundingClientRect();
     const measuredPanel = panelEl.getBoundingClientRect();
     const panelW = Math.max(230, Math.min(270, measuredPanel.width || panelEl.offsetWidth || 250));
     const panelH = Math.max(120, measuredPanel.height || panelEl.offsetHeight || 156);
@@ -1641,22 +1592,31 @@ function bindRubyTool() {
       const safeMax = Math.max(min, max);
       return Math.max(min, Math.min(safeMax, v));
     };
-    const unionRect = (rects) => rects.reduce((acc, rect) => ({
-      left: Math.min(acc.left, rect.left),
-      top: Math.min(acc.top, rect.top),
-      right: Math.max(acc.right, rect.right),
-      bottom: Math.max(acc.bottom, rect.bottom),
-    }));
     const overlapArea = (a, b) => {
       const w = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
       const h = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
       return w * h;
     };
+    const visibleRectFor = (el) => {
+      if (!el || typeof el.getBoundingClientRect !== "function") return null;
+      const style = window.getComputedStyle(el);
+      if (style.display === "none" || style.visibility === "hidden") return null;
+      const rect = el.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return null;
+      if (rect.right <= 0 || rect.left >= viewportW || rect.bottom <= 0 || rect.top >= viewportH) return null;
+      return rect;
+    };
+    const obstacleRects = Array.from(document.querySelectorAll(".side-toolbar, .side-panel"))
+      .map(visibleRectFor)
+      .filter(Boolean);
+    const obstacleOverlap = (rect) => obstacleRects.reduce((sum, obstacle) => sum + overlapArea(rect, obstacle), 0);
     const badge = anchor.querySelector(".layer-size-badge");
     const handle = anchor.querySelector(".layer-rotate-handle");
-    const avoid = unionRect([r, badge, handle]
+    const avoid = r;
+    const decorationRects = [badge, handle]
       .filter(Boolean)
-      .map((el) => (typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : el)));
+      .map((el) => (typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : el));
+    const decorationOverlap = (rect) => decorationRects.reduce((sum, decoration) => sum + overlapArea(rect, decoration), 0);
     const fitLeftMax = viewportW - panelW - margin;
     const fitTopMax = viewportH - panelH - margin;
     const candidates = [
@@ -1675,10 +1635,12 @@ function bindRubyTool() {
         left,
         top,
         overlap: overlapArea(rect, avoid),
+        decorationOverlap: decorationOverlap(rect),
+        obstacleOverlap: obstacleOverlap(rect),
         distance: Math.abs(left - (r.right + gap)) + Math.abs(top - r.top),
       };
     });
-    candidates.sort((a, b) => (a.overlap - b.overlap) || (a.distance - b.distance));
+    candidates.sort((a, b) => (a.obstacleOverlap - b.obstacleOverlap) || (a.overlap - b.overlap) || (a.decorationOverlap - b.decorationOverlap) || (a.distance - b.distance));
     panelEl.style.left = `${Math.round(candidates[0].left)}px`;
     panelEl.style.top = `${Math.round(candidates[0].top)}px`;
   };
@@ -2959,7 +2921,12 @@ async function startHomeTypesetFlow() {
         keepProgressOpen: true,
       });
     }
-    await loadPsdFilesByPaths(picked.psdPaths, { icon: PLACE_ICON_SVG, label: "自動配置中…", keepProgressOpen: true });
+    await loadPsdFilesByPaths(picked.psdPaths, {
+      icon: PLACE_ICON_SVG,
+      label: "自動配置中…",
+      keepProgressOpen: true,
+      variant: "place",
+    });
     if (!getPages().length) {
       await hideProgress();
       return;
@@ -3052,8 +3019,6 @@ async function closeStartupSplash() {
 function init() {
   applyThemeColor();
   void syncHomeVersionLabel();
-  document.getElementById("open-folder-btn")?.addEventListener("click", handleOpenFiles);
-  document.getElementById("open-pdf-btn")?.addEventListener("click", handleOpenPdf);
   bindSaveMenu();
   bindHistoryButtons();
   initHamburgerMenu();
@@ -3097,7 +3062,6 @@ function init() {
   bindParallelSync();
   bindWheelPageNav();
   bindActivePaneTracking();
-  bindResyncModal();
   bindViewModeControls();
   bindEditorPane();
   bindParallelViewMode();
