@@ -41,7 +41,7 @@ import {
 } from "./state.js";
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
-import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
+import { commitFontToSelections, openLayerFontPanel, openLayerSizePanel, openLayerStrokePanel, rebuildLayerList } from "./text-editor.js";
 import {
   appendBlockToCurrentPageContent,
   cascadeRemoveTxtForLayers,
@@ -230,7 +230,7 @@ export function restoreInplaceSelection(sel) {
 
 function shouldKeepInPlaceEditForTarget(target) {
   return !!(target && typeof target.closest === "function"
-    && target.closest(".editor, .side-panel .editor, .ruby-panel-floating, .side-panel-tabs, .side-panel-tab"));
+    && target.closest(".editor, .side-panel .editor, .ruby-panel-floating, .font-panel-floating, .size-panel-floating, .stroke-panel-floating, .side-panel-tabs, .side-panel-tab"));
 }
 
 export function showInplaceSelectionHighlightOnly(sel = _lastInplaceSelection) {
@@ -2693,11 +2693,22 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
 }
 
 function createStrokeBadgeSwatches(strokeColor, strokeWidthPx) {
-  if (!strokeColor || strokeColor === "none" || !(Number(strokeWidthPx) > 0)) return null;
-  const activeColor = strokeColor;
+  const activeColor = strokeColor === "white" || strokeColor === "black" ? strokeColor : "none";
+  const hasStroke = activeColor !== "none" && Number(strokeWidthPx) > 0;
   const wrap = document.createElement("div");
-  wrap.className = "layer-size-badge-stroke size-row";
+  wrap.className = `layer-size-badge-stroke size-row${hasStroke ? "" : " layer-size-badge-stroke-empty"}`;
+  wrap.setAttribute("role", "button");
+  wrap.tabIndex = 0;
   wrap.setAttribute("aria-label", "フチ");
+  wrap.title = "フチを変更";
+  wrap.addEventListener("mousedown", onBadgeStrokeMouseDown);
+  wrap.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    e.preventDefault();
+    e.stopPropagation();
+    const anchorRect = e.currentTarget.getBoundingClientRect();
+    openLayerStrokePanel({ getBoundingClientRect: () => anchorRect });
+  });
   const dot = document.createElement("span");
   dot.className = `stroke-dot stroke-dot-${activeColor} layer-size-badge-stroke-dot active`;
   dot.dataset.stroke = activeColor;
@@ -2733,6 +2744,31 @@ function formatBadgeSizeLabel(sizePtOrValues, page) {
     .join("/");
 }
 
+function onBadgeFontMouseDown(e, fontPostScriptName) {
+  if (e.button !== 0 || !fontPostScriptName) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const anchorRect = e.currentTarget.getBoundingClientRect();
+  commitFontToSelections(fontPostScriptName);
+  openLayerFontPanel({ getBoundingClientRect: () => anchorRect }, fontPostScriptName);
+}
+
+function onBadgeSizeMouseDown(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const anchorRect = e.currentTarget.getBoundingClientRect();
+  openLayerSizePanel({ getBoundingClientRect: () => anchorRect });
+}
+
+function onBadgeStrokeMouseDown(e) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const anchorRect = e.currentTarget.getBoundingClientRect();
+  openLayerStrokePanel({ getBoundingClientRect: () => anchorRect });
+}
+
 function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none", strokeWidthPx = 20) {
   // 環境設定（デフォルトタブ）でフォント名・文字サイズの表示/非表示を一括切替。
   // OFF の場合はバッジ自体を生成せず null を返し、呼び出し側で append をスキップする。
@@ -2748,11 +2784,15 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
     const fontEl = document.createElement("div");
     fontEl.className = "layer-size-badge-font";
     fontEl.textContent = fontName;
+    fontEl.title = "フォントを変更";
+    fontEl.addEventListener("mousedown", (e) => onBadgeFontMouseDown(e, fontPostScriptName));
     el.appendChild(fontEl);
   }
   const sizeEl = document.createElement("div");
   sizeEl.className = "layer-size-badge-size";
   sizeEl.textContent = sizeLabel;
+  sizeEl.title = "文字サイズを変更";
+  sizeEl.addEventListener("mousedown", onBadgeSizeMouseDown);
   el.appendChild(sizeEl);
   const strokeBadge = createStrokeBadgeSwatches(strokeColor, strokeWidthPx);
   if (strokeBadge) el.appendChild(strokeBadge);

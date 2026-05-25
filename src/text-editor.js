@@ -739,6 +739,250 @@ function closeCombo() {
   comboOpen = false;
 }
 
+let layerFontPanel = null;
+let layerFontPanelAnchor = null;
+let layerFontPanelBound = false;
+let layerFontPanelPlaceholder = null;
+let layerFontLabelWasHidden = null;
+let layerSizePanel = null;
+let layerSizePanelAnchor = null;
+let layerSizePanelPlaceholder = null;
+let layerStrokePanel = null;
+let layerStrokePanelAnchor = null;
+let layerStrokePanelPlaceholder = null;
+
+function fontSourceNodes() {
+  const tabs = document.querySelector(".font-source-tabs");
+  const panels = Array.from(document.querySelectorAll(".font-source-panel"));
+  return tabs && panels.length ? [tabs, ...panels] : [];
+}
+
+function restoreFontSourceNodes() {
+  if (!layerFontPanelPlaceholder?.parentNode) return;
+  const nodes = fontSourceNodes();
+  for (const node of nodes) {
+    layerFontPanelPlaceholder.parentNode.insertBefore(node, layerFontPanelPlaceholder);
+  }
+  layerFontPanelPlaceholder.remove();
+  layerFontPanelPlaceholder = null;
+  const label = document.querySelector(".font-combobox-label");
+  if (label && layerFontLabelWasHidden != null) {
+    label.hidden = layerFontLabelWasHidden;
+  }
+  layerFontLabelWasHidden = null;
+}
+
+function closeLayerSizePanel() {
+  const panel = layerSizePanel;
+  if (layerSizePanelPlaceholder?.parentNode && panel) {
+    layerSizePanelPlaceholder.parentNode.insertBefore(panel, layerSizePanelPlaceholder);
+    layerSizePanelPlaceholder.remove();
+  }
+  if (panel) {
+    panel.classList.remove("size-panel-floating");
+    panel.style.left = "";
+    panel.style.top = "";
+    panel.style.maxHeight = "";
+  }
+  layerSizePanel = null;
+  layerSizePanelAnchor = null;
+  layerSizePanelPlaceholder = null;
+}
+
+function closeLayerStrokePanel() {
+  const panel = layerStrokePanel;
+  if (layerStrokePanelPlaceholder?.parentNode && panel) {
+    layerStrokePanelPlaceholder.parentNode.insertBefore(panel, layerStrokePanelPlaceholder);
+    layerStrokePanelPlaceholder.remove();
+  }
+  if (panel) {
+    panel.classList.remove("stroke-panel-floating");
+    panel.style.left = "";
+    panel.style.top = "";
+    panel.style.maxHeight = "";
+  }
+  layerStrokePanel = null;
+  layerStrokePanelAnchor = null;
+  layerStrokePanelPlaceholder = null;
+}
+
+function closeLayerFontPanel() {
+  closeCombo();
+  restoreFontSourceNodes();
+  if (layerFontPanel) layerFontPanel.remove();
+  layerFontPanel = null;
+  layerFontPanelAnchor = null;
+}
+
+function positionLayerFontPanel() {
+  const panel = layerFontPanel;
+  const anchor = layerFontPanelAnchor;
+  if (!panel || !anchor?.getBoundingClientRect) return;
+  const gap = 8;
+  const margin = 8;
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  panel.style.maxHeight = `${Math.max(160, viewportH - margin * 2)}px`;
+  const r = anchor.getBoundingClientRect();
+  const measured = panel.getBoundingClientRect();
+  const panelW = Math.max(250, Math.min(320, measured.width || panel.offsetWidth || 280));
+  const panelH = Math.max(180, measured.height || panel.offsetHeight || 320);
+  const clamp = (v, min, max) => Math.max(min, Math.min(Math.max(min, max), v));
+  const fitLeftMax = viewportW - panelW - margin;
+  const fitTopMax = viewportH - panelH - margin;
+  const candidates = [
+    { left: r.right + gap, top: r.top },
+    { left: r.left - gap - panelW, top: r.top },
+    { left: r.left, top: r.bottom + gap },
+    { left: r.left, top: r.top - gap - panelH },
+  ].map((p) => ({
+    left: clamp(p.left, margin, fitLeftMax),
+    top: clamp(p.top, margin, fitTopMax),
+  }));
+  panel.style.left = `${Math.round(candidates[0].left)}px`;
+  panel.style.top = `${Math.round(candidates[0].top)}px`;
+}
+
+function ensureLayerFontPanelGlobalHandlers() {
+  if (layerFontPanelBound) return;
+  layerFontPanelBound = true;
+  document.addEventListener("mousedown", (e) => {
+    if (layerFontPanel) {
+      if (layerFontPanel.contains(e.target)) return;
+      if (layerFontPanelAnchor?.contains?.(e.target)) return;
+      closeLayerFontPanel();
+    }
+    if (layerSizePanel) {
+      if (layerSizePanel.contains(e.target)) return;
+      if (layerSizePanelAnchor?.contains?.(e.target)) return;
+      closeLayerSizePanel();
+    }
+    if (layerStrokePanel) {
+      if (layerStrokePanel.contains(e.target)) return;
+      if (layerStrokePanelAnchor?.contains?.(e.target)) return;
+      closeLayerStrokePanel();
+    }
+  });
+  const repos = () => {
+    positionLayerFontPanel();
+    positionFloatingPanel(layerSizePanel, layerSizePanelAnchor, 230, 96);
+    positionFloatingPanel(layerStrokePanel, layerStrokePanelAnchor, 250, 104);
+  };
+  window.addEventListener("resize", repos);
+  window.addEventListener("scroll", repos, true);
+}
+
+function positionFloatingPanel(panel, anchor, widthFallback = 280, heightFallback = 140) {
+  if (!panel || !anchor?.getBoundingClientRect) return;
+  const gap = 8;
+  const margin = 8;
+  const viewportW = window.innerWidth;
+  const viewportH = window.innerHeight;
+  panel.style.maxHeight = `${Math.max(120, viewportH - margin * 2)}px`;
+  const r = anchor.getBoundingClientRect();
+  const measured = panel.getBoundingClientRect();
+  const panelW = Math.max(220, Math.min(340, measured.width || panel.offsetWidth || widthFallback));
+  const panelH = Math.max(90, measured.height || panel.offsetHeight || heightFallback);
+  const clamp = (v, min, max) => Math.max(min, Math.min(Math.max(min, max), v));
+  const fitLeftMax = viewportW - panelW - margin;
+  const fitTopMax = viewportH - panelH - margin;
+  const candidates = [
+    { left: r.right + gap, top: r.top },
+    { left: r.left - gap - panelW, top: r.top },
+    { left: r.left, top: r.bottom + gap },
+    { left: r.left, top: r.top - gap - panelH },
+  ].map((p) => ({
+    left: clamp(p.left, margin, fitLeftMax),
+    top: clamp(p.top, margin, fitTopMax),
+  }));
+  panel.style.left = `${Math.round(candidates[0].left)}px`;
+  panel.style.top = `${Math.round(candidates[0].top)}px`;
+}
+
+export function openLayerFontPanel(anchor, currentPs = "") {
+  if (!anchor || !getFonts().length) return false;
+  closeLayerSizePanel();
+  closeLayerStrokePanel();
+  closeLayerFontPanel();
+  ensureLayerFontPanelGlobalHandlers();
+  const nodes = fontSourceNodes();
+  if (!nodes.length) return false;
+  layerFontPanelAnchor = anchor;
+  const panel = document.createElement("div");
+  panel.className = "font-panel-floating layer-font-panel";
+  panel.setAttribute("role", "dialog");
+  panel.setAttribute("aria-label", "フォントを変更");
+  panel.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      closeLayerFontPanel();
+    }
+  });
+  document.body.appendChild(panel);
+  layerFontPanel = panel;
+  const originalParent = nodes[0].parentNode;
+  layerFontPanelPlaceholder = document.createComment("font-source-home");
+  originalParent.insertBefore(layerFontPanelPlaceholder, nodes[0]);
+  for (const node of nodes) panel.appendChild(node);
+  const label = panel.querySelector(".font-combobox-label");
+  if (label) {
+    layerFontLabelWasHidden = label.hidden;
+    label.hidden = false;
+  }
+  if (currentPs) {
+    setCurrentFont(currentPs);
+    ensureFontLoaded(currentPs);
+    rebuildFontOptions(currentPs, { force: true });
+  }
+  setFontSourceTab("palette");
+  positionLayerFontPanel();
+  const input = fontEl();
+  closeCombo();
+  input?.blur();
+  return true;
+}
+
+export function openLayerSizePanel(anchor) {
+  if (!anchor) return false;
+  closeLayerFontPanel();
+  closeLayerStrokePanel();
+  closeLayerSizePanel();
+  ensureLayerFontPanelGlobalHandlers();
+  const panel = document.querySelector(".editor-tab-panel[data-tab-panel='size']");
+  if (!panel?.parentNode) return false;
+  layerSizePanelAnchor = anchor;
+  layerSizePanelPlaceholder = document.createComment("size-panel-home");
+  panel.parentNode.insertBefore(layerSizePanelPlaceholder, panel);
+  document.body.appendChild(panel);
+  panel.hidden = false;
+  panel.classList.add("size-panel-floating");
+  layerSizePanel = panel;
+  positionFloatingPanel(panel, anchor, 230, 96);
+  return true;
+}
+
+export function openLayerStrokePanel(anchor) {
+  if (!anchor) return false;
+  closeLayerFontPanel();
+  closeLayerSizePanel();
+  closeLayerStrokePanel();
+  ensureLayerFontPanelGlobalHandlers();
+  const panel = document.querySelector(".editor-tab-panel[data-tab-panel='stroke']");
+  if (!panel?.parentNode) return false;
+  const { strokeColor, strokeWidthPx } = computeCommonStroke(getSelectedLayers());
+  syncStrokeToggle(strokeColor);
+  syncStrokeWidthInput(strokeWidthPx);
+  layerStrokePanelAnchor = anchor;
+  layerStrokePanelPlaceholder = document.createComment("stroke-panel-home");
+  panel.parentNode.insertBefore(layerStrokePanelPlaceholder, panel);
+  document.body.appendChild(panel);
+  panel.hidden = false;
+  panel.classList.add("stroke-panel-floating");
+  layerStrokePanel = panel;
+  positionFloatingPanel(panel, anchor, 250, 104);
+  return true;
+}
+
 function moveComboHighlight(dir) {
   if (!comboOpen) { openCombo(); return; }
   const visible = [];
@@ -975,7 +1219,7 @@ function updateCharSelectionIndicator(sel) {
 
 // font-source タブ：edit-font-combobox（フォント検索）と style-palette（プリセット）を
 // 排他切替する。ユーザーの選択は localStorage に永続化。
-const FONT_SOURCE_KEY = "psdesign_font_source";
+const FONT_SOURCE_KEY = "psdesign_font_source_v2";
 const FAVORITE_STYLES_KEY = "psdesign_favorite_text_styles";
 
 function readFavoriteStyles() {
@@ -1114,6 +1358,7 @@ function bindFavoriteStyles() {
 }
 
 function setFontSourceTab(source) {
+  if (source !== "combobox") closeCombo();
   const tabs = document.querySelectorAll(".font-source-tab");
   const panels = document.querySelectorAll(".font-source-panel");
   for (const btn of tabs) {
@@ -1134,8 +1379,8 @@ function bindFontSourceTabs() {
     btn.addEventListener("mousedown", (e) => e.preventDefault());
     btn.addEventListener("click", () => setFontSourceTab(btn.dataset.source));
   }
-  // 初期状態を localStorage から復元（既定: combobox）
-  let initial = "combobox";
+  // 初期状態を localStorage から復元（既定: palette）
+  let initial = "palette";
   try {
     const saved = localStorage.getItem(FONT_SOURCE_KEY);
     if (saved === "combobox" || saved === "palette") initial = saved;

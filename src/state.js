@@ -926,10 +926,31 @@ export function toggleLayerSelected(pageIndex, layerId) {
 export function setFonts(fonts) { state.fonts = fonts; }
 export function getFonts() { return state.fonts; }
 
+const FONT_DISPLAY_NAME_FALLBACKS = new Map([
+  ["DFGMaruGothic-Md", "ＤＦ中丸ゴシック体"],
+]);
+
+function containsJapaneseText(value) {
+  return /[\u3040-\u30ff\u3400-\u9fff\uff00-\uffef]/.test(String(value ?? ""));
+}
+
+function preferredLocalizedFontName(font, psName) {
+  const aliases = Array.isArray(font?.aliases) ? font.aliases : [];
+  const candidates = [
+    font?.name,
+    ...aliases,
+  ]
+    .map((v) => String(v ?? "").trim())
+    .filter((v) => v && v !== psName);
+  return candidates.find(containsJapaneseText) ?? candidates[0] ?? null;
+}
+
 export function getFontDisplayName(psName) {
   if (!psName) return null;
   const hit = state.fonts.find((f) => f.postScriptName === psName);
-  return hit?.name ?? psName;
+  return preferredLocalizedFontName(hit, psName)
+    ?? FONT_DISPLAY_NAME_FALLBACKS.get(psName)
+    ?? psName;
 }
 
 export const getTool = $tool.get;

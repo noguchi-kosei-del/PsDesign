@@ -3146,7 +3146,7 @@ function bindGlobalBlurOnOutsideClick() {
     const target = e.target;
     if (!target) return;
     if (target === active || active.contains(target)) return;
-    const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .layer-box.editing, .editor, .ruby-panel-floating");
+    const near = target.closest?.("input, textarea, [contenteditable], .style-palette, .save-menu, .layer-box.editing, .editor, .ruby-panel-floating, .font-panel-floating, .size-panel-floating, .stroke-panel-floating");
     if (near) return;
     active.blur();
   }, true);
