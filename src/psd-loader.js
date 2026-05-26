@@ -140,13 +140,41 @@ function effectiveFontSize(rawFontSize, transform) {
   return rawFontSize * scale;
 }
 
+function readTextScalePercent(style, key) {
+  const raw = style?.[key];
+  let v = null;
+  if (typeof raw === "number") {
+    v = raw;
+  } else if (raw && typeof raw === "object") {
+    v = typeof raw.value === "number" ? raw.value : null;
+  }
+  if (!Number.isFinite(v) || v <= 0) return 100;
+  return Math.max(10, Math.min(400, Math.round(v)));
+}
+
+function readTextSpacingMille(style, key) {
+  const raw = style?.[key];
+  let v = null;
+  if (typeof raw === "number") {
+    v = raw;
+  } else if (raw && typeof raw === "object") {
+    v = typeof raw.value === "number" ? raw.value : null;
+  }
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(-1000, Math.min(1000, Math.round(v)));
+}
+
 function extractStyleRunStyles(textData, baseFont, baseRawFontSize, transform) {
   const text = textData?.text ?? "";
   const runs = Array.isArray(textData?.styleRuns) ? textData.styleRuns : [];
   const charFonts = {};
   const charSizes = {};
+  const charTrackings = {};
+  const charKernings = {};
   const usedFonts = [];
   const baseEffectiveSize = effectiveFontSize(baseRawFontSize, transform);
+  const baseTracking = readTextSpacingMille(textData?.style, "tracking");
+  const baseKerning = readTextSpacingMille(textData?.style, "kerning");
   const addUsed = (font) => {
     if (!font || usedFonts.includes(font)) return;
     usedFonts.push(font);
@@ -159,6 +187,8 @@ function extractStyleRunStyles(textData, baseFont, baseRawFontSize, transform) {
     const font = run?.style?.font?.name || baseFont || "";
     const rawSize = Number.isFinite(run?.style?.fontSize) ? run.style.fontSize : baseRawFontSize;
     const size = effectiveFontSize(rawSize, transform);
+    const tracking = readTextSpacingMille(run?.style, "tracking");
+    const kerning = readTextSpacingMille(run?.style, "kerning");
     if (font) addUsed(font);
     const end = Math.min(text.length, pos + len);
     if (font && font !== baseFont) {
@@ -167,10 +197,16 @@ function extractStyleRunStyles(textData, baseFont, baseRawFontSize, transform) {
     if (Number.isFinite(size) && Number.isFinite(baseEffectiveSize) && Math.abs(size - baseEffectiveSize) > 0.01) {
       for (let i = pos; i < end; i++) charSizes[i] = size;
     }
+    if (tracking !== baseTracking) {
+      for (let i = pos; i < end; i++) charTrackings[i] = tracking;
+    }
+    if (kerning !== baseKerning) {
+      for (let i = pos; i < end; i++) charKernings[i] = kerning;
+    }
     pos += len;
     if (pos >= text.length) break;
   }
-  return { charFonts, charSizes, usedFonts };
+  return { charFonts, charSizes, charTrackings, charKernings, usedFonts };
 }
 
 // 【v1.26.0 移植 (PsDesign-main v1.24.0)】非表示判定を統一する。
@@ -197,7 +233,7 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
       const fillColor = extractFillColor(layer);
       const baseFont = style.font?.name ?? "";
       const baseFontSize = effectiveFontSize(style.fontSize, layer.text.transform);
-      const { charFonts, charSizes, usedFonts } = extractStyleRunStyles(
+      const { charFonts, charSizes, charTrackings, charKernings, usedFonts } = extractStyleRunStyles(
         layer.text,
         baseFont,
         style.fontSize,
@@ -210,6 +246,8 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
         font: baseFont,
         charFonts,
         charSizes,
+        charTrackings,
+        charKernings,
         usedFonts,
         fontSize: baseFontSize,
         left: layer.left ?? 0,
@@ -217,6 +255,10 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
         right: layer.right ?? 0,
         bottom: layer.bottom ?? 0,
         direction: orientation === "vertical" ? "vertical" : "horizontal",
+        horizontalScale: readTextScalePercent(style, "horizontalScale"),
+        verticalScale: readTextScalePercent(style, "verticalScale"),
+        trackingMille: readTextSpacingMille(style, "tracking"),
+        kerningMille: readTextSpacingMille(style, "kerning"),
         strokeColor,
         strokeWidthPx,
         fillColor,

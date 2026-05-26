@@ -16,6 +16,11 @@ import {
   onFillColorChange,
   removeNewLayer,
   setCurrentFont,
+  setCharHorizontalScalesRange,
+  setCharKerningsRange,
+  setCharTateChuYokosRange,
+  setCharTrackingsRange,
+  setCharVerticalScalesRange,
   setCurrentPageIndex,
   setEdit,
   setFillColor,
@@ -46,6 +51,9 @@ import {
   // 【v1.21.0】per-char フォント変更時の編集中 DOM リアルタイム反映
   applyEditModeStyleToRange,
   cssFontFamily,
+  refreshActiveInPlaceEditPreview,
+  restoreInplaceSelection,
+  showInplaceSelectionHighlightOnly,
   // 【v1.26.0 移植 (PsDesign-main v1.24.0)】commit 系の中心固定で bbox 再計算用
   layerRectForExisting,
   layerRectForNew,
@@ -53,6 +61,7 @@ import {
   setSelectionAdornmentsVisible,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
+import { getDefault, onSettingsChange, setDefault } from "./settings.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
 
 const listEl = () => document.getElementById("layer-list");
@@ -64,6 +73,13 @@ const fontListEl = () => document.getElementById("edit-font-list");
 const favoriteStyleListEl = () => document.getElementById("favorite-style-list");
 const favoriteStyleSaveBtnEl = () => document.getElementById("favorite-style-save-btn");
 const sizeInputEl = () => document.getElementById("size-input");
+const horizontalScaleInputEl = () => document.getElementById("horizontal-scale-input");
+const verticalScaleInputEl = () => document.getElementById("vertical-scale-input");
+const trackingInputEl = () => document.getElementById("tracking-input");
+const kerningInputEl = () => document.getElementById("kerning-input");
+const tcyApplyBtnEl = () => document.getElementById("tcy-apply-btn");
+const tcyRemoveBtnEl = () => document.getElementById("tcy-remove-btn");
+const verticalHalfToFullSelectEl = () => document.getElementById("vertical-half-to-full-select");
 const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
@@ -219,12 +235,208 @@ function collectSizesForRange(ref, start, end, defaultSizePt) {
   return sizes;
 }
 
+function scaleAt(ref, index, field, defaultValue = 100) {
+  if (!ref || !Number.isInteger(index)) return defaultValue;
+  if (ref.kind === "existing") {
+    const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+    const charField = field === "horizontalScale" ? "charHorizontalScales" : "charVerticalScales";
+    const v = { ...(ref.layer[charField] ?? {}), ...(edit[charField] ?? {}) }[index];
+    return Number.isFinite(v) ? v : (edit[field] ?? ref.layer[field] ?? defaultValue);
+  }
+  const charField = field === "horizontalScale" ? "charHorizontalScales" : "charVerticalScales";
+  const v = ref.newLayer[charField]?.[index];
+  return Number.isFinite(v) ? v : (ref.newLayer[field] ?? defaultValue);
+}
+
+function collectScalesForRange(ref, start, end, field) {
+  const values = [];
+  const seen = new Set();
+  const add = (pct) => {
+    const n = clampTextScalePercent(pct);
+    if (!Number.isFinite(n)) return;
+    if (seen.has(n)) return;
+    seen.add(n);
+    values.push(n);
+  };
+  const text = ref?.kind === "existing"
+    ? (getEdit(ref.page.path, ref.layer.id)?.contents ?? ref.layer.text ?? "")
+    : (ref?.newLayer?.contents ?? "");
+  const len = text.length;
+  const from = Math.max(0, Math.min(len, Number.isInteger(start) ? start : 0));
+  const to = Math.max(from, Math.min(len, Number.isInteger(end) ? end : len));
+  if (to === from) {
+    add(scaleAt(ref, Math.max(0, Math.min(len - 1, from)), field));
+  } else {
+    for (let i = from; i < to; i++) add(scaleAt(ref, i, field));
+  }
+  return values;
+}
+
+function spacingAt(ref, index, field, defaultValue = 0) {
+  if (!ref || !Number.isInteger(index)) return defaultValue;
+  if (ref.kind === "existing") {
+    const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+    const charField = field === "trackingMille" ? "charTrackings" : "charKernings";
+    const v = { ...(ref.layer[charField] ?? {}), ...(edit[charField] ?? {}) }[index];
+    return Number.isFinite(v) ? v : (edit[field] ?? ref.layer[field] ?? defaultValue);
+  }
+  const charField = field === "trackingMille" ? "charTrackings" : "charKernings";
+  const v = ref.newLayer[charField]?.[index];
+  return Number.isFinite(v) ? v : (ref.newLayer[field] ?? defaultValue);
+}
+
+function collectSpacingsForRange(ref, start, end, field) {
+  const values = [];
+  const seen = new Set();
+  const add = (mille) => {
+    const n = clampTextSpacingMille(mille);
+    if (!Number.isFinite(n)) return;
+    if (seen.has(n)) return;
+    seen.add(n);
+    values.push(n);
+  };
+  const text = ref?.kind === "existing"
+    ? (getEdit(ref.page.path, ref.layer.id)?.contents ?? ref.layer.text ?? "")
+    : (ref?.newLayer?.contents ?? "");
+  const len = text.length;
+  const from = Math.max(0, Math.min(len, Number.isInteger(start) ? start : 0));
+  const to = Math.max(from, Math.min(len, Number.isInteger(end) ? end : len));
+  if (to === from) {
+    add(spacingAt(ref, Math.max(0, Math.min(len - 1, from - 1)), field));
+  } else {
+    for (let i = from; i < to; i++) add(spacingAt(ref, i, field));
+  }
+  return values;
+}
+
+function getTcyContext(sel = getLastInplaceSelection()) {
+  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end)) return null;
+  const targetId = sel.tempId ?? sel.layerId;
+  const page = getPages().find((p) => p.path === sel.psdPath);
+  if (!page) return null;
+  if (typeof targetId === "string") {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === targetId);
+    if (!nl) return null;
+    return {
+      sel,
+      targetId,
+      text: String(nl.contents ?? ""),
+      direction: nl.direction ?? "vertical",
+      charTateChuYokos: nl.charTateChuYokos ?? {},
+    };
+  }
+  const layer = page.textLayers?.find((l) => l.id === targetId);
+  if (!layer) return null;
+  const edit = getEdit(page.path, targetId) ?? {};
+  return {
+    sel,
+    targetId,
+    text: String(edit.contents ?? layer.text ?? ""),
+    direction: edit.direction ?? layer.direction ?? "horizontal",
+    charTateChuYokos: { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
+  };
+}
+
+function isTcyTargetChar(ch) {
+  return ch !== "\n" && ch !== "\r";
+}
+
+function rangesForTcy(text, start, end) {
+  const len = text.length;
+  if (len <= 0) return [];
+  const runs = [];
+  const pushSelectedRuns = (from, to) => {
+    let i = from;
+    while (i < to) {
+      if (isTcyTargetChar(text[i])) {
+        let j = i + 1;
+        while (j < to && isTcyTargetChar(text[j])) j++;
+        runs.push({ start: i, end: j });
+        i = j;
+      } else {
+        i++;
+      }
+    }
+  };
+  const from = Math.max(0, Math.min(len, Number.isInteger(start) ? start : 0));
+  const to = Math.max(from, Math.min(len, Number.isInteger(end) ? end : from));
+  if (to > from) {
+    pushSelectedRuns(from, to);
+    return runs;
+  }
+  let pos = Math.max(0, Math.min(len - 1, from));
+  if (!isTcyTargetChar(text[pos]) && from > 0 && isTcyTargetChar(text[from - 1])) {
+    pos = from - 1;
+  }
+  if (!isTcyTargetChar(text[pos])) return [];
+  return [{ start: pos, end: pos + 1 }];
+}
+
+function tcyRunsActive(runs, map) {
+  if (!runs.length) return false;
+  for (const run of runs) {
+    for (let i = run.start; i < run.end; i++) {
+      if (map?.[i] !== true) return false;
+    }
+  }
+  return true;
+}
+
+function syncTcyControls(sel = getLastInplaceSelection()) {
+  const applyBtn = tcyApplyBtnEl();
+  const removeBtn = tcyRemoveBtnEl();
+  if (!applyBtn && !removeBtn) return;
+  const ctx = getTcyContext(sel);
+  const runs = ctx && ctx.direction === "vertical"
+    ? rangesForTcy(ctx.text, ctx.sel.start, ctx.sel.end)
+    : [];
+  const enabled = !!ctx && ctx.direction === "vertical" && runs.length > 0;
+  const active = enabled && tcyRunsActive(runs, ctx.charTateChuYokos);
+  if (applyBtn) {
+    applyBtn.disabled = !enabled;
+    applyBtn.setAttribute("aria-pressed", active ? "true" : "false");
+  }
+  if (removeBtn) {
+    removeBtn.disabled = !enabled;
+    removeBtn.setAttribute("aria-pressed", enabled && !active ? "true" : "false");
+  }
+}
+
+function syncVerticalHalfToFullSelect() {
+  const select = verticalHalfToFullSelectEl();
+  if (!select) return;
+  select.value = getDefault("verticalHalfToFullEnabled") === false ? "off" : "on";
+}
+
 function syncSizeInputMixedDisplay(sizes, page) {
   const input = sizeInputEl();
   if (!input || document.activeElement === input) return;
   const values = (sizes ?? []).filter(Number.isFinite);
   if (values.length <= 1) return;
   input.value = values.map((pt) => formatDisplayPt(pt, page)).filter(Boolean).join("/");
+}
+
+function clampTextScalePercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(10, Math.min(400, Math.round(n)));
+}
+
+function clampTextSpacingMille(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(-1000, Math.min(1000, Math.round(n)));
+}
+
+function syncTextScaleInput(input, value) {
+  if (!input || document.activeElement === input) return;
+  if (value == null) {
+    input.value = "";
+    input.placeholder = "混在";
+    return;
+  }
+  input.value = String(value);
+  input.placeholder = "";
 }
 
 function refreshTextStyleMarkerViews() {
@@ -511,6 +723,12 @@ function populateEditor() {
     syncStrokeToggle(getStrokeColor());
     syncStrokeWidthInput(getStrokeWidthPx());
     syncFillToggle(getFillColor());
+    syncTextScaleInput(horizontalScaleInputEl(), 100);
+    syncTextScaleInput(verticalScaleInputEl(), 100);
+    syncTextScaleInput(trackingInputEl(), 0);
+    syncTextScaleInput(kerningInputEl(), 0);
+    syncTcyControls(null);
+    syncVerticalHalfToFullSelect();
     // 【v1.22.0】B トグルは選択 0 件で disabled。
     syncBoldToggle(undefined);
     syncItalicToggle(undefined);
@@ -523,6 +741,10 @@ function populateEditor() {
       let effectiveSize = null;
       let effectiveFont = null;
       let effectiveLeading = null;
+      let effectiveHorizontalScale = 100;
+      let effectiveVerticalScale = 100;
+      let effectiveTrackingMille = 0;
+      let effectiveKerningMille = 0;
       let mixedSizes = [];
       let mixedSizesPage = null;
       if (resolved.kind === "existing") {
@@ -531,6 +753,10 @@ function populateEditor() {
         // bounds 逆算後の実効 pt をサイズ入力にも反映（transform で縮められた写植テキスト対応）
         effectiveSize = layerDefaultSize(resolved, page, layer, edit);
         effectiveFont = edit.fontPostScriptName ?? layer.font ?? null;
+        effectiveHorizontalScale = edit.horizontalScale ?? layer.horizontalScale ?? 100;
+        effectiveVerticalScale = edit.verticalScale ?? layer.verticalScale ?? 100;
+        effectiveTrackingMille = edit.trackingMille ?? layer.trackingMille ?? 0;
+        effectiveKerningMille = edit.kerningMille ?? layer.kerningMille ?? 0;
         // 既存レイヤーは PSD から行間を読み戻していないため、edit に明示があれば
         // それを使い、なければ既定 125% として表示（実 PSD と乖離する可能性あり）。
         effectiveLeading = edit.leadingPct ?? 125;
@@ -542,6 +768,10 @@ function populateEditor() {
         effectiveSize = layerDefaultSize(resolved);
         effectiveFont = newLayer.fontPostScriptName ?? null;
         effectiveLeading = newLayer.leadingPct ?? 125;
+        effectiveHorizontalScale = newLayer.horizontalScale ?? 100;
+        effectiveVerticalScale = newLayer.verticalScale ?? 100;
+        effectiveTrackingMille = newLayer.trackingMille ?? 0;
+        effectiveKerningMille = newLayer.kerningMille ?? 0;
         rebuildFontOptions(effectiveFont ?? "");
         mixedSizes = collectSizesForRange(resolved, 0, (newLayer.contents ?? "").length, effectiveSize);
         mixedSizesPage = getPages()[resolved.pageIndex] ?? null;
@@ -550,6 +780,10 @@ function populateEditor() {
       if (effectiveSize != null && Number.isFinite(effectiveSize)) setTextSize(effectiveSize);
       if (effectiveFont) setCurrentFont(effectiveFont);
       if (Number.isFinite(effectiveLeading)) setLeadingPct(effectiveLeading);
+      syncTextScaleInput(horizontalScaleInputEl(), clampTextScalePercent(effectiveHorizontalScale) ?? 100);
+      syncTextScaleInput(verticalScaleInputEl(), clampTextScalePercent(effectiveVerticalScale) ?? 100);
+      syncTextScaleInput(trackingInputEl(), clampTextSpacingMille(effectiveTrackingMille) ?? 0);
+      syncTextScaleInput(kerningInputEl(), clampTextSpacingMille(effectiveKerningMille) ?? 0);
       syncSizeInputMixedDisplay(mixedSizes, mixedSizesPage);
     }
   } else {
@@ -572,6 +806,15 @@ function populateEditor() {
   syncBoldToggle(commonBold);
   const commonItalic = computeCommonItalic(selections);
   syncItalicToggle(commonItalic);
+
+  if (selections.length > 1) {
+    syncTextScaleInput(horizontalScaleInputEl(), computeCommonTextScale(selections, "horizontalScale"));
+    syncTextScaleInput(verticalScaleInputEl(), computeCommonTextScale(selections, "verticalScale"));
+    syncTextScaleInput(trackingInputEl(), computeCommonTextSpacing(selections, "trackingMille"));
+    syncTextScaleInput(kerningInputEl(), computeCommonTextSpacing(selections, "kerningMille"));
+  }
+  syncTcyControls();
+  syncVerticalHalfToFullSelect();
 }
 
 // 【v1.22.0】B トグルボタンの aria-pressed と disabled を更新。
@@ -1657,6 +1900,15 @@ export function bindEditorEvents() {
       const rangePage = ref?.page ?? getPages()[pageIndex] ?? null;
       if (rangeSizes.length === 1) setTextSize(rangeSizes[0]);
       syncSizeInputMixedDisplay(rangeSizes, rangePage);
+      const horizontalScales = ref ? collectScalesForRange(ref, sel.start, sel.end, "horizontalScale") : [];
+      const verticalScales = ref ? collectScalesForRange(ref, sel.start, sel.end, "verticalScale") : [];
+      const trackings = ref ? collectSpacingsForRange(ref, sel.start, sel.end, "trackingMille") : [];
+      const kernings = ref ? collectSpacingsForRange(ref, sel.start, sel.end, "kerningMille") : [];
+      syncTextScaleInput(horizontalScaleInputEl(), horizontalScales.length === 1 ? horizontalScales[0] : null);
+      syncTextScaleInput(verticalScaleInputEl(), verticalScales.length === 1 ? verticalScales[0] : null);
+      syncTextScaleInput(trackingInputEl(), trackings.length === 1 ? trackings[0] : null);
+      syncTextScaleInput(kerningInputEl(), kernings.length === 1 ? kernings[0] : null);
+      syncTcyControls(sel);
       const fonts = ref ? collectFontsForRange(ref, sel.start, sel.end) : [];
       if (fonts.length === 1) {
         syncFontInputFromRangeFonts(fonts);
@@ -1669,6 +1921,11 @@ export function bindEditorEvents() {
       }
     });
   }
+
+  bindTextScaleControls();
+  bindTextSpacingControls();
+  bindTateChuYokoControl();
+  bindVerticalHalfToFullSelect();
 
   const deleteBtn = document.getElementById("delete-new-layer-btn");
   if (deleteBtn) {
@@ -1787,6 +2044,238 @@ export function bindEditorEvents() {
   const widthInc = document.getElementById("stroke-width-inc-btn");
   if (widthDec) widthDec.addEventListener("click", () => adjustStrokeWidth(-0.5));
   if (widthInc) widthInc.addEventListener("click", () => adjustStrokeWidth(+0.5));
+}
+
+function commitTextScaleField(field, percent) {
+  const value = clampTextScalePercent(percent);
+  if (!Number.isFinite(value)) return false;
+  const sel = getLastInplaceSelection();
+  if (sel && sel.end > sel.start) {
+    const targetId = sel.tempId ?? sel.layerId;
+    withHistoryTransient(() => {
+      if (field === "horizontalScale") {
+        setCharHorizontalScalesRange(sel.psdPath, targetId, sel.start, sel.end, value);
+      } else {
+        setCharVerticalScalesRange(sel.psdPath, targetId, sel.start, sel.end, value);
+      }
+      return true;
+    });
+    refreshActiveInPlaceEditPreview(sel);
+    const active = document.activeElement;
+    const activeIsScaleInput = active === horizontalScaleInputEl() || active === verticalScaleInputEl();
+    if (activeIsScaleInput) {
+      showInplaceSelectionHighlightOnly(sel);
+      requestAnimationFrame(() => showInplaceSelectionHighlightOnly(sel));
+    } else {
+      restoreInplaceSelection(sel);
+      requestAnimationFrame(() => restoreInplaceSelection(sel));
+    }
+    return true;
+  }
+  return commitSingleFieldToSelections(field, value);
+}
+
+function commitTextSpacingField(field, mille) {
+  const value = clampTextSpacingMille(mille);
+  if (!Number.isFinite(value)) return false;
+  const sel = getLastInplaceSelection();
+  if (sel && Number.isInteger(sel.start) && Number.isInteger(sel.end) && sel.end >= sel.start) {
+    const targetId = sel.tempId ?? sel.layerId;
+    const textLength = (() => {
+      const page = getPages().find((p) => p.path === sel.psdPath);
+      if (!page) return 0;
+      if (typeof targetId === "string") {
+        const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === targetId);
+        return String(nl?.contents ?? "").length;
+      }
+      const layer = page.textLayers?.find((l) => l.id === targetId);
+      const edit = getEdit(page.path, targetId) ?? {};
+      return String(edit.contents ?? layer?.text ?? "").length;
+    })();
+    if (textLength <= 0) return false;
+    const from = sel.end > sel.start
+      ? Math.max(0, Math.min(textLength, sel.start))
+      : Math.max(0, Math.min(textLength - 1, sel.start - 1));
+    const to = sel.end > sel.start
+      ? Math.max(from, Math.min(textLength, sel.end))
+      : Math.min(textLength, from + 1);
+    if (to <= from) return false;
+    withHistoryTransient(() => {
+      if (typeof targetId === "string") {
+        updateNewLayer(targetId, { [field]: 0 });
+      } else {
+        setEdit(sel.psdPath, targetId, { [field]: undefined });
+      }
+      if (field === "trackingMille") {
+        setCharTrackingsRange(sel.psdPath, targetId, from, to, value);
+      } else {
+        setCharKerningsRange(sel.psdPath, targetId, from, to, value);
+      }
+      return true;
+    });
+    refreshActiveInPlaceEditPreview(sel);
+    const active = document.activeElement;
+    const activeIsSpacingInput = active === trackingInputEl() || active === kerningInputEl();
+    if (activeIsSpacingInput) {
+      showInplaceSelectionHighlightOnly(sel);
+      requestAnimationFrame(() => showInplaceSelectionHighlightOnly(sel));
+    } else {
+      restoreInplaceSelection(sel);
+      requestAnimationFrame(() => restoreInplaceSelection(sel));
+    }
+    return true;
+  }
+  return false;
+}
+
+function commitTateChuYokoSelection(enabled) {
+  const ctx = getTcyContext();
+  if (!ctx) return false;
+  if (ctx.direction !== "vertical") {
+    toast("縦書きテキストでのみ使用できます");
+    return false;
+  }
+  const runs = rangesForTcy(ctx.text, ctx.sel.start, ctx.sel.end);
+  if (runs.length === 0) {
+    toast("縦中横にする文字を選択してください");
+    syncTcyControls(ctx.sel);
+    return false;
+  }
+  withHistoryTransient(() => {
+    for (const run of runs) {
+      setCharTateChuYokosRange(ctx.sel.psdPath, ctx.targetId, run.start, run.end, enabled);
+    }
+    return true;
+  });
+  refreshActiveInPlaceEditPreview(ctx.sel);
+  showInplaceSelectionHighlightOnly(ctx.sel);
+  requestAnimationFrame(() => showInplaceSelectionHighlightOnly(ctx.sel));
+  syncTcyControls(ctx.sel);
+  return true;
+}
+
+function bindTateChuYokoControl() {
+  const applyBtn = tcyApplyBtnEl();
+  const removeBtn = tcyRemoveBtnEl();
+  const bind = (btn, enabled) => {
+    if (!btn || btn.dataset.tcyBound === "true") return;
+    btn.dataset.tcyBound = "true";
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => commitTateChuYokoSelection(enabled));
+  };
+  bind(applyBtn, true);
+  bind(removeBtn, false);
+  syncTcyControls();
+}
+
+function bindVerticalHalfToFullSelect() {
+  const select = verticalHalfToFullSelectEl();
+  if (!select || select.dataset.halfToFullBound === "true") return;
+  select.dataset.halfToFullBound = "true";
+  syncVerticalHalfToFullSelect();
+  select.addEventListener("change", () => {
+    setDefault("verticalHalfToFullEnabled", select.value !== "off");
+    syncVerticalHalfToFullSelect();
+  });
+  onSettingsChange(() => syncVerticalHalfToFullSelect());
+}
+
+function bindTextScaleControls() {
+  const bind = (field, input, decBtn, incBtn) => {
+    if (!input) return;
+    const applyValue = () => {
+      const value = clampTextScalePercent(input.value);
+      if (!Number.isFinite(value)) return;
+      input.value = String(value);
+      commitTextScaleField(field, value);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      applyValue();
+      input.select();
+    });
+    input.addEventListener("change", applyValue);
+    input.addEventListener("blur", () => {
+      if (input.value === "" || !Number.isFinite(Number(input.value))) input.value = "100";
+      applyValue();
+    });
+    const adjust = (delta) => {
+      const cur = clampTextScalePercent(input.value || 100) ?? 100;
+      const next = clampTextScalePercent(cur + delta) ?? 100;
+      input.value = String(next);
+      commitTextScaleField(field, next);
+    };
+    if (decBtn) {
+      decBtn.addEventListener("mousedown", (e) => e.preventDefault());
+      decBtn.addEventListener("click", () => adjust(-1));
+    }
+    if (incBtn) {
+      incBtn.addEventListener("mousedown", (e) => e.preventDefault());
+      incBtn.addEventListener("click", () => adjust(+1));
+    }
+  };
+  bind(
+    "horizontalScale",
+    horizontalScaleInputEl(),
+    document.getElementById("horizontal-scale-dec-btn"),
+    document.getElementById("horizontal-scale-inc-btn"),
+  );
+  bind(
+    "verticalScale",
+    verticalScaleInputEl(),
+    document.getElementById("vertical-scale-dec-btn"),
+    document.getElementById("vertical-scale-inc-btn"),
+  );
+}
+
+function bindTextSpacingControls() {
+  const bind = (field, input, decBtn, incBtn) => {
+    if (!input) return;
+    const applyValue = () => {
+      const value = clampTextSpacingMille(input.value);
+      if (!Number.isFinite(value)) return;
+      input.value = String(value);
+      commitTextSpacingField(field, value);
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter") return;
+      e.preventDefault();
+      applyValue();
+      input.select();
+    });
+    input.addEventListener("change", applyValue);
+    input.addEventListener("blur", () => {
+      if (input.value === "" || !Number.isFinite(Number(input.value))) input.value = "0";
+      applyValue();
+    });
+    const adjust = (delta) => {
+      const cur = clampTextSpacingMille(input.value || 0) ?? 0;
+      const next = clampTextSpacingMille(cur + delta) ?? 0;
+      input.value = String(next);
+      commitTextSpacingField(field, next);
+    };
+    if (decBtn) {
+      decBtn.addEventListener("mousedown", (e) => e.preventDefault());
+      decBtn.addEventListener("click", () => adjust(-10));
+    }
+    if (incBtn) {
+      incBtn.addEventListener("mousedown", (e) => e.preventDefault());
+      incBtn.addEventListener("click", () => adjust(+10));
+    }
+  };
+  bind(
+    "kerningMille",
+    kerningInputEl(),
+    document.getElementById("kerning-dec-btn"),
+    document.getElementById("kerning-inc-btn"),
+  );
+  bind(
+    "trackingMille",
+    trackingInputEl(),
+    document.getElementById("tracking-dec-btn"),
+    document.getElementById("tracking-inc-btn"),
+  );
 }
 
 // colorOrNull / widthOrNull に null を渡すと「各レイヤーの現在値を保持」の意味。
@@ -2125,6 +2614,44 @@ function commitFillField(color) {
   });
   rebuildLayerList();
   refreshAllOverlays();
+}
+
+function computeCommonTextScale(selections, field) {
+  let common;
+  for (const sel of selections) {
+    const ref = resolveLayerRef(sel);
+    if (!ref) continue;
+    let v;
+    if (ref.kind === "existing") {
+      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+      v = edit[field] ?? ref.layer[field] ?? 100;
+    } else {
+      v = ref.newLayer[field] ?? 100;
+    }
+    v = clampTextScalePercent(v) ?? 100;
+    if (common === undefined) common = v;
+    else if (common !== v) return null;
+  }
+  return common ?? 100;
+}
+
+function computeCommonTextSpacing(selections, field) {
+  let common;
+  for (const sel of selections) {
+    const ref = resolveLayerRef(sel);
+    if (!ref) continue;
+    let v;
+    if (ref.kind === "existing") {
+      const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+      v = edit[field] ?? ref.layer[field] ?? 0;
+    } else {
+      v = ref.newLayer[field] ?? 0;
+    }
+    v = clampTextSpacingMille(v) ?? 0;
+    if (common === undefined) common = v;
+    else if (common !== v) return null;
+  }
+  return common ?? 0;
 }
 
 function currentWidthForCommit() {

@@ -1,7 +1,7 @@
 import { buildReferencePageCards, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { getVersion } from "@tauri-apps/api/app";
 import packageInfo from "../package.json";
-import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
+import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh, setNextPdfZoomAnchorFromClientPoint } from "./pdf-view.js";
 import {
   clearTemporaryMultiSelectionAdornments,
   deleteSelectedLayers,
@@ -27,7 +27,7 @@ import {
   removeEditModeRubyFromRange,
 } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
-import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh } from "./spread-view.js";
+import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh, setNextPsdZoomAnchorFromClientPoint } from "./spread-view.js";
 import {
   bindEditorEvents,
   commitBoldToSelections,
@@ -897,7 +897,7 @@ let pendingSidePanelInplaceSelection = null;
 function loadSidePanelTab() {
   try {
     const v = localStorage.getItem(SIDE_PANEL_TAB_KEY);
-    if (v === "txt" || v === "editor") return v;
+    if (v === "txt" || v === "editor" || v === "style") return v;
   } catch (_) {}
   return "txt";
 }
@@ -907,8 +907,12 @@ function hasTextForEditorTab() {
 }
 function syncTextEditorTabLock() {
   const locked = !hasTextForEditorTab();
-  const tab = document.getElementById("side-panel-tab-editor");
-  if (tab) {
+  const tabs = [
+    document.getElementById("side-panel-tab-editor"),
+    document.getElementById("side-panel-tab-style"),
+  ];
+  for (const tab of tabs) {
+    if (!tab) continue;
     tab.disabled = locked;
     tab.classList.toggle("locked", locked);
     tab.setAttribute("aria-disabled", locked ? "true" : "false");
@@ -929,8 +933,8 @@ function syncTextEditorTabLock() {
   if (locked) closeLayersDrawer();
 }
 function setSidePanelTab(tab) {
-  if (tab !== "txt" && tab !== "editor") tab = "txt";
-  if (tab === "editor" && !hasTextForEditorTab()) tab = "txt";
+  if (tab !== "txt" && tab !== "editor" && tab !== "style") tab = "txt";
+  if ((tab === "editor" || tab === "style") && !hasTextForEditorTab()) tab = "txt";
   const inplaceSelection = pendingSidePanelInplaceSelection ?? getLastInplaceSelection();
   pendingSidePanelInplaceSelection = null;
   for (const btn of document.querySelectorAll(".side-panel-tab")) {
@@ -952,7 +956,7 @@ function bindSidePanelTabs() {
   for (const btn of tabs) {
     btn.addEventListener("mousedown", (e) => {
       const sel = getLastInplaceSelection();
-      pendingSidePanelInplaceSelection = sel && sel.end > sel.start ? { ...sel } : null;
+      pendingSidePanelInplaceSelection = sel && sel.end >= sel.start ? { ...sel } : null;
       e.preventDefault();
     });
     btn.addEventListener("click", () => {
@@ -2104,6 +2108,8 @@ function bindZoomTool() {
         if (!e.altKey) return;
         e.preventDefault();
         const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1;
+        if (pane === "pdf") setNextPdfZoomAnchorFromClientPoint(e.clientX, e.clientY);
+        else setNextPsdZoomAnchorFromClientPoint(e.clientX, e.clientY);
         zoomPaneBy(pane, factor);
       },
       { passive: false },

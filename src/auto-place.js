@@ -107,14 +107,18 @@ function countPunctTsumeCharsScan(line) {
 function countTcyPairsScan(line) {
   if (!line || line.length < 2) return 0;
   let n = 0;
-  for (let k = 0; k < line.length - 1; ) {
-    const two = line.slice(k, k + 2);
-    if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
-      n++;
-      k += 2;
-    } else {
+  for (let k = 0; k < line.length; ) {
+    const ch = line[k];
+    if (ch < "0" || ch > "9") {
       k += 1;
+      continue;
     }
+    let j = k + 1;
+    while (j < line.length && line[j] >= "0" && line[j] <= "9") j++;
+    if (j - k === 2) {
+      n++;
+    }
+    k = j;
   }
   return n;
 }

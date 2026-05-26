@@ -72,6 +72,8 @@ pub fn apply_edits(payload: &EditPayload, app: &tauri::AppHandle) -> Result<Stri
             let _ = std::fs::remove_file(&sentinel_path);
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
+            hidden_windows.restore_hidden_photoshop_windows();
+            cleanup_adobe_crash_processors();
             let trimmed = content.trim().to_string();
             // "head" は OK ステータス本体（"OK" / "OK partial 7/10"）、
             // "warn_suffix" は addWarning 由来の警告群（失敗 PSD 詳細含む）。
@@ -109,6 +111,8 @@ pub fn apply_edits(payload: &EditPayload, app: &tauri::AppHandle) -> Result<Stri
         if Instant::now() > deadline {
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
+            hidden_windows.restore_hidden_photoshop_windows();
+            cleanup_adobe_crash_processors();
             return Err(PhotoshopError::Timeout);
         }
         std::thread::sleep(Duration::from_millis(SENTINEL_POLL_MS));
@@ -134,6 +138,15 @@ impl HiddenPhotoshopWindows {
             }
         }
     }
+
+    fn restore_hidden_photoshop_windows(&mut self) {
+        for hwnd_key in self.hwnds.drain(..) {
+            let hwnd = hwnd_key as winapi::shared::windef::HWND;
+            unsafe {
+                winapi::um::winuser::ShowWindow(hwnd, winapi::um::winuser::SW_RESTORE);
+            }
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -143,7 +156,20 @@ struct HiddenPhotoshopWindows;
 #[cfg(not(windows))]
 impl HiddenPhotoshopWindows {
     fn hide_visible_photoshop_windows(&mut self) {}
+    fn restore_hidden_photoshop_windows(&mut self) {}
 }
+
+#[cfg(windows)]
+fn cleanup_adobe_crash_processors() {
+    for image_name in ["Adobe Crash Processor.exe", "Adobe Crash Handler.exe"] {
+        let _ = Command::new("taskkill")
+            .args(["/F", "/IM", image_name])
+            .output();
+    }
+}
+
+#[cfg(not(windows))]
+fn cleanup_adobe_crash_processors() {}
 
 #[cfg(windows)]
 fn find_visible_photoshop_windows() -> Vec<winapi::shared::windef::HWND> {

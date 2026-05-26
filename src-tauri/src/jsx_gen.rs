@@ -103,6 +103,18 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
             if let Some(l) = layer.leading_pct {
                 out.push_str(&format!(", leadingPct: {}", l));
             }
+            if let Some(s) = layer.horizontal_scale {
+                out.push_str(&format!(", horizontalScale: {}", s));
+            }
+            if let Some(s) = layer.vertical_scale {
+                out.push_str(&format!(", verticalScale: {}", s));
+            }
+            if let Some(s) = layer.tracking_mille {
+                out.push_str(&format!(", trackingMille: {}", s));
+            }
+            if let Some(s) = layer.kerning_mille {
+                out.push_str(&format!(", kerningMille: {}", s));
+            }
             if let Some(ref ll) = layer.line_leadings {
                 if !ll.is_empty() {
                     out.push_str(", lineLeadings: ");
@@ -119,6 +131,36 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
                 if !cf.is_empty() {
                     out.push_str(", charFonts: ");
                     emit_char_fonts(&mut out, cf);
+                }
+            }
+            if let Some(ref cs) = layer.char_horizontal_scales {
+                if !cs.is_empty() {
+                    out.push_str(", charHorizontalScales: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cs) = layer.char_vertical_scales {
+                if !cs.is_empty() {
+                    out.push_str(", charVerticalScales: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cs) = layer.char_trackings {
+                if !cs.is_empty() {
+                    out.push_str(", charTrackings: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cs) = layer.char_kernings {
+                if !cs.is_empty() {
+                    out.push_str(", charKernings: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref ct) = layer.char_tate_chu_yokos {
+                if !ct.is_empty() {
+                    out.push_str(", charTateChuYokos: ");
+                    emit_char_bolds(&mut out, ct);
                 }
             }
             if let Some(b) = layer.synthetic_bold {
@@ -176,6 +218,18 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
             if let Some(l) = nl.leading_pct {
                 out.push_str(&format!(", leadingPct: {}", l));
             }
+            if let Some(s) = nl.horizontal_scale {
+                out.push_str(&format!(", horizontalScale: {}", s));
+            }
+            if let Some(s) = nl.vertical_scale {
+                out.push_str(&format!(", verticalScale: {}", s));
+            }
+            if let Some(s) = nl.tracking_mille {
+                out.push_str(&format!(", trackingMille: {}", s));
+            }
+            if let Some(s) = nl.kerning_mille {
+                out.push_str(&format!(", kerningMille: {}", s));
+            }
             if let Some(ref ll) = nl.line_leadings {
                 if !ll.is_empty() {
                     out.push_str(", lineLeadings: ");
@@ -192,6 +246,36 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
                 if !cf.is_empty() {
                     out.push_str(", charFonts: ");
                     emit_char_fonts(&mut out, cf);
+                }
+            }
+            if let Some(ref cs) = nl.char_horizontal_scales {
+                if !cs.is_empty() {
+                    out.push_str(", charHorizontalScales: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cs) = nl.char_vertical_scales {
+                if !cs.is_empty() {
+                    out.push_str(", charVerticalScales: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cs) = nl.char_trackings {
+                if !cs.is_empty() {
+                    out.push_str(", charTrackings: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref cs) = nl.char_kernings {
+                if !cs.is_empty() {
+                    out.push_str(", charKernings: ");
+                    emit_char_sizes(&mut out, cs);
+                }
+            }
+            if let Some(ref ct) = nl.char_tate_chu_yokos {
+                if !ct.is_empty() {
+                    out.push_str(", charTateChuYokos: ");
+                    emit_char_bolds(&mut out, ct);
                 }
             }
             if let Some(b) = nl.synthetic_bold {
@@ -875,6 +959,254 @@ function applyPerCharSizesAndFonts(layer, contents, charSizes, charFonts) {
 // applyPerCharSizesAndFonts と同型の clone-and-replace。layerBold が true で
 // charBolds が空の場合でも全 char に true をセットしたいので、layerBold あり
 // または charBolds あり のどちらかで処理を起動する。
+function normalizeTextScalePercent(v) {
+  if (typeof v !== "number" || !isFinite(v)) return null;
+  return Math.max(10, Math.min(400, Math.round(v)));
+}
+
+function putTextScaleKeys(styleDesc, horizontalScale, verticalScale) {
+  var hs = normalizeTextScalePercent(horizontalScale);
+  var vs = normalizeTextScalePercent(verticalScale);
+  if (hs !== null) {
+    try { styleDesc.putUnitDouble(sID("horizontalScale"), sID("percentUnit"), hs); } catch (eHs) {}
+  }
+  if (vs !== null) {
+    try { styleDesc.putUnitDouble(sID("verticalScale"), sID("percentUnit"), vs); } catch (eVs) {}
+  }
+}
+
+function applyLayerTextScales(layer, horizontalScale, verticalScale) {
+  if (normalizeTextScalePercent(horizontalScale) === null && normalizeTextScalePercent(verticalScale) === null) return;
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+  var newRangeList = new ActionList();
+  for (var r = 0; r < oldRanges.count; r++) {
+    var srcRange = oldRanges.getObjectValue(r);
+    var styleClone = cloneActionDescriptor(srcRange.getObjectValue(sID("textStyle")));
+    putTextScaleKeys(styleClone, horizontalScale, verticalScale);
+    var rangeDesc = new ActionDescriptor();
+    rangeDesc.putInteger(sID("from"), srcRange.getInteger(sID("from")));
+    rangeDesc.putInteger(sID("to"), srcRange.getInteger(sID("to")));
+    rangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+    newRangeList.putObject(sID("textStyleRange"), rangeDesc);
+  }
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
+function applyPerCharTextScales(layer, contents, charHorizontalScales, charVerticalScales) {
+  var hasH = charHorizontalScales && !isObjEmpty(charHorizontalScales);
+  var hasV = charVerticalScales && !isObjEmpty(charVerticalScales);
+  if (!hasH && !hasV) return;
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+  function readScale(map, idx) {
+    var v = map ? map[String(idx)] : undefined;
+    return (typeof v === "number") ? normalizeTextScalePercent(v) : null;
+  }
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curH = readScale(charHorizontalScales, 0);
+  var curV = readScale(charVerticalScales, 0);
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextH, nextV, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc; nextH = curH; nextV = curV;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextH = readScale(charHorizontalScales, p);
+      nextV = readScale(charVerticalScales, p);
+      boundary = (nextSrc !== curSrc) || (nextH !== curH) || (nextV !== curV);
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var styleClone = cloneActionDescriptor(srcRange.getObjectValue(sID("textStyle")));
+      putTextScaleKeys(styleClone, curH, curV);
+      var rangeDesc = new ActionDescriptor();
+      rangeDesc.putInteger(sID("from"), curStart);
+      rangeDesc.putInteger(sID("to"), p);
+      rangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), rangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curH = nextH;
+      curV = nextV;
+    }
+  }
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
+function normalizeTextSpacingMille(v) {
+  if (typeof v !== "number" || !isFinite(v)) return null;
+  return Math.max(-1000, Math.min(1000, Math.round(v)));
+}
+
+function putTrackingValue(styleDesc, value) {
+  var n = normalizeTextSpacingMille(value);
+  if (n === null) return;
+  try { styleDesc.putInteger(sID("tracking"), n); } catch (eTrackA) {}
+  try { styleDesc.putInteger(cID("Trck"), n); } catch (eTrackB) {}
+}
+
+function addKerningRange(list, from, to, value) {
+  var n = normalizeTextSpacingMille(value);
+  if (n === null) return;
+  var kernDesc = new ActionDescriptor();
+  kernDesc.putInteger(sID("from"), from);
+  kernDesc.putInteger(sID("to"), to);
+  kernDesc.putInteger(sID("kerning"), n);
+  list.putObject(sID("kerningRange"), kernDesc);
+}
+
+function applyLayerTextSpacing(layer, trackingMille, kerningMille) {
+  var tr = normalizeTextSpacingMille(trackingMille);
+  var kr = normalizeTextSpacingMille(kerningMille);
+  if (tr === 0) tr = null;
+  if (kr === 0) kr = null;
+  if (tr === null && kr === null) return;
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  var newTextKey = cloneActionDescriptor(textKey);
+  if (tr !== null && oldRanges.count > 0) {
+    var newRangeList = new ActionList();
+    for (var r = 0; r < oldRanges.count; r++) {
+      var srcRange = oldRanges.getObjectValue(r);
+      var styleClone = cloneActionDescriptor(srcRange.getObjectValue(sID("textStyle")));
+      putTrackingValue(styleClone, tr);
+      var rangeDesc = new ActionDescriptor();
+      rangeDesc.putInteger(sID("from"), srcRange.getInteger(sID("from")));
+      rangeDesc.putInteger(sID("to"), srcRange.getInteger(sID("to")));
+      rangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), rangeDesc);
+    }
+    newTextKey.putList(sID("textStyleRange"), newRangeList);
+  }
+  if (kr !== null) {
+    var kernList = new ActionList();
+    var totalChars = 0;
+    for (var rr = 0; rr < oldRanges.count; rr++) {
+      var rd = oldRanges.getObjectValue(rr);
+      var toCh = rd.getInteger(sID("to"));
+      if (toCh > totalChars) totalChars = toCh;
+    }
+    for (var k = Math.max(0, totalChars - 2); k >= 0; k--) addKerningRange(kernList, k, k + 1, kr);
+    newTextKey.putList(sID("kerningRange"), kernList);
+  }
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
+function applyPerCharTextSpacing(layer, contents, charTrackings, charKernings) {
+  var hasT = charTrackings && !isObjEmpty(charTrackings);
+  var hasK = charKernings && !isObjEmpty(charKernings);
+  if (!hasT && !hasK) return;
+  app.activeDocument.activeLayer = layer;
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+  function readSpacing(map, idx) {
+    var v = map ? map[String(idx)] : undefined;
+    return (typeof v === "number") ? normalizeTextSpacingMille(v) : null;
+  }
+  var newTextKey = cloneActionDescriptor(textKey);
+  if (hasT) {
+    var newRangeList = new ActionList();
+    if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+    var curStart = 0;
+    var curSrc = srcRangeIndex[0];
+    var curT = readSpacing(charTrackings, 0);
+    for (var p = 1; p <= totalChars; p++) {
+      var nextSrc, nextT, boundary;
+      if (p === totalChars) {
+        boundary = true; nextSrc = curSrc; nextT = curT;
+      } else {
+        nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+        nextT = readSpacing(charTrackings, p);
+        boundary = (nextSrc !== curSrc) || (nextT !== curT);
+      }
+      if (boundary) {
+        var srcRange = oldRanges.getObjectValue(curSrc);
+        var styleClone = cloneActionDescriptor(srcRange.getObjectValue(sID("textStyle")));
+        putTrackingValue(styleClone, curT);
+        var rangeDesc = new ActionDescriptor();
+        rangeDesc.putInteger(sID("from"), curStart);
+        rangeDesc.putInteger(sID("to"), p);
+        rangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+        newRangeList.putObject(sID("textStyleRange"), rangeDesc);
+        curStart = p; curSrc = nextSrc; curT = nextT;
+      }
+    }
+    newTextKey.putList(sID("textStyleRange"), newRangeList);
+  }
+  if (hasK) {
+    var kernList = new ActionList();
+    for (var k = Math.max(0, totalChars - 2); k >= 0; k--) {
+      var kv = readSpacing(charKernings, k);
+      if (kv !== null) addKerningRange(kernList, k, k + 1, kv);
+    }
+    newTextKey.putList(sID("kerningRange"), kernList);
+  }
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
 function applyPerCharBolds(layer, contents, charBolds, layerBold) {
   var hasChar = charBolds && !isObjEmpty(charBolds);
   var lb = layerBold === true;
@@ -2050,45 +2382,58 @@ function applyRepeatedDashTracking(layer, contents, dashMille, tildeMille) {
 //   2) ペア該当レンジに putEnumerated(baselineDirection, baselineDirection, cross) を当てる
 //   3) ペア外レンジは clone した style をそのまま (baselineDirection を触らない)
 //   4) set は textLayer クラス (tracking と同じパターン)
-function applyTateChuYoko(layer, contents, enabled, direction) {
-  if (!enabled) return;
+function applyTateChuYoko(layer, contents, enabled, direction, charTateChuYokos) {
+  var hasManual = charTateChuYokos && !isObjEmpty(charTateChuYokos);
+  if (!enabled && !hasManual) return;
   if (direction !== "vertical") return;
   var fullText = String(contents);
-  if (fullText.length < 2) return;
+  if (fullText.length < 1) return;
 
-  // 【v1.26.0】PSD 保存時に全角 ！！/！？ を半角 !!/!? に変換する。
-  // Photoshop の縦中横 (baselineDirection: cross) は半角の合成 glyph 化が安定しており、
-  // 全角だと cross 属性を当てても縦に並んだまま残るケースが実機で確認されている。
-  // 半角化は char index 1:1 (全角 1 文字 → 半角 1 文字) なので、後段の per-char 系
-  // (applyLineLeadings / applyPerCharSizesAndFonts / applyPerCharBolds 等) に影響なし。
-  // 変換後の textItem.contents で pairs を再検出 (もちろん半角ペアも該当する)。
-  var hasFullWidthPair = fullText.indexOf("！！") >= 0 || fullText.indexOf("！？") >= 0;
-  if (hasFullWidthPair) {
-    var halfText = fullText.replace(/！！/g, "!!").replace(/！？/g, "!?");
-    try {
-      // 改行は \r で渡す (Photoshop textItem.contents の標準)。normalizeLineBreaks と同じ規約。
-      layer.textItem.contents = halfText.replace(/\n/g, "\r");
-      fullText = halfText;
-    } catch (eContentsRewrite) {
-      // contents 上書きに失敗しても、ペア検出は元 fullText のまま継続
-      addWarning("縦中横の半角化に失敗 (contents 上書き): " + eContentsRewrite);
+  // Auto TCY applies only to isolated two-character half-width digit runs.
+  // Manual charTateChuYokos ranges are still honored below.
+  var pairs = [];
+  if (enabled) {
+    var i = 0;
+    while (i < fullText.length) {
+      var ch = fullText.charAt(i);
+      if (ch < "0" || ch > "9") {
+        i += 1;
+        continue;
+      }
+      var j = i + 1;
+      while (j < fullText.length && fullText.charAt(j) >= "0" && fullText.charAt(j) <= "9") j++;
+      if (j - i === 2) pairs.push({ start: i, end: j });
+      i = j;
     }
   }
-
-  // ペア検出 (先頭から貪欲に 2 文字単位)
-  // 半角 "!!" / "!?" に加えて、全角 "！！" / "！？" も縦中横の対象として扱う。
-  // PSD 既存テキストは全角で組まれていることが多く、ユーザーが PsDesign で開いた
-  // 際に自動で縦中横化されるべき (ag-psd は全角のまま contents として返す)。
-  var pairs = [];
-  var i = 0;
-  while (i < fullText.length - 1) {
-    var two = fullText.charAt(i) + fullText.charAt(i + 1);
-    if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
-      pairs.push({ start: i, end: i + 2 });
-      i += 2;
-    } else {
-      i += 1;
+  if (hasManual) {
+    var mi = 0;
+    while (mi < fullText.length) {
+      if (charTateChuYokos[String(mi)] === true) {
+        var mj = mi + 1;
+        while (mj < fullText.length && charTateChuYokos[String(mj)] === true) mj++;
+        pairs.push({ start: mi, end: mj });
+        mi = mj;
+      } else {
+        mi++;
+      }
     }
+  }
+  if (pairs.length > 1) {
+    pairs.sort(function(a, b) {
+      return (a.start - b.start) || (a.end - b.end);
+    });
+    var mergedPairs = [];
+    for (var mpi = 0; mpi < pairs.length; mpi++) {
+      var pr = pairs[mpi];
+      var lastPair = mergedPairs.length > 0 ? mergedPairs[mergedPairs.length - 1] : null;
+      if (lastPair && pr.start <= lastPair.end) {
+        if (pr.end > lastPair.end) lastPair.end = pr.end;
+      } else {
+        mergedPairs.push({ start: pr.start, end: pr.end });
+      }
+    }
+    pairs = mergedPairs;
   }
   if (pairs.length === 0) return;
 
@@ -2279,6 +2624,50 @@ function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
   visit(doc);
 }
 
+function reapplyManualTextSpacingForPayload(doc, edits, newLayers) {
+  function hasNonZeroNumber(v) {
+    return typeof v === "number" && isFinite(v) && Math.round(v) !== 0;
+  }
+  function hasManualSpacing(entry) {
+    return entry && (
+      hasNonZeroNumber(entry.trackingMille) ||
+      hasNonZeroNumber(entry.kerningMille) ||
+      (entry.charTrackings && !isObjEmpty(entry.charTrackings)) ||
+      (entry.charKernings && !isObjEmpty(entry.charKernings))
+    );
+  }
+  function reapply(layer, entry, label) {
+    if (!layer || layer.kind !== LayerKind.TEXT || !entry) return;
+    try {
+      if (hasNonZeroNumber(entry.trackingMille) || hasNonZeroNumber(entry.kerningMille)) {
+        applyLayerTextSpacing(layer, entry.trackingMille, entry.kerningMille);
+      }
+    } catch (eLayerSpacing) {
+      addWarning(label + " text spacing final reapply failed: " + eLayerSpacing);
+    }
+    try {
+      if ((entry.charTrackings && !isObjEmpty(entry.charTrackings)) || (entry.charKernings && !isObjEmpty(entry.charKernings))) {
+        var ct = "";
+        try { ct = layer.textItem.contents; } catch (eTextContents) {}
+        applyPerCharTextSpacing(layer, ct, entry.charTrackings, entry.charKernings);
+      }
+    } catch (eCharSpacing) {
+      addWarning(label + " per-char text spacing final reapply failed: " + eCharSpacing);
+    }
+  }
+  for (var i = 0; i < edits.length; i++) {
+    var e = edits[i];
+    if (!hasManualSpacing(e)) continue;
+    reapply(findLayerById(doc, e.id), e, "layer " + e.id);
+  }
+  for (var j = 0; j < newLayers.length; j++) {
+    var nl = newLayers[j];
+    if (!hasManualSpacing(nl)) continue;
+    var layer = (typeof nl.__createdLayerId === "number") ? findLayerById(doc, nl.__createdLayerId) : null;
+    reapply(layer, nl, "new layer " + j);
+  }
+}
+
 function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent, rubyLeadingPct, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx, uiPageWidth, uiPageHeight) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[OPUS] skip missing: " + psdPath); return; }
@@ -2369,6 +2758,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       }
       // 【v1.22.0】合成太字（faux bold）。layer 全体 (e.syntheticBold) と per-char
       // (e.charBolds) のハイブリッド。どちらかに値があれば適用。
+      if (typeof e.horizontalScale === "number" || typeof e.verticalScale === "number") {
+        try {
+          applyLayerTextScales(layer, e.horizontalScale, e.verticalScale);
+        } catch (eScale) {
+          addWarning("text scale apply failed (layer " + e.id + "): " + eScale);
+        }
+      }
+      if ((e.charHorizontalScales && !isObjEmpty(e.charHorizontalScales)) || (e.charVerticalScales && !isObjEmpty(e.charVerticalScales))) {
+        try {
+          applyPerCharTextScales(layer, ti.contents, e.charHorizontalScales, e.charVerticalScales);
+        } catch (eCharScale) {
+          addWarning("per-char text scale apply failed (layer " + e.id + "): " + eCharScale);
+        }
+      }
       if (e.syntheticBold === true || e.syntheticBold === false ||
           (e.charBolds && !isObjEmpty(e.charBolds))) {
         try {
@@ -2450,12 +2853,12 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       // 【v1.26.0】縦中横（!! / !? の自動 tcy）。既存レイヤーにも適用（PSD 内に全角 ！！ で
       // 組まれているテキストを保存時に半角化 + 縦中横 cross 属性を当てる）。
       // 縦書きレイヤーのみ対象。direction は e.direction → ti.direction の優先順で判定。
-      if (tateChuYokoEnabled) {
+      if (tateChuYokoEnabled || (e.charTateChuYokos && !isObjEmpty(e.charTateChuYokos))) {
         try {
           var __dirTcy = (typeof e.direction === "string") ? e.direction
                        : (ti.direction === Direction.VERTICAL ? "vertical" : "horizontal");
           if (__dirTcy === "vertical") {
-            applyTateChuYoko(layer, ti.contents, true, __dirTcy);
+            applyTateChuYoko(layer, ti.contents, tateChuYokoEnabled, __dirTcy, e.charTateChuYokos);
           }
         } catch (eTcyExisting) {
           addWarning("縦中横の適用に失敗 (layer " + e.id + "): " + eTcyExisting);
@@ -2490,6 +2893,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         var nl = newLayers[j];
         var layerRef = doc.artLayers.add();
         layerRef.kind = LayerKind.TEXT;
+        try { nl.__createdLayerId = layerRef.id; } catch (eNewLayerId) {}
         var nti = layerRef.textItem;
         if (nl.direction === "vertical") {
           try { nti.direction = Direction.VERTICAL; } catch (eDir) {}
@@ -2601,6 +3005,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           }
         }
         // 【v1.22.0】合成太字（faux bold）。layer 全体 / per-char ハイブリッド。
+        if (typeof nl.horizontalScale === "number" || typeof nl.verticalScale === "number") {
+          try {
+            applyLayerTextScales(layerRef, nl.horizontalScale, nl.verticalScale);
+          } catch (eScaleNew) {
+            addWarning("new layer text scale apply failed: " + eScaleNew);
+          }
+        }
+        if ((nl.charHorizontalScales && !isObjEmpty(nl.charHorizontalScales)) || (nl.charVerticalScales && !isObjEmpty(nl.charVerticalScales))) {
+          try {
+            applyPerCharTextScales(layerRef, nti.contents, nl.charHorizontalScales, nl.charVerticalScales);
+          } catch (eCharScaleNew) {
+            addWarning("new layer per-char text scale apply failed: " + eCharScaleNew);
+          }
+        }
         if (nl.syntheticBold === true || nl.syntheticBold === false ||
             (nl.charBolds && !isObjEmpty(nl.charBolds))) {
           try {
@@ -2679,9 +3097,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         // 縦中横（!! / !? の自動 tcy）。設定 ON かつ縦書きレイヤーのみ。
         // applyRepeatedDashTracking の後に呼ぶことで、tracking で再構築された textStyleRange
         // を引き継ぎつつ baselineDirection=cross を上乗せする。
-        if (tateChuYokoEnabled) {
+        if (tateChuYokoEnabled || (nl.charTateChuYokos && !isObjEmpty(nl.charTateChuYokos))) {
           try {
-            applyTateChuYoko(layerRef, nti.contents, true, nl.direction);
+            applyTateChuYoko(layerRef, nti.contents, tateChuYokoEnabled, nl.direction, nl.charTateChuYokos);
           } catch (eTcy) {
             addWarning("縦中横 (!! / !?) の適用に失敗: " + eTcy);
           }
@@ -2789,6 +3207,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       try { reapplySymbolFontForAllLayers(doc, symbolFontPostScriptName); }
       catch (eRSym) { addWarning("記号フォント置換再適用に失敗: " + eRSym); }
     }
+    try { reapplyManualTextSpacingForPayload(doc, edits, newLayers); }
+    catch (eRManualSpacing) { addWarning("manual text spacing reapply failed: " + eRManualSpacing); }
     if (typeof savePath === "string" && savePath.length > 0) {
       var outFile = new File(savePath);
       try {

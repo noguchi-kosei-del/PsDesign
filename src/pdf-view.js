@@ -24,8 +24,10 @@ import {
 import {
   applyOverscrollMargin,
   captureViewportCenterFraction,
+  captureViewportPointFraction,
   centerCanvasInViewport,
   restoreViewportCenter,
+  restoreViewportPoint,
 } from "./overscroll.js";
 
 const MAX_CANVAS_SIDE = 16384;
@@ -52,6 +54,8 @@ let currentRenderTask = null;
 // ズーム由来かどうかをフラグで区別する。
 let pdfZoomDirty = false;
 let resetZoomToStart = false;
+let pendingZoomAnchor = null;
+let pendingResizeViewportCenter = null;
 
 function isEditorPdfSampleMode() {
   return getParallelViewMode() === "editor" && getEditorLeftPaneMode() === "pdf";
@@ -144,7 +148,10 @@ export function mountPdfView() {
   updatePdfCursor();
 
   if (typeof ResizeObserver !== "undefined") {
-    const ro = new ResizeObserver(() => schedule());
+    const ro = new ResizeObserver(() => {
+      pendingResizeViewportCenter = capturePdfViewportCenter() ?? pendingResizeViewportCenter;
+      schedule();
+    });
     ro.observe(rootEl);
   }
 
@@ -210,6 +217,11 @@ function restoreCurrentPdfPageCenter(center) {
 export function capturePdfViewportCenter() {
   if (!stageEl || !pageWrap || pageWrap.hidden) return null;
   return captureViewportCenterFraction(stageEl, pageWrap);
+}
+
+export function setNextPdfZoomAnchorFromClientPoint(clientX, clientY) {
+  if (!stageEl || !pageWrap || pageWrap.hidden) return;
+  pendingZoomAnchor = captureViewportPointFraction(stageEl, pageWrap, clientX, clientY);
 }
 
 export function resetPdfViewportToStart() {
@@ -408,14 +420,17 @@ async function redraw() {
   // ズーム経由の redraw のときだけ、サイズ変更前の現在レイアウトから
   // viewport 中心のキャンバス相対座標をキャプチャ。フラグはここで消費。
   let zoomFracForThisRedraw = null;
+  const resizeCenterForThisRedraw = pendingResizeViewportCenter;
+  pendingResizeViewportCenter = null;
   let resetZoomForThisRedraw = false;
   if (pdfZoomDirty) {
     pdfZoomDirty = false;
     resetZoomForThisRedraw = resetZoomToStart;
     resetZoomToStart = false;
     if (!fitToPane && !resetZoomForThisRedraw) {
-      zoomFracForThisRedraw = captureViewportCenterFraction(stageEl, pageWrap);
+      zoomFracForThisRedraw = pendingZoomAnchor ?? captureViewportCenterFraction(stageEl, pageWrap);
     }
+    pendingZoomAnchor = null;
   }
 
   // canvas の CSS サイズを先に設定して pageWrap のレイアウトを確定させる
@@ -450,7 +465,18 @@ async function redraw() {
     centerCanvasInViewport(stageEl, pageWrap);
   } else if (zoomFracForThisRedraw) {
     if (hasOverflowAfter) {
-      restoreViewportCenter(stageEl, pageWrap, zoomFracForThisRedraw);
+      if (Number.isFinite(zoomFracForThisRedraw.offsetX) && Number.isFinite(zoomFracForThisRedraw.offsetY)) {
+        restoreViewportPoint(stageEl, pageWrap, zoomFracForThisRedraw);
+      } else {
+        restoreViewportCenter(stageEl, pageWrap, zoomFracForThisRedraw);
+      }
+    } else {
+      stageEl.scrollLeft = 0;
+      stageEl.scrollTop = 0;
+    }
+  } else if (resizeCenterForThisRedraw) {
+    if (hasOverflowAfter) {
+      restoreViewportCenter(stageEl, pageWrap, resizeCenterForThisRedraw);
     } else {
       stageEl.scrollLeft = 0;
       stageEl.scrollTop = 0;

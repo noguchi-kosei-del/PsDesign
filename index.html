@@ -10,6 +10,47 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <svg class="svg-symbols" width="0" height="0" aria-hidden="true" focusable="false">
+      <symbol id="char-icon-size" viewBox="0 0 24 24">
+        <path d="M4 5h12M10 5v14M6 19h8" stroke="currentColor" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M18 7v10M16 9l2-2 2 2M16 15l2 2 2-2" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="char-icon-leading" viewBox="0 0 24 24">
+        <path d="M4 4v16M2.5 7L4 5.5 5.5 7M2.5 17L4 18.5 5.5 17" stroke="currentColor" fill="none" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M9 6h10M9 12h10M9 18h10" stroke="currentColor" fill="none" stroke-width="1.7" stroke-linecap="round"/>
+        <text x="10.5" y="10.6" font-size="8" font-family="Arial, sans-serif" font-weight="700" fill="currentColor">A</text>
+      </symbol>
+      <symbol id="char-icon-fill" viewBox="0 0 24 24">
+        <text x="5" y="16" font-size="14" font-family="Arial, sans-serif" font-weight="800" fill="currentColor">A</text>
+        <path d="M4 20h12" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="round"/>
+        <rect x="17" y="13" width="4" height="7" rx="0.6" fill="currentColor" opacity="0.65"/>
+      </symbol>
+      <symbol id="char-icon-stroke" viewBox="0 0 24 24">
+        <text x="4.5" y="16" font-size="14" font-family="Arial, sans-serif" font-weight="800" fill="none" stroke="currentColor" stroke-width="1">A</text>
+        <path d="M15.5 7.5h4v9h-4z" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="char-icon-scale-h" viewBox="0 0 24 24">
+        <path d="M4 5h16M12 5v14M8 19h8" stroke="currentColor" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M4 13h16M6 11l-2 2 2 2M18 11l2 2-2 2" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="char-icon-scale-v" viewBox="0 0 24 24">
+        <path d="M7 6h10M12 6v12M9 18h6" stroke="currentColor" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M19 5v14M17 7l2-2 2 2M17 17l2 2 2-2" stroke="currentColor" fill="none" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="char-icon-kerning" viewBox="0 0 24 24">
+        <text x="2" y="15" font-size="12" font-family="Arial, sans-serif" font-weight="800" fill="currentColor">V</text>
+        <text x="13" y="15" font-size="12" font-family="Arial, sans-serif" font-weight="800" fill="currentColor">A</text>
+        <path d="M10 18h4M8.5 16.5L10 18l-1.5 1.5M15.5 16.5L14 18l1.5 1.5" stroke="currentColor" fill="none" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="char-icon-tracking" viewBox="0 0 24 24">
+        <text x="4" y="14.5" font-size="12" font-family="Arial, sans-serif" font-weight="800" fill="currentColor">VA</text>
+        <path d="M4 18h16M6 16l-2 2 2 2M18 16l2 2-2 2" stroke="currentColor" fill="none" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"/>
+      </symbol>
+      <symbol id="char-icon-tcy" viewBox="0 0 24 24">
+        <path d="M6 4v16M18 4v16" stroke="currentColor" fill="none" stroke-width="1.4" stroke-linecap="round"/>
+        <text x="7" y="15" font-size="9" font-family="Arial, sans-serif" font-weight="800" fill="currentColor">12</text>
+      </symbol>
+    </svg>
     <div id="app" class="app">
       <header class="toolbar" data-tauri-drag-region>
         <h1 data-tauri-drag-region class="app-logo" aria-label="OPUS">
@@ -527,7 +568,8 @@
           </div>
           <div class="side-panel-tabs" role="tablist">
             <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
-            <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">スタイル編集</button>
+            <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">テキスト編集</button>
+            <button id="side-panel-tab-style" class="side-panel-tab" data-tab="style" type="button" role="tab" aria-selected="false">スタイル編集</button>
           </div>
           <section class="panel-section txt-source" id="txt-source" data-section="txt">
             <div id="txt-source-actions" class="txt-source-actions">
@@ -593,7 +635,7 @@
           <div id="editor" class="editor">
             <div class="editor-tabs-section">
               <div class="editor-tab-panel" data-tab-panel="size">
-                <div class="editor-panel-label">サイズ</div>
+                <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-size"></use></svg>サイズ</div>
                 <div class="size-row">
                   <div class="size-group" role="group" aria-label="文字サイズ">
                     <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
@@ -604,7 +646,7 @@
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="leading">
-                <div class="editor-panel-label">行間</div>
+                <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-leading"></use></svg>行間</div>
                 <div class="size-row">
                   <div class="size-group" role="group" aria-label="行間">
                     <button id="leading-inc-btn" class="size-btn" type="button" title="広く">＋</button>
@@ -615,9 +657,8 @@
                 </div>
               </div>
               <div class="editor-tab-panel toolbar-fill-palette" data-tab-panel="fill">
-                <div class="editor-panel-label">文字色</div>
+                <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-fill"></use></svg>文字色</div>
                 <div class="toolbar-fill-swatches" role="group" aria-label="文字色パレット">
-                  <span class="toolbar-fill-icon" aria-hidden="true">A</span>
                   <button class="toolbar-fill-swatch toolbar-fill-black" type="button" data-fill="black" title="黒文字" aria-label="黒文字"></button>
                   <button class="toolbar-fill-swatch toolbar-fill-white" type="button" data-fill="white" title="白文字" aria-label="白文字"></button>
                   <button class="toolbar-fill-swatch toolbar-fill-red" type="button" data-fill="#ff0000" title="赤文字" aria-label="赤文字"></button>
@@ -627,7 +668,7 @@
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="stroke">
-                <div class="editor-panel-label">フチ</div>
+                <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-stroke"></use></svg>フチ</div>
                 <div class="size-row">
                   <div class="stroke-width-group" role="group" aria-label="フチ太さ">
                     <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
@@ -640,6 +681,15 @@
                     <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
                     <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
                   </div>
+                </div>
+              </div>
+              <div class="editor-tab-panel" data-tab-panel="vertical-half-to-full">
+                <div class="editor-panel-label">縦書き時の半角→全角</div>
+                <div class="editor-setting-row">
+                  <select id="vertical-half-to-full-select" class="editor-setting-select" aria-label="縦書き時の半角文字を全角に変換">
+                    <option value="on">適用する</option>
+                    <option value="off">適用しない</option>
+                  </select>
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="ruby">
@@ -724,6 +774,67 @@
               </div>
             </div>
           </div>
+          </section>
+          <section class="panel-section" data-section="style" hidden>
+            <div class="editor style-editor">
+              <div class="editor-tabs-section style-editor-section">
+                <div class="editor-tab-panel style-controls-panel" data-tab-panel="text-scale">
+                  <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-scale-h"></use></svg>長体・平体</div>
+                  <div class="style-control-grid">
+                    <div class="style-control-item">
+                      <div class="style-control-label">長体</div>
+                      <div class="size-group" role="group" aria-label="長体">
+                        <button id="horizontal-scale-inc-btn" class="size-btn" type="button" title="広げる" aria-label="長体を広げる">＋</button>
+                        <input id="horizontal-scale-input" class="size-input" type="number" min="10" max="400" step="1" value="100" aria-label="長体" />
+                        <span class="size-unit">%</span>
+                        <button id="horizontal-scale-dec-btn" class="size-btn" type="button" title="縮める" aria-label="長体を縮める">−</button>
+                      </div>
+                    </div>
+                    <div class="style-control-item">
+                      <div class="style-control-label">平体</div>
+                      <div class="size-group" role="group" aria-label="平体">
+                        <button id="vertical-scale-inc-btn" class="size-btn" type="button" title="広げる" aria-label="平体を広げる">＋</button>
+                        <input id="vertical-scale-input" class="size-input" type="number" min="10" max="400" step="1" value="100" aria-label="平体" />
+                        <span class="size-unit">%</span>
+                        <button id="vertical-scale-dec-btn" class="size-btn" type="button" title="縮める" aria-label="平体を縮める">−</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="editor-tab-panel style-controls-panel" data-tab-panel="letter-spacing">
+                  <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-tracking"></use></svg>字間</div>
+                  <div class="style-control-grid">
+                    <div class="style-control-item">
+                      <div class="style-control-label">カーニング</div>
+                      <div class="size-group" role="group" aria-label="カーニング">
+                        <button id="kerning-inc-btn" class="size-btn" type="button" title="広げる" aria-label="カーニングを広げる">＋</button>
+                        <input id="kerning-input" class="size-input spacing-input" type="number" min="-1000" max="1000" step="10" value="0" aria-label="カーニング" />
+                        <button id="kerning-dec-btn" class="size-btn" type="button" title="詰める" aria-label="カーニングを詰める">−</button>
+                      </div>
+                    </div>
+                    <div class="style-control-item">
+                      <div class="style-control-label">トラッキング</div>
+                      <div class="size-group" role="group" aria-label="トラッキング">
+                        <button id="tracking-inc-btn" class="size-btn" type="button" title="広げる" aria-label="トラッキングを広げる">＋</button>
+                        <input id="tracking-input" class="size-input spacing-input" type="number" min="-1000" max="1000" step="10" value="0" aria-label="トラッキング" />
+                        <button id="tracking-dec-btn" class="size-btn" type="button" title="詰める" aria-label="トラッキングを詰める">−</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div class="editor-tab-panel style-controls-panel" data-tab-panel="tate-chu-yoko">
+                  <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-tcy"></use></svg>縦中横</div>
+                  <div class="style-control-grid style-control-grid-single">
+                    <div class="style-control-item">
+                      <div class="style-toggle-row" role="group" aria-label="縦中横">
+                        <button id="tcy-apply-btn" class="style-toggle-btn" type="button">適用</button>
+                        <button id="tcy-remove-btn" class="style-toggle-btn" type="button">解除</button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
           </section>
           <section class="panel-section font-book-panel" data-section="font-book" hidden>
             <div class="font-book-select-row">

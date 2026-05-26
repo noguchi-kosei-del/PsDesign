@@ -334,6 +334,131 @@ export function getCharSize(psdPath, layerIdOrTempId, charIndex) {
 // 既存レイヤーの edit / 新規レイヤーの nl に charFonts: {[charIndex]: postScriptName} を保持。
 // charIndex は contents 文字列の絶対 index（textarea selectionStart と同じ）。
 // 値を null にすると当該文字のオーバーライドを除去（layer 全体の fontPostScriptName にフォールバック）。
+function normalizeTextScalePercent(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(10, Math.min(400, Math.round(n)));
+}
+
+function normalizeTextSpacingMille(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  return Math.max(-1000, Math.min(1000, Math.round(n)));
+}
+
+function setCharScaleRange(field, psdPath, layerIdOrTempId, from, to, percentOrNull) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  const normalized = percentOrNull == null ? null : normalizeTextScalePercent(percentOrNull);
+  if (percentOrNull != null && normalized == null) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx][field] ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (normalized == null || normalized === 100) delete cur[i]; else cur[i] = normalized;
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], [field]: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing[field] ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (normalized == null || normalized === 100) delete cur[i]; else cur[i] = normalized;
+    }
+    setEdit(psdPath, layerIdOrTempId, { [field]: cur });
+  }
+}
+
+export function setCharHorizontalScalesRange(psdPath, layerIdOrTempId, from, to, percentOrNull) {
+  setCharScaleRange("charHorizontalScales", psdPath, layerIdOrTempId, from, to, percentOrNull);
+}
+
+export function setCharVerticalScalesRange(psdPath, layerIdOrTempId, from, to, percentOrNull) {
+  setCharScaleRange("charVerticalScales", psdPath, layerIdOrTempId, from, to, percentOrNull);
+}
+
+function setCharSpacingRange(field, psdPath, layerIdOrTempId, from, to, valueOrNull) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  const normalized = valueOrNull == null ? null : normalizeTextSpacingMille(valueOrNull);
+  if (valueOrNull != null && normalized == null) return;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx][field] ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (normalized == null || normalized === 0) delete cur[i]; else cur[i] = normalized;
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], [field]: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing[field] ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (normalized == null || normalized === 0) delete cur[i]; else cur[i] = normalized;
+    }
+    setEdit(psdPath, layerIdOrTempId, { [field]: cur });
+  }
+}
+
+export function setCharTrackingsRange(psdPath, layerIdOrTempId, from, to, valueOrNull) {
+  setCharSpacingRange("charTrackings", psdPath, layerIdOrTempId, from, to, valueOrNull);
+}
+
+export function setCharKerningsRange(psdPath, layerIdOrTempId, from, to, valueOrNull) {
+  setCharSpacingRange("charKernings", psdPath, layerIdOrTempId, from, to, valueOrNull);
+}
+
+export function setCharTateChuYokosRange(psdPath, layerIdOrTempId, from, to, enabledOrNull) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return;
+  if (from >= to) return;
+  const enabled = enabledOrNull === true ? true : enabledOrNull === false ? false : null;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const cur = { ...(state.newLayers[idx].charTateChuYokos ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (enabled === true) cur[i] = true;
+      else delete cur[i];
+    }
+    state.newLayers[idx] = { ...state.newLayers[idx], charTateChuYokos: cur };
+    pushHistorySnapshot();
+  } else {
+    const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+    const cur = { ...(existing.charTateChuYokos ?? {}) };
+    for (let i = from; i < to; i++) {
+      if (enabled === true) cur[i] = true;
+      else delete cur[i];
+    }
+    setEdit(psdPath, layerIdOrTempId, { charTateChuYokos: cur });
+  }
+}
+
+export function getCharHorizontalScale(psdPath, layerIdOrTempId, charIndex) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.charHorizontalScales?.[charIndex];
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  if (e?.charHorizontalScales?.[charIndex]) return e.charHorizontalScales[charIndex];
+  const page = state.pages.find((p) => p.path === psdPath);
+  const layer = page?.textLayers?.find((l) => l.id === layerIdOrTempId);
+  return layer?.charHorizontalScales?.[charIndex];
+}
+
+export function getCharVerticalScale(psdPath, layerIdOrTempId, charIndex) {
+  if (typeof layerIdOrTempId === "string") {
+    const nl = state.newLayers.find((l) => l.tempId === layerIdOrTempId);
+    return nl?.charVerticalScales?.[charIndex];
+  }
+  const e = getEdit(psdPath, layerIdOrTempId);
+  if (e?.charVerticalScales?.[charIndex]) return e.charVerticalScales[charIndex];
+  const page = state.pages.find((p) => p.path === psdPath);
+  const layer = page?.textLayers?.find((l) => l.id === layerIdOrTempId);
+  return layer?.charVerticalScales?.[charIndex];
+}
+
 export function setCharFontsRange(psdPath, layerIdOrTempId, from, to, postScriptNameOrNull) {
   if (!Number.isInteger(from) || !Number.isInteger(to)) return;
   if (from >= to) return;
@@ -1043,6 +1168,10 @@ export function addNewLayer({
   fillColor,
   rotation,
   leadingPct,
+  horizontalScale,
+  verticalScale,
+  trackingMille,
+  kerningMille,
   syntheticBold,
   syntheticItalic,
   sourceTxtRef,
@@ -1068,6 +1197,10 @@ export function addNewLayer({
     fillColor: _normFillColor(fillColor),
     rotation: Number.isFinite(rotation) ? rotation : 0,
     leadingPct: Number.isFinite(leadingPct) ? leadingPct : 125,
+    horizontalScale: Number.isFinite(horizontalScale) ? normalizeTextScalePercent(horizontalScale) : 100,
+    verticalScale: Number.isFinite(verticalScale) ? normalizeTextScalePercent(verticalScale) : 100,
+    trackingMille: Number.isFinite(trackingMille) ? normalizeTextSpacingMille(trackingMille) : 0,
+    kerningMille: Number.isFinite(kerningMille) ? normalizeTextSpacingMille(kerningMille) : 0,
     // 【v1.22.0】合成太字（faux bold）。layer 全体に適用、per-char (charBolds) があれば
     // それが優先される。
     syntheticBold: syntheticBold === true,
@@ -1080,6 +1213,11 @@ export function addNewLayer({
     // UI プレビューのみ反映、Photoshop には書き戻されない（layer 全体の sizePt/font が使われる）。
     charSizes: {},
     charFonts: {},
+    charHorizontalScales: {},
+    charVerticalScales: {},
+    charTrackings: {},
+    charKernings: {},
+    charTateChuYokos: {},
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     // 値あり → layer の syntheticBold より優先。値なし → layer 値にフォールバック。
     charBolds: {},

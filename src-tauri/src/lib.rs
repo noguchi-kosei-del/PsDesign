@@ -63,12 +63,30 @@ pub struct LayerEdit {
     pub rotation: Option<f64>,
     #[serde(rename = "leadingPct", default)]
     pub leading_pct: Option<f64>,
+    #[serde(rename = "horizontalScale", default)]
+    pub horizontal_scale: Option<f64>,
+    #[serde(rename = "verticalScale", default)]
+    pub vertical_scale: Option<f64>,
+    #[serde(rename = "trackingMille", default)]
+    pub tracking_mille: Option<f64>,
+    #[serde(rename = "kerningMille", default)]
+    pub kerning_mille: Option<f64>,
     #[serde(rename = "lineLeadings", default)]
     pub line_leadings: Option<HashMap<String, f64>>,
     #[serde(rename = "charSizes", default)]
     pub char_sizes: Option<HashMap<String, f64>>,
     #[serde(rename = "charFonts", default)]
     pub char_fonts: Option<HashMap<String, String>>,
+    #[serde(rename = "charHorizontalScales", default)]
+    pub char_horizontal_scales: Option<HashMap<String, f64>>,
+    #[serde(rename = "charVerticalScales", default)]
+    pub char_vertical_scales: Option<HashMap<String, f64>>,
+    #[serde(rename = "charTrackings", default)]
+    pub char_trackings: Option<HashMap<String, f64>>,
+    #[serde(rename = "charKernings", default)]
+    pub char_kernings: Option<HashMap<String, f64>>,
+    #[serde(rename = "charTateChuYokos", default)]
+    pub char_tate_chu_yokos: Option<HashMap<String, bool>>,
     // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
     #[serde(rename = "syntheticBold", default)]
     pub synthetic_bold: Option<bool>,
@@ -105,12 +123,30 @@ pub struct NewLayer {
     pub rotation: Option<f64>,
     #[serde(rename = "leadingPct", default)]
     pub leading_pct: Option<f64>,
+    #[serde(rename = "horizontalScale", default)]
+    pub horizontal_scale: Option<f64>,
+    #[serde(rename = "verticalScale", default)]
+    pub vertical_scale: Option<f64>,
+    #[serde(rename = "trackingMille", default)]
+    pub tracking_mille: Option<f64>,
+    #[serde(rename = "kerningMille", default)]
+    pub kerning_mille: Option<f64>,
     #[serde(rename = "lineLeadings", default)]
     pub line_leadings: Option<HashMap<String, f64>>,
     #[serde(rename = "charSizes", default)]
     pub char_sizes: Option<HashMap<String, f64>>,
     #[serde(rename = "charFonts", default)]
     pub char_fonts: Option<HashMap<String, String>>,
+    #[serde(rename = "charHorizontalScales", default)]
+    pub char_horizontal_scales: Option<HashMap<String, f64>>,
+    #[serde(rename = "charVerticalScales", default)]
+    pub char_vertical_scales: Option<HashMap<String, f64>>,
+    #[serde(rename = "charTrackings", default)]
+    pub char_trackings: Option<HashMap<String, f64>>,
+    #[serde(rename = "charKernings", default)]
+    pub char_kernings: Option<HashMap<String, f64>>,
+    #[serde(rename = "charTateChuYokos", default)]
+    pub char_tate_chu_yokos: Option<HashMap<String, bool>>,
     // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
     #[serde(rename = "syntheticBold", default)]
     pub synthetic_bold: Option<bool>,

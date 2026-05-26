@@ -199,7 +199,7 @@ function syncInplaceSelectionHighlight(sel) {
 }
 
 export function restoreInplaceSelection(sel) {
-  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return false;
+  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end < sel.start) return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
   const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
@@ -301,6 +301,13 @@ export function refreshActiveInPlaceEditPreview(sel = _lastInplaceSelection) {
       edit.charItalics,
       punctTsumePct,
       edit.charRubies,
+      { ...(layer.charHorizontalScales ?? {}), ...(edit.charHorizontalScales ?? {}) },
+      { ...(layer.charVerticalScales ?? {}), ...(edit.charVerticalScales ?? {}) },
+      edit.trackingMille ?? layer.trackingMille ?? 0,
+      edit.kerningMille ?? layer.kerningMille ?? 0,
+      { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
+      { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
+      { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
     );
     inner.contentEditable = "true";
     return syncInplaceSelectionHighlight(sel);
@@ -327,6 +334,13 @@ export function refreshActiveInPlaceEditPreview(sel = _lastInplaceSelection) {
       nl.charItalics,
       punctTsumePctNew,
       nl.charRubies,
+      nl.charHorizontalScales,
+      nl.charVerticalScales,
+      nl.trackingMille ?? 0,
+      nl.kerningMille ?? 0,
+      nl.charTrackings,
+      nl.charKernings,
+      nl.charTateChuYokos,
     );
     inner.contentEditable = "true";
     return syncInplaceSelectionHighlight(sel);
@@ -1083,6 +1097,13 @@ export function layerRectForExisting(page, layer, edit) {
   const charFontsExisting = edit.charFonts ?? layer.charFonts ?? {};
   const existingCharSizes = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
   const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, existingCharSizes, charFontsExisting, punctTsumePctExisting, tcyEnabledExisting);
+  const spacingEmExisting = estimateMaxPositiveSpacingEm(
+    previewText,
+    edit.trackingMille ?? layer.trackingMille ?? 0,
+    edit.kerningMille ?? layer.kerningMille ?? 0,
+    { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
+    { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
+  );
   const THICK_SAFETY = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM;
   const LONG_SAFETY = TEXT_BBOX_LONG_SAFETY_EM;
   const LONG_SCALE = TEXT_BBOX_HEURISTIC_LONG_SCALE;
@@ -1112,7 +1133,7 @@ export function layerRectForExisting(page, layer, edit) {
   const fallbackThick = ptInPsdPx * (thickSum + THICK_SAFETY);
   // long 軸: 実測 em があればそれ、無ければツメ/縦中横反映後のセル数にフォールバック。
   // CJK 縦書き等はセル数と em がほぼ等価、Latin 系では em < セル数になるので bbox が縮む。
-  const heuristicLong = LONG_SCALE * estimateMaxLineExtentCells(previewText, punctTsumePctExisting, tcyEnabledExisting);
+  const heuristicLong = (LONG_SCALE * estimateMaxLineExtentCells(previewText, punctTsumePctExisting, tcyEnabledExisting)) + spacingEmExisting;
   const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
   const fallbackLong = ptInPsdPx * (longChars + LONG_SAFETY);
   const minThick = Math.max(ptInPsdPx * (leadingFactor + THICK_SAFETY), 20);
@@ -1146,6 +1167,13 @@ export function layerRectForNew(page, nl) {
   const tcyEnabledNew = (getDefault("tateChuYokoEnabled") !== false) && isVertical;
   // 【v1.16.0】枠の自動調整 — 実描画幅で long を auto-fit（フォント変更 + per-char サイズ/フォント変更で bbox 自動更新）。
   const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts, punctTsumePctNew, tcyEnabledNew);
+  const spacingEmNew = estimateMaxPositiveSpacingEm(
+    contents,
+    nl.trackingMille ?? 0,
+    nl.kerningMille ?? 0,
+    nl.charTrackings,
+    nl.charKernings,
+  );
   // 行間 (%) を厚み係数に反映。125 が既定。
   const leadingFactor = (nl.leadingPct ?? 125) / 100;
   // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
@@ -1172,7 +1200,7 @@ export function layerRectForNew(page, nl) {
   const longSafety = TEXT_BBOX_LONG_SAFETY_EM;
   const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE;
   const thick = Math.max(24, ptInPsdPx * (thickSum + thickSafety));
-  const heuristicLong = longScale * estimateMaxLineExtentCells(contents, punctTsumePctNew, tcyEnabledNew);
+  const heuristicLong = (longScale * estimateMaxLineExtentCells(contents, punctTsumePctNew, tcyEnabledNew)) + spacingEmNew;
   const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
   const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (longChars + longSafety));
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
@@ -1290,6 +1318,13 @@ function renderOverlay(ctx) {
       edit.charItalics,
       punctTsumePct,
       edit.charRubies,
+      { ...(layer.charHorizontalScales ?? {}), ...(edit.charHorizontalScales ?? {}) },
+      { ...(layer.charVerticalScales ?? {}), ...(edit.charVerticalScales ?? {}) },
+      edit.trackingMille ?? layer.trackingMille ?? 0,
+      edit.kerningMille ?? layer.kerningMille ?? 0,
+      { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
+      { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
+      { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
     );
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
@@ -1378,6 +1413,13 @@ function renderOverlay(ctx) {
       nl.charItalics,
       punctTsumePctNew,
       nl.charRubies,
+      nl.charHorizontalScales,
+      nl.charVerticalScales,
+      nl.trackingMille ?? 0,
+      nl.kerningMille ?? 0,
+      nl.charTrackings,
+      nl.charKernings,
+      nl.charTateChuYokos,
     );
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
@@ -2115,13 +2157,6 @@ function lineHasSymbolChar(s) {
   return false;
 }
 
-// 縦中横（tate-chu-yoko）対象の半角ペア。先頭から 2 文字単位で探索し、3 文字以上連続のとき
-// 余り 1 文字は単独扱い（ユーザー仕様）。Photoshop 側 (jsx_gen.rs) でも同じ判定を行う。
-// 縦中横の対象ペア: 半角 !! / !? に加え、全角 ！！ / ！？ も拾う（PSD 既存テキストは
-// 全角で組まれていることが多いため）。混在ペア (!！ / !？ / ！! / ！?) は意図しない
-// 入力途中のケースが多いので対象外。
-const TCY_P画像スキャンR_REGEX = /!!|!\?|！！|！？/;
-
 // 【v1.x.0】句読点ツメ（mojiZume）の対象。
 // Photoshop 側 (jsx_gen.rs applyPunctuationTsume) と同じ char code 集合。
 // 環境設定 `punctuationTsumePercent` (0/50%) に従って、対象文字まわりの空白を tsume% ぶん詰める。
@@ -2156,22 +2191,35 @@ function estimateMaxLineExtentCells(text, punctTsumePct, tcyEnabled) {
         if (PUNCT_TSUME_CHAR_CODES.has(line.charCodeAt(i))) punctReduction += tsumeMag;
       }
     }
-    let tcyReduction = 0;
-    if (tcyEnabled && line.length >= 2) {
-      for (let i = 0; i < line.length - 1; ) {
-        const two = line.slice(i, i + 2);
-        if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
-          tcyReduction += 1;
-          i += 2;
-        } else {
-          i += 1;
-        }
-      }
-    }
+    const tcyReduction = tcyEnabled ? findTcyPairs(line).length : 0;
     const cells = line.length - punctReduction - tcyReduction;
     if (cells > maxCells) maxCells = cells;
   }
   return maxCells;
+}
+
+function estimateMaxPositiveSpacingEm(text, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null) {
+  const baseTracking = Number.isFinite(Number(trackingMille)) ? Number(trackingMille) : 0;
+  const baseKerning = Number.isFinite(Number(kerningMille)) ? Number(kerningMille) : 0;
+  const hasCharTrackings = charTrackings && Object.keys(charTrackings).length > 0;
+  const hasCharKernings = charKernings && Object.keys(charKernings).length > 0;
+  const full = String(text ?? "");
+  const lineStarts = getLineStartOffsets(full);
+  const lines = full.split(/\r?\n/);
+  let max = 0;
+  for (let li = 0; li < lines.length; li++) {
+    const line = lines[li] ?? "";
+    const start = lineStarts[li] ?? 0;
+    let total = 0;
+    for (let i = 0; i < line.length; i++) {
+      const absIdx = start + i;
+      const tr = hasCharTrackings && Number.isFinite(charTrackings[absIdx]) ? charTrackings[absIdx] : baseTracking;
+      const kr = hasCharKernings && Number.isFinite(charKernings[absIdx]) ? charKernings[absIdx] : baseKerning;
+      total += Math.max(0, (tr + kr) / 1000);
+    }
+    if (total > max) max = total;
+  }
+  return max;
 }
 
 function repeatedTargetGroup(ch) {
@@ -2198,17 +2246,22 @@ function findRepeatedTargetRuns(line) {
 // 半角 !! / !? の出現位置を 2 文字ペアとして列挙する。先頭から貪欲に消費するので
 // "!!!" → [(0,2)]（末尾 ! は単独）、"!!?!" → [(0,2)] (! 単独 + ! 単独)、
 // "!!!!?" → [(0,2), (2,4)]（末尾 ? は単独）。
+function isHalfWidthDigitForTcy(ch) {
+  return ch >= "0" && ch <= "9";
+}
+
 function findTcyPairs(line) {
   const pairs = [];
-  for (let i = 0; i < line.length - 1; ) {
-    const two = line.slice(i, i + 2);
-    // 半角 !! / !? と全角 ！！ / ！？ の両方を縦中横ペアとして扱う。
-    if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
-      pairs.push({ start: i, end: i + 2 });
-      i += 2;
-    } else {
+  let i = 0;
+  while (i < line.length) {
+    if (!isHalfWidthDigitForTcy(line[i])) {
       i += 1;
+      continue;
     }
+    let j = i + 1;
+    while (j < line.length && isHalfWidthDigitForTcy(line[j])) j++;
+    if (j - i === 2) pairs.push({ start: i, end: j });
+    i = j;
   }
   return pairs;
 }
@@ -2229,7 +2282,7 @@ function findTcyPairs(line) {
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
 //
 // 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
-function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies) {
+function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null) {
   if (!line.length) {
     // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
     parentEl.appendChild(document.createTextNode("​"));
@@ -2237,11 +2290,43 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   }
   const dashTrack = Number.isFinite(Number(dashMille)) ? Number(dashMille) : 0;
   const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
-  let tcyPairs = tcyOn ? findTcyPairs(line) : [];
+  const manualTcyRanges = [];
+  if (charTateChuYokos && Object.keys(charTateChuYokos).length > 0) {
+    let i = 0;
+    while (i < line.length) {
+      const absIdx = lineStartIdx + i;
+      if (charTateChuYokos[absIdx] === true) {
+        let j = i + 1;
+        while (j < line.length && charTateChuYokos[lineStartIdx + j] === true) j++;
+        manualTcyRanges.push({ start: i, end: j });
+        i = j;
+      } else {
+        i++;
+      }
+    }
+  }
+  let tcyPairs = [...(tcyOn ? findTcyPairs(line) : []), ...manualTcyRanges]
+    .sort((a, b) => a.start - b.start || a.end - b.end)
+    .reduce((acc, r) => {
+      const last = acc[acc.length - 1];
+      if (last && r.start <= last.end) {
+        last.end = Math.max(last.end, r.end);
+      } else {
+        acc.push({ ...r });
+      }
+      return acc;
+    }, []);
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
   const hasCharItalics = charItalics && Object.keys(charItalics).length > 0;
+  const hasCharHorizontalScales = charHorizontalScales && Object.keys(charHorizontalScales).length > 0;
+  const hasCharVerticalScales = charVerticalScales && Object.keys(charVerticalScales).length > 0;
+  const baseTracking = Number.isFinite(Number(trackingMille)) ? Number(trackingMille) : 0;
+  const baseKerning = Number.isFinite(Number(kerningMille)) ? Number(kerningMille) : 0;
+  const hasCharTrackings = charTrackings && Object.keys(charTrackings).length > 0;
+  const hasCharKernings = charKernings && Object.keys(charKernings).length > 0;
+  const hasLetterSpacing = baseTracking !== 0 || baseKerning !== 0 || hasCharTrackings || hasCharKernings;
   const trackingActive = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(line);
   const symbolActive = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(line);
   // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。0..1 の em 量。
@@ -2274,12 +2359,20 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   }
 
   // 高速パス：何も装飾なし → 単純テキストノード 1 つで終わり
-  if (!trackingActive && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !hasCharItalics && !punctActive && !hasRuby) {
+  if (!trackingActive && !hasLetterSpacing && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !hasCharItalics && !hasCharHorizontalScales && !hasCharVerticalScales && !punctActive && !hasRuby) {
     parentEl.appendChild(document.createTextNode(line));
     return;
   }
   // 各文字の tracking 値（em 単位、負）を事前計算。連続ランの最後の文字は 0。
   const trackings = new Array(line.length).fill(0);
+  if (hasLetterSpacing) {
+    for (let i = 0; i < line.length; i++) {
+      const absIdx = lineStartIdx + i;
+      const tr = hasCharTrackings && Number.isFinite(charTrackings[absIdx]) ? charTrackings[absIdx] : baseTracking;
+      const kr = hasCharKernings && Number.isFinite(charKernings[absIdx]) ? charKernings[absIdx] : baseKerning;
+      trackings[i] = (tr + kr) / 1000;
+    }
+  }
   if (trackingActive) {
     const segments = findRepeatedTargetRuns(line);
     let pos = 0;
@@ -2287,7 +2380,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
       if (seg.group && seg.text.length >= 2) {
         for (let k = 0; k < seg.text.length - 1; k++) {
           const value = seg.group === "dash" ? dashTrack : seg.group === "tilde" ? tildeTrack : 0;
-          if (value !== 0) trackings[pos + k] = value / 1000;
+          if (value !== 0) trackings[pos + k] += value / 1000;
         }
       }
       pos += seg.text.length;
@@ -2312,21 +2405,29 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
       if (pair.start > pos) {
         appendStyledSegment(parentEl, sub.slice(pos, pair.start),
           fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
-          hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg);
+          hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg,
+          charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
       }
       const span = document.createElement("span");
       span.className = "tcy-span";
+      const innerSpan = document.createElement("span");
+      innerSpan.className = "tcy-inner";
       span.textContent = sub
         .slice(pair.start, pair.end)
         .replace(/！/g, "!")
         .replace(/？/g, "?");
+      innerSpan.textContent = span.textContent;
+      span.textContent = "";
+      span.dataset.tcyLength = String(innerSpan.textContent.length);
+      span.appendChild(innerSpan);
       parentEl.appendChild(span);
       pos = pair.end;
     }
     if (pos < sub.length) {
       appendStyledSegment(parentEl, sub.slice(pos),
         fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
-        hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg);
+        hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg,
+        charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
     }
   };
 
@@ -2338,7 +2439,8 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
         line.slice(seg.start, seg.end), seg.start, lineStartIdx, seg.entry,
         trackings, charSizes, defaultSizePt, charFonts,
         symbolActive ? symbolFontPS : null, charBolds, charItalics,
-        hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, tsumeArg);
+        hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, tsumeArg,
+        charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
       cursor = seg.end;
     }
     if (cursor < line.length) emitNonRubyRange(cursor, line.length);
@@ -2366,7 +2468,9 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
 function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx, entry,
                             trackings, charSizes, defaultSizePt, charFonts,
                             symbolFontPS, charBolds, charItalics,
-                            hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, punctTsumeMag) {
+                            hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, punctTsumeMag,
+                            charHorizontalScales = null, charVerticalScales = null,
+                            hasCharHorizontalScales = false, hasCharVerticalScales = false) {
   if (!parentText.length || !entry || typeof entry.text !== "string") return;
   const isMono = entry.type === "mono"
     && /[ 　]/.test(entry.text)
@@ -2389,7 +2493,8 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     base.className = "ruby-base";
     appendStyledSegment(base, segText,
       segLocalStart, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
-      hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag);
+      hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag,
+      charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
     wrap.appendChild(base);
     const rt = document.createElement("span");
     rt.className = "ruby-text";
@@ -2416,7 +2521,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
 // lineStartIdx: line が full contents のどの位置から始まるか（charSizes / charFonts の絶対 index 算出用）
 // 【v1.x.0】punctTsumeMag (0..1) で句読点/括弧を縮める。例: 0.5 で 0.5em 詰める。
 //   始め括弧（「/〝）は前側、その他は後ろ側を詰める。
-function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag) {
+function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag, charHorizontalScales = null, charVerticalScales = null, hasCharHorizontalScales = false, hasCharVerticalScales = false) {
   if (!segText.length) return;
   // 【v1.22.0】per-char font 解決: ユーザー手動指定 (charFonts[idx]) があれば最優先、
   // 無ければ symbol char に対しては symbolFontPS で自動置換、それでも無ければ undefined（layer 既定）。
@@ -2446,6 +2551,8 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     // 【v1.22.0】per-char 合成太字 (charBolds[absIdx])。boolean があれば signature に含める。
     const sigBold = hasCharBolds ? charBolds[absIdx] : undefined;
     const sigItalic = hasCharItalics ? charItalics[absIdx] : undefined;
+    const sigHScale = hasCharHorizontalScales ? charHorizontalScales[absIdx] : undefined;
+    const sigVScale = hasCharVerticalScales ? charVerticalScales[absIdx] : undefined;
     // 【v1.x.0】句読点ツメ。signature に含めて同じ詰め方向の連続文字を 1 span にまとめる。
     const sigTsume = tsumeForChar(segText[i]);
     let j = i + 1;
@@ -2456,9 +2563,12 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       const f = effectiveFontAt(absJ, segText[j]);
       const b = hasCharBolds ? charBolds[absJ] : undefined;
       const it = hasCharItalics ? charItalics[absJ] : undefined;
+      const hs = hasCharHorizontalScales ? charHorizontalScales[absJ] : undefined;
+      const vs = hasCharVerticalScales ? charVerticalScales[absJ] : undefined;
       const tu = tsumeForChar(segText[j]);
       if (
         s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || it !== sigItalic ||
+        hs !== sigHScale || vs !== sigVScale ||
         tu.before !== sigTsume.before || tu.after !== sigTsume.after
       ) break;
       j++;
@@ -2470,7 +2580,9 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     const needsSpan = Number.isFinite(sigSize) || effectiveLetterSpacingEm !== 0 || effectiveMarginInlineStartEm !== 0
       || (typeof sigFont === "string" && sigFont.length > 0)
       || typeof sigBold === "boolean"
-      || typeof sigItalic === "boolean";
+      || typeof sigItalic === "boolean"
+      || (Number.isFinite(sigHScale) && sigHScale !== 100)
+      || (Number.isFinite(sigVScale) && sigVScale !== 100);
     if (needsSpan) {
       const span = document.createElement("span");
       if (Number.isFinite(sigSize) && Number.isFinite(defaultSizePt) && defaultSizePt > 0) {
@@ -2497,6 +2609,13 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       if (typeof sigItalic === "boolean") {
         span.style.fontStyle = sigItalic ? "italic" : "normal";
       }
+      if ((Number.isFinite(sigHScale) && sigHScale !== 100) || (Number.isFinite(sigVScale) && sigVScale !== 100)) {
+        const sx = Number.isFinite(sigHScale) ? sigHScale / 100 : 1;
+        const sy = Number.isFinite(sigVScale) ? sigVScale / 100 : 1;
+        span.style.display = "inline-block";
+        span.style.transform = `scale(${sx}, ${sy})`;
+        span.style.transformOrigin = "center center";
+      }
       span.textContent = text;
       parentEl.appendChild(span);
     } else {
@@ -2518,31 +2637,41 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
 // それ以外は単一テキストノードで描画（最軽量）。
 // isVertical: true なら writing-mode: vertical-rl 想定で per-line の幅 (列幅) を切替える。
 // defaultSizePt: layer 全体の sizePt（charSizes の em 換算に使う）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumePct, charRubies) {
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumePct, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
   const hasCharItalics = charItalics && Object.keys(charItalics).length > 0;
+  const hasCharScales = (charHorizontalScales && Object.keys(charHorizontalScales).length > 0)
+    || (charVerticalScales && Object.keys(charVerticalScales).length > 0);
+  const hasCharTateChuYokos = charTateChuYokos && Object.keys(charTateChuYokos).length > 0;
+  const hasCharSpacings = (charTrackings && Object.keys(charTrackings).length > 0)
+    || (charKernings && Object.keys(charKernings).length > 0);
   // 【v1.26.0】ruby 範囲 array に変換しておくと、appendLineWithTracking で line ごとに filter しやすい。
   const hasCharRubies = charRubies && Object.keys(charRubies).length > 0;
   // 【v1.26.0】親文字の `overflow: hidden`（new-layer-text / existing-layer-text 既定）が <ruby> の
   // <rt> 部分を切り取ってしまうため、ruby ある時は `.has-ruby` クラスを付けて overflow: visible に。
-  inner.classList.toggle("has-ruby", hasCharRubies);
   const fallback = String((defaultLeadingPct ?? 125) / 100);
   const dashTrack = Number.isFinite(Number(dashMille)) ? Number(dashMille) : 0;
   const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
+  const baseTracking = Number.isFinite(Number(trackingMille)) ? Number(trackingMille) : 0;
+  const baseKerning = Number.isFinite(Number(kerningMille)) ? Number(kerningMille) : 0;
   const fullText = String(text ?? "");
   const trackingHits = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(fullText);
-  const tcyHits = !!tcyOn && TCY_P画像スキャンR_REGEX.test(fullText);
+  const spacingHits = baseTracking !== 0 || baseKerning !== 0 || hasCharSpacings;
+  const tcyHits = isVertical && ((!!tcyOn && fullText.split(/\r?\n/).some((line) => findTcyPairs(line).length > 0)) || hasCharTateChuYokos);
+  inner.classList.toggle("has-ruby", hasCharRubies);
+  inner.classList.toggle("has-tcy", tcyHits);
+  inner.classList.toggle("has-scale", hasCharScales);
   // 【v1.22.0】記号フォント置換: symbolFontPS が指定されており、対象記号が contents に含まれるとき適用。
   const symbolHits = (typeof symbolFontPS === "string" && symbolFontPS.length > 0) && lineHasSymbolChar(fullText);
   // 【v1.x.0】句読点ツメ（、 / 。 を tsume% で詰める）。punctTsumePct (0..100) → em 量に換算。
   const punctTsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
   const punctHits = punctTsumeMag > 0 && lineHasPunctTsumeChar(fullText);
   // 高速パス：何も装飾なし（charBolds / 句読点ツメ / charRubies も含めて全部空のときだけ通る）
-  if (!overrides && !trackingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !hasCharItalics && !punctHits && !hasCharRubies) {
+  if (!overrides && !trackingHits && !spacingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !hasCharItalics && !hasCharScales && !punctHits && !hasCharRubies) {
     inner.textContent = fullText;
     inner.style.lineHeight = fallback;
     return;
@@ -2585,7 +2714,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
           lineEl.style.marginBlockStart = `${extra}em`;
         }
       }
-      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies);
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos);
       inner.appendChild(lineEl);
     }
   } else {
@@ -2599,7 +2728,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // charRubies を渡すように修正。
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createTextNode("\n"));
-      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos);
     }
   }
 }
@@ -3133,6 +3262,10 @@ function beginMultiLayerDrag(e, ctx) {
           fillColor: nl.fillColor,
           rotation: nl.rotation ?? 0,
           leadingPct: nl.leadingPct,
+          horizontalScale: nl.horizontalScale ?? 100,
+          verticalScale: nl.verticalScale ?? 100,
+          trackingMille: nl.trackingMille ?? 0,
+          kerningMille: nl.kerningMille ?? 0,
           syntheticBold: nl.syntheticBold === true,
           syntheticItalic: nl.syntheticItalic === true,
           sourceTxtRef,
@@ -3148,6 +3281,11 @@ function beginMultiLayerDrag(e, ctx) {
           charFonts: { ...(nl.charFonts ?? {}) },
           charBolds: { ...(nl.charBolds ?? {}) },
           charItalics: { ...(nl.charItalics ?? {}) },
+          charHorizontalScales: { ...(nl.charHorizontalScales ?? {}) },
+          charVerticalScales: { ...(nl.charVerticalScales ?? {}) },
+          charTrackings: { ...(nl.charTrackings ?? {}) },
+          charKernings: { ...(nl.charKernings ?? {}) },
+          charTateChuYokos: { ...(nl.charTateChuYokos ?? {}) },
         });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
@@ -3172,6 +3310,10 @@ function beginMultiLayerDrag(e, ctx) {
           fillColor: edit.fillColor ?? layer.fillColor ?? "default",
           rotation: edit.rotation ?? 0,
           leadingPct: edit.leadingPct ?? 125,
+          horizontalScale: edit.horizontalScale ?? layer.horizontalScale ?? 100,
+          verticalScale: edit.verticalScale ?? layer.verticalScale ?? 100,
+          trackingMille: edit.trackingMille ?? layer.trackingMille ?? 0,
+          kerningMille: edit.kerningMille ?? layer.kerningMille ?? 0,
           syntheticBold: edit.syntheticBold === true,
           syntheticItalic: edit.syntheticItalic === true,
           sourceTxtRef,
@@ -3183,6 +3325,11 @@ function beginMultiLayerDrag(e, ctx) {
           charFonts: { ...(edit.charFonts ?? layer.charFonts ?? {}) },
           charBolds: { ...(edit.charBolds ?? {}) },
           charItalics: { ...(edit.charItalics ?? {}) },
+          charHorizontalScales: { ...(layer.charHorizontalScales ?? {}), ...(edit.charHorizontalScales ?? {}) },
+          charVerticalScales: { ...(layer.charVerticalScales ?? {}), ...(edit.charVerticalScales ?? {}) },
+          charTrackings: { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
+          charKernings: { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
+          charTateChuYokos: { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
         });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
@@ -3659,6 +3806,21 @@ function startContentEditableEdit(ctx, target, options = {}) {
   const startCharRubies = isExisting
     ? { ...(startEdit.charRubies ?? {}) }
     : { ...(target.nl.charRubies ?? {}) };
+  const startCharHorizontalScales = isExisting
+    ? { ...(target.layer.charHorizontalScales ?? {}), ...(startEdit.charHorizontalScales ?? {}) }
+    : { ...(target.nl.charHorizontalScales ?? {}) };
+  const startCharVerticalScales = isExisting
+    ? { ...(target.layer.charVerticalScales ?? {}), ...(startEdit.charVerticalScales ?? {}) }
+    : { ...(target.nl.charVerticalScales ?? {}) };
+  const startCharTrackings = isExisting
+    ? { ...(target.layer.charTrackings ?? {}), ...(startEdit.charTrackings ?? {}) }
+    : { ...(target.nl.charTrackings ?? {}) };
+  const startCharKernings = isExisting
+    ? { ...(target.layer.charKernings ?? {}), ...(startEdit.charKernings ?? {}) }
+    : { ...(target.nl.charKernings ?? {}) };
+  const startCharTateChuYokos = isExisting
+    ? { ...(target.layer.charTateChuYokos ?? {}), ...(startEdit.charTateChuYokos ?? {}) }
+    : { ...(target.nl.charTateChuYokos ?? {}) };
   // 位置（x,y / dx,dy）も snapshot。recenterBox が edit 中に書き換えるので、
   // cancel 時に元の位置に戻すために必要。
   const startDx = isExisting ? (startEdit.dx ?? 0) : null;
@@ -3685,6 +3847,13 @@ function startContentEditableEdit(ctx, target, options = {}) {
       startCharItalics,
       punctTsumePct,
       startCharRubies,
+      startCharHorizontalScales,
+      startCharVerticalScales,
+      startEdit.trackingMille ?? target.layer.trackingMille ?? 0,
+      startEdit.kerningMille ?? target.layer.kerningMille ?? 0,
+      startCharTrackings,
+      startCharKernings,
+      startCharTateChuYokos,
     );
   } else {
     const dashMille = Number(getDefault("dashRunTrackingMille")) || 0;
@@ -3704,6 +3873,13 @@ function startContentEditableEdit(ctx, target, options = {}) {
       startCharItalics,
       punctTsumePct,
       startCharRubies,
+      startCharHorizontalScales,
+      startCharVerticalScales,
+      target.nl.trackingMille ?? 0,
+      target.nl.kerningMille ?? 0,
+      startCharTrackings,
+      startCharKernings,
+      startCharTateChuYokos,
     );
   }
 
@@ -3763,6 +3939,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charBolds: e.charBolds ?? {},
         charItalics: e.charItalics ?? {},
         charRubies: e.charRubies ?? {},
+        charHorizontalScales: { ...(target.layer.charHorizontalScales ?? {}), ...(e.charHorizontalScales ?? {}) },
+        charVerticalScales: { ...(target.layer.charVerticalScales ?? {}), ...(e.charVerticalScales ?? {}) },
+        charTrackings: { ...(target.layer.charTrackings ?? {}), ...(e.charTrackings ?? {}) },
+        charKernings: { ...(target.layer.charKernings ?? {}), ...(e.charKernings ?? {}) },
+        charTateChuYokos: { ...(target.layer.charTateChuYokos ?? {}), ...(e.charTateChuYokos ?? {}) },
         lineLeadings: e.lineLeadings ?? {},
       };
     }
@@ -3774,6 +3955,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
       charBolds: nl.charBolds ?? {},
       charItalics: nl.charItalics ?? {},
       charRubies: nl.charRubies ?? {},
+      charHorizontalScales: nl.charHorizontalScales ?? {},
+      charVerticalScales: nl.charVerticalScales ?? {},
+      charTrackings: nl.charTrackings ?? {},
+      charKernings: nl.charKernings ?? {},
+      charTateChuYokos: nl.charTateChuYokos ?? {},
       lineLeadings: nl.lineLeadings ?? {},
     };
   };
@@ -4028,16 +4214,12 @@ function startContentEditableEdit(ctx, target, options = {}) {
     const range = getSelRange();
     if (!range) return;
     const { start, end } = range;
-    if (end > start) {
-      setLastInplaceSelection({
-        start, end,
-        psdPath: layerMeta.psdPath,
-        layerId: layerMeta.layerId ?? null,
-        tempId: layerMeta.tempId ?? null,
-      });
-    } else {
-      setLastInplaceSelection(null);
-    }
+    setLastInplaceSelection({
+      start, end,
+      psdPath: layerMeta.psdPath,
+      layerId: layerMeta.layerId ?? null,
+      tempId: layerMeta.tempId ?? null,
+    });
     const lineIndex = countNewlinesBefore(lastContents, start);
     const totalLines = (lastContents.match(/\n/g) ?? []).length + 1;
     setEditingContext({
@@ -4214,12 +4396,17 @@ function startContentEditableEdit(ctx, target, options = {}) {
       return;
     }
     const diff = computeStringDiff(lastContents, newContents);
-    const { charSizes, charFonts, charBolds, charItalics, charRubies, lineLeadings } = readCurrentMaps();
+    const { charSizes, charFonts, charBolds, charItalics, charRubies, charHorizontalScales, charVerticalScales, charTrackings, charKernings, charTateChuYokos, lineLeadings } = readCurrentMaps();
     const newCharSizes = shiftCharMap(charSizes, diff.pos, diff.deleted, diff.inserted);
     const newCharFonts = shiftCharMap(charFonts, diff.pos, diff.deleted, diff.inserted);
     // 【v1.26.0】charBolds も同じ shiftCharMap を適用（v1.22.0 で抜けていた既存バグ修正）。
     const newCharBolds = shiftCharMap(charBolds, diff.pos, diff.deleted, diff.inserted);
     const newCharItalics = shiftCharMap(charItalics, diff.pos, diff.deleted, diff.inserted);
+    const newCharHorizontalScales = shiftCharMap(charHorizontalScales, diff.pos, diff.deleted, diff.inserted);
+    const newCharVerticalScales = shiftCharMap(charVerticalScales, diff.pos, diff.deleted, diff.inserted);
+    const newCharTrackings = shiftCharMap(charTrackings, diff.pos, diff.deleted, diff.inserted);
+    const newCharKernings = shiftCharMap(charKernings, diff.pos, diff.deleted, diff.inserted);
+    const newCharTateChuYokos = shiftCharMap(charTateChuYokos, diff.pos, diff.deleted, diff.inserted);
     // 【v1.26.0】charRubies はキーが range の start なので shiftRubyMap を使う。
     const newCharRubies = shiftRubyMap(charRubies, diff.pos, diff.deleted, diff.inserted);
     const newLineLeadings = shiftLineMap(
@@ -4234,6 +4421,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charFonts: newCharFonts,
         charBolds: newCharBolds,
         charItalics: newCharItalics,
+        charHorizontalScales: newCharHorizontalScales,
+        charVerticalScales: newCharVerticalScales,
+        charTrackings: newCharTrackings,
+        charKernings: newCharKernings,
+        charTateChuYokos: newCharTateChuYokos,
         charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });
@@ -4244,6 +4436,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charFonts: newCharFonts,
         charBolds: newCharBolds,
         charItalics: newCharItalics,
+        charHorizontalScales: newCharHorizontalScales,
+        charVerticalScales: newCharVerticalScales,
+        charTrackings: newCharTrackings,
+        charKernings: newCharKernings,
+        charTateChuYokos: newCharTateChuYokos,
         charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });
@@ -4353,6 +4550,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
           lineLeadings: startLineLeadings,
           charSizes: startCharSizes,
           charFonts: startCharFonts,
+          charHorizontalScales: startCharHorizontalScales,
+          charVerticalScales: startCharVerticalScales,
+          charTrackings: startCharTrackings,
+          charKernings: startCharKernings,
+          charTateChuYokos: startCharTateChuYokos,
           dx: startDx,
           dy: startDy,
         });
@@ -4362,6 +4564,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
           lineLeadings: startLineLeadings,
           charSizes: startCharSizes,
           charFonts: startCharFonts,
+          charHorizontalScales: startCharHorizontalScales,
+          charVerticalScales: startCharVerticalScales,
+          charTrackings: startCharTrackings,
+          charKernings: startCharKernings,
+          charTateChuYokos: startCharTateChuYokos,
           x: startX,
           y: startY,
         });

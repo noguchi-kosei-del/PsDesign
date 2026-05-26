@@ -166,18 +166,17 @@ textarea,
   display: flex;
   flex-direction: column;
 }
-.toolbar-fill-icon {
-  width: 22px;
-  height: 22px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: var(--text);
-  font-size: 15px;
-  font-weight: 800;
-  line-height: 1;
-  border-bottom: 2px solid currentColor;
-  user-select: none;
+.svg-symbols {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+}
+.char-panel-icon {
+  width: 21px;
+  height: 21px;
+  flex: 0 0 21px;
+  color: var(--text-muted);
 }
 .toolbar-fill-swatches {
   display: flex;
@@ -3252,7 +3251,9 @@ body.home-starting .home-screen {
   text-shadow: none;
 }
 .new-layer-text.has-ruby,
-.existing-layer-text.has-ruby {
+.existing-layer-text.has-ruby,
+.new-layer-text.has-tcy,
+.existing-layer-text.has-tcy {
   overflow: visible;
 }
 .existing-layer-text {
@@ -3265,7 +3266,9 @@ body.home-starting .home-screen {
    ほぼ見えなくなるため、has-ruby 時は選択状態に関係なく高 opacity に保つ。PSD canvas の
    ベース文字と多少重なって見えるが、ルビが見えないよりは許容される視認性。 */
 .existing-layer-text.has-ruby,
-.layer-box-existing.selected .existing-layer-text.has-ruby {
+.layer-box-existing.selected .existing-layer-text.has-ruby,
+.existing-layer-text.has-tcy,
+.layer-box-existing.selected .existing-layer-text.has-tcy {
   opacity: 1;
 }
 .layer-box-new[data-direction="vertical"] .new-layer-text,
@@ -3278,8 +3281,36 @@ body.home-starting .home-screen {
    ラップしたものを WebView2 (Chromium) が標準サポートする text-combine-upright で描画。
    text-orientation は親の vertical-rl コンテキスト下では tcy span 内で upright 扱いになる。 */
 .tcy-span {
-  text-combine-upright: all;
-  -webkit-text-combine: horizontal;
+  text-combine-upright: none;
+  -webkit-text-combine: none;
+  display: inline-block;
+  position: relative;
+  --tcy-line-center-shift: -0.36em;
+  width: 1em;
+  height: 1em;
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  line-height: 1;
+  white-space: nowrap;
+  vertical-align: middle;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  overflow: visible;
+  direction: ltr;
+  transform-origin: center;
+  transform: translateX(var(--tcy-line-center-shift));
+  font-size: 1em;
+}
+.tcy-inner {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
+  line-height: 1;
+  white-space: nowrap;
+  font-size: 1em;
 }
 .layer-size-badge {
   position: absolute;
@@ -5529,6 +5560,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 /* 各 panel 先頭の見出し（サイズ / 行間 / フチ）。font-combobox-label と同じ
    muted 色 + 11px で視覚的に揃える。 */
 .editor-panel-label {
+  display: flex;
+  align-items: center;
+  gap: 5px;
   font-size: 11px;
   color: var(--text-muted);
   margin-bottom: 0;
@@ -6116,11 +6150,110 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .style-palette-browser-error { color: var(--danger); }
 /* テキスト編集セクション。サイドバータブで排他表示されるので、active 時はサイドバー残余高を
    全部吸収する（min-height: 0 で内側 flex の縮小を許可）。 */
-.panel-section[data-section="editor"] {
+.panel-section[data-section="editor"],
+.panel-section[data-section="style"] {
   display: flex;
   flex-direction: column;
   flex: 1 1 auto;
   min-height: 0;
+}
+.style-editor {
+  padding: 12px 14px;
+}
+.style-editor-section {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+.style-controls-panel {
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+.style-controls-panel:last-child {
+  border-bottom: 0;
+}
+.style-control-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+.style-control-grid-single {
+  grid-template-columns: minmax(0, 1fr);
+}
+.style-control-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 0;
+  gap: 6px;
+}
+.style-control-label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+.style-control-item .size-group {
+  justify-content: center;
+  min-width: 0;
+}
+.style-control-item .size-input {
+  width: 54px;
+  text-align: center;
+}
+.style-control-item .spacing-input {
+  width: 62px;
+}
+.editor-setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 2px 0 0;
+}
+.editor-setting-select {
+  width: 100%;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+  padding: 0 8px;
+}
+.style-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.style-toggle-btn {
+  min-width: 72px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--input-bg);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+.style-toggle-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+.style-toggle-btn[aria-pressed="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.style-toggle-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 .layer-list-footer {
   display: flex;

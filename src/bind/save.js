@@ -39,6 +39,23 @@ export function updateSaveButton() {
   if (btn) btn.disabled = getPages().length === 0;
 }
 
+function flushActiveSidebarInputBeforeSave() {
+  const active = document.activeElement;
+  if (!(active instanceof window.HTMLInputElement)) return;
+  const commitOnSaveIds = new Set([
+    "size-input",
+    "leading-input",
+    "stroke-width-input",
+    "horizontal-scale-input",
+    "vertical-scale-input",
+    "tracking-input",
+    "kerning-input",
+  ]);
+  if (!commitOnSaveIds.has(active.id)) return;
+  active.dispatchEvent(new window.Event("change", { bubbles: true }));
+  active.blur();
+}
+
 const BASE_SAVE_FOLDER_NAME = "写植完了";
 // 連番フォーマット: BASE, BASE(1), BASE(2), ...（Tachimi の `jpg(1)` 命名に合わせて空白なし）。
 function indexedSaveFolderName(i) {
@@ -52,6 +69,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     toast("保存処理中です。完了までお待ちください", { kind: "info", duration: 2200 });
     return;
   }
+  flushActiveSidebarInputBeforeSave();
   if (!hasEdits()) {
     toast("編集内容がありません", { kind: "info" });
     return;

@@ -27,6 +27,19 @@ export function captureViewportCenterFraction(stage, pageEl) {
   };
 }
 
+export function captureViewportPointFraction(stage, pageEl, clientX, clientY) {
+  if (!stage || !pageEl) return null;
+  const r = pageEl.getBoundingClientRect();
+  const sr = stage.getBoundingClientRect();
+  if (r.width <= 0 || r.height <= 0) return null;
+  return {
+    fracX: (clientX - r.left) / r.width,
+    fracY: (clientY - r.top) / r.height,
+    offsetX: clientX - sr.left,
+    offsetY: clientY - sr.top,
+  };
+}
+
 // margin 設定は副作用として行い、戻り値は「margin が今回新規に付いたか」を示す。
 // 戻り値 true は「直前は margin なし → 今回 margin あり」への遷移、つまり通常の
 // scroll(0,0) では canvas が見切れる状態。呼び出し側はこの戻り値を見て
@@ -106,4 +119,23 @@ export function restoreViewportCenter(stage, pageEl, frac) {
   const maxScrollY = Math.max(0, stage.scrollHeight - stage.clientHeight);
   stage.scrollLeft = Math.max(0, Math.min(maxScrollX, Math.round(targetX - stage.clientWidth / 2)));
   stage.scrollTop = Math.max(0, Math.min(maxScrollY, Math.round(targetY - stage.clientHeight / 2)));
+}
+
+export function restoreViewportPoint(stage, pageEl, anchor) {
+  if (!stage || !pageEl || !anchor) return;
+  const r = pageEl.getBoundingClientRect();
+  const sr = stage.getBoundingClientRect();
+  const w = r.width;
+  const h = r.height;
+  if (w <= 0 || h <= 0) return;
+  const canvasLeftInScroll = r.left - sr.left + stage.scrollLeft;
+  const canvasTopInScroll = r.top - sr.top + stage.scrollTop;
+  const targetX = canvasLeftInScroll + anchor.fracX * w;
+  const targetY = canvasTopInScroll + anchor.fracY * h;
+  const maxScrollX = Math.max(0, stage.scrollWidth - stage.clientWidth);
+  const maxScrollY = Math.max(0, stage.scrollHeight - stage.clientHeight);
+  const offsetX = Number.isFinite(anchor.offsetX) ? anchor.offsetX : stage.clientWidth / 2;
+  const offsetY = Number.isFinite(anchor.offsetY) ? anchor.offsetY : stage.clientHeight / 2;
+  stage.scrollLeft = Math.max(0, Math.min(maxScrollX, Math.round(targetX - offsetX)));
+  stage.scrollTop = Math.max(0, Math.min(maxScrollY, Math.round(targetY - offsetY)));
 }

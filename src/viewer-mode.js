@@ -20,7 +20,7 @@ import {
   onPageIndexChange,
 } from "./state.js";
 import { capturePdfViewportCenter, schedulePdfStageLayoutRefresh } from "./pdf-view.js";
-import { capturePsdViewportCenter, schedulePsdStageLayoutRefresh } from "./spread-view.js";
+import { capturePsdViewportCenter, schedulePsdStageLayoutRefresh, setNextPsdZoomAnchorFromClientPoint } from "./spread-view.js";
 
 const HINT_SHOW_DURATION = 3000;
 const CLOSE_BTN_FADE_DELAY = 3000;
@@ -229,6 +229,7 @@ function setupEventListeners() {
     e.preventDefault();
     e.stopPropagation();
     const factor = e.deltaY > 0 ? 1 / 1.1 : 1.1;
+    setNextPsdZoomAnchorFromClientPoint(e.clientX, e.clientY);
     setPsdZoom(getPsdZoom() * factor);
     schedulePsdStageLayoutRefresh({ durationMs: 80, recenter: false });
   };

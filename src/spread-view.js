@@ -12,8 +12,10 @@ import {
   alignCanvasStartInViewport,
   applyOverscrollMargin,
   captureViewportCenterFraction,
+  captureViewportPointFraction,
   centerCanvasInViewport,
   restoreViewportCenter,
+  restoreViewportPoint,
 } from "./overscroll.js";
 
 const container = () => document.getElementById("psd-stage");
@@ -31,6 +33,7 @@ export const PSD_FIT_ZOOM = 1;
 // redraw 内で読み出して新しいスクロール位置を計算 → null へリセット。
 // それ以外（リサイズ・回転）の redraw ではこの値は null のままなので副作用なし。
 let zoomTransitionCenter = null;
+let zoomTransitionAnchor = null;
 let resetZoomToStart = false;
 let resetZoomDuringRedraw = false;
 
@@ -52,6 +55,12 @@ export function capturePsdViewportCenter() {
   const root = container();
   const pageEl = root ? root.querySelector(".page") : null;
   return captureViewportCenterFraction(root, pageEl);
+}
+
+export function setNextPsdZoomAnchorFromClientPoint(clientX, clientY) {
+  const root = container();
+  const pageEl = root ? root.querySelector(".page") : null;
+  zoomTransitionAnchor = captureViewportPointFraction(root, pageEl, clientX, clientY);
 }
 
 export function refreshPsdStageLayout({ recenter = true, viewportCenter = null } = {}) {
@@ -101,11 +110,14 @@ export function renderAllSpreads() {
       const pageEl = stage ? stage.querySelector(".page") : null;
       resetZoomDuringRedraw = resetZoomToStart;
       resetZoomToStart = false;
-      zoomTransitionCenter = resetZoomDuringRedraw ? null : captureViewportCenterFraction(stage, pageEl);
+      zoomTransitionCenter = resetZoomDuringRedraw
+        ? null
+        : (zoomTransitionAnchor ?? captureViewportCenterFraction(stage, pageEl));
       try {
         for (const fn of pageRedraws) fn();
       } finally {
         zoomTransitionCenter = null;
+        zoomTransitionAnchor = null;
         resetZoomDuringRedraw = false;
       }
     });
@@ -293,7 +305,11 @@ function buildPage(page, pageIndex, root) {
       alignCanvasStartInViewport(root, el);
     } else if (zoomTransitionCenter) {
       if (hasOverflowAfter) {
-        restoreViewportCenter(root, el, zoomTransitionCenter);
+        if (Number.isFinite(zoomTransitionCenter.offsetX) && Number.isFinite(zoomTransitionCenter.offsetY)) {
+          restoreViewportPoint(root, el, zoomTransitionCenter);
+        } else {
+          restoreViewportCenter(root, el, zoomTransitionCenter);
+        }
       } else {
         root.scrollLeft = 0;
         root.scrollTop = 0;
