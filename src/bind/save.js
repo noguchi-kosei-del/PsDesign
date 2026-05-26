@@ -76,6 +76,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     current: 0,
     total: payload.edits?.length ?? 0,
     showCount: true,
+    variant: "save",
   });
   try {
     const { invoke } = await import("@tauri-apps/api/core");

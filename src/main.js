@@ -2645,6 +2645,7 @@ function openHomeTypesetDialog() {
         await loadReferenceFiles(paths, {
           skipFirstBlankPage: false,
           excludedPages: hiddenReferencePages,
+          showProgress: false,
         });
         referencePageCount = referenceSelectionMatchesLoaded(paths, hiddenReferencePages)
           ? Math.max(0, getPdfVirtualPageCount())

@@ -303,6 +303,7 @@ export async function pickPdfFile() {
 export async function loadReferenceFiles(paths, options = {}) {
   if (!Array.isArray(paths) || paths.length === 0) return;
   const keepProgressOpen = !!options.keepProgressOpen;
+  const shouldShowProgress = options.showProgress !== false;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
   const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
   const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
@@ -313,17 +314,23 @@ export async function loadReferenceFiles(paths, options = {}) {
   }
   const sorted = sortPathsNaturally(filtered);
   const total = sorted.length;
+  const progressTotal = total + 2;
   const headLabel = total === 1
     ? basename(sorted[0])
     : `${basename(sorted[0])} ほか ${total} 件`;
 
-  showProgress({
-    title: options.title || options.label || "見本を読み込み中",
-    detail: `${headLabel}  読込中`,
-    current: 0,
-    total,
-    variant: options.variant,
-  });
+  if (shouldShowProgress) {
+    showProgress({
+      title: options.title || options.label || "見本を読み込み中",
+      detail: `${headLabel}  読込中`,
+      current: 0,
+      total: progressTotal,
+      variant: options.variant || "load",
+      tasks: hasPdf ? ["ファイル読込", "PDF解析", "表示準備"] : ["ファイル読込", "画像解析", "表示準備"],
+      taskIndex: 0,
+      taskProgress: 0,
+    });
+  }
 
   const sources = [];
   const failures = [];
@@ -332,11 +339,14 @@ export async function loadReferenceFiles(paths, options = {}) {
     for (let i = 0; i < total; i++) {
       const p = sorted[i];
       const name = basename(p);
-      updateProgress({
-        detail: `${name} (${i + 1} / ${total})`,
-        current: i,
-        total,
-      });
+      if (shouldShowProgress) {
+        updateProgress({
+          detail: `${name} (${i + 1} / ${total})`,
+          current: i,
+          total: progressTotal,
+          taskIndex: 0,
+        });
+      }
       try {
         if (IMAGE_EXT_REGEX.test(p)) {
           sourceIndex += 1;
@@ -361,7 +371,9 @@ export async function loadReferenceFiles(paths, options = {}) {
         failures.push({ name, error: e });
       }
     }
-    updateProgress({ detail: headLabel, current: total, total });
+    if (shouldShowProgress) {
+      updateProgress({ detail: headLabel, current: total, total: progressTotal, taskIndex: 1 });
+    }
 
     if (sources.length === 0) {
       toast("有効な見本ファイルがありませんでした", { kind: "error", duration: 5000 });
@@ -371,12 +383,18 @@ export async function loadReferenceFiles(paths, options = {}) {
     const compositeDoc = makeCompositeDoc(sources);
     // 横長判定は 1 ページ目（先頭ソース）で行い、PDF と同じく自動 split mode を設定。
     const isLandscape = await detectLandscape(compositeDoc);
+    if (shouldShowProgress) {
+      updateProgress({ detail: headLabel, current: total + 1, total: progressTotal, taskIndex: 2 });
+    }
     setPdfSplitMode(isLandscape);
     setPdfSkipFirstBlank(skipFirstBlankPage && hasPdf);
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
     // 画像スキャンや自動配置が複数ファイルを 画像スキャン 対象にできるようにする。
     setPdf(compositeDoc, sorted[0], sorted);
     setPdfExcludedReferencePages(excludedPages);
+    if (shouldShowProgress) {
+      updateProgress({ detail: headLabel, current: progressTotal, total: progressTotal, taskIndex: 2, taskProgress: 100 });
+    }
 
     if (failures.length > 0) {
       toast(
@@ -385,7 +403,7 @@ export async function loadReferenceFiles(paths, options = {}) {
       );
     }
   } finally {
-    if (!keepProgressOpen) hideProgress();
+    if (shouldShowProgress && !keepProgressOpen) hideProgress();
   }
 }
 

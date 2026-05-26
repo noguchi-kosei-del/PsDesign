@@ -54,7 +54,7 @@ export async function loadPsdFilesByPaths(files, {
   icon,
   label = "PSD を読み込み中",
   keepProgressOpen = false,
-  variant = null,
+  variant = "load",
   confirmUnsaved = true,
   preserveOrder = false,
 } = {}) {
@@ -90,6 +90,9 @@ export async function loadPsdFilesByPaths(files, {
     total: files.length,
     icon,
     variant,
+    tasks: ["ファイル確認", "PSD解析", "ページ表示"],
+    taskIndex: 0,
+    taskProgress: 0,
   });
 
   clearPages();
@@ -105,6 +108,7 @@ export async function loadPsdFilesByPaths(files, {
       detail: baseName(path),
       current: i,
       total: files.length,
+      taskIndex: i === 0 ? 0 : 1,
     });
     try {
       const page = await loadPsdFromPath(path);
@@ -124,6 +128,7 @@ export async function loadPsdFilesByPaths(files, {
       detail: baseName(path),
       current: i + 1,
       total: files.length,
+      taskIndex: i + 1 >= files.length ? 2 : 1,
     });
   }
 
