@@ -1,6 +1,7 @@
 import * as pdfjsLib from "pdfjs-dist";
 import { setPdf, setPdfExcludedReferencePages, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
 import { showProgress, hideProgress, toast, updateProgress } from "./ui-feedback.js";
+import { withProgressFlow } from "./progress-flow.js";
 
 // 「見本」として読み込める拡張子。PDF（複数ページ）と、JPEG / PNG（単一画像）。
 export const REFERENCE_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"];
@@ -39,6 +40,11 @@ async function readFileBytes(path) {
 function sortPathsNaturally(paths) {
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   return [...paths].sort((a, b) => collator.compare(basename(a), basename(b)));
+}
+
+function waitForNextFrame() {
+  if (typeof requestAnimationFrame !== "function") return Promise.resolve();
+  return new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
 // 1 ページ目の物理サイズで「横長原稿」と判定する。横長なら単ページ表示（左右分割）。
@@ -304,6 +310,7 @@ export async function loadReferenceFiles(paths, options = {}) {
   if (!Array.isArray(paths) || paths.length === 0) return;
   const keepProgressOpen = !!options.keepProgressOpen;
   const shouldShowProgress = options.showProgress !== false;
+  const progressFlow = options.progressFlow || null;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
   const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
   const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
@@ -320,7 +327,7 @@ export async function loadReferenceFiles(paths, options = {}) {
     : `${basename(sorted[0])} ほか ${total} 件`;
 
   if (shouldShowProgress) {
-    showProgress({
+    showProgress(withProgressFlow(progressFlow, {
       title: options.title || options.label || "見本を読み込み中",
       detail: `${headLabel}  読込中`,
       current: 0,
@@ -329,7 +336,7 @@ export async function loadReferenceFiles(paths, options = {}) {
       tasks: hasPdf ? ["ファイル読込", "PDF解析", "表示準備"] : ["ファイル読込", "画像解析", "表示準備"],
       taskIndex: 0,
       taskProgress: 0,
-    });
+    }));
   }
 
   const sources = [];
@@ -340,13 +347,14 @@ export async function loadReferenceFiles(paths, options = {}) {
       const p = sorted[i];
       const name = basename(p);
       if (shouldShowProgress) {
-        updateProgress({
+        updateProgress(withProgressFlow(progressFlow, {
           detail: `${name} (${i + 1} / ${total})`,
           current: i,
           total: progressTotal,
           taskIndex: 0,
-        });
+        }));
       }
+      await waitForNextFrame();
       try {
         if (IMAGE_EXT_REGEX.test(p)) {
           sourceIndex += 1;
@@ -372,7 +380,7 @@ export async function loadReferenceFiles(paths, options = {}) {
       }
     }
     if (shouldShowProgress) {
-      updateProgress({ detail: headLabel, current: total, total: progressTotal, taskIndex: 1 });
+      updateProgress(withProgressFlow(progressFlow, { detail: headLabel, current: total, total: progressTotal, taskIndex: 1 }));
     }
 
     if (sources.length === 0) {
@@ -384,7 +392,7 @@ export async function loadReferenceFiles(paths, options = {}) {
     // 横長判定は 1 ページ目（先頭ソース）で行い、PDF と同じく自動 split mode を設定。
     const isLandscape = await detectLandscape(compositeDoc);
     if (shouldShowProgress) {
-      updateProgress({ detail: headLabel, current: total + 1, total: progressTotal, taskIndex: 2 });
+      updateProgress(withProgressFlow(progressFlow, { detail: headLabel, current: total + 1, total: progressTotal, taskIndex: 2 }));
     }
     setPdfSplitMode(isLandscape);
     setPdfSkipFirstBlank(skipFirstBlankPage && hasPdf);
@@ -393,7 +401,7 @@ export async function loadReferenceFiles(paths, options = {}) {
     setPdf(compositeDoc, sorted[0], sorted);
     setPdfExcludedReferencePages(excludedPages);
     if (shouldShowProgress) {
-      updateProgress({ detail: headLabel, current: progressTotal, total: progressTotal, taskIndex: 2, taskProgress: 100 });
+      updateProgress(withProgressFlow(progressFlow, { detail: headLabel, current: progressTotal, total: progressTotal, taskIndex: 2, taskProgress: 100 }));
     }
 
     if (failures.length > 0) {

@@ -8,6 +8,7 @@
 
 import { addPage, clearPages, hasEdits, setFolder } from "../state.js";
 import { confirmDialog, hideProgress, notifyDialog, showProgress, toast, updateProgress } from "../ui-feedback.js";
+import { withProgressFlow } from "../progress-flow.js";
 import { renderAllSpreads } from "../spread-view.js";
 import { rebuildLayerList } from "../text-editor.js";
 import { UnsupportedBitmapPsdError, loadPsdFromPath } from "../psd-loader.js";
@@ -57,6 +58,7 @@ export async function loadPsdFilesByPaths(files, {
   variant = "load",
   confirmUnsaved = true,
   preserveOrder = false,
+  progressFlow = null,
 } = {}) {
   if (!files || files.length === 0) return;
   // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
@@ -83,7 +85,7 @@ export async function loadPsdFilesByPaths(files, {
   // ない / 異なる位置にあっても古いロック状態でユーザーがハマらないようにする。
   setGuidesLocked(false);
 
-  showProgress({
+  showProgress(withProgressFlow(progressFlow, {
     title: label,
     detail: baseName(files[0]),
     current: 0,
@@ -93,7 +95,7 @@ export async function loadPsdFilesByPaths(files, {
     tasks: ["ファイル確認", "PSD解析", "ページ表示"],
     taskIndex: 0,
     taskProgress: 0,
-  });
+  }));
 
   clearPages();
   renderAllSpreads();
@@ -104,12 +106,12 @@ export async function loadPsdFilesByPaths(files, {
   const unsupportedBitmapFiles = [];
   for (let i = 0; i < files.length; i++) {
     const path = files[i];
-    updateProgress({
+    updateProgress(withProgressFlow(progressFlow, {
       detail: baseName(path),
       current: i,
       total: files.length,
       taskIndex: i === 0 ? 0 : 1,
-    });
+    }));
     try {
       const page = await loadPsdFromPath(path);
       addPage(page);
@@ -124,12 +126,12 @@ export async function loadPsdFilesByPaths(files, {
         failures.push({ path, error: e });
       }
     }
-    updateProgress({
+    updateProgress(withProgressFlow(progressFlow, {
       detail: baseName(path),
       current: i + 1,
       total: files.length,
       taskIndex: i + 1 >= files.length ? 2 : 1,
-    });
+    }));
   }
 
   window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));

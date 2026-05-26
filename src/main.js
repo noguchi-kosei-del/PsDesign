@@ -61,9 +61,15 @@ import {
   hideModalAnimated,
   hideProgress,
   notifyDialog,
+  showProgress,
   showModalAnimated,
   toast,
 } from "./ui-feedback.js";
+import {
+  clearProgressFlow,
+  createHomeTypesetSteps,
+  startProgressFlow,
+} from "./progress-flow.js";
 import { bindEditorPane, focusEditor, refreshEditorPaneViewer } from "./bind/editor-pane.js";
 import {
   listPsdFilesInFolder,
@@ -1449,10 +1455,12 @@ function stepTextPointSize(sign, multiplier = 1) {
 }
 
 function bindBoldToggle() {
-  const btn = document.getElementById("bold-toggle-btn");
-  if (!btn) return;
-  btn.addEventListener("mousedown", (e) => e.preventDefault());
-  btn.addEventListener("click", () => {
+  const buttons = document.querySelectorAll(".bold-toggle-btn");
+  buttons.forEach((btn) => {
+    if (btn.dataset.boldBound === "true") return;
+    btn.dataset.boldBound = "true";
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
     if (btn.disabled) return;
     const newValue = btn.getAttribute("aria-pressed") !== "true";
     const sel = getLastInplaceSelection();
@@ -1462,20 +1470,23 @@ function bindBoldToggle() {
       applyEditModeStyleToRange(sel.start, sel.end, { fontWeight: newValue ? "700" : "400" });
       refreshAllOverlays();
       rebuildLayerList();
-      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+      buttons.forEach((item) => item.setAttribute("aria-pressed", newValue ? "true" : "false"));
       return;
     }
     if (commitBoldToSelections(newValue)) {
-      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+      buttons.forEach((item) => item.setAttribute("aria-pressed", newValue ? "true" : "false"));
     }
+    });
   });
 }
 
 function bindItalicToggle() {
-  const btn = document.getElementById("italic-toggle-btn");
-  if (!btn) return;
-  btn.addEventListener("mousedown", (e) => e.preventDefault());
-  btn.addEventListener("click", () => {
+  const buttons = document.querySelectorAll(".italic-toggle-btn");
+  buttons.forEach((btn) => {
+    if (btn.dataset.italicBound === "true") return;
+    btn.dataset.italicBound = "true";
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
     if (btn.disabled) return;
     const newValue = btn.getAttribute("aria-pressed") !== "true";
     const sel = getLastInplaceSelection();
@@ -1485,12 +1496,13 @@ function bindItalicToggle() {
       applyEditModeStyleToRange(sel.start, sel.end, { fontStyle: newValue ? "italic" : "normal" });
       refreshAllOverlays();
       rebuildLayerList();
-      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+      buttons.forEach((item) => item.setAttribute("aria-pressed", newValue ? "true" : "false"));
       return;
     }
     if (commitItalicToSelections(newValue)) {
-      btn.setAttribute("aria-pressed", newValue ? "true" : "false");
+      buttons.forEach((item) => item.setAttribute("aria-pressed", newValue ? "true" : "false"));
     }
+    });
   });
 }
 
@@ -1944,6 +1956,36 @@ async function handleDroppedPaths(paths) {
   }
   if (pdfFiles.length > 0) {
     await loadReferenceFiles(pdfFiles);
+  }
+}
+
+function normalizeStartupProjectPath(value) {
+  if (typeof value !== "string") return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  if (!/^file:\/\//i.test(raw)) return raw;
+  try {
+    const url = new URL(raw);
+    let path = decodeURIComponent(url.pathname);
+    if (/^\/[a-z]:\//i.test(path)) path = path.slice(1);
+    return path.replace(/\//g, "\\");
+  } catch (_) {
+    return raw;
+  }
+}
+
+async function openStartupProjectFromArgs() {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const args = await invoke("startup_args");
+    if (!Array.isArray(args)) return;
+    const projectPath = args
+      .map(normalizeStartupProjectPath)
+      .find((path) => typeof path === "string" && /\.opus$/i.test(path));
+    if (!projectPath) return;
+    await openProjectFromPath(projectPath);
+  } catch (e) {
+    console.warn("startup project open skipped:", e);
   }
 }
 
@@ -2909,6 +2951,7 @@ function openHomeTypesetDialog() {
 
 async function transitionFromHome() {
   const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
   document.body.classList.add("home-starting");
   await wait(360);
   hideHomeScreen();
@@ -2922,6 +2965,15 @@ async function startHomeTypesetFlow() {
   if (!picked) return;
   const positionAdjustMode = await choosePositionAdjustMode();
   if (positionAdjustMode == null) return;
+  const progressFlowId = `home-typeset-${Date.now()}`;
+  startProgressFlow({
+    id: progressFlowId,
+    title: "自動配置中…",
+    variant: "place",
+    icon: PLACE_ICON_SVG,
+    steps: createHomeTypesetSteps({ positionAdjustMode }),
+    detail: "自動配置を準備中…",
+  });
   await transitionFromHome();
   try {
     clearScanExtractDoc();
@@ -2930,6 +2982,7 @@ async function startHomeTypesetFlow() {
         skipFirstBlankPage: false,
         excludedPages: picked.hiddenReferencePages,
         keepProgressOpen: true,
+        progressFlow: { id: progressFlowId, stepId: "reference-load" },
       });
     }
     await loadPsdFilesByPaths(picked.psdPaths, {
@@ -2937,6 +2990,7 @@ async function startHomeTypesetFlow() {
       label: "自動配置中…",
       keepProgressOpen: true,
       variant: "place",
+      progressFlow: { id: progressFlowId, stepId: "psd-load" },
     });
     if (!getPages().length) {
       await hideProgress();
@@ -2947,13 +3001,14 @@ async function startHomeTypesetFlow() {
       allowExtractText: true,
       preserveTxtDuringExtract: !!picked.txtPath,
       positionAdjustMode,
+      progressFlowId,
     });
     if (!placed) {
       await hideProgress();
       return;
     }
     if (placed?.positionAdjusted !== true) {
-      await runSelectedPositionAdjust(positionAdjustMode, { automatic: true });
+      await runSelectedPositionAdjust(positionAdjustMode, { automatic: true, progressFlowId });
     }
   } catch (e) {
     console.error(e);
@@ -2962,6 +3017,8 @@ async function startHomeTypesetFlow() {
       title: "写植を開始できません",
       message: String(e?.message ?? e ?? "不明なエラー"),
     });
+  } finally {
+    clearProgressFlow(progressFlowId);
   }
 }
 
@@ -2977,10 +3034,18 @@ async function startHomeTranscribeFlow() {
   }
   if (!files.length) return;
 
+  showProgress({
+    title: "書き起こし中…",
+    detail: "読み込み準備中…",
+    current: 0,
+    total: 1,
+    showCount: false,
+    variant: "scan",
+  });
   await transitionFromHome();
   try {
     clearScanExtractDoc();
-    await loadReferenceFiles(files);
+    await loadReferenceFiles(files, { keepProgressOpen: true, variant: "scan" });
     await runScanExtractForTranscription(files);
     setParallelViewMode("editor");
     setEditorLeftPaneMode("pdf");
@@ -2988,6 +3053,7 @@ async function startHomeTranscribeFlow() {
     requestAnimationFrame(() => focusEditor());
   } catch (e) {
     console.error(e);
+    await hideProgress();
     await notifyDialog({
       title: "書き起こしを開始できません",
       message: String(e?.message ?? e ?? "不明なエラー"),
@@ -3106,6 +3172,7 @@ function init() {
     updatePsdGuidesApplyVisibility();
   });
   maybeShowFirstRunSetup();
+  void openStartupProjectFromArgs();
   void closeStartupSplash();
 }
 

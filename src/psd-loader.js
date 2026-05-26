@@ -1,5 +1,92 @@
 import { readPsd } from "ag-psd";
 
+let psdParseWorker = null;
+let psdParseWorkerSeq = 1;
+const psdParseWorkerPending = new Map();
+
+function waitForNextFrame() {
+  if (typeof requestAnimationFrame !== "function") return Promise.resolve();
+  return new Promise((resolve) => requestAnimationFrame(resolve));
+}
+
+function nowMs() {
+  return typeof performance !== "undefined" && typeof performance.now === "function"
+    ? performance.now()
+    : Date.now();
+}
+
+async function yieldIfNeeded(startedAt, budgetMs = 12) {
+  if (nowMs() - startedAt < budgetMs) return nowMs();
+  await waitForNextFrame();
+  return nowMs();
+}
+
+function createBlankCanvas(width, height) {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  return canvas;
+}
+
+function canUsePsdParseWorker() {
+  return typeof Worker === "function" && typeof OffscreenCanvas === "function";
+}
+
+function getPsdParseWorker() {
+  if (psdParseWorker) return psdParseWorker;
+  psdParseWorker = new Worker(new URL("./psd-parse-worker.js", import.meta.url), { type: "module" });
+  psdParseWorker.onmessage = (event) => {
+    const { id, ok, parsed, error } = event.data ?? {};
+    const pending = psdParseWorkerPending.get(id);
+    if (!pending) return;
+    psdParseWorkerPending.delete(id);
+    if (ok) {
+      pending.resolve(parsed);
+    } else {
+      const err = new Error(error?.message ?? "PSD worker parse failed");
+      err.name = error?.name ?? "Error";
+      err.code = error?.code ?? null;
+      pending.reject(err);
+    }
+  };
+  psdParseWorker.onerror = (event) => {
+    const error = new Error(event?.message ?? "PSD worker failed");
+    for (const pending of psdParseWorkerPending.values()) {
+      pending.reject(error);
+    }
+    psdParseWorkerPending.clear();
+    psdParseWorker?.terminate();
+    psdParseWorker = null;
+  };
+  return psdParseWorker;
+}
+
+function parsePsdWithWorker(bytes) {
+  if (!canUsePsdParseWorker()) return Promise.reject(new Error("PSD parse worker is not available"));
+  const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const id = psdParseWorkerSeq++;
+  return new Promise((resolve, reject) => {
+    psdParseWorkerPending.set(id, { resolve, reject });
+    getPsdParseWorker().postMessage({ id, buffer }, [buffer]);
+  });
+}
+
+function imageBitmapToCanvas(bitmap) {
+  if (!bitmap) return null;
+  const canvas = document.createElement("canvas");
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return null;
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close?.();
+  return canvas;
+}
+
 export class UnsupportedBitmapPsdError extends Error {
   constructor(path) {
     super("モノクロ2階調のPSDは読み込めません");
@@ -387,9 +474,22 @@ function isRectMostlyWhite(ctx, sx, sy, w, h) {
 // あったため、案 G に置換。ベースに psd.canvas を使うため、再合成画像が不完全でも
 // 全体が真っ白くなることはない。再合成画像が空 (白) なら非表示部分だけが白になる
 // (= 案 B/D の矩形 fill 相当に degrade)。
-function rebuildCanvasMaskingHidden(psd) {
+async function rebuildCanvasMaskingHidden(psd) {
   try {
     if (!psd || !psd.width || !psd.height) return null;
+    // (2) 非表示レイヤーを集める
+    const hiddenList = [];
+    if (Array.isArray(psd.children)) {
+      for (const child of psd.children) {
+        collectHiddenLayersForMasking(child, true, hiddenList);
+      }
+    }
+    if (hiddenList.length === 0) {
+      return psd.canvas ? null : createBlankCanvas(psd.width, psd.height);
+    }
+
+    await waitForNextFrame();
+
     const canvas = document.createElement("canvas");
     canvas.width = psd.width;
     canvas.height = psd.height;
@@ -404,16 +504,9 @@ function rebuildCanvasMaskingHidden(psd) {
       ctx.fillRect(0, 0, psd.width, psd.height);
     }
 
-    // (2) 非表示レイヤーを集める
-    const hiddenList = [];
-    if (Array.isArray(psd.children)) {
-      for (const child of psd.children) {
-        collectHiddenLayersForMasking(child, true, hiddenList);
-      }
-    }
-    if (hiddenList.length === 0) return canvas;
-
     // (3) 可視非テキストレイヤーで「絵柄背景」用の合成画像を作る
+    await waitForNextFrame();
+
     const visibleCanvas = document.createElement("canvas");
     visibleCanvas.width = psd.width;
     visibleCanvas.height = psd.height;
@@ -428,14 +521,22 @@ function rebuildCanvasMaskingHidden(psd) {
       }
     }
     // 描画順は「下から上」なので reverse
-    for (const layer of visibleLayers.reverse()) {
+    let yieldStartedAt = nowMs();
+    const visibleDrawOrder = visibleLayers.reverse();
+    for (let i = 0; i < visibleDrawOrder.length; i++) {
+      const layer = visibleDrawOrder[i];
       const lc = layer.canvas;
       if (!lc || lc.width === 0 || lc.height === 0) continue;
       const op = (typeof layer.opacity === "number") ? layer.opacity / 255 : 1;
       vctx.globalAlpha = Math.max(0, Math.min(1, op));
       vctx.drawImage(lc, layer.left ?? 0, layer.top ?? 0);
+      if ((i + 1) % 6 === 0) {
+        yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
+      }
     }
     vctx.globalAlpha = 1;
+
+    await waitForNextFrame();
 
     // (4) 非表示レイヤーの bbox 範囲 + DILATE 余白だけ、visibleCanvas から切り出して上書き。
     // DILATE は frameFX (白フチ) サイズ (layer.strokePx) を加味して per-layer に決める。
@@ -448,9 +549,14 @@ function rebuildCanvasMaskingHidden(psd) {
     const psdH = psd.height;
     let skippedAll = 0;
     let drawnAll = 0;
-    for (const item of hiddenList) {
+    yieldStartedAt = nowMs();
+    for (let i = 0; i < hiddenList.length; i++) {
+      const item = hiddenList[i];
       const lc = item.canvas;
-      if (!lc || lc.width === 0 || lc.height === 0) continue;
+      if (!lc || lc.width === 0 || lc.height === 0) {
+        if ((i + 1) % 4 === 0) yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
+        continue;
+      }
       const strokePx = Number.isFinite(item.strokePx) && item.strokePx > 0 ? item.strokePx : 0;
       const DILATE = Math.ceil(strokePx) + 4;
       const left0 = (item.left ?? 0) - DILATE;
@@ -463,15 +569,22 @@ function rebuildCanvasMaskingHidden(psd) {
       const ey = Math.min(psdH, Math.ceil(bottom0));
       const w = ex - sx;
       const h = ey - sy;
-      if (w <= 0 || h <= 0) continue;
+      if (w <= 0 || h <= 0) {
+        if ((i + 1) % 4 === 0) yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
+        continue;
+      }
 
       // visibleCanvas の該当矩形が一様白かを 5 点サンプリング (4 隅 + 中央) で判定
       if (isRectMostlyWhite(vctx, sx, sy, w, h)) {
         skippedAll++;
+        if ((i + 1) % 4 === 0) yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
         continue; // 絵柄が無い → 上書きしない (psd.canvas のまま残す)
       }
       ctx.drawImage(visibleCanvas, sx, sy, w, h, sx, sy, w, h);
       drawnAll++;
+      if ((i + 1) % 4 === 0) {
+        yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
+      }
     }
     if (skippedAll > 0) {
       console.info(`[psd-loader] mask skip: visibleCanvas が空のため ${skippedAll}件 上書き回避 / ${drawnAll}件 上書き`);
@@ -485,11 +598,36 @@ function rebuildCanvasMaskingHidden(psd) {
 
 export async function loadPsdFromPath(path) {
   const bytes = await readFileBytes(path);
+  if (canUsePsdParseWorker()) {
+    try {
+      const parsed = await parsePsdWithWorker(bytes);
+      const canvas = imageBitmapToCanvas(parsed.bitmap);
+      if (canvas) {
+        return {
+          path,
+          width: parsed.width,
+          height: parsed.height,
+          canvas,
+          textLayers: parsed.textLayers ?? [],
+          dpi: parsed.dpi ?? 72,
+        };
+      }
+    } catch (error) {
+      if (error?.code === "UNSUPPORTED_BITMAP_PSD") {
+        throw new UnsupportedBitmapPsdError(path);
+      }
+      console.warn("PSD worker parse failed, falling back to main thread:", error);
+    }
+  }
+
+  await waitForNextFrame();
+
   const psd = readPsd(bytes, {
     skipLayerImageData: false,
     skipThumbnail: true,
     useImageData: false,
   });
+  await waitForNextFrame();
   if (isBitmapPsd(psd)) {
     throw new UnsupportedBitmapPsdError(path);
   }
@@ -506,7 +644,7 @@ export async function loadPsdFromPath(path) {
   // 旧 maskHiddenLayersOnComposite (案 A 白フィル) は frameFX 白フチが残る欠点があった。
   let canvas = psd.canvas;
   if (Array.isArray(psd.children)) {
-    const rebuilt = rebuildCanvasMaskingHidden(psd);
+    const rebuilt = await rebuildCanvasMaskingHidden(psd);
     if (rebuilt) {
       canvas = rebuilt;
       console.info(`[psd-loader] canvas 部分再合成 OK | path=${path}`);

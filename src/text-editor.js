@@ -820,27 +820,31 @@ function populateEditor() {
 // 【v1.22.0】B トグルボタンの aria-pressed と disabled を更新。
 // value === undefined → 未選択 (disabled)、null → 混在 (inactive)、true/false → 反映。
 function syncBoldToggle(value) {
-  const btn = document.getElementById("bold-toggle-btn");
-  if (!btn) return;
-  if (value === undefined) {
+  const buttons = document.querySelectorAll(".bold-toggle-btn");
+  if (!buttons.length) return;
+  buttons.forEach((btn) => {
+    if (value === undefined) {
     btn.disabled = true;
     btn.setAttribute("aria-pressed", "false");
-  } else {
+    } else {
     btn.disabled = false;
     btn.setAttribute("aria-pressed", value === true ? "true" : "false");
-  }
+    }
+  });
 }
 
 function syncItalicToggle(value) {
-  const btn = document.getElementById("italic-toggle-btn");
-  if (!btn) return;
-  if (value === undefined) {
+  const buttons = document.querySelectorAll(".italic-toggle-btn");
+  if (!buttons.length) return;
+  buttons.forEach((btn) => {
+    if (value === undefined) {
     btn.disabled = true;
     btn.setAttribute("aria-pressed", "false");
-  } else {
+    } else {
     btn.disabled = false;
     btn.setAttribute("aria-pressed", value === true ? "true" : "false");
-  }
+    }
+  });
 }
 
 // ========== フォント検索コンボボックス ==========
@@ -1221,7 +1225,7 @@ function ensureLayerFontPanelGlobalHandlers() {
   const repos = () => {
     positionLayerFontPanel();
     positionFloatingPanel(layerSizePanel, layerSizePanelAnchor, 230, 96);
-    positionFloatingPanel(layerStrokePanel, layerStrokePanelAnchor, 250, 104);
+    positionFloatingPanel(layerStrokePanel, layerStrokePanelAnchor, 220, 104);
   };
   window.addEventListener("resize", repos);
   window.addEventListener("scroll", repos, true);
@@ -1374,7 +1378,7 @@ export function openLayerStrokePanel(anchor) {
   panel.hidden = false;
   panel.classList.add("stroke-panel-floating");
   layerStrokePanel = panel;
-  positionFloatingPanel(panel, anchor, 250, 104);
+  positionFloatingPanel(panel, anchor, 220, 104);
   return true;
 }
 

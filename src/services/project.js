@@ -2,7 +2,15 @@ import { loadReferenceFiles } from "../pdf-loader.js";
 import { renderAllSpreads } from "../spread-view.js";
 import { rebuildLayerList } from "../text-editor.js";
 import { renderTxtSourceViewer } from "../txt-source.js";
-import { confirmDialog, hideProgress, toast } from "../ui-feedback.js";
+import {
+  MODAL_ANIM_MS,
+  confirmDialog,
+  hideModalAnimated,
+  hideProgress,
+  notifyDialog,
+  showModalAnimated,
+  toast,
+} from "../ui-feedback.js";
 import { openFileDialog } from "../file-picker.js";
 import {
   applyProjectSnapshot,
@@ -47,6 +55,11 @@ function defaultProjectStem() {
   const first = getPages()[0]?.path;
   const stem = first ? baseName(first).replace(/\.[^.]+$/, "") : "opus-project";
   return stem || "opus-project";
+}
+
+function defaultWorkName() {
+  const stem = defaultProjectStem();
+  return stem === "opus-project" ? "" : stem;
 }
 
 function makeProjectDocument() {
@@ -136,17 +149,188 @@ function extensionOf(path) {
   return m ? m[1] : "";
 }
 
-function stemOf(path) {
-  const name = baseName(path) || "untitled";
-  return name.replace(/\.[^.]*$/, "") || "untitled";
-}
-
 function safeFileName(name, fallback = "untitled") {
   const raw = String(name || fallback)
     .replace(/[<>:"/\\|?*\x00-\x1F]/g, "_")
     .trim()
     .replace(/[. ]+$/g, "");
   return raw || fallback;
+}
+
+function buildProjectDisplayName(workName, volume) {
+  const work = String(workName || "").trim();
+  const vol = String(volume || "").trim();
+  if (work && vol) return `${work} ${vol}`;
+  return work || vol || defaultProjectStem();
+}
+
+function normalizeVolumeLabel(volume) {
+  const vol = String(volume || "").trim();
+  if (!vol) return "";
+  return /^\d+$/.test(vol) ? `${vol}巻` : vol;
+}
+
+function buildProjectTextFileName({ workName, volume, projectName }) {
+  const work = String(workName || "").trim();
+  const vol = normalizeVolumeLabel(volume);
+  const stem = work && vol
+    ? `${work}${vol}`
+    : work || vol || projectName || defaultProjectStem();
+  return `${safeFileName(stem, "text")}.txt`;
+}
+
+async function defaultProjectRoot() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const scriptOutput = await invoke("script_output_dir");
+  return joinPath(scriptOutput, "OPUS");
+}
+
+async function chooseProjectRoot(currentRoot) {
+  let fallbackRoot = currentRoot || await defaultProjectRoot();
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    fallbackRoot = await invoke("script_output_dir");
+  } catch {}
+  const picked = await openFileDialog({
+    mode: "openFolder",
+    title: "プロジェクト保存先を選択",
+    defaultPath: fallbackRoot,
+    rememberKey: "project-save-root",
+  });
+  return typeof picked === "string" && picked ? picked : currentRoot;
+}
+
+function createProjectSaveForm({ workName, volume, rootDir }) {
+  const form = document.createElement("div");
+  form.className = "project-save-form";
+  form.innerHTML = `
+    <label class="project-save-field">
+      <span>作品名</span>
+      <input id="project-save-work-input" class="project-save-input" type="text" autocomplete="off" />
+    </label>
+    <label class="project-save-field">
+      <span>巻数</span>
+      <input id="project-save-volume-input" class="project-save-input" type="text" autocomplete="off" placeholder="例: 1巻" />
+    </label>
+    <div class="project-save-field">
+      <span>保存先</span>
+      <div class="project-save-path-row">
+        <input id="project-save-root-input" class="project-save-input project-save-path-input" type="text" readonly />
+        <button id="project-save-root-btn" class="page-jump-btn" type="button">変更</button>
+      </div>
+    </div>
+    <div class="project-save-preview">
+      <span>保存フォルダ</span>
+      <strong id="project-save-preview-name"></strong>
+    </div>
+  `;
+  const workInput = form.querySelector("#project-save-work-input");
+  const volumeInput = form.querySelector("#project-save-volume-input");
+  const rootInput = form.querySelector("#project-save-root-input");
+  const preview = form.querySelector("#project-save-preview-name");
+  if (workInput) workInput.value = workName || "";
+  if (volumeInput) volumeInput.value = volume || "";
+  if (rootInput) rootInput.value = rootDir || "";
+  const syncPreview = () => {
+    if (preview) preview.textContent = safeFileName(
+      buildProjectDisplayName(workInput?.value, volumeInput?.value),
+      "OPUS_Project",
+    );
+  };
+  workInput?.addEventListener("input", syncPreview);
+  volumeInput?.addEventListener("input", syncPreview);
+  syncPreview();
+  return { form, workInput, volumeInput, rootInput, syncPreview };
+}
+
+async function showProjectSaveDialog() {
+  const modal = document.getElementById("confirm-modal");
+  const titleEl = document.getElementById("confirm-modal-title");
+  const msgEl = document.getElementById("confirm-modal-message");
+  const okBtn = document.getElementById("confirm-modal-ok");
+  const cancelBtn = document.getElementById("confirm-modal-cancel");
+  if (!modal || !msgEl || !okBtn || !cancelBtn) return null;
+
+  const rootDir = await defaultProjectRoot();
+  return new Promise((resolve) => {
+    if (titleEl) {
+      titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
+      titleEl.textContent = "プロジェクトを保存";
+    }
+    msgEl.textContent = "作品名と巻数を入力してください。";
+    const nodes = createProjectSaveForm({
+      workName: defaultWorkName(),
+      volume: "",
+      rootDir,
+    });
+    msgEl.parentNode.insertBefore(nodes.form, msgEl.nextSibling);
+    okBtn.textContent = "保存";
+    cancelBtn.textContent = "キャンセル";
+    okBtn.classList.remove("page-jump-btn-place");
+    okBtn.classList.add("page-jump-btn-primary");
+    cancelBtn.hidden = false;
+
+    let currentRoot = rootDir;
+    let busy = false;
+    const setError = (message) => {
+      msgEl.textContent = message || "作品名と巻数を入力してください。";
+    };
+    const cleanup = (result) => {
+      hideModalAnimated(modal);
+      setTimeout(() => {
+        nodes.form.remove();
+      }, MODAL_ANIM_MS);
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      nodes.form.querySelector("#project-save-root-btn")?.removeEventListener("click", onChooseRoot);
+      modal.removeEventListener("mousedown", onOverlay);
+      document.removeEventListener("keydown", onKey);
+      resolve(result);
+    };
+    const onChooseRoot = async () => {
+      if (busy) return;
+      busy = true;
+      const picked = await chooseProjectRoot(currentRoot);
+      if (picked) {
+        currentRoot = picked;
+        if (nodes.rootInput) nodes.rootInput.value = currentRoot;
+      }
+      busy = false;
+    };
+    const onOk = () => {
+      const workName = String(nodes.workInput?.value || "").trim();
+      const volume = String(nodes.volumeInput?.value || "").trim();
+      if (!workName && !volume) {
+        setError("作品名または巻数を入力してください。");
+        nodes.workInput?.focus();
+        return;
+      }
+      const projectName = safeFileName(buildProjectDisplayName(workName, volume), "OPUS_Project");
+      cleanup({ workName, volume, projectName, rootDir: currentRoot });
+    };
+    const onCancel = () => cleanup(null);
+    const onOverlay = (e) => { if (e.target === modal && !busy) cleanup(null); };
+    const onKey = (e) => {
+      if (busy) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup(null);
+      } else if (e.key === "Enter" && e.ctrlKey) {
+        e.preventDefault();
+        onOk();
+      }
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    nodes.form.querySelector("#project-save-root-btn")?.addEventListener("click", onChooseRoot);
+    modal.addEventListener("mousedown", onOverlay);
+    document.addEventListener("keydown", onKey);
+    showModalAnimated(modal);
+    requestAnimationFrame(() => {
+      nodes.workInput?.focus();
+      nodes.workInput?.select();
+    });
+  });
 }
 
 function uniqueName(name, used) {
@@ -191,37 +375,81 @@ async function copyFilesToProject(paths, destDir, { prefix = "" } = {}) {
   return { copied, pathMap };
 }
 
-async function createProjectBundle(snapshot) {
+async function listProjectRootEntries(rootDir) {
   const { invoke } = await import("@tauri-apps/api/core");
-  const projectDir = await invoke("create_opus_project_dir", { name: defaultProjectStem() });
-  const projectName = baseName(projectDir);
-  const psdDir = joinPath(projectDir, "psd");
-  const textDir = joinPath(projectDir, "text");
-  const refDir = joinPath(projectDir, "reference");
+  try {
+    const entries = await invoke("list_directory_entries", { path: rootDir });
+    return Array.isArray(entries) ? entries : [];
+  } catch {
+    return [];
+  }
+}
+
+async function uniqueProjectDir(rootDir, projectName) {
+  const safeName = safeFileName(projectName, "OPUS_Project");
+  const entries = await listProjectRootEntries(rootDir);
+  const existing = new Set(
+    entries
+      .filter((entry) => entry?.isDirectory === true)
+      .map((entry) => String(entry.name || "").toLowerCase()),
+  );
+  for (let i = 0; i <= 9999; i++) {
+    const name = i === 0 ? safeName : `${safeName}(${i})`;
+    if (!existing.has(name.toLowerCase())) {
+      return {
+        projectDir: joinPath(rootDir, name),
+        projectName: name,
+      };
+    }
+  }
+  return {
+    projectDir: joinPath(rootDir, safeName),
+    projectName: safeName,
+  };
+}
+
+async function createProjectBundle(snapshot, options = {}) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const rootDir = options.rootDir || await defaultProjectRoot();
+  const nameInfo = await uniqueProjectDir(rootDir, options.projectName || defaultProjectStem());
+  const projectDir = nameInfo.projectDir;
+  const projectName = nameInfo.projectName;
+  const psdDir = joinPath(projectDir, "PSD");
+  const textDir = joinPath(projectDir, "テキスト");
+  const refDir = joinPath(projectDir, "写植見本");
 
   const psdBundle = await copyFilesToProject(snapshot.psdPaths || [], psdDir);
   const rewrittenSnapshot = rewriteSnapshotPaths(snapshot, psdBundle.pathMap);
 
   let textPath = null;
   if (snapshot.txtSource?.content != null) {
-    const base = safeFileName(snapshot.txtSource.name || "text.txt");
-    const textName = /\.txt$/i.test(base) ? base : `${stemOf(base)}.txt`;
+    const textName = buildProjectTextFileName({
+      workName: options.workName,
+      volume: options.volume,
+      projectName,
+    });
     textPath = joinPath(textDir, textName);
     await invoke("write_text_file", {
       path: textPath,
       content: String(snapshot.txtSource.content || ""),
     });
+    if (rewrittenSnapshot.txtSource) {
+      rewrittenSnapshot.txtSource.name = textName;
+    }
   }
 
   const refBundle = await copyFilesToProject(getPdfPaths(), refDir);
   const doc = makeProjectDocument();
   doc.savedAt = new Date().toISOString();
   doc.projectDir = projectDir;
+  doc.projectName = projectName;
+  doc.workName = options.workName || "";
+  doc.volume = options.volume || "";
   doc.psdPaths = rewrittenSnapshot.psdPaths;
   doc.snapshot = rewrittenSnapshot;
   doc.text = textPath ? {
     path: textPath,
-    name: snapshot.txtSource?.name || baseName(textPath),
+    name: baseName(textPath),
   } : null;
   doc.references = {
     paths: refBundle.copied,
@@ -236,7 +464,7 @@ async function createProjectBundle(snapshot) {
     path: opusPath,
     content: JSON.stringify(doc, null, 2),
   });
-  return { projectDir, opusPath, psdCount: psdBundle.copied.length, referenceCount: refBundle.copied.length, textPath };
+  return { projectDir, opusPath, projectName, psdCount: psdBundle.copied.length, referenceCount: refBundle.copied.length, textPath };
 }
 
 export async function saveProject() {
@@ -248,14 +476,25 @@ export async function saveProject() {
     toast("PSD を読み込んでからプロジェクト保存してください", { kind: "info" });
     return;
   }
+  const saveOptions = await showProjectSaveDialog();
+  if (!saveOptions) return;
   projectSaveInflight = true;
   updateProjectButtons();
   try {
-    const result = await createProjectBundle(exportProjectSnapshot());
-    toast(
-      `プロジェクトを保存しました: ${baseName(result.opusPath)}`,
-      { kind: "success", duration: 3800 },
-    );
+    const result = await createProjectBundle(exportProjectSnapshot(), saveOptions);
+    await notifyDialog({
+      title: "プロジェクト保存完了",
+      message: `${result.projectName} を保存しました。`,
+      kind: "success",
+      primaryAction: {
+        label: "保存先を開く",
+        kind: "primary",
+        onClick: async () => {
+          const { invoke } = await import("@tauri-apps/api/core");
+          await invoke("open_folder_in_explorer", { path: result.projectDir });
+        },
+      },
+    });
   } catch (e) {
     console.error(e);
     toast(`プロジェクト保存に失敗しました: ${e?.message ?? e}`, { kind: "error", duration: 5000 });

@@ -31,6 +31,7 @@ export default [
         ResizeObserver: "readonly",
         TextDecoder: "readonly",
         URL: "readonly",
+        Worker: "readonly",
         atob: "readonly",
         btoa: "readonly",
         cancelAnimationFrame: "readonly",

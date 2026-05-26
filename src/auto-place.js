@@ -35,6 +35,7 @@ import {
 } from "./state.js";
 import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress, showProgress, updateProgress } from "./ui-feedback.js";
+import { withProgressFlow, updateProgressFlow, completeProgressFlowStep } from "./progress-flow.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runScanExtractForFiles, runScanExtractForPlacementOnly, PLACE_ICON_SVG, normalizeReferenceScanDocForReferencePages } from "./scan-extract.js";
 import { renderAllSpreads } from "./spread-view.js";
@@ -44,6 +45,17 @@ import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 
 const $ = (id) => document.getElementById(id);
 const SOURCE_DOC_KEY = "mo" + "kuro";
+
+function waitForTransitionPaint() {
+  if (typeof requestAnimationFrame !== "function") return Promise.resolve();
+  return new Promise((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(resolve));
+  });
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 let runningPlacePromise = null;
 // 【v1.28.0 移植】位置調整 (3 モード) の二重起動防止フラグ
@@ -534,7 +546,7 @@ async function computeAlignmentSafe(referencePath, psdPage, referenceScanPage, p
   return null;
 }
 
-async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, referencePaths, { progressLabel = null } = {}) {
+async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, referencePaths, { progressLabel = null, progressFlow = null } = {}) {
   if (mode !== "mode1" && mode !== "mode2") return new Map();
   const alignmentByPath = new Map();
   const isSinglePdfMultiPsd = referencePaths.length === 1
@@ -544,7 +556,7 @@ async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, refer
     ? psdPages.length
     : Math.min(psdPages.length, referencePaths.length);
   if (progressLabel) {
-    updateProgress({ current: 0, total: Math.max(N, 1), detail: `${progressLabel} 0/${N}`, showCount: false });
+    updateProgress(withProgressFlow(progressFlow, { current: 0, total: Math.max(N, 1), detail: `${progressLabel} 0/${N}`, showCount: false }));
   }
   for (let i = 0; i < N; i++) {
     const psd = psdPages[i];
@@ -555,12 +567,12 @@ async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, refer
       : (isSinglePdfMultiPsd ? i : 0);
     const referenceScan = referenceScanDoc?.pages?.[i] ?? { blocks: [] };
     if (progressLabel) {
-      updateProgress({ current: i, total: N, detail: `${progressLabel} ${i + 1}/${N} を計算中…`, showCount: false });
+      updateProgress(withProgressFlow(progressFlow, { current: i, total: N, detail: `${progressLabel} ${i + 1}/${N} を計算中…`, showCount: false }));
     }
     const alignment = await computeAlignmentSafe(refPath, psd, referenceScan, pdfPageIdx, mode);
     if (alignment && psd?.path) alignmentByPath.set(psd.path, alignment);
     if (progressLabel) {
-      updateProgress({ current: i + 1, total: N, detail: `${progressLabel} ${i + 1}/${N} 完了`, showCount: false });
+      updateProgress(withProgressFlow(progressFlow, { current: i + 1, total: N, detail: `${progressLabel} ${i + 1}/${N} 完了`, showCount: false }));
     }
   }
   return alignmentByPath;
@@ -1163,6 +1175,7 @@ export async function runAutoPlace({
   forceRescan = false,
   positionOnlyScan = false,
   positionAdjustMode = null,
+  progressFlowId = null,
 } = {}) {
   if (runningPlacePromise) return runningPlacePromise;
   runningPlacePromise = (async () => {
@@ -1172,6 +1185,9 @@ export async function runAutoPlace({
     progressOpenForAutoPlace = false;
     await hideProgress(options);
   };
+  const scanProgressFlow = progressFlowId ? { id: progressFlowId, stepId: "scan" } : null;
+  const placeProgressFlow = progressFlowId ? { id: progressFlowId, stepId: "place" } : null;
+  const alignProgressFlow = progressFlowId ? { id: progressFlowId, stepId: "align" } : null;
   try {
     // 1. PSD / TXT の事前確認
     //    PSD 未読込なら、ファイル選択ダイアログを起動して読み込みまで一気通貫で進める
@@ -1182,7 +1198,7 @@ export async function runAutoPlace({
       if (!files || files.length === 0) return;
       // 自動配置から呼ばれる PSD 読込なので進捗バーには wand-sparkles アイコンと
       // 「自動配置中…」ラベルを出し、ユーザーの操作文脈を維持する。
-      await loadPsdFilesByPaths(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place" });
+      await loadPsdFilesByPaths(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place", progressFlow: progressFlowId ? { id: progressFlowId, stepId: "psd-load" } : null });
       psdPages = getPages();
       if (!psdPages || psdPages.length === 0) {
         // 読み込みが全件失敗 (loadPsdFilesByPaths が内部で notifyDialog を出す) 等
@@ -1220,17 +1236,18 @@ export async function runAutoPlace({
       // 既存の画像スキャンフローを呼び出す (進捗モーダルは scan-extract 側が出す)。
       // 読込済みの見本ファイル全てを 画像スキャン 対象にして自動配置の整合を取る。
       if (positionOnlyScan) {
-        await runScanExtractForPlacementOnly(loadedRefs, { keepProgressOpen: true });
+        await runScanExtractForPlacementOnly(loadedRefs, { keepProgressOpen: true, progressFlow: scanProgressFlow });
       } else {
         await runScanExtractForFiles(loadedRefs, {
           loadText: !preserveTxtDuringExtract || !(txtSrc && txtSrc.content),
           maxPages: psdPages.length,
           excludedPages: getPdfExcludedReferencePages(),
           keepProgressOpen: true,
+          progressFlow: scanProgressFlow,
         });
       }
       progressOpenForAutoPlace = true;
-      showProgress({
+      showProgress(withProgressFlow(placeProgressFlow, {
         title: "自動配置中…",
         detail: "自動配置を準備中…",
         icon: PLACE_ICON_SVG,
@@ -1238,7 +1255,7 @@ export async function runAutoPlace({
         current: null,
         total: null,
         showCount: false,
-      });
+      }));
       cache = getScanExtractDoc();
       if (!cache || !cache.doc) {
         await closeAutoPlaceProgress();
@@ -1283,13 +1300,13 @@ export async function runAutoPlace({
     let alignmentByPath = null;
     if (positionAdjustMode === "mode1" || positionAdjustMode === "mode2") {
       progressOpenForAutoPlace = true;
-      showProgress({ title: "自動配置中…", detail: "位置調整を計算中…", icon: PLACE_ICON_SVG, variant: "place" });
+      showProgress(withProgressFlow(alignProgressFlow, { title: "自動配置中…", detail: "位置調整を計算中…", icon: PLACE_ICON_SVG, variant: "place" }));
       alignmentByPath = await computeAlignmentsForPages(
         positionAdjustMode,
         psdPages,
         placementDoc,
         psdPages.map((_, i) => getLoadedReferenceEntryForPage(i)).filter(Boolean),
-        { progressLabel: "位置調整を計算中…" },
+        { progressLabel: "位置調整を計算中…", progressFlow: alignProgressFlow },
       );
       if (alignmentByPath.size === 0) {
         await closeAutoPlaceProgress();
@@ -1299,6 +1316,9 @@ export async function runAutoPlace({
         });
         return;
       }
+    }
+    if (placeProgressFlow) {
+      updateProgressFlow(placeProgressFlow, { detail: "配置プランを作成中…", progress: 18, showCount: false });
     }
     const plan = buildPlacementPlan(placementDoc, psdPages, txtPages, defaults, { alignmentByPath });
 
@@ -1338,18 +1358,29 @@ export async function runAutoPlace({
     }
 
     // 6. 適用
+    if (placeProgressFlow) {
+      updateProgressFlow(placeProgressFlow, { detail: "テキストを配置中…", progress: 72, showCount: false });
+    }
     applyPlan(plan);
-    setActivePane("psd");
-    setPsdZoom(1);
     lastPlacedFingerprint = fingerprint;
+    await waitForTransitionPaint();
+    if (placeProgressFlow) {
+      completeProgressFlowStep(placeProgressFlow, { detail: "自動配置 完了" });
+    }
     // 進捗モーダルだけ緑のチェックマークアニメで閉じる。完了 notifyDialog は
     // ユーザー要望で出さない（写植作業の流れを止めないため）。エラー時のみ下の
     // catch で notifyDialog を表示する。
-    if (progressOpenForAutoPlace) {
+    const willRunExternalAlign = positionAdjustMode === "mode3" && progressFlowId;
+    if (willRunExternalAlign) {
+      await hideProgress();
+    } else if (progressOpenForAutoPlace) {
       await closeAutoPlaceProgress({ success: true });
     } else {
       await hideProgress({ success: true });
     }
+    await wait(320);
+    setActivePane("psd");
+    setPsdZoom(1);
     return { placed: true, positionAdjusted: positionAdjustMode === "mode1" || positionAdjustMode === "mode2" };
   } catch (e) {
     console.error(e);
@@ -2009,8 +2040,11 @@ function showOverlayAlignModal(refCanvas, psdCanvas) {
   });
 }
 
-async function runOverlayAlign() {
+async function runOverlayAlign(options = {}) {
   if (runningAdjust) return;
+  const progressFlow = options.progressFlowId
+    ? { id: options.progressFlowId, stepId: "align" }
+    : options.progressFlow;
   const psdPages = getPages();
   if (!psdPages || psdPages.length === 0) {
     await notifyDialog({ title: "重ね調整できません", message: "PSD が読み込まれていません。" });
@@ -2044,7 +2078,14 @@ async function runOverlayAlign() {
   const referenceScanDoc = getScanExtractDoc()?.doc;
 
   runningAdjust = true;
-  showProgress({ detail: "重ね調整 中…", icon: PLACE_ICON_SVG, label: "重ね調整", variant: "place" });
+  showProgress(withProgressFlow(progressFlow, {
+    title: progressFlow ? "自動配置中…" : undefined,
+    detail: "重ね調整 中…",
+    icon: PLACE_ICON_SVG,
+    label: "重ね調整",
+    variant: "place",
+    showCount: false,
+  }));
 
   beginHistoryTransient();
   let movedCount = 0;
@@ -2137,6 +2178,10 @@ async function runOverlayAlign() {
     try { renderAllSpreads(); } catch (_) {}
     try { rebuildLayerList(); } catch (_) {}
   }
+  if (progressFlow) {
+    completeProgressFlowStep(progressFlow, { detail: "重ね調整 完了" });
+    await waitForTransitionPaint();
+  }
   await hideProgress({ success: true });
   await notifyDialog({
     title: "重ね調整 完了",
@@ -2178,9 +2223,18 @@ export function getPositionAdjustOptions() {
 
 export async function runSelectedPositionAdjust(mode, options = {}) {
   if (mode === "none") return undefined;
-  if (mode === "mode3") return await runOverlayAlign(options);
-  if (mode === "mode1" || mode === "mode2") return await runPositionAdjust(mode, options);
-  return undefined;
+  const alignFlow = options.progressFlowId ? { id: options.progressFlowId, stepId: "align" } : options.progressFlow;
+  if (alignFlow) {
+    updateProgressFlow(alignFlow, { detail: "位置調整中…", progress: 15, showCount: false });
+  }
+  let result;
+  if (mode === "mode3") result = await runOverlayAlign(options);
+  else if (mode === "mode1" || mode === "mode2") result = await runPositionAdjust(mode, options);
+  else return undefined;
+  if (alignFlow && mode !== "mode3") {
+    completeProgressFlowStep(alignFlow, { detail: "位置調整 完了" });
+  }
+  return result;
 }
 
 function renderPositionAdjustPreview(mode) {

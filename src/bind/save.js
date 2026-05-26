@@ -4,7 +4,7 @@
 // に書き出す。フロント側で空きフォルダ名を確定してから Rust に渡す。
 // 外向き API: bindSaveMenu / handleSave / 保存可能フラグの get/set。
 
-import { exportEdits, getPages, hasEdits } from "../state.js";
+import { exportEdits, getPages, getPdfPaths, hasEdits } from "../state.js";
 import {
   hideProgress,
   notifyDialog,
@@ -12,7 +12,8 @@ import {
   toast,
   updateProgress,
 } from "../ui-feedback.js";
-import { baseName, joinPath } from "../utils/path.js";
+import { baseName, joinPath, parentDir } from "../utils/path.js";
+import { launchKenbanPsdPdf } from "../services/kenban.js";
 import { launchTachimiWithPaths } from "../services/tachimi.js";
 // 【v1.29.x UI-coord】保存前に全 page のルビ wrap 実描画位置を同期測定して state に書き戻す。
 // これにより exportEdits が「最新の UI 上の位置」を含む payload を返し、JSX 側 createRubyLayer が
@@ -63,6 +64,15 @@ function indexedSaveFolderName(i) {
 }
 // 安全上限。通常運用で 1000 個もできないが暴走防止。
 const MAX_FOLDER_INDEX = 9999;
+
+async function openSavedFolder(folderPath) {
+  if (!folderPath) {
+    toast("保存先フォルダが見つかりません", { kind: "error", duration: 3000 });
+    return;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("open_folder_in_explorer", { path: folderPath });
+}
 
 async function runSaveWithMode({ saveMode, targetDir }) {
   if (saveInflight) {
@@ -122,17 +132,36 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     const savedPaths = (saveMode === "saveAs" && targetDir)
       ? getPages().map((p) => joinPath(targetDir, baseName(p.path)))
       : getPages().map((p) => p.path);
+    const savedFolder = (saveMode === "saveAs" && targetDir)
+      ? targetDir
+      : parentDir(savedPaths[0]);
     // 保存完了は中央モーダルで通知。警告有無で kind を切替（warning=オレンジ + 警告 SVG / success=緑 + チェック SVG）。
     // 「PDF 化に進む」ボタンを併設し、保存した PSD を Tachimi (写植チェッカー / PDF 化機能あり) に流して開く。
     await notifyDialog({
       title: hasWarn ? "保存完了（警告あり）" : "保存完了",
       message: `${result}${suffix}`,
       kind: hasWarn ? "warning" : "success",
-      primaryAction: {
-        label: "PDF 化に進む",
-        kind: "place",
-        onClick: () => launchTachimiWithPaths(savedPaths),
-      },
+      actions: [
+        {
+          label: "保存先を開く",
+          kind: "folder",
+          onClick: () => openSavedFolder(savedFolder),
+        },
+        {
+          label: "KENBANで開く",
+          kind: "primary",
+          onClick: () => launchKenbanPsdPdf({
+            psdFolder: savedFolder,
+            psdPaths: savedPaths,
+            referencePaths: getPdfPaths(),
+          }),
+        },
+        {
+          label: "PDF 化に進む",
+          kind: "place",
+          onClick: () => launchTachimiWithPaths(savedPaths),
+        },
+      ],
     });
   } catch (e) {
     console.error(e);

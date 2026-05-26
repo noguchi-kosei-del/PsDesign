@@ -1,6 +1,7 @@
 mod alignment;
 mod fonts;
 mod jsx_gen;
+mod kenban;
 mod ocr;
 mod photoshop;
 mod tachimi;
@@ -209,16 +210,28 @@ pub struct EditPayload {
     #[serde(rename = "rubyLeadingPct", default = "default_ruby_leading_pct")]
     pub ruby_leading_pct: f64,
     // 【v1.29.x】ルビ位置 Photoshop 微調整: 親 fontSize 単位で親側に追加シフト
-    #[serde(rename = "rubyPhotoshopOffsetEm", default = "default_ruby_photoshop_offset_em")]
+    #[serde(
+        rename = "rubyPhotoshopOffsetEm",
+        default = "default_ruby_photoshop_offset_em"
+    )]
     pub ruby_photoshop_offset_em: f64,
     // 【v1.29.x】ルビ位置 Photoshop 微調整: 親離し方向の固定 PSD px
-    #[serde(rename = "rubyPhotoshopBiasPx", default = "default_ruby_photoshop_bias_px")]
+    #[serde(
+        rename = "rubyPhotoshopBiasPx",
+        default = "default_ruby_photoshop_bias_px"
+    )]
     pub ruby_photoshop_bias_px: f64,
 }
 
-fn default_ruby_leading_pct() -> f64 { 150.0 }
-fn default_ruby_photoshop_offset_em() -> f64 { 0.0 }
-fn default_ruby_photoshop_bias_px() -> f64 { 0.0 }
+fn default_ruby_leading_pct() -> f64 {
+    150.0
+}
+fn default_ruby_photoshop_offset_em() -> f64 {
+    0.0
+}
+fn default_ruby_photoshop_bias_px() -> f64 {
+    0.0
+}
 
 // 【v1.16.0】使用フォントの拡張 — TTC face_index を保持して全 face を個別管理。
 #[derive(Debug, Serialize)]
@@ -237,7 +250,10 @@ pub struct FontEntry {
 }
 
 #[tauri::command]
-async fn apply_edits_via_photoshop(app: tauri::AppHandle, payload: EditPayload) -> Result<String, String> {
+async fn apply_edits_via_photoshop(
+    app: tauri::AppHandle,
+    payload: EditPayload,
+) -> Result<String, String> {
     if payload.save_mode.as_deref() == Some("saveAs") {
         if let Some(dir) = payload.target_dir.as_deref() {
             if !dir.is_empty() {
@@ -321,17 +337,31 @@ async fn create_opus_project_dir(name: String) -> Result<String, String> {
     let desktop = dirs::desktop_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
         .ok_or_else(|| "Desktop folder was not found".to_string())?;
-    let root = desktop.join("Script_Output");
-    fs::create_dir_all(&root)
-        .map_err(|e| format!("Script_Output folder create failed ({}): {}", root.display(), e))?;
+    let root = desktop.join("Script_Output").join("OPUS");
+    fs::create_dir_all(&root).map_err(|e| {
+        format!(
+            "Script_Output folder create failed ({}): {}",
+            root.display(),
+            e
+        )
+    })?;
 
     let base = sanitize_project_dir_name(&name);
     for i in 0..=9999 {
-        let dir_name = if i == 0 { base.clone() } else { format!("{}({})", base, i) };
+        let dir_name = if i == 0 {
+            base.clone()
+        } else {
+            format!("{}({})", base, i)
+        };
         let candidate = root.join(dir_name);
         if !candidate.exists() {
-            fs::create_dir_all(&candidate)
-                .map_err(|e| format!("project folder create failed ({}): {}", candidate.display(), e))?;
+            fs::create_dir_all(&candidate).map_err(|e| {
+                format!(
+                    "project folder create failed ({}): {}",
+                    candidate.display(),
+                    e
+                )
+            })?;
             return Ok(candidate.to_string_lossy().to_string());
         }
     }
@@ -344,8 +374,13 @@ async fn script_output_dir() -> Result<String, String> {
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
         .ok_or_else(|| "Desktop folder was not found".to_string())?;
     let dir = desktop.join("Script_Output");
-    fs::create_dir_all(&dir)
-        .map_err(|e| format!("Script_Output folder create failed ({}): {}", dir.display(), e))?;
+    fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Script_Output folder create failed ({}): {}",
+            dir.display(),
+            e
+        )
+    })?;
     Ok(dir.to_string_lossy().to_string())
 }
 
@@ -353,7 +388,9 @@ fn script_output_text_dir() -> Result<PathBuf, String> {
     let desktop = dirs::desktop_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
         .ok_or_else(|| "Desktop folder was not found".to_string())?;
-    Ok(desktop.join("Script_Output").join("COMIPO_text\u{62BD}\u{51FA}"))
+    Ok(desktop
+        .join("Script_Output")
+        .join("COMIPO_text\u{62BD}\u{51FA}"))
 }
 
 fn sanitize_txt_filename(name: &str) -> String {
@@ -383,8 +420,13 @@ async fn save_editor_text_to_script_output(
     default_name: Option<String>,
 ) -> Result<String, String> {
     let dir = script_output_text_dir()?;
-    fs::create_dir_all(&dir)
-        .map_err(|e| format!("Script_Output folder create failed ({}): {}", dir.display(), e))?;
+    fs::create_dir_all(&dir).map_err(|e| {
+        format!(
+            "Script_Output folder create failed ({}): {}",
+            dir.display(),
+            e
+        )
+    })?;
     let name = sanitize_txt_filename(default_name.as_deref().unwrap_or("untitled.txt"));
     let path = dir.join(name);
     fs::write(&path, content)
@@ -394,7 +436,10 @@ async fn save_editor_text_to_script_output(
 
 fn write_progen_handoff(text_path: &Path) -> Result<(), String> {
     if !text_path.is_file() {
-        return Err(format!("saved text file was not found: {}", text_path.display()));
+        return Err(format!(
+            "saved text file was not found: {}",
+            text_path.display()
+        ));
     }
     let dir = script_output_text_dir()?;
     fs::create_dir_all(&dir)
@@ -405,15 +450,17 @@ fn write_progen_handoff(text_path: &Path) -> Result<(), String> {
 }
 
 fn find_progen_launcher() -> Option<PathBuf> {
-    let desktop = dirs::desktop_dir()
-        .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))?;
+    let desktop = dirs::desktop_dir().or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))?;
     let home = dirs::home_dir();
     let demo_root = desktop.join("progen_DEMO");
-    let mut candidates = vec![
-        desktop.join("ProGen.lnk"),
-    ];
+    let mut candidates = vec![desktop.join("ProGen.lnk")];
     if let Some(home) = home {
-        candidates.push(home.join("AppData").join("Local").join("ProGen").join("progen.exe"));
+        candidates.push(
+            home.join("AppData")
+                .join("Local")
+                .join("ProGen")
+                .join("progen.exe"),
+        );
     }
     let checkout_roots = [
         // Current ProGen checkout layout.
@@ -422,8 +469,18 @@ fn find_progen_launcher() -> Option<PathBuf> {
         demo_root.join("data"),
     ];
     for root in checkout_roots {
-        candidates.push(root.join("src-tauri").join("target").join("release").join("progen.exe"));
-        candidates.push(root.join("src-tauri").join("target").join("debug").join("progen.exe"));
+        candidates.push(
+            root.join("src-tauri")
+                .join("target")
+                .join("release")
+                .join("progen.exe"),
+        );
+        candidates.push(
+            root.join("src-tauri")
+                .join("target")
+                .join("debug")
+                .join("progen.exe"),
+        );
         candidates.push(root.join("dev.bat"));
     }
     candidates.into_iter().find(|p| p.exists())
@@ -451,7 +508,13 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
             .args(["/C", "start", "", &launcher.to_string_lossy()])
             .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")))
             .spawn()
-            .map_err(|e| format!("ProGen launcher start failed ({}): {}", launcher.display(), e))?;
+            .map_err(|e| {
+                format!(
+                    "ProGen launcher start failed ({}): {}",
+                    launcher.display(),
+                    e
+                )
+            })?;
     } else {
         Command::new(&launcher)
             .spawn()
@@ -535,12 +598,9 @@ fn extract_face_from_ttc(ttc: &[u8], face_index: u32) -> Option<Vec<u8>> {
     for i in 0..num_tables {
         let p = sfnt_off + 12 + i * 16;
         let tag = u32::from_be_bytes([ttc[p], ttc[p + 1], ttc[p + 2], ttc[p + 3]]);
-        let checksum =
-            u32::from_be_bytes([ttc[p + 4], ttc[p + 5], ttc[p + 6], ttc[p + 7]]);
-        let offset =
-            u32::from_be_bytes([ttc[p + 8], ttc[p + 9], ttc[p + 10], ttc[p + 11]]);
-        let length =
-            u32::from_be_bytes([ttc[p + 12], ttc[p + 13], ttc[p + 14], ttc[p + 15]]);
+        let checksum = u32::from_be_bytes([ttc[p + 4], ttc[p + 5], ttc[p + 6], ttc[p + 7]]);
+        let offset = u32::from_be_bytes([ttc[p + 8], ttc[p + 9], ttc[p + 10], ttc[p + 11]]);
+        let length = u32::from_be_bytes([ttc[p + 12], ttc[p + 13], ttc[p + 14], ttc[p + 15]]);
         entries.push((tag, checksum, offset, length));
     }
     // OpenType spec はディレクトリエントリを tag 昇順でソートすることを要求。
@@ -548,7 +608,7 @@ fn extract_face_from_ttc(ttc: &[u8], face_index: u32) -> Option<Vec<u8>> {
     // 厳格なフォントパーサ（DirectWrite 等）は順序違反で全体を却下するため重要。
     entries.sort_by_key(|&(tag, _, _, _)| tag);
     let header_size = 12 + dir_size; // sfnt header + table dir
-    // 各 table は 4-byte 境界で padding して連結。新しいオフセットを計算。
+                                     // 各 table は 4-byte 境界で padding して連結。新しいオフセットを計算。
     let mut new_offsets: Vec<u32> = Vec::with_capacity(num_tables);
     let mut tables_size = 0usize;
     for &(_, _, _, length) in &entries {
@@ -566,7 +626,9 @@ fn extract_face_from_ttc(ttc: &[u8], face_index: u32) -> Option<Vec<u8>> {
         (num_tables as f64).log2().floor() as u16
     };
     let search_range = (1u16 << entry_selector) * 16;
-    let range_shift = (num_tables as u16).saturating_mul(16).saturating_sub(search_range);
+    let range_shift = (num_tables as u16)
+        .saturating_mul(16)
+        .saturating_sub(search_range);
     out.extend_from_slice(&search_range.to_be_bytes());
     out.extend_from_slice(&entry_selector.to_be_bytes());
     out.extend_from_slice(&range_shift.to_be_bytes());
@@ -776,7 +838,10 @@ async fn list_drives() -> Result<Vec<DriveInfo>, String> {
     }
     #[cfg(not(target_os = "windows"))]
     {
-        Ok(vec![DriveInfo { letter: "/".into(), path: "/".into() }])
+        Ok(vec![DriveInfo {
+            letter: "/".into(),
+            path: "/".into(),
+        }])
     }
 }
 
@@ -786,8 +851,7 @@ async fn list_drives() -> Result<Vec<DriveInfo>, String> {
 async fn home_dir() -> Result<String, String> {
     #[cfg(target_os = "windows")]
     {
-        std::env::var("USERPROFILE")
-            .map_err(|_| "USERPROFILE 環境変数が取得できません".to_string())
+        std::env::var("USERPROFILE").map_err(|_| "USERPROFILE 環境変数が取得できません".to_string())
     }
     #[cfg(not(target_os = "windows"))]
     {
@@ -801,7 +865,11 @@ async fn home_dir() -> Result<String, String> {
 #[tauri::command]
 async fn desktop_dir() -> Result<String, String> {
     let home = home_dir().await?;
-    let sep = if cfg!(target_os = "windows") { "\\" } else { "/" };
+    let sep = if cfg!(target_os = "windows") {
+        "\\"
+    } else {
+        "/"
+    };
     let path = format!("{}{}Desktop", home, sep);
     if std::path::Path::new(&path).is_dir() {
         Ok(path)
@@ -814,8 +882,8 @@ async fn desktop_dir() -> Result<String, String> {
 // 隠しファイル / シンボリックリンクの type 解決失敗は無視。サブツリー走査はしない（1 階層のみ）。
 #[tauri::command]
 async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
-    let entries =
-        std::fs::read_dir(&path).map_err(|e| format!("ディレクトリ読み取り失敗 {}: {}", path, e))?;
+    let entries = std::fs::read_dir(&path)
+        .map_err(|e| format!("ディレクトリ読み取り失敗 {}: {}", path, e))?;
     let mut out: Vec<DirEntry> = Vec::new();
     for entry in entries.filter_map(|e| e.ok()) {
         let p = entry.path();
@@ -844,10 +912,57 @@ async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
 }
 
 #[tauri::command]
+async fn open_folder_in_explorer(path: String) -> Result<(), String> {
+    let folder = PathBuf::from(&path);
+    if !folder.exists() {
+        return Err(format!("フォルダが見つかりません: {}", path));
+    }
+    if !folder.is_dir() {
+        return Err(format!("フォルダではありません: {}", path));
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let native_path = path.replace('/', "\\");
+        Command::new("explorer.exe")
+            .arg(native_path)
+            .spawn()
+            .map_err(|e| format!("Explorer を起動できませんでした: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .arg(&folder)
+            .spawn()
+            .map_err(|e| format!("Finder を起動できませんでした: {}", e))?;
+        return Ok(());
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        Command::new("xdg-open")
+            .arg(&folder)
+            .spawn()
+            .map_err(|e| format!("フォルダを開けませんでした: {}", e))?;
+        return Ok(());
+    }
+
+    #[allow(unreachable_code)]
+    Err("この環境ではフォルダを開けません".to_string())
+}
+
+#[tauri::command]
+async fn startup_args() -> Vec<String> {
+    std::env::args().skip(1).collect()
+}
+
+#[tauri::command]
 async fn path_info(path: String) -> Result<PathInfo, String> {
     let p = PathBuf::from(&path);
-    let meta = std::fs::metadata(&p)
-        .map_err(|e| format!("パスを確認できません: {}: {}", path, e))?;
+    let meta =
+        std::fs::metadata(&p).map_err(|e| format!("パスを確認できません: {}: {}", path, e))?;
     let name = p
         .file_name()
         .and_then(|n| n.to_str())
@@ -957,6 +1072,8 @@ pub fn run() {
             read_font_face_bytes,
             list_psd_files,
             list_directory_entries,
+            open_folder_in_explorer,
+            startup_args,
             path_info,
             list_drives,
             home_dir,
@@ -968,6 +1085,8 @@ pub fn run() {
             ocr::run_ai_ocr,
             ocr::export_ai_text,
             alignment::compute_alignment,
+            kenban::detect_kenban_exe,
+            kenban::launch_kenban_psd_pdf,
             tachimi::detect_tachimi_exe,
             tachimi::launch_tachimi_with_files
         ])

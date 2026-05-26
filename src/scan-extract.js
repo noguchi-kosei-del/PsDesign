@@ -27,6 +27,7 @@ import {
 } from "./state.js";
 import { loadTxtFromContent, parsePages } from "./txt-source.js";
 import { loadReferenceFiles } from "./pdf-loader.js";
+import { withProgressFlow } from "./progress-flow.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
 import { checkScanModelsStatus } from "./scan-install.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
@@ -343,6 +344,7 @@ async function runScanExtract(files, {
   maxPages = null,
   excludedPages = null,
   keepProgressOpen = false,
+  progressFlow = null,
   // 進捗ダイアログのアイコン直下ラベル。直接呼ばれる「画像スキャン」と
   // 自動配置から呼ばれる経路で文言を切替えるため引数化。
   label = "画像スキャン中…",
@@ -373,7 +375,7 @@ async function runScanExtract(files, {
   // 「約 N 分」の vague 表記。
   const approxLabel = formatApproxDuration(estimateRemainingSeconds(files.length));
 
-  showProgress({
+  showProgress(withProgressFlow(progressFlow, {
     title: label,
     detail: `${baseName(files[0])} ほか ${files.length} 件 (完了まで${approxLabel})`,
     current: 0,
@@ -381,7 +383,7 @@ async function runScanExtract(files, {
     showCount: false,
     icon,
     variant,
-  });
+  }));
 
   const { invoke } = await import("@tauri-apps/api/core");
   const { listen } = await import("@tauri-apps/api/event");
@@ -392,24 +394,24 @@ async function runScanExtract(files, {
   const unsubStart = await listen(`${TEXT_SCAN_EVENT_PREFIX}:start`, () => {
     // PDF 展開完了 → referenceScan 起動。画像スキャン の最初の tqdm 進捗が来るまで indeterminate。
     phase = "starting";
-    updateProgress({
+    updateProgress(withProgressFlow(progressFlow, {
       detail: `画像スキャン エンジンを起動中… (完了まで${approxLabel})`,
       current: null,
       total: null,
       showCount: false,
-    });
+    }));
   });
 
   const unsubProgress = await listen(`${TEXT_SCAN_EVENT_PREFIX}:progress`, (e) => {
     const p = e.payload || {};
     if (p.phase === "pdf") {
       phase = "pdf";
-      updateProgress({
+      updateProgress(withProgressFlow(progressFlow, {
         detail: `PDF 展開中… (${p.current}/${p.total}) (完了まで${approxLabel})`,
         current: p.current,
         total: p.total,
         showCount: false,
-      });
+      }));
     } else if (p.phase === TEXT_SCAN_TOKEN) {
       phase = TEXT_SCAN_TOKEN;
       // tqdm の初期出力 "0/5 [00:00<?, ?it/s]" は残り時間が未確定（"?" を含む）。
@@ -417,19 +419,19 @@ async function runScanExtract(files, {
       const formattedEta = formatEta(p.eta);
       const hasValidEta = !!formattedEta;
       if (!hasValidEta) {
-        updateProgress({
+        updateProgress(withProgressFlow(progressFlow, {
           detail: `画像スキャン 実行中… (完了まで${approxLabel})`,
           current: null,
           total: null,
           showCount: false,
-        });
+        }));
       } else {
-        updateProgress({
+        updateProgress(withProgressFlow(progressFlow, {
           detail: `画像スキャン 実行中… ${p.current}/${p.total} (残り ${formattedEta})`,
           current: p.current,
           total: p.total,
           showCount: false,
-        });
+        }));
       }
     }
   });
@@ -445,12 +447,12 @@ async function runScanExtract(files, {
     if (phase === TEXT_SCAN_TOKEN) return;
     const marker = detectStartupPhase(line);
     if (marker) {
-      updateProgress({
+      updateProgress(withProgressFlow(progressFlow, {
         detail: `${marker} (完了まで${approxLabel})`,
         current: null,
         total: null,
         showCount: false,
-      });
+      }));
     }
   });
 
@@ -625,8 +627,8 @@ function formatEta(eta) {
 // 公開: ファイル群に対して画像スキャンを実行し、ReferenceScanDocument を返す。
 // (auto-place.js から「画像スキャン キャッシュなし時に自動実行」用に呼ぶ)
 // 自動配置経由なのでアイコンは wand-sparkles、ラベルも「自動配置中…」に揃える。
-export async function runScanExtractForFiles(files, { loadText = true, maxPages = null, excludedPages = null, keepProgressOpen = false } = {}) {
-  await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place", loadText, maxPages, excludedPages, keepProgressOpen });
+export async function runScanExtractForFiles(files, { loadText = true, maxPages = null, excludedPages = null, keepProgressOpen = false, progressFlow = null } = {}) {
+  await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place", loadText, maxPages, excludedPages, keepProgressOpen, progressFlow });
 }
 
 export async function runScanExtractForTranscription(files) {
@@ -640,7 +642,7 @@ export async function runScanExtractForTranscription(files) {
   });
 }
 
-export async function runScanExtractForPlacementOnly(files, { keepProgressOpen = false } = {}) {
+export async function runScanExtractForPlacementOnly(files, { keepProgressOpen = false, progressFlow = null } = {}) {
   await runScanExtract(files, {
     icon: PLACE_ICON_SVG,
     label: "位置検出中…",
@@ -648,6 +650,7 @@ export async function runScanExtractForPlacementOnly(files, { keepProgressOpen =
     consumeText: false,
     loadText: false,
     keepProgressOpen,
+    progressFlow,
   });
 }
 

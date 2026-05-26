@@ -2742,6 +2742,59 @@ body.home-starting .home-screen {
 .prompt-modal-input:focus {
   border-color: var(--accent);
 }
+.project-save-form {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0 4px;
+  min-width: min(460px, calc(100vw - 80px));
+  text-align: left;
+}
+.project-save-field {
+  display: grid;
+  gap: 5px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.project-save-input {
+  width: 100%;
+  padding: 7px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.project-save-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.project-save-path-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.project-save-path-input {
+  color: var(--text-muted);
+}
+.project-save-preview {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding-top: 2px;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+.project-save-preview strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* ===== ルーラー / ガイド =====
    ペイン直下に固定配置。rulers-on のとき #psd-stage を ruler 厚ぶん押し出して
    ステージのコンテンツが目盛りで隠れないようにする。 */
@@ -5500,7 +5553,26 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
 }
 .editor-tab-panel.stroke-panel-floating {
-  width: 250px;
+  width: 220px;
+}
+.editor-tab-panel.stroke-panel-floating .size-row {
+  justify-content: flex-start;
+  gap: 12px;
+  padding-left: 3px;
+}
+.editor-tab-panel.stroke-panel-floating .stroke-toggle {
+  gap: 6px;
+}
+.editor-tab-panel.stroke-panel-floating .stroke-width-group {
+  gap: 3px;
+}
+.editor-tab-panel.stroke-panel-floating .size-input {
+  width: 38px;
+  padding-left: 5px;
+  padding-right: 5px;
+}
+.editor-tab-panel.stroke-panel-floating .size-unit {
+  margin-left: 0;
 }
 .editor-tab-panel.ruby-panel-floating + .editor-tab-panel {
   margin-top: 0;
@@ -5581,6 +5653,9 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   display: flex;
   gap: 6px;
   margin-top: 6px;
+}
+.style-controls-panel .font-style-toggle-row {
+  margin-top: 0;
 }
 .font-style-toggle-btn {
   min-width: 36px;
@@ -6781,7 +6856,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   -webkit-backdrop-filter: blur(3px);
 }
 #progress-modal.opus-progress-active .progress-bg {
-  background: rgba(2, 3, 6, 0.76);
+  display: none;
 }
 #progress-modal.opus-progress-active .progress-card {
   width: 100%;
@@ -6871,10 +6946,9 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 #progress-modal.opus-progress-active.closing .opus-constellation-svg,
 #progress-modal.opus-progress-active.closing .opus-star-field,
 #progress-modal.opus-progress-active.closing .opus-top-banner {
-  opacity: 0;
-  visibility: hidden;
+  opacity: 0.08;
   animation-play-state: paused;
-  transition: none;
+  transition: opacity 0.22s ease;
 }
 #progress-modal.opus-progress-active.closing .opus-cloud,
 #progress-modal.opus-progress-active.closing .opus-cloud-bulge,
@@ -6940,6 +7014,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .opus-bg-stars,
 .opus-constellation-svg,
 .opus-star-field,
+.opus-complete-constellation,
 .opus-top-banner {
   position: absolute;
   inset: 0;
@@ -7006,15 +7081,16 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 }
 .opus-milky-glow {
   z-index: 2;
-  opacity: 0;
+  opacity: 0.52;
   pointer-events: none;
   background:
-    linear-gradient(135deg, transparent 18%, rgba(75, 105, 175, 0.10) 30%, rgba(120, 155, 220, 0.30) 42%, rgba(165, 195, 240, 0.42) 50%, rgba(120, 155, 220, 0.30) 58%, rgba(75, 105, 175, 0.10) 70%, transparent 82%),
-    linear-gradient(135deg, transparent 30%, rgba(180, 130, 220, 0.14) 50%, transparent 70%);
+    linear-gradient(135deg, transparent 14%, rgba(72, 104, 176, 0.16) 28%, rgba(124, 162, 230, 0.42) 42%, rgba(186, 212, 255, 0.56) 50%, rgba(126, 166, 232, 0.42) 59%, rgba(82, 112, 186, 0.16) 73%, transparent 86%),
+    linear-gradient(135deg, transparent 24%, rgba(190, 142, 232, 0.20) 49%, rgba(248, 220, 178, 0.12) 56%, transparent 76%);
   filter: blur(24px);
   mix-blend-mode: screen;
   transform: translateY(3%);
   transition: opacity 0.8s ease;
+  animation: opus-milky-flow 24s ease-in-out infinite;
 }
 .opus-bg-stars {
   z-index: 3;
@@ -7026,8 +7102,23 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   transform: translate(-50%, -50%);
   transition: opacity 0.9s ease;
 }
+.opus-bg-star.is-bloom {
+  will-change: opacity, transform, filter;
+}
+.opus-bg-star.is-psd-fill,
+.opus-bg-star.is-opening-fill {
+  mix-blend-mode: screen;
+}
+.opus-bg-star.is-deep-space {
+  mix-blend-mode: screen;
+  filter: saturate(0.82);
+}
 .opus-bg-star.is-pending {
   opacity: 0 !important;
+}
+.opus-progress-stage.is-psd-parse .opus-bg-star.is-milky:not(.is-pending),
+.opus-progress-stage.has-milky-rhythm .opus-bg-star.is-milky:not(.is-pending) {
+  animation: opus-psd-milky-rhythm var(--psd-rhythm-dur, 3.6s) ease-in-out var(--psd-rhythm-delay, 0s) infinite !important;
 }
 .opus-constellation-svg {
   z-index: 5;
@@ -7039,6 +7130,148 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .opus-star-field {
   z-index: 6;
   pointer-events: none;
+}
+.opus-complete-constellation {
+  z-index: 10;
+  display: grid;
+  place-items: center;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(8px) scale(0.92);
+}
+.opus-complete-constellation::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  background:
+    radial-gradient(circle at 50% 50%, rgba(8, 10, 18, 0.1) 0%, rgba(4, 5, 12, 0.34) 52%, rgba(0, 0, 0, 0.46) 100%);
+}
+.opus-complete-halo {
+  position: absolute;
+  width: clamp(210px, 30vw, 310px);
+  height: clamp(210px, 30vw, 310px);
+  border-radius: 50%;
+  opacity: 0;
+  background:
+    radial-gradient(circle, rgba(244, 228, 197, 0.22) 0%, rgba(214, 232, 255, 0.14) 32%, rgba(118, 144, 210, 0.08) 54%, transparent 72%);
+  filter: blur(8px);
+  transform: scale(0.82);
+}
+.opus-complete-constellation svg {
+  position: relative;
+  width: clamp(188px, 27vw, 284px);
+  height: clamp(188px, 27vw, 284px);
+  overflow: visible;
+  filter:
+    drop-shadow(0 0 18px rgba(244, 228, 197, 0.32))
+    drop-shadow(0 0 28px rgba(214, 232, 255, 0.18))
+    drop-shadow(0 18px 36px rgba(0, 0, 0, 0.36));
+}
+.opus-complete-gather-stars circle {
+  fill: rgba(244, 228, 197, 0.92);
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  filter:
+    drop-shadow(0 0 8px rgba(244, 228, 197, 0.78))
+    drop-shadow(0 0 18px rgba(214, 232, 255, 0.32));
+}
+.opus-complete-core-glow {
+  fill: rgba(244, 228, 197, 0.42);
+  stroke: rgba(255, 246, 222, 0.62);
+  stroke-width: 1.2;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  filter:
+    drop-shadow(0 0 14px rgba(244, 228, 197, 0.82))
+    drop-shadow(0 0 30px rgba(214, 232, 255, 0.42));
+}
+.opus-complete-check-line {
+  fill: none;
+  stroke: rgba(255, 246, 222, 0.98);
+  stroke-width: 6.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 1;
+  stroke-dashoffset: 1;
+  opacity: 0;
+  filter:
+    drop-shadow(0 0 10px rgba(244, 228, 197, 0.82))
+    drop-shadow(0 0 22px rgba(214, 232, 255, 0.38));
+}
+.opus-complete-star-mark {
+  opacity: 0;
+  transform-box: view-box;
+  transform-origin: center;
+  filter:
+    drop-shadow(0 0 12px rgba(244, 228, 197, 0.84))
+    drop-shadow(0 0 24px rgba(214, 232, 255, 0.42));
+}
+.opus-complete-star-mark circle {
+  fill: rgba(244, 228, 197, 0.92);
+  stroke: rgba(255, 246, 222, 0.78);
+  stroke-width: 1.7;
+}
+.opus-complete-star-mark path {
+  fill: none;
+  stroke: rgba(255, 246, 222, 0.86);
+  stroke-width: 3;
+  stroke-linecap: round;
+}
+.opus-complete-rays path {
+  fill: none;
+  stroke: rgba(244, 228, 197, 0.58);
+  stroke-width: 1.15;
+  stroke-linecap: round;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  filter: drop-shadow(0 0 7px rgba(244, 228, 197, 0.44));
+}
+.opus-complete-glints path {
+  fill: none;
+  stroke: rgba(244, 228, 197, 0.96);
+  stroke-width: 1.35;
+  stroke-linecap: round;
+  opacity: 0;
+  transform-box: fill-box;
+  transform-origin: center;
+  filter:
+    drop-shadow(0 0 7px rgba(244, 228, 197, 0.78))
+    drop-shadow(0 0 14px rgba(214, 232, 255, 0.34));
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-constellation {
+  animation: opus-complete-constellation-in 2.16s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-constellation::before {
+  animation: opus-complete-backdrop-in 2.16s ease-out forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-halo {
+  animation: opus-complete-halo-bloom 2.16s ease-out forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-gather-stars circle {
+  animation: opus-complete-gather-star 0.74s cubic-bezier(0.16, 1, 0.3, 1) var(--delay, 120ms) forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-core-glow {
+  animation: opus-complete-core-glow 0.78s cubic-bezier(0.16, 1, 0.3, 1) 520ms forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-star-mark {
+  animation: opus-complete-star-transform 0.58s cubic-bezier(0.2, 1.6, 0.32, 1) 620ms forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-check-line {
+  animation: opus-complete-check-draw 0.54s cubic-bezier(0.16, 1, 0.3, 1) 980ms forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-rays path {
+  animation: opus-complete-ray-light 0.58s cubic-bezier(0.16, 1, 0.3, 1) var(--delay, 260ms) forwards;
+}
+.opus-progress-stage.is-completion-constellation .opus-complete-glints path {
+  animation: opus-complete-glint 0.72s cubic-bezier(0.16, 1, 0.3, 1) var(--delay, 620ms) forwards;
+}
+#progress-modal.opus-progress-active.closing .opus-complete-constellation {
+  opacity: 0 !important;
+  animation: none !important;
 }
 .opus-star {
   position: absolute;
@@ -7121,6 +7354,14 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   filter: drop-shadow(0 0 7px rgba(255, 245, 220, 0.82));
   animation: opus-shooting-fly 2.2s linear forwards;
 }
+.opus-shooting-star.is-inside {
+  z-index: 4;
+  width: 88px;
+  height: 1.4px;
+  background: linear-gradient(90deg, transparent 0%, rgba(214, 232, 255, 0.12) 30%, rgba(225, 236, 255, 0.58) 68%, rgba(255, 245, 218, 0.82) 90%, transparent 100%);
+  filter: drop-shadow(0 0 5px rgba(214, 232, 255, 0.52));
+  animation: opus-shooting-fly 1.45s linear forwards;
+}
 .opus-top-banner {
   z-index: 8;
   bottom: auto;
@@ -7191,7 +7432,9 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   font-size: 34px;
 }
 
-#progress-modal[data-progress-variant="load"] .opus-top-banner {
+#progress-modal[data-progress-variant="scan"] .opus-top-banner,
+#progress-modal[data-progress-variant="load"] .opus-top-banner,
+#progress-modal[data-progress-variant="place"] .opus-top-banner {
   display: none;
 }
 .opus-task-panel {
@@ -7205,33 +7448,139 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   font-family: "Noto Serif JP", "Yu Mincho", serif;
   pointer-events: none;
   text-shadow: 0 4px 14px rgba(0, 0, 0, 0.72);
+  transition: opacity 0.22s ease, transform 0.22s ease;
 }
-.opus-progress-stage.is-load .opus-task-panel {
+.opus-progress-stage.is-load .opus-task-panel,
+.opus-progress-stage.is-scan .opus-task-panel,
+.opus-progress-stage.is-place .opus-task-panel,
+.opus-progress-stage.has-flow .opus-task-panel {
   display: block;
 }
+.opus-progress-stage.is-exiting .opus-task-panel,
+#progress-modal.opus-progress-active.closing .opus-task-panel {
+  opacity: 0;
+  transform: translateY(6px) scale(0.98);
+}
 .opus-task-total {
-  display: flex;
-  align-items: baseline;
-  justify-content: flex-end;
-  gap: 14px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  justify-items: end;
+  gap: 4px;
   margin-bottom: 10px;
 }
 .opus-task-total-label {
-  max-width: 220px;
-  overflow: hidden;
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+  max-width: 100%;
+  overflow: visible;
   color: rgba(212, 212, 212, 0.68);
   font-size: 11px;
+  line-height: 1.45;
   letter-spacing: 0.08em;
-  text-overflow: ellipsis;
+  text-align: right;
+  text-wrap: pretty;
+  overflow-wrap: anywhere;
+  white-space: normal;
+}
+.opus-task-total-primary,
+.opus-task-total-sub {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+.opus-task-total-sub {
+  color: rgba(244, 228, 197, 0.72);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  max-width: min(300px, 100%);
+}
+.opus-task-total-sub-line {
+  display: block;
+  max-width: 100%;
+  overflow-wrap: normal;
   white-space: nowrap;
 }
 .opus-task-total-percent {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  justify-self: end;
+  width: 92px;
+  min-width: 72px;
+  min-height: 44px;
   color: var(--opus-brass-pale);
   font-family: "Times New Roman", "Noto Serif JP", serif;
   font-size: 34px;
   font-variant-numeric: tabular-nums;
   line-height: 1;
   text-shadow: 0 0 12px rgba(244, 228, 197, 0.34);
+  transform-origin: 50% 50%;
+  will-change: transform, color, text-shadow;
+  transition:
+    color 0.22s ease,
+    text-shadow 0.22s ease,
+    transform 0.22s ease;
+}
+.opus-task-total-percent::before,
+.opus-task-total-percent::after {
+  content: "";
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+  will-change: transform, opacity;
+}
+.opus-task-total-percent::before {
+  width: 40px;
+  height: 40px;
+  border: 1.8px solid rgba(244, 228, 197, 0.22);
+  border-top-color: var(--opus-brass-pale);
+  border-right-color: rgba(255, 241, 204, 0.82);
+  border-radius: 50%;
+  box-shadow:
+    0 0 10px rgba(244, 228, 197, 0.22),
+    inset 0 0 9px rgba(244, 228, 197, 0.12);
+}
+.opus-task-total-percent::after {
+  width: 14px;
+  height: 8px;
+  border-left: 2.2px solid #f4e4c5;
+  border-bottom: 2.2px solid #f4e4c5;
+  filter:
+    drop-shadow(0 0 6px rgba(244, 228, 197, 0.68))
+    drop-shadow(0 0 12px rgba(214, 232, 255, 0.3));
+  transform: translateY(-1px) rotate(-45deg) scale(0.3);
+}
+.opus-progress-stage.is-complete .opus-task-total-percent {
+  animation: opus-task-percent-complete 1.08s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+.opus-progress-stage.is-complete .opus-task-total-percent::before {
+  opacity: 0;
+  animation: none;
+}
+.opus-progress-stage.is-complete .opus-task-total-percent::after {
+  opacity: 0;
+  animation: none;
+}
+.opus-complete-sparkle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  z-index: 2;
+  width: var(--spark-size, 3px);
+  height: var(--spark-size, 3px);
+  border-radius: 50%;
+  background: radial-gradient(circle, var(--spark-core, #fff9e7) 0%, var(--spark-edge, #f5dfad) 52%, rgba(245, 223, 173, 0) 72%);
+  opacity: 0;
+  pointer-events: none;
+  box-shadow:
+    0 0 7px rgba(255, 246, 222, 0.72),
+    0 0 16px var(--spark-glow, rgba(212, 165, 95, 0.38));
+  transform: translate(-50%, -50%) rotate(var(--spark-angle, 0deg)) translateX(0) scale(0.4);
+  animation: opus-complete-sparkle 0.94s var(--spark-delay, 0ms) cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 .opus-task-list {
   display: grid;
@@ -7260,7 +7609,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.opus-task-percent {
+.opus-task-status {
   justify-self: end;
   color: currentColor;
   font-family: "Times New Roman", "Noto Serif JP", serif;
@@ -7283,6 +7632,9 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 }
 .opus-task-item.is-done .opus-task-dot {
   background: rgba(212, 165, 95, 0.36);
+}
+.opus-progress-stage.is-complete .opus-task-item.is-done {
+  animation: opus-task-done-glow 0.76s cubic-bezier(0.16, 1, 0.3, 1) both;
 }
 
 #progress-modal[data-progress-variant="save"] .opus-cosmic-clouds,
@@ -7608,6 +7960,335 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 @keyframes opus-cloud-bulge {
   0%, 100% { transform: translate(0, 0) scale(1); }
   50% { transform: translate(-10px, 10px) scale(1.08); }
+}
+@keyframes opus-milky-flow {
+  0%, 100% { transform: translateY(3%) translateX(0) scale(1); filter: blur(24px); }
+  50% { transform: translateY(2%) translateX(1.4%) scale(1.015); filter: blur(26px); }
+}
+@keyframes opus-milky-bloom-in {
+  0% {
+    opacity: 0;
+    filter: brightness(0.75);
+    transform: translate(-50%, -50%) scale(0.35);
+  }
+  70% {
+    opacity: var(--milky-max-opacity, 0.82);
+    filter: brightness(1.28);
+    transform: translate(-50%, -50%) scale(1.22);
+  }
+  100% {
+    opacity: var(--milky-min-opacity, 0.5);
+    filter: brightness(1);
+    transform: translate(-50%, -50%) scale(0.86);
+  }
+}
+@keyframes opus-psd-milky-rhythm {
+  0%, 100% {
+    opacity: var(--psd-rhythm-min-opacity, 0.32);
+    filter: brightness(0.88);
+    transform: translate(-50%, -50%) scale(0.82);
+  }
+  18% {
+    opacity: var(--psd-rhythm-max-opacity, 0.92);
+    filter: brightness(1.18);
+    transform: translate(-50%, -50%) scale(1.16);
+  }
+  32% {
+    opacity: var(--psd-rhythm-mid-opacity, 0.64);
+    filter: brightness(0.98);
+    transform: translate(-50%, -50%) scale(0.94);
+  }
+  56% {
+    opacity: var(--psd-rhythm-max-opacity, 0.88);
+    filter: brightness(1.1);
+    transform: translate(-50%, -50%) scale(1.08);
+  }
+  72% {
+    opacity: var(--psd-rhythm-min-opacity, 0.34);
+    filter: brightness(0.9);
+    transform: translate(-50%, -50%) scale(0.86);
+  }
+}
+@keyframes opus-milky-star-breathe {
+  0%, 100% { opacity: var(--milky-min-opacity, 0.52); transform: translate(-50%, -50%) scale(0.86); }
+  50% { opacity: var(--milky-max-opacity, 0.92); transform: translate(-50%, -50%) scale(1.08); }
+}
+@keyframes opus-complete-ring {
+  0% { opacity: 0; transform: rotate(-130deg) scale(0.56); border-top-color: rgba(244, 228, 197, 0); }
+  28% { opacity: 0.94; transform: rotate(22deg) scale(1.08); }
+  66% { opacity: 1; transform: rotate(248deg) scale(0.98); }
+  100% { opacity: 1; transform: rotate(360deg) scale(1); border-color: rgba(244, 228, 197, 0.82); }
+}
+@keyframes opus-complete-check {
+  0% {
+    opacity: 0;
+    border-color: rgba(244, 228, 197, 0);
+    filter:
+      drop-shadow(0 0 2px rgba(244, 228, 197, 0))
+      drop-shadow(0 0 6px rgba(214, 232, 255, 0));
+    transform: translateY(1px) rotate(-45deg) scale(0.42);
+  }
+  58% {
+    opacity: 1;
+    border-color: #fff6de;
+    filter:
+      drop-shadow(0 0 8px rgba(255, 246, 222, 0.92))
+      drop-shadow(0 0 17px rgba(214, 232, 255, 0.46));
+    transform: translateY(-1px) rotate(-45deg) scale(1.12);
+  }
+  100% {
+    opacity: 1;
+    border-color: #f4e4c5;
+    filter:
+      drop-shadow(0 0 7px rgba(244, 228, 197, 0.68))
+      drop-shadow(0 0 13px rgba(214, 232, 255, 0.32));
+    transform: translateY(-1px) rotate(-45deg) scale(1);
+  }
+}
+@keyframes opus-complete-sparkle {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--spark-angle, 0deg)) translateX(0) scale(0.35);
+  }
+  16% {
+    opacity: var(--spark-peak, 0.96);
+    transform: translate(-50%, -50%) rotate(var(--spark-angle, 0deg)) translateX(calc(var(--spark-distance, 68px) * 0.28)) scale(1.18);
+  }
+  44% {
+    opacity: 0.68;
+    transform: translate(-50%, -50%) rotate(var(--spark-angle, 0deg)) translateX(calc(var(--spark-distance, 68px) * 0.76)) scale(0.68);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -50%) rotate(var(--spark-angle, 0deg)) translateX(var(--spark-distance, 68px)) scale(0.14);
+  }
+}
+@keyframes opus-task-percent-complete {
+  0% {
+    color: var(--opus-brass-pale);
+    text-shadow: 0 0 12px rgba(244, 228, 197, 0.34);
+    transform: scale(1);
+  }
+  18% {
+    color: var(--opus-brass-pale);
+    text-shadow: 0 0 15px rgba(244, 228, 197, 0.44);
+    transform: scale(1);
+  }
+  38% {
+    color: var(--opus-brass-pale);
+    text-shadow:
+      0 0 24px rgba(244, 228, 197, 0.7),
+      0 0 42px rgba(214, 232, 255, 0.28);
+    transform: scale(1.18);
+  }
+  58% {
+    color: rgba(244, 228, 197, 0.92);
+    text-shadow:
+      0 0 22px rgba(244, 228, 197, 0.5),
+      0 0 34px rgba(214, 232, 255, 0.18);
+    transform: scale(1.07);
+  }
+  78% {
+    color: rgba(244, 228, 197, 0.88);
+    text-shadow: 0 0 18px rgba(244, 228, 197, 0.38);
+    transform: scale(1.01);
+  }
+  100% {
+    color: rgba(244, 228, 197, 0.9);
+    text-shadow:
+      0 0 14px rgba(244, 228, 197, 0.34),
+      0 0 24px rgba(214, 232, 255, 0.12);
+    transform: scale(1.02);
+  }
+}
+@keyframes opus-task-done-glow {
+  0% {
+    color: rgba(150, 150, 150, 0.48);
+    text-shadow: none;
+  }
+  35% {
+    color: rgba(244, 228, 197, 0.86);
+    text-shadow: 0 0 11px rgba(244, 228, 197, 0.28);
+  }
+  100% {
+    color: rgba(150, 150, 150, 0.5);
+    text-shadow: none;
+  }
+}
+@keyframes opus-complete-constellation-in {
+  0% {
+    opacity: 0;
+    transform: translateY(8px) scale(0.94);
+  }
+  12% {
+    opacity: 1;
+  }
+  72% {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+  84% {
+    opacity: 1;
+    transform: translateY(0) scale(1.012);
+  }
+  100% {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+@keyframes opus-complete-backdrop-in {
+  0% {
+    opacity: 0;
+  }
+  14% {
+    opacity: 1;
+  }
+  76% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+@keyframes opus-complete-halo-bloom {
+  0% {
+    opacity: 0;
+    transform: scale(0.78);
+  }
+  24% {
+    opacity: 0.58;
+    transform: scale(1);
+  }
+  62% {
+    opacity: 0.36;
+    transform: scale(1.1);
+  }
+  82% {
+    opacity: 0.38;
+    transform: scale(1.14);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(1.18);
+  }
+}
+@keyframes opus-complete-gather-star {
+  0% {
+    opacity: 0;
+    transform: translate(var(--from-x, 0), var(--from-y, 0)) scale(0.6);
+  }
+  18% {
+    opacity: 0.9;
+  }
+  74% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1.15);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0, 0) scale(0.18);
+  }
+}
+@keyframes opus-complete-core-glow {
+  0% {
+    opacity: 0;
+    transform: scale(0.24);
+  }
+  34% {
+    opacity: 0.82;
+    transform: scale(1.26);
+  }
+  68% {
+    opacity: 0.48;
+    transform: scale(0.84);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.3);
+  }
+}
+@keyframes opus-complete-star-light {
+  0% {
+    opacity: 0;
+    transform: scale(0.28);
+  }
+  64% {
+    opacity: 1;
+    transform: scale(1.52);
+  }
+  100% {
+    opacity: 0.92;
+    transform: scale(1);
+  }
+}
+@keyframes opus-complete-ray-light {
+  0% {
+    opacity: 0;
+    transform: scaleY(0.15);
+  }
+  54% {
+    opacity: 0.82;
+    transform: scaleY(1.42);
+  }
+  100% {
+    opacity: 0.48;
+    transform: scaleY(1);
+  }
+}
+@keyframes opus-complete-star-transform {
+  0% {
+    opacity: 0;
+    transform: scale(0.35) rotate(-10deg);
+  }
+  36% {
+    opacity: 1;
+    transform: scale(1.18) rotate(0deg);
+  }
+  66% {
+    opacity: 0.92;
+    transform: scale(0.92) rotate(10deg);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(0.34) rotate(16deg);
+  }
+}
+@keyframes opus-complete-check-draw {
+  0% {
+    opacity: 0;
+    stroke-dashoffset: 1;
+    transform: scale(0.82);
+    transform-origin: 100px 100px;
+  }
+  20% {
+    opacity: 1;
+  }
+  82% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+    transform: scale(1.14);
+    transform-origin: 100px 100px;
+  }
+  100% {
+    opacity: 1;
+    stroke-dashoffset: 0;
+    transform: scale(1);
+    transform-origin: 100px 100px;
+  }
+}
+@keyframes opus-complete-glint {
+  0% {
+    opacity: 0;
+    transform: scale(0.35) rotate(-8deg);
+  }
+  42% {
+    opacity: 1;
+    transform: scale(1.45) rotate(0deg);
+  }
+  100% {
+    opacity: 0.58;
+    transform: scale(1) rotate(0deg);
+  }
 }
 @keyframes opus-bg-star-twinkle {
   0%, 100% { opacity: 0.35; }

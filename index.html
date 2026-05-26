@@ -568,8 +568,8 @@
           </div>
           <div class="side-panel-tabs" role="tablist">
             <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
-            <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">テキスト編集</button>
-            <button id="side-panel-tab-style" class="side-panel-tab" data-tab="style" type="button" role="tab" aria-selected="false">スタイル編集</button>
+            <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">基本スタイル</button>
+            <button id="side-panel-tab-style" class="side-panel-tab" data-tab="style" type="button" role="tab" aria-selected="false">文字詳細</button>
           </div>
           <section class="panel-section txt-source" id="txt-source" data-section="txt">
             <div id="txt-source-actions" class="txt-source-actions">
@@ -670,26 +670,17 @@
               <div class="editor-tab-panel" data-tab-panel="stroke">
                 <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-stroke"></use></svg>フチ</div>
                 <div class="size-row">
+                  <div class="stroke-toggle" role="group" aria-label="境界線">
+                    <button id="stroke-none-btn" class="stroke-dot stroke-dot-none" type="button" data-stroke="none" title="境界線なし" aria-label="境界線なし"></button>
+                    <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
+                    <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
+                  </div>
                   <div class="stroke-width-group" role="group" aria-label="フチ太さ">
                     <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>
                     <input id="stroke-width-input" class="size-input" type="number" min="0" max="999" step="0.5" value="20" aria-label="境界線の太さ" />
                     <span class="size-unit">px</span>
                     <button id="stroke-width-dec-btn" class="size-btn" type="button" title="細く" aria-label="細く">−</button>
                   </div>
-                  <div class="stroke-toggle" role="group" aria-label="境界線">
-                    <button id="stroke-none-btn" class="stroke-dot stroke-dot-none" type="button" data-stroke="none" title="境界線なし" aria-label="境界線なし"></button>
-                    <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
-                    <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
-                  </div>
-                </div>
-              </div>
-              <div class="editor-tab-panel" data-tab-panel="vertical-half-to-full">
-                <div class="editor-panel-label">縦書き時の半角→全角</div>
-                <div class="editor-setting-row">
-                  <select id="vertical-half-to-full-select" class="editor-setting-select" aria-label="縦書き時の半角文字を全角に変換">
-                    <option value="on">適用する</option>
-                    <option value="off">適用しない</option>
-                  </select>
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="ruby">
@@ -801,6 +792,13 @@
                     </div>
                   </div>
                 </div>
+                <div class="editor-tab-panel style-controls-panel" data-tab-panel="font-style">
+                  <div class="editor-panel-label">文字スタイル</div>
+                  <div class="font-style-toggle-row" role="group" aria-label="文字スタイル">
+                    <button id="bold-toggle-detail-btn" class="font-style-toggle-btn bold-toggle-btn" type="button" title="太字（合成太字）" aria-label="太字" aria-pressed="false" disabled>太字</button>
+                    <button id="italic-toggle-detail-btn" class="font-style-toggle-btn italic-toggle-btn" type="button" title="イタリック体（合成斜体）" aria-label="イタリック体" aria-pressed="false" disabled>斜体</button>
+                  </div>
+                </div>
                 <div class="editor-tab-panel style-controls-panel" data-tab-panel="letter-spacing">
                   <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-tracking"></use></svg>字間</div>
                   <div class="style-control-grid">
@@ -831,6 +829,15 @@
                         <button id="tcy-remove-btn" class="style-toggle-btn" type="button">解除</button>
                       </div>
                     </div>
+                  </div>
+                </div>
+                <div class="editor-tab-panel style-controls-panel" data-tab-panel="vertical-half-to-full">
+                  <div class="editor-panel-label">縦書き時の半角→全角</div>
+                  <div class="editor-setting-row">
+                    <select id="vertical-half-to-full-select" class="editor-setting-select" aria-label="縦書き時の半角文字を全角に変換">
+                      <option value="on">適用する</option>
+                      <option value="off">適用しない</option>
+                    </select>
                   </div>
                 </div>
               </div>
