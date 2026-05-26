@@ -148,8 +148,8 @@ export const DEFAULT_SETTINGS = {
     cloudShapeFontPostScriptName: "DFGMaruGothic-Md", // 中丸ゴシック (環境依存。空ならフォント差し替えしない)
   },
   shortcuts: {
-    save:       { key: "s",          modifiers: ["ctrl"],          description: "保存" },
-    saveAs:     { key: "s",          modifiers: ["ctrl", "shift"], description: "保存（互換）" },
+    save:       { key: "s",          modifiers: ["ctrl"],          description: "プロジェクト保存" },
+    saveAs:     { key: "s",          modifiers: ["ctrl", "shift"], description: "PSD保存" },
     pagePrev:   { key: "ArrowLeft",  modifiers: [],                description: "前ページ（アクティブペイン）" },
     pageNext:   { key: "ArrowRight", modifiers: [],                description: "次ページ（アクティブペイン）" },
     pageFirst:  { key: "ArrowLeft",  modifiers: ["ctrl"],          description: "最初のページ（アクティブペイン）" },

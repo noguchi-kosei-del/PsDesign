@@ -201,4 +201,6 @@ export function bindSaveMenu() {
     e.stopPropagation();
     handleSave();
   });
+  window.addEventListener("psdesign:psd-loaded", updateSaveButton);
+  updateSaveButton();
 }

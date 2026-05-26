@@ -638,6 +638,11 @@ function snapshotState() {
   };
 }
 
+function cloneProjectValue(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
+}
+
 function txtSourceEqual(a, b) {
   if (a === b) return true;
   if (!a || !b) return false;
@@ -684,6 +689,74 @@ function resetHistoryBaseline() {
   state.historyIndex = 0;
   state.historyTransientDepth = 0;
   for (const fn of state.historyListeners) fn();
+}
+
+export function exportProjectSnapshot() {
+  return {
+    psdPaths: state.pages.map((p) => p.path).filter(Boolean),
+    edits: Array.from(state.edits.values()).map(cloneProjectValue),
+    newLayers: state.newLayers.map(cloneProjectValue),
+    nextTempId: state.nextTempId,
+    txtSource: state.txtSource ? { ...state.txtSource } : null,
+    txtSelection: state.txtSelection || "",
+    txtSelectedBlockIndex: state.txtSelectedBlockIndex,
+  };
+}
+
+export function applyProjectSnapshot(snapshot) {
+  const loadedPaths = new Set(state.pages.map((p) => p.path).filter(Boolean));
+  const edits = Array.isArray(snapshot?.edits) ? snapshot.edits : [];
+  const newLayers = Array.isArray(snapshot?.newLayers) ? snapshot.newLayers : [];
+  state.edits = new Map();
+  for (const raw of edits) {
+    const entry = cloneProjectValue(raw);
+    if (!entry || typeof entry !== "object") continue;
+    const psdPath = typeof entry.psdPath === "string" ? entry.psdPath : "";
+    const layerId = Number(entry.layerId);
+    if (!psdPath || !loadedPaths.has(psdPath) || !Number.isFinite(layerId)) continue;
+    entry.layerId = layerId;
+    state.edits.set(editKey(psdPath, layerId), entry);
+  }
+
+  let maxTempId = 0;
+  state.newLayers = [];
+  for (const raw of newLayers) {
+    const layer = cloneProjectValue(raw);
+    if (!layer || typeof layer !== "object") continue;
+    if (typeof layer.psdPath !== "string" || !loadedPaths.has(layer.psdPath)) continue;
+    if (!Number.isFinite(Number(layer.x)) || !Number.isFinite(Number(layer.y))) continue;
+    layer.x = Number(layer.x);
+    layer.y = Number(layer.y);
+    if (typeof layer.tempId !== "string" || !layer.tempId) {
+      layer.tempId = `new-${++maxTempId}`;
+    }
+    const m = layer.tempId.match(/^new-(\d+)$/);
+    if (m) maxTempId = Math.max(maxTempId, Number(m[1]) || 0);
+    state.newLayers.push(layer);
+  }
+  const requestedNext = Number(snapshot?.nextTempId);
+  state.nextTempId = Math.max(
+    Number.isFinite(requestedNext) ? Math.round(requestedNext) : 1,
+    maxTempId + 1,
+    1,
+  );
+  state.selectedLayers = [];
+
+  if (Object.prototype.hasOwnProperty.call(snapshot || {}, "txtSource")) {
+    const restored = snapshot.txtSource ? {
+      name: String(snapshot.txtSource.name || "untitled.txt"),
+      content: String(snapshot.txtSource.content || ""),
+    } : null;
+    const changed = !txtSourceEqual(state.txtSource, restored);
+    state.txtSource = restored;
+    state.txtSelection = "";
+    state.txtSelectedBlockIndex = null;
+    if (changed) {
+      for (const fn of state.txtSourceListeners) fn(state.txtSource);
+    }
+  }
+
+  resetHistoryBaseline();
 }
 
 export function undo() {

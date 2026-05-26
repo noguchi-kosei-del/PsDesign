@@ -58,28 +58,48 @@ const OPUS_PROGRESS_HTML = `
         <div class="opus-chapter-name-en">standby</div>
       </div>
       <div class="opus-counter">
-        <span class="opus-counter-current">0</span>
-        <span class="opus-counter-sep">/</span>
-        <span class="opus-counter-total">100</span>
+        <span class="opus-counter-pages">0/100P</span>
+        <span class="opus-counter-percent">0%</span>
       </div>
     </div>
   </div>
 `;
 
 const OPUS_PROGRESS_VARIANTS = new Set(["scan", "place"]);
-const OPUS_MILKY_COUNT = 240;
-const OPUS_AMBIENT_COUNT = 90;
+const OPUS_MILKY_COUNT = 96;
+const OPUS_AMBIENT_COUNT = 36;
+const OPUS_FRAME_INTERVAL_MS = 33;
+const OPUS_CONSTELLATION_SCALE = 0.5;
+const OPUS_CONSTELLATION_AUTO_STEP_MS = 850;
+const OPUS_CONSTELLATION_MAX_VISIBLE = 3;
+const OPUS_CONSTELLATION_FADE_STAGGER_MS = 70;
 const OPUS_IDLE_CAP_PCT = 98.4;
-const OPUS_CONSTELLATION_POINTS = [
-  [0.18, 0.24, true], [0.27, 0.31, false], [0.35, 0.22, false], [0.43, 0.36, true],
-  [0.58, 0.24, true], [0.67, 0.33, false], [0.73, 0.45, true],
-  [0.22, 0.62, true], [0.32, 0.54, false], [0.42, 0.64, false], [0.52, 0.57, true],
-  [0.64, 0.70, false], [0.76, 0.62, true],
+const OPUS_CONSTELLATION_TEMPLATES = [
+  {
+    name: "orion",
+    points: [[-0.16, -0.15, true], [0.14, -0.14, true], [-0.07, -0.02, false], [0, 0, false], [0.07, 0.02, false], [-0.13, 0.16, true], [0.13, 0.15, true]],
+    lines: [[0, 2], [1, 4], [2, 3], [3, 4], [2, 5], [4, 6]],
+  },
+  {
+    name: "cassiopeia",
+    points: [[-0.16, -0.03, true], [-0.08, 0.05, false], [0, -0.04, false], [0.08, 0.06, false], [0.16, -0.02, true]],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4]],
+  },
+  {
+    name: "cygnus",
+    points: [[0, -0.17, true], [0, -0.06, false], [0, 0.06, false], [0, 0.17, true], [-0.13, 0.02, false], [0.13, 0.02, false]],
+    lines: [[0, 1], [1, 2], [2, 3], [4, 2], [2, 5]],
+  },
+  {
+    name: "lyra",
+    points: [[-0.10, -0.06, true], [0.02, -0.10, false], [0.12, -0.02, true], [0.06, 0.10, false], [-0.08, 0.08, false]],
+    lines: [[0, 1], [1, 2], [2, 3], [3, 4], [4, 0], [0, 2]],
+  },
 ];
-const OPUS_CONSTELLATION_LINES = [
-  [0, 1], [1, 2], [1, 3], [4, 5], [5, 6],
-  [7, 8], [8, 9], [9, 10], [10, 11], [11, 12],
-  [3, 10], [6, 12],
+const OPUS_CONSTELLATION_SLOTS = [
+  [0.18, 0.30], [0.43, 0.28], [0.68, 0.30],
+  [0.24, 0.58], [0.52, 0.56], [0.76, 0.58],
+  [0.34, 0.78], [0.66, 0.76],
 ];
 
 const opusProgress = {
@@ -103,6 +123,17 @@ const opusProgress = {
   finishing: false,
   indeterminate: false,
   lastFrameAt: 0,
+  stage: null,
+  nodes: null,
+  lastAppliedPct: -1,
+  lastCopyKey: "",
+  lastConstellationAdvanceAt: 0,
+  constellationQueue: [],
+  constellationCurrent: null,
+  constellationSerial: 0,
+  constellationSlotBag: [],
+  lastCountCurrent: null,
+  lastCountTotal: null,
 };
 
 // 直前の hideProgress 閉じアニメをキャンセルするためのタイマー ID。
@@ -325,19 +356,33 @@ function resetOpusProgress(variant, phaseKey = "") {
   opusProgress.finishing = false;
   opusProgress.indeterminate = true;
   opusProgress.lastFrameAt = 0;
+  opusProgress.stage = stage;
+  opusProgress.nodes = cacheOpusNodes(stage);
+  opusProgress.lastAppliedPct = -1;
+  opusProgress.lastCopyKey = "";
+  opusProgress.lastConstellationAdvanceAt = performance.now();
+  opusProgress.constellationQueue = [];
+  opusProgress.constellationCurrent = null;
+  opusProgress.constellationSerial = 0;
+  opusProgress.constellationSlotBag = shuffleArray(OPUS_CONSTELLATION_SLOTS);
+  opusProgress.lastCountCurrent = null;
+  opusProgress.lastCountTotal = null;
 
-  stage.classList.remove("is-final", "is-milky-visible", "is-scan", "is-place");
+  stage.classList.remove("is-milky-visible", "is-scan", "is-place");
   stage.classList.add(variant === "scan" ? "is-scan" : "is-place");
   stage.style.setProperty("--opus-progress-pct", "0%");
-  stage.querySelector(".opus-star-field").innerHTML = "";
-  stage.querySelector(".opus-constellation-svg").innerHTML = "";
+  opusProgress.nodes.starField.innerHTML = "";
+  opusProgress.nodes.constellationSvg.innerHTML = "";
   generateOpusBackgroundStars(stage);
   updateOpusCopy({ detail: "", current: 0, total: 100 });
 
   opusProgress.detectionTimer = window.setInterval(() => {
     if (!opusProgress.active) return;
     if (opusProgress.variant === "scan") spawnOpusDetectionDot();
-    else spawnOpusConstellationPulse();
+    else {
+      advanceOpusConstellationByTime();
+      spawnOpusConstellationPulse();
+    }
   }, 760);
   opusProgress.shootTimer = window.setInterval(() => {
     if (!opusProgress.active) return;
@@ -365,14 +410,41 @@ function stopOpusProgress({ keepDom = false } = {}) {
     modal?.classList.remove("opus-progress-active");
     if (modal) delete modal.dataset.progressVariant;
   }
+  opusProgress.stage = null;
+  opusProgress.nodes = null;
+  opusProgress.lastAppliedPct = -1;
+  opusProgress.lastCopyKey = "";
+  opusProgress.lastConstellationAdvanceAt = 0;
+  opusProgress.constellationQueue = [];
+  opusProgress.constellationCurrent = null;
+  opusProgress.constellationSerial = 0;
+  opusProgress.constellationSlotBag = [];
+  opusProgress.lastCountCurrent = null;
+  opusProgress.lastCountTotal = null;
+}
+
+function cacheOpusNodes(stage) {
+  return {
+    bgStars: stage.querySelector(".opus-bg-stars"),
+    starField: stage.querySelector(".opus-star-field"),
+    constellationSvg: stage.querySelector(".opus-constellation-svg"),
+    milkyGlow: stage.querySelector(".opus-milky-glow"),
+    chapterNum: stage.querySelector(".opus-chapter-num"),
+    chapterName: stage.querySelector(".opus-chapter-name"),
+    chapterNameEn: stage.querySelector(".opus-chapter-name-en"),
+    counter: stage.querySelector(".opus-counter"),
+    counterPages: stage.querySelector(".opus-counter-pages"),
+    counterPercent: stage.querySelector(".opus-counter-percent"),
+  };
 }
 
 function generateOpusBackgroundStars(stage) {
-  const container = stage.querySelector(".opus-bg-stars");
+  const container = opusProgress.nodes?.bgStars ?? stage.querySelector(".opus-bg-stars");
   if (!container) return;
   container.innerHTML = "";
+  const frag = document.createDocumentFragment();
   for (let i = 0; i < OPUS_AMBIENT_COUNT; i++) {
-    container.appendChild(createOpusBgStar(Math.random() * 100, Math.random() * 100));
+    frag.appendChild(createOpusBgStar(Math.random() * 100, Math.random() * 100));
   }
 
   const milky = [];
@@ -390,9 +462,10 @@ function generateOpusBackgroundStars(stage) {
   milky.sort((a, b) => a.t - b.t);
   for (const star of milky) {
     const el = createOpusBgStar(star.x, star.y, { pending: true, milky: true });
-    container.appendChild(el);
+    frag.appendChild(el);
     opusProgress.milkyStars.push(el);
   }
+  container.appendChild(frag);
 }
 
 function createOpusBgStar(x, y, { pending = false, milky = false } = {}) {
@@ -426,6 +499,10 @@ function startOpusProgressLoop() {
       return;
     }
     if (!opusProgress.lastFrameAt) opusProgress.lastFrameAt = now;
+    if (now - opusProgress.lastFrameAt < OPUS_FRAME_INTERVAL_MS) {
+      opusProgress.raf = requestAnimationFrame(tick);
+      return;
+    }
     const dt = Math.min(120, now - opusProgress.lastFrameAt);
     opusProgress.lastFrameAt = now;
     if (opusProgress.finishing) {
@@ -473,27 +550,52 @@ function updateOpusProgress({ detail, current, total } = {}) {
 }
 
 function updateOpusCopy({ detail, current, total } = {}) {
-  const stage = ensureOpusProgressStage();
+  const stage = opusProgress.stage || ensureOpusProgressStage();
   if (!stage || !opusProgress.active) return;
   const pct = Math.max(opusProgress.visualPct, opusProgress.targetPct);
-  const chapterNum = stage.querySelector(".opus-chapter-num");
-  const chapterName = stage.querySelector(".opus-chapter-name");
-  const chapterNameEn = stage.querySelector(".opus-chapter-name-en");
-  const counterCurrent = stage.querySelector(".opus-counter-current");
-  const counterTotal = stage.querySelector(".opus-counter-total");
   const copy = getOpusCopy(opusProgress.variant, pct, detail);
-  if (chapterNum) chapterNum.textContent = copy.num;
-  if (chapterName) chapterName.textContent = copy.name;
-  if (chapterNameEn) chapterNameEn.textContent = copy.en;
-  if (counterCurrent && counterTotal) {
-    if (typeof current === "number" && typeof total === "number" && total > 1) {
-      counterCurrent.textContent = String(Math.max(0, Math.min(total, Math.round(current))));
-      counterTotal.textContent = String(total);
-    } else {
-      counterCurrent.textContent = String(Math.round(pct));
-      counterTotal.textContent = "100";
-    }
+  const nodes = opusProgress.nodes || cacheOpusNodes(stage);
+  const incomingHasCount = Number.isFinite(current) && Number.isFinite(total) && total > 0;
+  if (incomingHasCount) {
+    opusProgress.lastCountCurrent = current;
+    opusProgress.lastCountTotal = total;
   }
+  const hasCount = Number.isFinite(opusProgress.lastCountCurrent)
+    && Number.isFinite(opusProgress.lastCountTotal)
+    && opusProgress.lastCountTotal > 0;
+  const displayTotal = hasCount ? Math.round(opusProgress.lastCountTotal) : 0;
+  const displayCurrent = hasCount
+    ? (opusProgress.finishing
+      ? displayTotal
+      : Math.max(0, Math.min(displayTotal, Math.round(opusProgress.lastCountCurrent))))
+    : 0;
+  const counterPagesText = hasCount ? `${displayCurrent}/${displayTotal}P` : "";
+  const rawPercent = incomingHasCount
+    ? (current / total) * 100
+    : hasCount
+      ? (displayCurrent / Math.max(displayTotal, 1)) * 100
+      : pct;
+  const counterPercentText = `${Math.round(opusProgress.finishing ? 100 : Math.max(0, Math.min(100, rawPercent)))}%`;
+  const copyKey = [
+    copy.num,
+    copy.name,
+    copy.en,
+    counterPagesText,
+    counterPercentText,
+    hasCount ? "count" : "percent",
+  ].join("|");
+  if (copyKey === opusProgress.lastCopyKey) return;
+  opusProgress.lastCopyKey = copyKey;
+  setTextIfChanged(nodes.chapterNum, copy.num);
+  setTextIfChanged(nodes.chapterName, copy.name);
+  setTextIfChanged(nodes.chapterNameEn, copy.en);
+  nodes.counter?.classList.toggle("is-percent-only", !hasCount);
+  setTextIfChanged(nodes.counterPages, counterPagesText);
+  setTextIfChanged(nodes.counterPercent, counterPercentText);
+}
+
+function setTextIfChanged(el, text) {
+  if (el && el.textContent !== text) el.textContent = text;
 }
 
 function getOpusCopy(variant, pct, detail = "") {
@@ -509,19 +611,24 @@ function getOpusCopy(variant, pct, detail = "") {
   }
   if (pct < 22) return { num: "I", name: "配置を準備する", en: "preparing the layout" };
   if (pct < 86) return { num: "II", name: "文字を配置する", en: "placing the typesetting" };
+  if (pct >= 99 && !/完了|complete/i.test(detail)) return { num: "III", name: "最終調整中", en: "finalizing" };
   return { num: "III", name: "仕上げを反映する", en: "finishing the page" };
 }
 
 function applyOpusProgress(pct) {
-  const stage = ensureOpusProgressStage();
+  const stage = opusProgress.stage || ensureOpusProgressStage();
   if (!stage) return;
   const clamped = Math.max(0, Math.min(100, pct));
-  stage.style.setProperty("--opus-progress-pct", `${clamped}%`);
-  $("progress-modal")?.style.setProperty("--opus-progress-pct", `${clamped}%`);
-  stage.querySelector(".opus-milky-glow").style.opacity = String(0.1 + 0.72 * (clamped / 100));
-  stage.classList.toggle("is-milky-visible", clamped > 10);
-  revealOpusMilkyStars(clamped);
-  if (opusProgress.variant === "place") spawnOpusConstellationUntil(clamped);
+  const rounded = Math.round(clamped * 10) / 10;
+  if (Math.abs(rounded - opusProgress.lastAppliedPct) < 0.1) return;
+  opusProgress.lastAppliedPct = rounded;
+  stage.style.setProperty("--opus-progress-pct", `${rounded}%`);
+  $("progress-modal")?.style.setProperty("--opus-progress-pct", `${rounded}%`);
+  const nodes = opusProgress.nodes || cacheOpusNodes(stage);
+  if (nodes.milkyGlow) nodes.milkyGlow.style.opacity = String(0.1 + 0.72 * (rounded / 100));
+  stage.classList.toggle("is-milky-visible", rounded > 10);
+  revealOpusMilkyStars(rounded);
+  if (opusProgress.variant === "place") spawnOpusConstellationUntil(rounded);
 }
 
 function revealOpusMilkyStars(pct) {
@@ -537,54 +644,173 @@ function revealOpusMilkyStars(pct) {
   }
 }
 
+function shuffleArray(items) {
+  const result = [...items];
+  for (let i = result.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [result[i], result[j]] = [result[j], result[i]];
+  }
+  return result;
+}
+
+function randomBetween(min, max) {
+  return min + Math.random() * Math.max(0, max - min);
+}
+
+function clamp01(value) {
+  return Math.max(0.04, Math.min(0.96, value));
+}
+
+function seededJitter(index, axis) {
+  const seed = (axis === "x" ? 12.9898 : 78.233) * (index + 1);
+  const raw = Math.sin(seed) * 43758.5453;
+  return (raw - Math.floor(raw)) * 2 - 1;
+}
+
 function spawnOpusConstellationUntil(pct) {
-  const target = Math.round((pct / 100) * OPUS_CONSTELLATION_POINTS.length);
+  if (opusProgress.variant !== "place") return;
+  const target = Math.max(1, Math.round((pct / 100) * totalOpusConstellationPointCount()));
   while (opusProgress.spawnedStars < target) {
-    spawnOpusConstellationStar(opusProgress.spawnedStars);
-    opusProgress.spawnedStars++;
+    if (!advanceOpusConstellation()) break;
   }
 }
 
-function spawnOpusConstellationStar(index) {
-  const stage = ensureOpusProgressStage();
-  const field = stage?.querySelector(".opus-star-field");
-  const svg = stage?.querySelector(".opus-constellation-svg");
-  const point = OPUS_CONSTELLATION_POINTS[index];
-  if (!stage || !field || !svg || !point) return;
+function advanceOpusConstellationByTime(now = performance.now()) {
+  if (opusProgress.variant !== "place") return;
+  if (opusProgress.lastConstellationAdvanceAt && now - opusProgress.lastConstellationAdvanceAt < OPUS_CONSTELLATION_AUTO_STEP_MS) return;
+  if (advanceOpusConstellation()) {
+    opusProgress.lastConstellationAdvanceAt = now;
+  }
+}
+
+function totalOpusConstellationPointCount() {
+  return OPUS_CONSTELLATION_TEMPLATES.reduce((sum, template) => sum + template.points.length, 0);
+}
+
+function advanceOpusConstellation() {
+  pruneOpusConstellationQueue();
+  if (!opusProgress.constellationCurrent || opusProgress.constellationCurrent.spawned >= opusProgress.constellationCurrent.points.length) {
+    opusProgress.constellationCurrent = createOpusConstellationInstance();
+    opusProgress.constellationQueue.push(opusProgress.constellationCurrent);
+  }
+  if (activeOpusConstellationCount() > OPUS_CONSTELLATION_MAX_VISIBLE) {
+    fadeOldestOpusConstellation();
+  }
+  return spawnOpusConstellationStar(opusProgress.constellationCurrent);
+}
+
+function activeOpusConstellationCount() {
+  return opusProgress.constellationQueue.filter((item) => !item.fading).length;
+}
+
+function createOpusConstellationInstance() {
+  if (opusProgress.constellationSlotBag.length === 0) {
+    opusProgress.constellationSlotBag = shuffleArray(OPUS_CONSTELLATION_SLOTS);
+  }
+  const template = OPUS_CONSTELLATION_TEMPLATES[opusProgress.constellationSerial % OPUS_CONSTELLATION_TEMPLATES.length];
+  const serial = opusProgress.constellationSerial++;
+  const [slotX, slotY] = opusProgress.constellationSlotBag.shift() ?? [randomBetween(0.16, 0.84), randomBetween(0.22, 0.82)];
+  const centerX = clamp01(slotX + randomBetween(-0.055, 0.055));
+  const centerY = clamp01(slotY + randomBetween(-0.05, 0.05));
+  const scale = OPUS_CONSTELLATION_SCALE * randomBetween(0.88, 1.12);
+  const angle = randomBetween(-0.42, 0.42);
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const points = template.points.map(([x, y, isKey], pointIndex) => {
+    const rx = (x * cos - y * sin) * scale;
+    const ry = (x * sin + y * cos) * scale;
+    const jitter = isKey ? 0.004 : 0.008;
+    return [
+      clamp01(centerX + rx + seededJitter(serial * 31 + pointIndex, "x") * jitter),
+      clamp01(centerY + ry + seededJitter(serial * 31 + pointIndex, "y") * jitter),
+      isKey,
+      template.name,
+    ];
+  });
+  return {
+    id: `opus-constellation-${serial}`,
+    name: template.name,
+    points,
+    lines: template.lines,
+    spawned: 0,
+    drawnLines: new Set(),
+    elements: [],
+    lineElements: [],
+    fading: false,
+    createdAt: performance.now(),
+  };
+}
+
+function spawnOpusConstellationStar(instance) {
+  const stage = opusProgress.stage || ensureOpusProgressStage();
+  const nodes = opusProgress.nodes || (stage ? cacheOpusNodes(stage) : null);
+  const field = nodes?.starField;
+  const svg = nodes?.constellationSvg;
+  const index = instance?.spawned ?? 0;
+  const point = instance?.points?.[index];
+  if (!stage || !field || !svg || !point) return false;
   const [x, y, isKey] = point;
   const el = document.createElement("div");
   el.className = "opus-star" + (isKey ? " is-key" : "");
+  el.dataset.constellationId = instance.id;
   el.style.left = `${x * 100}%`;
   el.style.top = `${y * 100}%`;
   el.style.setProperty("--twinkle-dur", `${3.4 + Math.random() * 3}s`);
   field.appendChild(el);
+  instance.elements.push(el);
 
-  for (const [a, b] of OPUS_CONSTELLATION_LINES) {
+  for (const [a, b] of instance.lines) {
     const key = `${a}-${b}`;
-    if (opusProgress.drawnLines.has(key)) continue;
+    if (instance.drawnLines.has(key)) continue;
     if (a <= index && b <= index) {
-      opusProgress.drawnLines.add(key);
-      const p1 = OPUS_CONSTELLATION_POINTS[a];
-      const p2 = OPUS_CONSTELLATION_POINTS[b];
+      instance.drawnLines.add(key);
+      const p1 = instance.points[a];
+      const p2 = instance.points[b];
       const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
       line.setAttribute("x1", String(p1[0] * 1000));
       line.setAttribute("y1", String(p1[1] * 1000));
       line.setAttribute("x2", String(p2[0] * 1000));
       line.setAttribute("y2", String(p2[1] * 1000));
       line.setAttribute("class", "opus-connection");
+      line.dataset.constellationId = instance.id;
       line.setAttribute("vector-effect", "non-scaling-stroke");
       const len = Math.hypot((p2[0] - p1[0]) * 1000, (p2[1] - p1[1]) * 1000);
       line.style.strokeDasharray = String(len);
       line.style.strokeDashoffset = String(len);
       line.style.setProperty("--len", String(len));
       svg.appendChild(line);
+      instance.lineElements.push(line);
     }
   }
+  instance.spawned++;
+  opusProgress.spawnedStars++;
+  return true;
+}
+
+function fadeOldestOpusConstellation() {
+  const oldest = opusProgress.constellationQueue.find((item) => !item.fading);
+  if (!oldest) return;
+  oldest.fading = true;
+  const items = [...oldest.elements, ...oldest.lineElements];
+  items.forEach((el, index) => {
+    el.style.setProperty("--fade-delay", `${index * OPUS_CONSTELLATION_FADE_STAGGER_MS}ms`);
+    el.classList.add("is-fading");
+  });
+  const removeAfter = Math.max(520, items.length * OPUS_CONSTELLATION_FADE_STAGGER_MS + 420);
+  window.setTimeout(() => {
+    items.forEach((el) => el.remove());
+    oldest.removed = true;
+    pruneOpusConstellationQueue();
+  }, removeAfter);
+}
+
+function pruneOpusConstellationQueue() {
+  opusProgress.constellationQueue = opusProgress.constellationQueue.filter((item) => !item.removed);
 }
 
 function spawnOpusDetectionDot() {
-  const stage = ensureOpusProgressStage();
-  const field = stage?.querySelector(".opus-star-field");
+  const stage = opusProgress.stage || ensureOpusProgressStage();
+  const field = opusProgress.nodes?.starField ?? stage?.querySelector(".opus-star-field");
   if (!field) return;
   const t = Math.random();
   const u = 1 - t;
@@ -601,11 +827,11 @@ function spawnOpusDetectionDot() {
 }
 
 function spawnOpusConstellationPulse() {
-  const stage = ensureOpusProgressStage();
-  const field = stage?.querySelector(".opus-star-field");
+  const stage = opusProgress.stage || ensureOpusProgressStage();
+  const field = opusProgress.nodes?.starField ?? stage?.querySelector(".opus-star-field");
   if (!field) return;
-  const visibleCount = Math.max(1, Math.min(OPUS_CONSTELLATION_POINTS.length, Math.max(opusProgress.spawnedStars, 1)));
-  const point = OPUS_CONSTELLATION_POINTS[Math.floor(Math.random() * visibleCount)] ?? OPUS_CONSTELLATION_POINTS[0];
+  const points = getVisibleOpusConstellationPoints();
+  const point = points[Math.floor(Math.random() * points.length)];
   if (!point) return;
   const dot = document.createElement("div");
   dot.className = "opus-detection-dot opus-constellation-pulse";
@@ -615,8 +841,17 @@ function spawnOpusConstellationPulse() {
   setTimeout(() => dot.remove(), 1500);
 }
 
+function getVisibleOpusConstellationPoints() {
+  const points = [];
+  for (const item of opusProgress.constellationQueue) {
+    if (item.fading || item.removed) continue;
+    points.push(...item.points.slice(0, item.spawned));
+  }
+  return points;
+}
+
 function spawnOpusShootingStar() {
-  const stage = ensureOpusProgressStage();
+  const stage = opusProgress.stage || ensureOpusProgressStage();
   if (!stage) return;
   const el = document.createElement("div");
   el.className = "opus-shooting-star";
@@ -627,7 +862,10 @@ function spawnOpusShootingStar() {
   el.style.left = `${startX}%`;
   el.style.top = `${startY}%`;
   el.style.setProperty("--angle", `${angle}deg`);
-  el.style.setProperty("--travel", `${420 + Math.random() * 280}px`);
+  const travel = 420 + Math.random() * 280;
+  el.style.setProperty("--travel", `${travel}px`);
+  el.style.setProperty("--travel-mid", `${travel * 0.35}px`);
+  el.style.setProperty("--travel-late", `${travel * 0.72}px`);
   stage.appendChild(el);
   setTimeout(() => el.remove(), 2800);
 }
@@ -638,10 +876,6 @@ function completeOpusProgress() {
   opusProgress.finishing = true;
   opusProgress.phaseEndPct = 100;
   opusProgress.targetPct = 100;
-  const stage = ensureOpusProgressStage();
-  window.setTimeout(() => {
-    if (opusProgress.active && opusProgress.finishing) stage?.classList.add("is-final");
-  }, 420);
   updateOpusCopy({ detail: "完了" });
 }
 
@@ -654,21 +888,10 @@ function completeOpusProgress() {
 // progress-modal の上に重なってアニメが見えなくなる」事故を防げる（既存の fire-and-forget
 // 呼び出しは await しないだけで、Promise 自体は GC で回収されるため互換）。
 //
-// success: true を渡すと、close アニメに入る前にアイコン領域へ緑のチェックマーク
-// アニメーション（リング描画 + チェック描画 + バースト）を再生してから閉じる。
 const PROGRESS_CLOSE_ANIM_MS = 500;
-const SUCCESS_HOLD_MS = 700;
-const OPUS_SUCCESS_HOLD_MS = 950;
-const SUCCESS_CHECK_HTML = `
-  <div class="success-check-anim">
-    <div class="success-check-burst"></div>
-    <svg viewBox="0 0 48 48" fill="none" aria-hidden="true">
-      <circle class="success-check-ring" cx="24" cy="24" r="22"/>
-      <path class="success-check-path" d="M14 24l7 7 13-13"/>
-    </svg>
-  </div>
-`;
-export function hideProgress({ success = false } = {}) {
+const OPUS_CLOSE_ANIM_MS = 620;
+const OPUS_SUCCESS_HOLD_MS = 180;
+export function hideProgress({ success = false, variant = null } = {}) {
   return new Promise((resolve) => {
     const modal = $("progress-modal");
     if (!modal) { resolve(); return; }
@@ -677,6 +900,13 @@ export function hideProgress({ success = false } = {}) {
     if (modal.hidden && !modal.classList.contains("closing")) {
       resolve();
       return;
+    }
+    const forcedVariant = success ? normalizeOpusProgressVariant(variant) : null;
+    if (forcedVariant && (!isOpusProgressActive(modal) || normalizeOpusProgressVariant(modal.dataset.progressVariant) !== forcedVariant)) {
+      setOpusProgressMode(forcedVariant, {
+        phaseKey: makeOpusProgressPhaseKey({ title: $("progress-title")?.textContent, detail: "complete", variant: forcedVariant }),
+      });
+      updateProgress({ detail: "complete", current: 1, total: 1 });
     }
 
     const startCloseAnim = () => {
@@ -696,7 +926,9 @@ export function hideProgress({ success = false } = {}) {
       // 直前の hideProgress があれば置き換え（重複タイマー防止）。
       if (pendingHideTimer != null) clearTimeout(pendingHideTimer);
       // .visible は外さず .closing を付ける（opacity 1 維持 + bg 帯のスライドアウト）。
+      const opusClosing = isOpusProgressActive(modal);
       modal.classList.add("closing");
+      const closeMs = opusClosing ? OPUS_CLOSE_ANIM_MS : PROGRESS_CLOSE_ANIM_MS;
       pendingHideTimer = setTimeout(() => {
         pendingHideTimer = null;
         // 万一 .closing が外れていたら（次の showProgress が割り込んだ）何もしない。
@@ -722,7 +954,7 @@ export function hideProgress({ success = false } = {}) {
         setProgressIcon(null);
         stopOpusProgress();
         resolve();
-      }, PROGRESS_CLOSE_ANIM_MS);
+      }, closeMs);
     };
 
     if (success && isOpusProgressActive(modal)) {
@@ -730,13 +962,6 @@ export function hideProgress({ success = false } = {}) {
       const loadingText = $("progress-loading-text");
       if (loadingText) loadingText.textContent = "完了";
       setTimeout(startCloseAnim, OPUS_SUCCESS_HOLD_MS);
-    } else if (success) {
-      // close アニメに入る前にアイコンを成功チェックマークに差し替えて約 700ms 再生。
-      // ローディングテキストもクリアして「完了」感を視覚的に揃える。
-      setProgressIcon(SUCCESS_CHECK_HTML);
-      const loadingText = $("progress-loading-text");
-      if (loadingText) loadingText.textContent = "";
-      setTimeout(startCloseAnim, SUCCESS_HOLD_MS);
     } else {
       startCloseAnim();
     }
@@ -1012,19 +1237,6 @@ export function promptDialog({
   });
 }
 
-export function toast(message, { kind = "info", duration = 2800 } = {}) {
-  const container = $("toast-container");
-  if (!container) return;
-  const el = document.createElement("div");
-  el.className = `toast toast-${kind}`;
-  el.textContent = message;
-  container.appendChild(el);
-  requestAnimationFrame(() => el.classList.add("visible"));
-  const remove = () => {
-    el.classList.remove("visible");
-    el.addEventListener("transitionend", () => el.remove(), { once: true });
-    setTimeout(() => el.remove(), 400);
-  };
-  setTimeout(remove, duration);
-  el.addEventListener("click", remove);
+export function toast(_message, _opts = {}) {
+  // Right-top toast notifications are intentionally disabled app-wide.
 }

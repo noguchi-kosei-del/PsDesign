@@ -64,16 +64,14 @@ import {
   showModalAnimated,
   toast,
 } from "./ui-feedback.js";
-import {
-  bindSaveMenu,
-  handleSave,
-} from "./bind/save.js";
 import { bindEditorPane, focusEditor, refreshEditorPaneViewer } from "./bind/editor-pane.js";
 import {
   listPsdFilesInFolder,
   loadPsdFilesByPaths,
   pickPsdFiles,
 } from "./services/psd-load.js";
+import { bindSaveMenu, handleSave } from "./bind/save.js";
+import { bindProjectButtons, openProjectFromPath, saveProject } from "./services/project.js";
 import {
   findShortcutMatch,
   applyThemeColor,
@@ -413,7 +411,7 @@ function restoreSelectedLayerBadgesNow() {
 function runShortcut(id) {
   const inv = getPageDirectionInverted();
   switch (id) {
-    case "save":       handleSave(); break;
+    case "save":       saveProject(); break;
     case "saveAs":     handleSave(); break;
     case "pagePrev":   advancePage(inv ? +1 : -1); break;
     case "pageNext":   advancePage(inv ? -1 : +1); break;
@@ -1911,14 +1909,20 @@ function bindLeadingTool() {
 async function handleDroppedPaths(paths) {
   if (!paths || paths.length === 0) return;
   const psdFiles = [];
+  const projectFiles = [];
   const txtFiles = [];
   const pdfFiles = [];
   const unknowns = [];
   for (const p of paths) {
-    if (/\.psd$/i.test(p)) psdFiles.push(p);
+    if (/\.opus$/i.test(p)) projectFiles.push(p);
+    else if (/\.psd$/i.test(p)) psdFiles.push(p);
     else if (/\.txt$/i.test(p)) txtFiles.push(p);
     else if (/\.(pdf|jpe?g|png)$/i.test(p)) pdfFiles.push(p);
     else unknowns.push(p);
+  }
+  if (projectFiles.length > 0) {
+    await openProjectFromPath(projectFiles[0]);
+    return;
   }
   for (const folder of unknowns) {
     try {
@@ -3019,6 +3023,7 @@ async function closeStartupSplash() {
 function init() {
   applyThemeColor();
   void syncHomeVersionLabel();
+  bindProjectButtons();
   bindSaveMenu();
   bindHistoryButtons();
   initHamburgerMenu();

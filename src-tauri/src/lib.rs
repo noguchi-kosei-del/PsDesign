@@ -228,6 +228,91 @@ async fn read_text_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path, e))
 }
 
+#[tauri::command]
+async fn write_text_file(path: String, content: String) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if let Some(parent) = path_buf.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("folder create failed ({}): {}", parent.display(), e))?;
+        }
+    }
+    fs::write(&path_buf, content)
+        .map_err(|e| format!("text write failed ({}): {}", path_buf.display(), e))
+}
+
+#[tauri::command]
+async fn copy_file(source: String, dest: String) -> Result<u64, String> {
+    let source_path = PathBuf::from(&source);
+    let dest_path = PathBuf::from(&dest);
+    if let Some(parent) = dest_path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("folder create failed ({}): {}", parent.display(), e))?;
+        }
+    }
+    fs::copy(&source_path, &dest_path).map_err(|e| {
+        format!(
+            "file copy failed ({} -> {}): {}",
+            source_path.display(),
+            dest_path.display(),
+            e
+        )
+    })
+}
+
+fn sanitize_project_dir_name(name: &str) -> String {
+    let mut out: String = name
+        .chars()
+        .map(|c| {
+            if c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*') {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    out = out.trim().trim_matches('.').to_string();
+    if out.is_empty() {
+        "OPUS_Project".to_string()
+    } else {
+        out
+    }
+}
+
+#[tauri::command]
+async fn create_opus_project_dir(name: String) -> Result<String, String> {
+    let desktop = dirs::desktop_dir()
+        .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
+        .ok_or_else(|| "Desktop folder was not found".to_string())?;
+    let root = desktop.join("Script_Output");
+    fs::create_dir_all(&root)
+        .map_err(|e| format!("Script_Output folder create failed ({}): {}", root.display(), e))?;
+
+    let base = sanitize_project_dir_name(&name);
+    for i in 0..=9999 {
+        let dir_name = if i == 0 { base.clone() } else { format!("{}({})", base, i) };
+        let candidate = root.join(dir_name);
+        if !candidate.exists() {
+            fs::create_dir_all(&candidate)
+                .map_err(|e| format!("project folder create failed ({}): {}", candidate.display(), e))?;
+            return Ok(candidate.to_string_lossy().to_string());
+        }
+    }
+    Err("project folder name is exhausted".to_string())
+}
+
+#[tauri::command]
+async fn script_output_dir() -> Result<String, String> {
+    let desktop = dirs::desktop_dir()
+        .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
+        .ok_or_else(|| "Desktop folder was not found".to_string())?;
+    let dir = desktop.join("Script_Output");
+    fs::create_dir_all(&dir)
+        .map_err(|e| format!("Script_Output folder create failed ({}): {}", dir.display(), e))?;
+    Ok(dir.to_string_lossy().to_string())
+}
+
 fn script_output_text_dir() -> Result<PathBuf, String> {
     let desktop = dirs::desktop_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
@@ -801,7 +886,7 @@ pub fn run() {
                 tauri::WebviewUrl::App("splash.html".into()),
             )
             .title("OPUS")
-            .inner_size(670.0, 420.0)
+            .inner_size(871.0, 546.0)
             .background_color(tauri::webview::Color(0x21, 0x21, 0x21, 255))
             .visible(false)
             .resizable(false)
@@ -827,6 +912,10 @@ pub fn run() {
             list_fonts,
             read_binary_file,
             read_text_file,
+            write_text_file,
+            copy_file,
+            create_opus_project_dir,
+            script_output_dir,
             save_editor_text_to_script_output,
             launch_progen_with_text,
             read_font_face_bytes,

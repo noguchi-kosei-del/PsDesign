@@ -318,10 +318,11 @@ export async function loadReferenceFiles(paths, options = {}) {
     : `${basename(sorted[0])} ほか ${total} 件`;
 
   showProgress({
-    title: "見本を読み込み中",
+    title: options.title || options.label || "見本を読み込み中",
     detail: `${headLabel}  読込中`,
     current: 0,
     total,
+    variant: options.variant,
   });
 
   const sources = [];

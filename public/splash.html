@@ -22,27 +22,24 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 0 36px;
+      padding: 0 47px;
       background: #212121;
-      border-radius: 8px;
+      border-radius: 10px;
       color: #ffffff;
     }
     .brand-pane {
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 24px;
+      gap: 31px;
       min-width: 0;
     }
     .brand-icon {
-      width: 84px;
-      height: 84px;
+      width: 110px;
+      height: 110px;
       object-fit: contain;
       opacity: 0;
-      transform: translateY(8px) scale(0.985);
-      transition:
-        opacity 1.6s ease,
-        transform 1.6s cubic-bezier(0.22, 1, 0.36, 1);
+      transform: translateY(18px) scale(0.94);
       will-change: opacity, transform;
       user-select: none;
       -webkit-user-drag: none;
@@ -57,15 +54,12 @@
       opacity: 0;
       color: #ffffff;
       font-family: "Cinzel", "Times New Roman", serif;
-      font-size: 58px;
+      font-size: 76px;
       font-weight: 600;
       letter-spacing: 0.64em;
       line-height: 1;
       text-shadow: 0 12px 24px rgba(0, 0, 0, 0.52);
-      transform: translateY(8px) scale(0.985);
-      transition:
-        opacity 1.6s 0.08s ease,
-        transform 1.6s 0.08s cubic-bezier(0.22, 1, 0.36, 1);
+      transform: translateY(18px) scale(0.94);
       will-change: opacity, transform;
       user-select: none;
       -webkit-user-drag: none;
@@ -75,13 +69,28 @@
     }
     .splash.is-ready .brand-icon,
     .splash.is-ready .home-title-word {
-      opacity: 1;
-      transform: translateY(0) scale(1);
+      animation: splash-brand-in 1.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .splash.is-ready .home-title-word {
+      animation-delay: 0.08s;
+    }
+    @keyframes splash-brand-in {
+      0% {
+        opacity: 0;
+        transform: translateY(18px) scale(0.94);
+      }
+      58% {
+        opacity: 1;
+      }
+      100% {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
     }
     @media (prefers-reduced-motion: reduce) {
       .brand-icon,
       .home-title-word {
-        transition: none;
+        animation: none !important;
         opacity: 1;
         transform: none;
       }

@@ -139,13 +139,6 @@ async function goHome() {
   // main.js が購読している統合シグナルを発火し、
   // ステージラベルバーのボタン (回転 / ガイドロック / ガイド反映) を再評価させる。
   window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
-  const saveBtn = document.getElementById("save-btn");
-  if (saveBtn) {
-    saveBtn.disabled = true;
-    saveBtn.setAttribute("aria-expanded", "false");
-  }
-  const saveMenu = document.getElementById("save-menu");
-  if (saveMenu) saveMenu.hidden = true;
   document.body.classList.add("home-returning");
   await wait(HOME_RETURN_ANIMATION_MS);
   document.body.classList.add("home-mode");
