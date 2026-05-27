@@ -718,7 +718,7 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
     }
     const rt = document.createElement("span");
     rt.className = `ruby-text ruby-text-overlay${isNakaguroRubyText(text) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(text) ? " ruby-text-overlay-same-position" : ""}`;
-    if (isNakaguroRubyText(text) && isFirstLineRange(from)) rt.classList.add("ruby-text-first-line");
+    if (isFirstLineRange(from)) rt.classList.add("ruby-text-first-line");
     rt.contentEditable = "false";
     rt.setAttribute("aria-hidden", "true");
     rt.dataset.rubyStart = String(from);
@@ -842,7 +842,7 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
   // contenteditable="false" で caret 進入を禁止 + readContents 側で除外する。
   const rt = document.createElement("span");
   rt.className = `ruby-text${isNakaguroRubyText(rubyText) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(rubyText) ? " ruby-text-overlay-same-position" : ""}`;
-  if (isNakaguroRubyText(rubyText) && isFirstLineRange(start)) rt.classList.add("ruby-text-first-line");
+  if (isFirstLineRange(start)) rt.classList.add("ruby-text-first-line");
   rt.contentEditable = "false";
   rt.setAttribute("aria-hidden", "true");
   rt.dataset.rubyStart = String(start);
@@ -1978,6 +1978,11 @@ function isParentMarkRubyElement(rt) {
     || rt?.classList?.contains("ruby-text-overlay-same-position");
 }
 
+function isFixedSideRubyElement(rt) {
+  return isParentMarkRubyElement(rt)
+    || rt?.classList?.contains("ruby-text-first-line");
+}
+
 function resetRubyTextInlinePosition(rt) {
   if (!rt) return;
   rt.style.left = "";
@@ -2208,7 +2213,7 @@ function placeRubyAtLineMidpointsForOverlay(overlay, options = {}) {
     for (const wrap of wraps) {
       const rt = wrap.querySelector(".ruby-text");
       if (!rt) continue;
-      if (isParentMarkRubyElement(rt)) {
+      if (isFixedSideRubyElement(rt)) {
         resetRubyTextInlinePosition(rt);
         continue;
       }
@@ -3095,7 +3100,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
   const appendOverlayRubyText = (host, overlay, index, from, to) => {
     const overlayRt = document.createElement("span");
     overlayRt.className = `ruby-text ruby-text-overlay${isNakaguroRubyText(overlay.text) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(overlay.text) ? " ruby-text-overlay-same-position" : ""}`;
-    if (lineStartIdx === 0 && isNakaguroRubyText(overlay.text)) overlayRt.classList.add("ruby-text-first-line");
+    if (lineStartIdx === 0) overlayRt.classList.add("ruby-text-first-line");
     overlayRt.contentEditable = "false";
     overlayRt.setAttribute("aria-hidden", "true");
     overlayRt.dataset.rubyStart = String(overlay.start);
@@ -3126,7 +3131,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     wrap.appendChild(base);
     const rt = document.createElement("span");
     rt.className = `ruby-text${isNakaguroRubyText(rubyText) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(rubyText) ? " ruby-text-overlay-same-position" : ""}`;
-    if (lineStartIdx === 0 && isNakaguroRubyText(rubyText)) rt.classList.add("ruby-text-first-line");
+    if (lineStartIdx === 0) rt.classList.add("ruby-text-first-line");
     rt.contentEditable = "false";
     rt.setAttribute("aria-hidden", "true");
     rt.dataset.rubyStart = String(absStartForThisPair);

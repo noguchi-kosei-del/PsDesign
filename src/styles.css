@@ -676,6 +676,11 @@ body.home-mode .toolbar .settings-toolbar-btn {
   font-size: 12px;
   cursor: pointer;
 }
+.ruby-parent-select-btn {
+  min-height: 29px;
+  padding: 0 10px;
+  font-size: 14px;
+}
 .ruby-parent-select-btn:hover:not(:disabled),
 .ruby-special-btn:hover:not(:disabled) {
   border-color: var(--accent);
@@ -797,34 +802,39 @@ body.home-mode .toolbar .settings-toolbar-btn {
   position: fixed;
   inset: 0;
   z-index: 5000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.36);
+  display: block;
+  background: transparent;
 }
 .ruby-parent-dialog-panel {
-  width: min(620px, calc(100vw - 32px));
-  max-height: min(520px, calc(100vh - 32px));
+  position: fixed;
+  left: var(--ruby-parent-dialog-left, 50%);
+  top: var(--ruby-parent-dialog-top, 50%);
+  width: max-content;
+  max-width: calc(100vw - 12px);
+  max-height: calc(100vh - 12px);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  gap: 4px;
+  padding: 4px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 6px;
   background: var(--panel);
   color: var(--text);
   box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
 }
 .ruby-parent-dialog-vertical .ruby-parent-dialog-panel {
-  width: min(420px, calc(100vw - 32px));
-  max-height: min(760px, calc(100vh - 32px));
+  width: max-content;
+  max-width: calc(100vw - 12px);
+  max-height: calc(100vh - 12px);
 }
 .ruby-parent-dialog-head,
 .ruby-parent-dialog-actions {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: 4px;
+  font-size: 11px;
+  line-height: 1.2;
 }
 .ruby-parent-dialog-close,
 .ruby-parent-dialog-actions button {
@@ -832,59 +842,71 @@ body.home-mode .toolbar .settings-toolbar-btn {
   border-radius: 4px;
   background: var(--panel-2);
   color: var(--text);
-  min-height: 26px;
-  padding: 0 10px;
+  min-height: 20px;
+  padding: 0 5px;
+  font-size: 11px;
   cursor: pointer;
 }
 .ruby-parent-dialog-close {
-  min-width: 28px;
+  min-width: 22px;
   padding: 0;
-  font-size: 16px;
+  font-size: 14px;
 }
 .ruby-parent-ok-btn {
   border-color: var(--accent) !important;
   color: var(--accent) !important;
 }
+.ruby-parent-ok-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
 .ruby-parent-grid {
-  max-height: 360px;
+  width: max-content;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 86px);
   overflow: auto;
-  padding: 8px;
+  padding: 1px;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 4px;
   background: var(--bg);
 }
 .ruby-parent-dialog-vertical .ruby-parent-grid {
-  height: min(560px, calc(100vh - 168px));
-  max-height: calc(100vh - 168px);
-  max-width: 100%;
+  width: max-content;
+  height: max-content;
+  max-width: calc(100vw - 24px);
+  max-height: calc(100vh - 86px);
   display: flex;
   flex-direction: row-reverse;
   align-items: flex-start;
   justify-content: flex-start;
-  gap: 4px;
+  gap: 0;
 }
 .ruby-parent-line {
   display: flex;
   align-items: center;
-  min-height: 32px;
+  min-height: var(--ruby-parent-cell-size, 22px);
   flex-wrap: nowrap;
+  gap: 0;
 }
 .ruby-parent-dialog-vertical .ruby-parent-line {
   flex-direction: column;
-  min-width: 32px;
+  min-width: var(--ruby-parent-cell-size, 22px);
   min-height: 0;
 }
 .ruby-parent-cell {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 28px;
-  margin: 2px;
+  min-width: var(--ruby-parent-cell-size, 22px);
+  width: var(--ruby-parent-cell-size, 22px);
+  height: var(--ruby-parent-cell-size, 22px);
+  margin: 0;
   border: 1px solid transparent;
-  border-radius: 4px;
+  border-radius: 2px;
   background: transparent;
   color: var(--text);
+  font-size: calc(var(--ruby-parent-cell-size, 22px) * 0.58);
+  line-height: 1;
   cursor: pointer;
   user-select: none;
 }
@@ -897,8 +919,8 @@ body.home-mode .toolbar .settings-toolbar-btn {
   color: #fff;
 }
 .ruby-parent-divider {
-  width: 8px;
-  height: 28px;
+  width: 3px;
+  height: var(--ruby-parent-cell-size, 22px);
   padding: 0;
   border: 0;
   border-radius: 2px;
@@ -906,47 +928,47 @@ body.home-mode .toolbar .settings-toolbar-btn {
   cursor: pointer;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider {
-  width: 28px;
-  height: 8px;
+  width: var(--ruby-parent-cell-size, 22px);
+  height: 3px;
 }
 .ruby-parent-divider::after {
   content: "";
   display: block;
   width: 1px;
-  height: 10px;
-  margin: 9px auto;
+  height: 8px;
+  margin: calc((var(--ruby-parent-cell-size, 22px) - 8px) / 2) auto;
   border-radius: 1px;
   background: transparent;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider::after {
-  width: 10px;
+  width: 8px;
   height: 1px;
-  margin: 3px auto;
+  margin: 1px auto;
 }
 .ruby-parent-divider:hover::after {
   width: 2px;
-  height: 14px;
-  margin-top: 7px;
+  height: 12px;
+  margin-top: calc((var(--ruby-parent-cell-size, 22px) - 12px) / 2);
   background: #ff9f1a;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider:hover::after {
-  width: 14px;
+  width: 12px;
   height: 2px;
-  margin-top: 3px;
+  margin-top: 1px;
 }
 .ruby-parent-divider.active {
   background: rgba(255, 159, 26, 0.16);
 }
 .ruby-parent-divider.active::after {
   width: 2px;
-  height: 16px;
-  margin-top: 6px;
+  height: 14px;
+  margin-top: calc((var(--ruby-parent-cell-size, 22px) - 14px) / 2);
   background: #ff9f1a;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider.active::after {
-  width: 16px;
+  width: 14px;
   height: 2px;
-  margin-top: 3px;
+  margin-top: 1px;
 }
 /* 【v1.26.0】in-app プレビューのルビ表示（編集後 / 非編集状態）。
    <ruby> タグや ::after 疑似要素ではなく本物の <span> 要素を使ってルビを描画する。
@@ -1023,6 +1045,13 @@ body.home-mode .toolbar .settings-toolbar-btn {
     -50%
   );
 }
+.ruby-text.ruby-text-first-line:not(.ruby-text-nakaguro):not(.ruby-text-overlay-same-position) {
+  left: calc(100% + 0.08em);
+  transform: translate(
+    0,
+    -50%
+  );
+}
 /* 縦書き: 親文字 wrap の中心から、行送りの半分だけ右 (= 前の行側) に
    ルビ自身の中心を置く。 */
 .layer-box[data-direction="vertical"] .ruby-text {
@@ -1035,6 +1064,13 @@ body.home-mode .toolbar .settings-toolbar-btn {
   margin-bottom: 0;
   margin-left: 0;
   writing-mode: vertical-rl;
+}
+.layer-box[data-direction="vertical"] .ruby-text.ruby-text-first-line:not(.ruby-text-nakaguro):not(.ruby-text-overlay-same-position) {
+  left: calc(100% + 0.08em);
+  transform: translate(
+    0,
+    -50%
+  );
 }
 .layer-box[data-direction="vertical"] .ruby-text-overlay {
   transform: translate(

@@ -2040,12 +2040,19 @@ function bindRubyTool() {
     return ranges;
   };
 
-  const openParentSelectDialog = () => {
+  const focusRubyInput = () => {
+    requestAnimationFrame(() => {
+      if (inputEl.disabled) return;
+      inputEl.focus({ preventScroll: true });
+      const caret = inputEl.value.length;
+      inputEl.setSelectionRange?.(caret, caret);
+    });
+  };
+
+  const openParentSelectDialog = (triggerEvent = null) => {
     const target = activeEditTarget();
     if (!target || !target.contents) return;
-    const existing = manualParentRanges.length > 0
-      ? normalizeManualRanges(manualParentRanges, target.contents)
-      : (target.end > target.start ? [{ start: target.start, end: target.end }] : []);
+    const existing = [];
     const selected = new Set();
     const dividers = new Set();
     for (let i = 0; i < existing.length; i++) {
@@ -2071,6 +2078,54 @@ function bindRubyTool() {
         </div>
       </div>`;
     const grid = overlay.querySelector(".ruby-parent-grid");
+    const okBtn = overlay.querySelector(".ruby-parent-ok-btn");
+    const applyLayerSizedGrid = () => {
+      const inner = document.querySelector(".layer-box.editing .existing-layer-text:not(.stroke-preview-underlay), .layer-box.editing .new-layer-text:not(.stroke-preview-underlay)");
+      const rect = inner?.getBoundingClientRect?.();
+      const lines = String(target.contents ?? "").split(/\r\n|\r|\n/);
+      const maxChars = Math.max(1, ...lines.map((lineText) => lineText.length));
+      const lineCount = Math.max(1, lines.length);
+      let cellSize = 22;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        const inlineSize = isVertical ? rect.height / maxChars : rect.width / maxChars;
+        const blockSize = isVertical ? rect.width / lineCount : rect.height / lineCount;
+        const fitted = Math.min(inlineSize, blockSize);
+        if (Number.isFinite(fitted) && fitted > 0) cellSize = Math.max(14, Math.round(fitted));
+      } else {
+        const fontSize = Number.parseFloat(getComputedStyle(inner ?? document.documentElement).fontSize);
+        if (Number.isFinite(fontSize) && fontSize > 0) cellSize = Math.max(14, Math.round(fontSize));
+      }
+      overlay.style.setProperty("--ruby-parent-cell-size", `${Math.round(cellSize * 1.2)}px`);
+    };
+    applyLayerSizedGrid();
+    const selectedCellCount = () => grid?.querySelectorAll(".ruby-parent-cell.selected").length ?? 0;
+    const updateOkState = () => {
+      if (okBtn) okBtn.disabled = selectedCellCount() === 0;
+    };
+    const dialogPoint = () => {
+      let x = Number(triggerEvent?.clientX);
+      let y = Number(triggerEvent?.clientY);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        const rect = parentSelectBtn?.getBoundingClientRect?.();
+        x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+        y = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
+      }
+      return { x, y };
+    };
+    const positionDialog = () => {
+      const panel = overlay.querySelector(".ruby-parent-dialog-panel");
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      const margin = 8;
+      const maxLeft = window.innerWidth - rect.width - margin;
+      const maxTop = window.innerHeight - rect.height - margin;
+      const clamp = (value, min, max) => Math.max(min, Math.min(Math.max(min, max), value));
+      const point = dialogPoint();
+      const left = clamp(point.x - rect.width / 2, margin, maxLeft);
+      const top = clamp(point.y - rect.height / 2, margin, maxTop);
+      overlay.style.setProperty("--ruby-parent-dialog-left", `${Math.round(left)}px`);
+      overlay.style.setProperty("--ruby-parent-dialog-top", `${Math.round(top)}px`);
+    };
     let line = document.createElement("div");
     line.className = "ruby-parent-line";
     let lastCharIndex = -1;
@@ -2081,7 +2136,10 @@ function bindRubyTool() {
       divider.dataset.after = String(lastCharIndex);
       divider.title = "ここで親文字を分割";
       if (dividers.has(lastCharIndex)) divider.classList.add("active");
-      divider.addEventListener("click", () => divider.classList.toggle("active"));
+      divider.addEventListener("click", () => {
+        divider.classList.toggle("active");
+        updateOkState();
+      });
       line.appendChild(divider);
     };
     const textIndices = Array.from({ length: target.contents.length }, (_, i) => i);
@@ -2102,7 +2160,10 @@ function bindRubyTool() {
       cell.dataset.index = String(i);
       cell.textContent = ch;
       if (selected.has(i)) cell.classList.add("selected");
-      cell.addEventListener("click", () => cell.classList.toggle("selected"));
+      cell.addEventListener("click", () => {
+        cell.classList.toggle("selected");
+        updateOkState();
+      });
       line.appendChild(cell);
       lastCharIndex = i;
     }
@@ -2117,13 +2178,22 @@ function bindRubyTool() {
       close();
       updateSelection();
     });
-    overlay.querySelector(".ruby-parent-ok-btn")?.addEventListener("click", () => {
+    okBtn?.addEventListener("click", () => {
       manualParentRanges = normalizeManualRanges(rangesFromSelectedCells(grid), target.contents);
       close();
       updateSelection();
+      focusRubyInput();
     });
+    overlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") close();
+    });
+    updateOkState();
+    overlay.style.visibility = "hidden";
     document.body.appendChild(overlay);
-    grid.focus();
+    positionDialog();
+    overlay.style.visibility = "";
+    requestAnimationFrame(positionDialog);
+    grid.focus({ preventScroll: true });
   };
 
   const updateSelection = () => {

@@ -818,15 +818,26 @@ function parseRubyAnnotatedText(raw) {
   return { text, charRubies };
 }
 
+function isDakutenRubyText(text) {
+  const chars = Array.from(String(text ?? ""));
+  if (chars.length === 0) return false;
+  return chars.every((ch) => {
+    const code = ch.codePointAt(0);
+    return code === 0x309b || code === 0xff9e || code === 0x3099;
+  });
+}
+
 function rubyLineLeadingsForText(text, charRubies) {
   const out = {};
   if (!charRubies || Object.keys(charRubies).length === 0) return out;
   const rubyLeadingPct = Number(getDefault("rubyLeadingPct")) || 150;
   for (const key of Object.keys(charRubies)) {
+    if (isDakutenRubyText(charRubies[key]?.text)) continue;
     const start = Number(key);
     if (!Number.isFinite(start)) continue;
-    const lineIndex = String(text ?? "").slice(0, start).split("\n").length - 1;
-    out[lineIndex] = rubyLeadingPct;
+    const parentLineIndex = String(text ?? "").slice(0, start).split(/\r\n|\r|\n/).length - 1;
+    const targetLineIndex = parentLineIndex - 1;
+    if (targetLineIndex >= 0) out[targetLineIndex] = rubyLeadingPct;
   }
   return out;
 }

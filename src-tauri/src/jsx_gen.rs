@@ -827,8 +827,12 @@ function buildRubyLineLeadings(contents, charRubies, explicitLineLeadings, rubyL
     for (var i = 0; i < rubyLines.length; i++) {
       var idx = parseInt(rubyLines[i], 10);
       if (isNaN(idx) || idx < 0) continue;
-      out[String(idx)] = rubyLeadingPct;
-      hasAny = true;
+      // Preserve a user-edited per-line leading. Ruby defaults are only a
+      // fallback for ruby-bearing lines that do not already have an override.
+      if (typeof out[String(idx)] !== "number") {
+        out[String(idx)] = rubyLeadingPct;
+        hasAny = true;
+      }
     }
   }
   return hasAny ? out : null;
@@ -896,14 +900,28 @@ function applyLineLeadings(layer, lineLeadings, contents, fontSizePt) {
   if (oldRanges.count === 0) return;
   var baseStyle = oldRanges.getObjectValue(0).getObjectValue(sID("textStyle"));
 
-  var lines = String(contents).split("\r");
+  var sourceText = String(contents);
+  var lines = [];
+  var lineBreakRe = /\r\n|\r|\n/g;
+  var lineStart = 0;
+  var lineBreak;
+  while ((lineBreak = lineBreakRe.exec(sourceText)) !== null) {
+    lines.push({
+      text: sourceText.substring(lineStart, lineBreak.index),
+      breakLength: lineBreak[0].length
+    });
+    lineStart = lineBreak.index + lineBreak[0].length;
+  }
+  lines.push({
+    text: sourceText.substring(lineStart),
+    breakLength: 0
+  });
   var newRangeList = new ActionList();
   var pos = 0;
   for (var i = 0; i < lines.length; i++) {
-    var len = lines[i].length;
+    var len = lines[i].text.length;
     var startChar = pos;
-    var includeBreak = (i < lines.length - 1) ? 1 : 0;
-    var endChar = pos + len + includeBreak;
+    var endChar = pos + len + lines[i].breakLength;
 
     var styleClone = cloneActionDescriptor(baseStyle);
     var pct = lineLeadings[String(i)];
@@ -1028,13 +1046,6 @@ function applyPerCharSizesAndFonts(layer, contents, charSizes, charFonts) {
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
-// 【v1.22.0】===== 文字ごとの合成太字（faux bold / syntheticBold） =====
-// charBolds: { "0": true, "5": false, ... } 絶対 char index → bool 値
-// layerBold: layer 全体の bold flag (boolean)。char 個別指定が無い文字に適用。
-//
-// applyPerCharSizesAndFonts と同型の clone-and-replace。layerBold が true で
-// charBolds が空の場合でも全 char に true をセットしたいので、layerBold あり
-// または charBolds あり のどちらかで処理を起動する。
 function rgbDescriptorForFillColor(name) {
   var c = fillColorFor(name);
   if (!c) return null;
@@ -1118,6 +1129,13 @@ function applyPerCharFillColors(layer, contents, charFillColors) {
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
+// 【v1.22.0】===== 文字ごとの合成太字（faux bold / syntheticBold） =====
+// charBolds: { "0": true, "5": false, ... } 絶対 char index → bool 値
+// layerBold: layer 全体の bold flag (boolean)。char 個別指定が無い文字に適用。
+//
+// applyPerCharSizesAndFonts と同型の clone-and-replace。layerBold が true で
+// charBolds が空の場合でも全 char に true をセットしたいので、layerBold あり
+// または charBolds あり のどちらかで処理を起動する。
 function normalizeTextScalePercent(v) {
   if (typeof v !== "number" || !isFinite(v)) return null;
   return Math.max(10, Math.min(400, Math.round(v)));
@@ -1368,9 +1386,8 @@ function applyPerCharTextSpacing(layer, contents, charTrackings, charKernings) {
 
 function applyPerCharBolds(layer, contents, charBolds, layerBold) {
   var hasChar = charBolds && !isObjEmpty(charBolds);
-  var hasLayer = (layerBold === true || layerBold === false);
   var lb = layerBold === true;
-  if (!hasChar && !hasLayer) return;
+  if (!hasChar && !lb) return;
   app.activeDocument.activeLayer = layer;
 
   var layerRef = new ActionReference();
@@ -1399,7 +1416,7 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
       var v = charBolds[String(idx)];
       if (typeof v === "boolean") return v;
     }
-    return hasLayer ? lb : null;
+    return lb;
   }
 
   // 連続する同 (srcRange, bold) 文字を 1 セグメントに圧縮。
@@ -1423,9 +1440,7 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
       var srcRange = oldRanges.getObjectValue(curSrc);
       var srcStyle = srcRange.getObjectValue(sID("textStyle"));
       var styleClone = cloneActionDescriptor(srcStyle);
-      if (curBold !== null) {
-        try { styleClone.putBoolean(sID("syntheticBold"), curBold === true); } catch (eSB) {}
-      }
+      try { styleClone.putBoolean(sID("syntheticBold"), curBold === true); } catch (eSB) {}
       var newRangeDesc = new ActionDescriptor();
       newRangeDesc.putInteger(sID("from"), curStart);
       newRangeDesc.putInteger(sID("to"), p);
@@ -1462,9 +1477,7 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
 //   defaultMultiplier: 他の行に当てる元の倍率 (例: 1.25 = 125%、e.leadingPct/100 でいい)
 function applyPerCharItalics(layer, contents, charItalics, layerItalic) {
   var hasChar = charItalics && !isObjEmpty(charItalics);
-  var hasLayer = (layerItalic === true || layerItalic === false);
   var li = layerItalic === true;
-  if (!hasChar && !hasLayer) return;
   app.activeDocument.activeLayer = layer;
 
   var layerRef = new ActionReference();
@@ -1492,7 +1505,7 @@ function applyPerCharItalics(layer, contents, charItalics, layerItalic) {
       var v = charItalics[String(idx)];
       if (typeof v === "boolean") return v;
     }
-    return hasLayer ? li : null;
+    return li;
   }
 
   var newRangeList = new ActionList();
@@ -1515,9 +1528,7 @@ function applyPerCharItalics(layer, contents, charItalics, layerItalic) {
       var srcRange = oldRanges.getObjectValue(curSrc);
       var srcStyle = srcRange.getObjectValue(sID("textStyle"));
       var styleClone = cloneActionDescriptor(srcStyle);
-      if (curItalic !== null) {
-        try { styleClone.putBoolean(sID("syntheticItalic"), curItalic === true); } catch (eSI) {}
-      }
+      try { styleClone.putBoolean(sID("syntheticItalic"), curItalic === true); } catch (eSI) {}
       var newRangeDesc = new ActionDescriptor();
       newRangeDesc.putInteger(sID("from"), curStart);
       newRangeDesc.putInteger(sID("to"), p);
@@ -1563,21 +1574,18 @@ function applyRubyAutoLeadingPercentage(layer, contents, rubyLineIndices, multip
   var textKey = layerDesc.getObjectValue(sID("textKey"));
   if (!textKey.hasKey(sID("paragraphStyleRange"))) return;
 
-  // contents の行分解。Photoshop の contents は \r 区切り (JS の split で対応)。
+  // 各行の char [start, end) 範囲を計算。改行が \r\n の場合も
+  // paragraphStyleRange の境界がずれないよう、実際の改行長を含める。
   var normContents = String(contents || "");
-  var lines = normContents.split(/\r\n|\n|\r/);
-  if (lines.length === 0) return;
-
-  // 各行の char [start, end) 範囲を計算 (改行を含む末端まで、最終行は除く)。
   var lineRanges = [];
-  var cumCh = 0;
-  for (var li = 0; li < lines.length; li++) {
-    var lstart = cumCh;
-    var lend = cumCh + lines[li].length;
-    if (li < lines.length - 1) lend += 1; // 改行 (\r) 1 文字
-    lineRanges.push({ from: lstart, to: lend });
-    cumCh = lend;
+  var lineStart = 0;
+  var lineBreakRe = /\r\n|\r|\n/g;
+  var lineBreak;
+  while ((lineBreak = lineBreakRe.exec(normContents)) !== null) {
+    lineRanges.push({ from: lineStart, to: lineBreak.index + lineBreak[0].length });
+    lineStart = lineBreak.index + lineBreak[0].length;
   }
+  lineRanges.push({ from: lineStart, to: normContents.length });
 
   // ルビが乗る行の (from, to) リスト
   var rubyRanges = [];
@@ -1723,6 +1731,28 @@ function applyRubyAutoLeadingPercentage(layer, contents, rubyLineIndices, multip
   setDesc2.putReference(charIDToTypeID("null"), setRef);
   setDesc2.putObject(sID("to"), sID("textLayer"), newTextKey);
   executeAction(sID("set"), setDesc2, DialogModes.NO);
+}
+
+function applyLineLeadingPercentages(layer, contents, lineLeadings, defaultMultiplier) {
+  if (isObjEmpty(lineLeadings)) return;
+  var grouped = {};
+  for (var k in lineLeadings) {
+    if (!lineLeadings.hasOwnProperty(k)) continue;
+    var idx = parseInt(k, 10);
+    var pct = lineLeadings[k];
+    if (isNaN(idx) || idx < 0) continue;
+    if (typeof pct !== "number" || !isFinite(pct) || pct <= 0) continue;
+    var multiplier = pct / 100;
+    var groupKey = String(Math.round(multiplier * 1000000) / 1000000);
+    if (!grouped[groupKey]) grouped[groupKey] = [];
+    grouped[groupKey].push(idx);
+  }
+  for (var g in grouped) {
+    if (!grouped.hasOwnProperty(g)) continue;
+    var mult = parseFloat(g);
+    if (typeof mult !== "number" || !isFinite(mult) || mult <= 0) continue;
+    applyRubyAutoLeadingPercentage(layer, contents, grouped[g], mult, defaultMultiplier);
+  }
 }
 
 // 【v1.29.x 修正】contents (\n or \r 区切り) と charRubies から
@@ -1951,6 +1981,9 @@ function parentEmPxForLayer(parentLayer, doc) {
 var PARENT_MARK_OFFSET_EM = 0.55;
 var NAKAGURO_PARENT_MARK_OFFSET_EM = 0.72;
 var NAKAGURO_FIRST_LINE_PARENT_MARK_OFFSET_EM = 0.84;
+var NORMAL_FIRST_LINE_RUBY_GAP_EM = 0.08;
+var LATER_LINE_RUBY_PARENT_OFFSET_EM = 0.72;
+var NORMAL_RUBY_PARENT_NUDGE_EM = 0.08;
 
 function lineIndexForCharIndex(contents, idx) {
   var fullText = String(contents || "");
@@ -2194,9 +2227,18 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
     var hasUiAbs = (typeof uiAbsX === "number" && typeof uiAbsY === "number"
                     && isFinite(uiAbsX) && isFinite(uiAbsY));
     var isParentMarkRuby = isSpecialParentMarkRubyText(rubyText);
+    var parentLineIndex = lineIndexForCharIndex(contents, fromCh);
+    var isFirstLineNormalRuby = !isParentMarkRuby && parentLineIndex === 0;
     var parentMarkOffsetEm = isNakaguroRubyText(rubyText) ? NAKAGURO_PARENT_MARK_OFFSET_EM : PARENT_MARK_OFFSET_EM;
-    if (isNakaguroRubyText(rubyText) && lineIndexForCharIndex(contents, fromCh) === 0) {
+    if (isNakaguroRubyText(rubyText) && parentLineIndex === 0) {
       parentMarkOffsetEm = NAKAGURO_FIRST_LINE_PARENT_MARK_OFFSET_EM;
+    }
+    if (isParentMarkRuby || parentLineIndex > 0 || isFirstLineNormalRuby) {
+      // Parent marks, later-line rubies, and first-line normal rubies are
+      // positioned from the parent range. UI-measured offsets include
+      // ruby-line placement and can drift from Photoshop's adjusted geometry.
+      hasUiOffset = false;
+      hasUiAbs = false;
     }
     if (hasUiAbs || hasUiOffset) {
       // ルビ中心:
@@ -2260,21 +2302,38 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
         if (isParentMarkRuby) {
           var parentMarkCenterX = (rangeBounds.left + rangeBounds.right) / 2 + parentEmPxForLayer(parentLayer, doc) * parentMarkOffsetEm;
           targetLeft = parentMarkCenterX - rubyWidth / 2;
+        } else if (parentLineIndex > 0) {
+          var laterLineRubyCenterX = (rangeBounds.left + rangeBounds.right) / 2 + parentEmPxForLayer(parentLayer, doc) * LATER_LINE_RUBY_PARENT_OFFSET_EM;
+          targetLeft = laterLineRubyCenterX - rubyWidth / 2;
         } else {
-          targetLeft = rangeBounds.right + gap;
+          targetLeft = rangeBounds.right + parentEmPxForLayer(parentLayer, doc) * NORMAL_FIRST_LINE_RUBY_GAP_EM;
         }
         targetTop = rangeMidV - rubyHeight / 2;
       } else {
-        // 横書き: ルビは親 char range の **上** に配置。
+        // 横書き: 2 行目以降は前行との中間、1 行目は親の右側に配置。
         var rangeMidH = (rangeBounds.left + rangeBounds.right) / 2;
         targetLeft = rangeMidH - rubyWidth / 2;
         if (isParentMarkRuby) {
           var parentMarkCenterXH = rangeMidH + parentEmPxForLayer(parentLayer, doc) * parentMarkOffsetEm;
           targetLeft = parentMarkCenterXH - rubyWidth / 2;
           targetTop = (rangeBounds.top + rangeBounds.bottom) / 2 - rubyHeight / 2;
+        } else if (isFirstLineNormalRuby) {
+          targetLeft = rangeBounds.right + parentEmPxForLayer(parentLayer, doc) * NORMAL_FIRST_LINE_RUBY_GAP_EM;
+          targetTop = (rangeBounds.top + rangeBounds.bottom) / 2 - rubyHeight / 2;
+        } else if (parentLineIndex > 0) {
+          var laterLineRubyCenterY = (rangeBounds.top + rangeBounds.bottom) / 2 - parentEmPxForLayer(parentLayer, doc) * LATER_LINE_RUBY_PARENT_OFFSET_EM;
+          targetTop = laterLineRubyCenterY - rubyHeight / 2;
         } else {
           targetTop = rangeBounds.top - rubyHeight - gap;
         }
+      }
+    }
+    if (!isParentMarkRuby && !isFirstLineNormalRuby) {
+      var normalRubyParentNudgePx = parentEmPxForLayer(parentLayer, doc) * NORMAL_RUBY_PARENT_NUDGE_EM;
+      if (parentDirection === "vertical") {
+        targetLeft -= normalRubyParentNudgePx;
+      } else {
+        targetTop += normalRubyParentNudgePx;
       }
     }
     var dx = targetLeft - actualLeft;
@@ -2339,16 +2398,23 @@ function getLayerBoundsPx(layer) {
 // Phase A の精度として、per-char size override や複雑な改行は誤差が出る可能性あり。
 function estimateCharRangeBounds(parentBounds, contents, fromCh, toCh, parentDirection) {
   var fullText = String(contents || "");
-  var lines = fullText.split("\n");
+  var lines = [];
+  var lineStartChs = [];
+  var lineStartCh = 0;
+  var lineBreakRe = /\r\n|\r|\n/g;
+  var lineBreak;
+  while ((lineBreak = lineBreakRe.exec(fullText)) !== null) {
+    lineStartChs.push(lineStartCh);
+    lines.push(fullText.substring(lineStartCh, lineBreak.index));
+    lineStartCh = lineBreak.index + lineBreak[0].length;
+  }
+  lineStartChs.push(lineStartCh);
+  lines.push(fullText.substring(lineStartCh));
   if (lines.length === 0) return parentBounds;
   // 各行が contents 内で開始する char index と長さを事前計算。
-  var lineStartChs = [];
   var maxLineLen = 0;
-  var lineStartCh = 0;
   for (var i = 0; i < lines.length; i++) {
-    lineStartChs.push(lineStartCh);
     if (lines[i].length > maxLineLen) maxLineLen = lines[i].length;
-    lineStartCh += lines[i].length + 1; // +1 for \n
   }
   if (maxLineLen === 0) return parentBounds;
 
@@ -3154,9 +3220,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           addWarning("行間の適用に失敗 (layer " + e.id + "): " + eLead);
         }
       }
-      // 【v1.29.x】ルビあり時は applyLineLeadings (textStyleRange に Ldng pt 固定) を呼ばず、
-      // 代わりに applyRubyAutoLeadingPercentage で paragraphStyleRange に
-      // autoLeadingPercentage を行ごとに当てる (参考: 共有プラグイン ruby/index.js)。
+      // 【v1.29.x】ルビあり時は textStyleRange の固定 leading ではなく、
+      // paragraphStyleRange の autoLeadingPercentage を行ごとに当てる。
       // ルビなしのときは従来通り applyLineLeadings (ユーザー手動の per-line override)。
       var __hasRubyE = (e.charRubies && !isObjEmpty(e.charRubies));
       var __lineLeadingsE = __hasRubyE
@@ -3165,7 +3230,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       if (__lineLeadingsE && !isObjEmpty(__lineLeadingsE)) {
         try {
           var __sz = ti.size.value;
-          applyLineLeadings(layer, __lineLeadingsE, ti.contents, __sz);
+          if (__hasRubyE) {
+            var __defLineMult = (typeof e.leadingPct === "number" && e.leadingPct > 0)
+              ? (e.leadingPct / 100) : 1.0;
+            applyLineLeadingPercentages(layer, ti.contents, __lineLeadingsE, __defLineMult);
+          } else {
+            applyLineLeadings(layer, __lineLeadingsE, ti.contents, __sz);
+          }
         } catch (eLineLead) {
           addWarning("行ごとの行間の適用に失敗 (layer " + e.id + "): " + eLineLead);
         }
@@ -3339,9 +3410,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           try { nti.font = nl.font; } catch (eFont) {}
         }
         nti.size = new UnitValue((typeof nl.size === "number") ? nl.size : 24, "pt");
-        // 【v1.29.x 修正】autoLeadingAmount は段落全体属性。ルビあり行のみ 150% にしたい
-        // なら applyLineLeadings 経路で per-line 固定 leading を当てる方式に統一する。
-        // ここでは元の leadingPct (or 125 default) のまま、自動行送りで設定する。
+        // autoLeadingAmount は段落全体属性。ここでは元の leadingPct (or 125 default)
+        // のまま自動行送りにし、ルビあり行だけ後段の paragraphStyleRange
+        // autoLeadingPercentage で個別に上書きする。
         var __lpNew = (typeof nl.leadingPct === "number") ? nl.leadingPct : 125;
         try { nti.autoLeadingAmount = __lpNew; } catch (eAutoLeadPct) {}
         try { nti.useAutoLeading = true; } catch (eAutoLead) {}
@@ -3382,9 +3453,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var _padInsetV = 0.3 * _ptInPx;
           var _fixDx, _fixDy;
           if (nl.direction === "vertical") {
-            // 【v1.29.x 修正】autoLeadingAmount を rubyLeadingPct で上書きしなくなったため、
-            // bbox の縦書き thick 計算も元の leadingPct (or 125 default) のままで OK。
-            // ルビあり行は applyLineLeadings の per-line 固定 leading で個別に処理される。
+            // autoLeadingAmount を rubyLeadingPct で上書きしないため、bbox の縦書き
+            // thick 計算は元の leadingPct (or 125 default) のままにする。
+            // ルビあり行の個別行間は後段の paragraphStyleRange で処理される。
             var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
             var _contentsForCount = String(nl.contents || "");
             var _lc = _contentsForCount.split(/\r?\n/).length;
@@ -3416,9 +3487,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         } catch (eBounds) {}
         // フチはルビ生成後に一括適用する。ここで先に付けると、
         // Photoshop の bounds が変わり、ルビ位置計算がぶれる。
-        // 【v1.29.x】ルビあり時は applyLineLeadings (Ldng pt 固定) を呼ばず、
-        // 代わりに後段の applyRubyAutoLeadingPercentage で paragraphStyleRange を分割する。
-        // ルビなしのときだけユーザーの手動 per-line override を当てる。
+        // 【v1.29.x】ルビあり時は paragraphStyleRange の autoLeadingPercentage、
+        // ルビなしのときは従来の textStyleRange 固定 leading を使う。
         var __hasRubyNL = (nl.charRubies && !isObjEmpty(nl.charRubies));
         var __lineLeadingsNL = __hasRubyNL
           ? buildRubyLineLeadings(nti.contents, nl.charRubies, nl.lineLeadings, rubyLeadingPct)
@@ -3426,7 +3496,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         if (__lineLeadingsNL && !isObjEmpty(__lineLeadingsNL)) {
           try {
             var __szNew = nti.size.value;
-            applyLineLeadings(layerRef, __lineLeadingsNL, nti.contents, __szNew);
+            if (__hasRubyNL) {
+              var __defLineMultN = (typeof nl.leadingPct === "number" && nl.leadingPct > 0)
+                ? (nl.leadingPct / 100) : 1.25;
+              applyLineLeadingPercentages(layerRef, nti.contents, __lineLeadingsNL, __defLineMultN);
+            } else {
+              applyLineLeadings(layerRef, __lineLeadingsNL, nti.contents, __szNew);
+            }
           } catch (eLineLeadNew) {
             addWarning("新規レイヤーの行ごとの行間適用に失敗: " + eLineLeadNew);
           }
