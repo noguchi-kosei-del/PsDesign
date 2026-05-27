@@ -163,6 +163,12 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
                     emit_char_bolds(&mut out, ct);
                 }
             }
+            if let Some(ref cf) = layer.char_fill_colors {
+                if !cf.is_empty() {
+                    out.push_str(", charFillColors: ");
+                    emit_char_fonts(&mut out, cf);
+                }
+            }
             if let Some(b) = layer.synthetic_bold {
                 out.push_str(&format!(", syntheticBold: {}", if b { "true" } else { "false" }));
             }
@@ -276,6 +282,12 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
                 if !ct.is_empty() {
                     out.push_str(", charTateChuYokos: ");
                     emit_char_bolds(&mut out, ct);
+                }
+            }
+            if let Some(ref cf) = nl.char_fill_colors {
+                if !cf.is_empty() {
+                    out.push_str(", charFillColors: ");
+                    emit_char_fonts(&mut out, cf);
                 }
             }
             if let Some(b) = nl.synthetic_bold {
@@ -1023,6 +1035,89 @@ function applyPerCharSizesAndFonts(layer, contents, charSizes, charFonts) {
 // applyPerCharSizesAndFonts と同型の clone-and-replace。layerBold が true で
 // charBolds が空の場合でも全 char に true をセットしたいので、layerBold あり
 // または charBolds あり のどちらかで処理を起動する。
+function rgbDescriptorForFillColor(name) {
+  var c = fillColorFor(name);
+  if (!c) return null;
+  var d = new ActionDescriptor();
+  d.putDouble(sID("red"), c.rgb.red);
+  d.putDouble(sID("green"), c.rgb.green);
+  d.putDouble(sID("blue"), c.rgb.blue);
+  return d;
+}
+
+function applyPerCharFillColors(layer, contents, charFillColors) {
+  if (!charFillColors || isObjEmpty(charFillColors)) return;
+  app.activeDocument.activeLayer = layer;
+
+  var layerRef = new ActionReference();
+  layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+  var layerDesc = executeActionGet(layerRef);
+  if (!layerDesc.hasKey(sID("textKey"))) return;
+  var textKey = layerDesc.getObjectValue(sID("textKey"));
+
+  var oldRanges = textKey.getList(sID("textStyleRange"));
+  if (oldRanges.count === 0) return;
+
+  var srcRangeIndex = [];
+  var totalChars = 0;
+  for (var r = 0; r < oldRanges.count; r++) {
+    var rd = oldRanges.getObjectValue(r);
+    var fromCh = rd.getInteger(sID("from"));
+    var toCh = rd.getInteger(sID("to"));
+    if (toCh > totalChars) totalChars = toCh;
+    for (var c = fromCh; c < toCh; c++) srcRangeIndex[c] = r;
+  }
+  if (totalChars === 0) return;
+
+  function readFill(idx) {
+    var v = charFillColors ? charFillColors[String(idx)] : undefined;
+    if (typeof v !== "string" || v.length === 0 || v === "default") return null;
+    return rgbDescriptorForFillColor(v);
+  }
+
+  var newRangeList = new ActionList();
+  if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+  var curStart = 0;
+  var curSrc = srcRangeIndex[0];
+  var curFill = readFill(0);
+
+  for (var p = 1; p <= totalChars; p++) {
+    var nextSrc, nextFill, boundary;
+    if (p === totalChars) {
+      boundary = true;
+      nextSrc = curSrc; nextFill = curFill;
+    } else {
+      nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
+      nextFill = readFill(p);
+      boundary = (nextSrc !== curSrc) || ((curFill === null) !== (nextFill === null));
+      if (!boundary && curFill !== null && nextFill !== null) boundary = true;
+    }
+    if (boundary) {
+      var srcRange = oldRanges.getObjectValue(curSrc);
+      var srcStyle = srcRange.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      if (curFill !== null) {
+        try { styleClone.putObject(sID("color"), sID("RGBColor"), curFill); } catch (eColor) {}
+      }
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), curStart);
+      newRangeDesc.putInteger(sID("to"), p);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+      curStart = p;
+      curSrc = nextSrc;
+      curFill = nextFill;
+    }
+  }
+
+  var newTextKey = cloneActionDescriptor(textKey);
+  newTextKey.putList(sID("textStyleRange"), newRangeList);
+  var setDesc = new ActionDescriptor();
+  setDesc.putReference(sID("null"), layerRef);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+  executeAction(sID("set"), setDesc, DialogModes.NO);
+}
+
 function normalizeTextScalePercent(v) {
   if (typeof v !== "number" || !isFinite(v)) return null;
   return Math.max(10, Math.min(400, Math.round(v)));
@@ -1273,8 +1368,9 @@ function applyPerCharTextSpacing(layer, contents, charTrackings, charKernings) {
 
 function applyPerCharBolds(layer, contents, charBolds, layerBold) {
   var hasChar = charBolds && !isObjEmpty(charBolds);
+  var hasLayer = (layerBold === true || layerBold === false);
   var lb = layerBold === true;
-  if (!hasChar && !lb) return;
+  if (!hasChar && !hasLayer) return;
   app.activeDocument.activeLayer = layer;
 
   var layerRef = new ActionReference();
@@ -1303,7 +1399,7 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
       var v = charBolds[String(idx)];
       if (typeof v === "boolean") return v;
     }
-    return lb;
+    return hasLayer ? lb : null;
   }
 
   // 連続する同 (srcRange, bold) 文字を 1 セグメントに圧縮。
@@ -1327,7 +1423,9 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
       var srcRange = oldRanges.getObjectValue(curSrc);
       var srcStyle = srcRange.getObjectValue(sID("textStyle"));
       var styleClone = cloneActionDescriptor(srcStyle);
-      try { styleClone.putBoolean(sID("syntheticBold"), curBold === true); } catch (eSB) {}
+      if (curBold !== null) {
+        try { styleClone.putBoolean(sID("syntheticBold"), curBold === true); } catch (eSB) {}
+      }
       var newRangeDesc = new ActionDescriptor();
       newRangeDesc.putInteger(sID("from"), curStart);
       newRangeDesc.putInteger(sID("to"), p);
@@ -1364,7 +1462,9 @@ function applyPerCharBolds(layer, contents, charBolds, layerBold) {
 //   defaultMultiplier: 他の行に当てる元の倍率 (例: 1.25 = 125%、e.leadingPct/100 でいい)
 function applyPerCharItalics(layer, contents, charItalics, layerItalic) {
   var hasChar = charItalics && !isObjEmpty(charItalics);
+  var hasLayer = (layerItalic === true || layerItalic === false);
   var li = layerItalic === true;
+  if (!hasChar && !hasLayer) return;
   app.activeDocument.activeLayer = layer;
 
   var layerRef = new ActionReference();
@@ -1392,7 +1492,7 @@ function applyPerCharItalics(layer, contents, charItalics, layerItalic) {
       var v = charItalics[String(idx)];
       if (typeof v === "boolean") return v;
     }
-    return li;
+    return hasLayer ? li : null;
   }
 
   var newRangeList = new ActionList();
@@ -1415,7 +1515,9 @@ function applyPerCharItalics(layer, contents, charItalics, layerItalic) {
       var srcRange = oldRanges.getObjectValue(curSrc);
       var srcStyle = srcRange.getObjectValue(sID("textStyle"));
       var styleClone = cloneActionDescriptor(srcStyle);
-      try { styleClone.putBoolean(sID("syntheticItalic"), curItalic === true); } catch (eSI) {}
+      if (curItalic !== null) {
+        try { styleClone.putBoolean(sID("syntheticItalic"), curItalic === true); } catch (eSI) {}
+      }
       var newRangeDesc = new ActionDescriptor();
       newRangeDesc.putInteger(sID("from"), curStart);
       newRangeDesc.putInteger(sID("to"), p);
@@ -3080,6 +3182,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       }
       // 【v1.22.0】合成太字（faux bold）。layer 全体 (e.syntheticBold) と per-char
       // (e.charBolds) のハイブリッド。どちらかに値があれば適用。
+      if (e.charFillColors && !isObjEmpty(e.charFillColors)) {
+        try {
+          applyPerCharFillColors(layer, ti.contents, e.charFillColors);
+        } catch (eCharFill) {
+          addWarning("per-char fill color apply failed (layer " + e.id + "): " + eCharFill);
+        }
+      }
       if (typeof e.horizontalScale === "number" || typeof e.verticalScale === "number") {
         try {
           applyLayerTextScales(layer, e.horizontalScale, e.verticalScale);
@@ -3097,7 +3206,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       if (e.syntheticBold === true || e.syntheticBold === false ||
           (e.charBolds && !isObjEmpty(e.charBolds))) {
         try {
-          applyPerCharBolds(layer, ti.contents, e.charBolds, e.syntheticBold === true);
+          var __boldLayerOverride = (e.syntheticBold === true || e.syntheticBold === false) ? e.syntheticBold : null;
+          applyPerCharBolds(layer, ti.contents, e.charBolds, __boldLayerOverride);
         } catch (eBold) {
           addWarning("合成太字の適用に失敗 (layer " + e.id + "): " + eBold);
         }
@@ -3105,7 +3215,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       if (e.syntheticItalic === true || e.syntheticItalic === false ||
           (e.charItalics && !isObjEmpty(e.charItalics))) {
         try {
-          applyPerCharItalics(layer, ti.contents, e.charItalics, e.syntheticItalic === true);
+          var __italicLayerOverride = (e.syntheticItalic === true || e.syntheticItalic === false) ? e.syntheticItalic : null;
+          applyPerCharItalics(layer, ti.contents, e.charItalics, __italicLayerOverride);
         } catch (eItalic) {
           addWarning("合成斜体の適用に失敗 (layer " + e.id + "): " + eItalic);
         }
@@ -3331,6 +3442,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           }
         }
         // 【v1.22.0】合成太字（faux bold）。layer 全体 / per-char ハイブリッド。
+        if (nl.charFillColors && !isObjEmpty(nl.charFillColors)) {
+          try {
+            applyPerCharFillColors(layerRef, nti.contents, nl.charFillColors);
+          } catch (eCharFillNew) {
+            addWarning("new layer per-char fill color apply failed: " + eCharFillNew);
+          }
+        }
         if (typeof nl.horizontalScale === "number" || typeof nl.verticalScale === "number") {
           try {
             applyLayerTextScales(layerRef, nl.horizontalScale, nl.verticalScale);
@@ -3348,7 +3466,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         if (nl.syntheticBold === true || nl.syntheticBold === false ||
             (nl.charBolds && !isObjEmpty(nl.charBolds))) {
           try {
-            applyPerCharBolds(layerRef, nti.contents, nl.charBolds, nl.syntheticBold === true);
+            var __boldLayerOverrideN = (nl.syntheticBold === true || nl.syntheticBold === false) ? nl.syntheticBold : null;
+            applyPerCharBolds(layerRef, nti.contents, nl.charBolds, __boldLayerOverrideN);
           } catch (eBoldNew) {
             addWarning("新規レイヤーの合成太字適用に失敗: " + eBoldNew);
           }
@@ -3356,7 +3475,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         if (nl.syntheticItalic === true || nl.syntheticItalic === false ||
             (nl.charItalics && !isObjEmpty(nl.charItalics))) {
           try {
-            applyPerCharItalics(layerRef, nti.contents, nl.charItalics, nl.syntheticItalic === true);
+            var __italicLayerOverrideN = (nl.syntheticItalic === true || nl.syntheticItalic === false) ? nl.syntheticItalic : null;
+            applyPerCharItalics(layerRef, nti.contents, nl.charItalics, __italicLayerOverrideN);
           } catch (eItalicNew) {
             addWarning("新規レイヤーの合成斜体適用に失敗: " + eItalicNew);
           }

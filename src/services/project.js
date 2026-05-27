@@ -154,7 +154,7 @@ async function pickProjectOpenPath() {
   let defaultPath = null;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    defaultPath = joinPath(await invoke("script_output_dir"), "OPUSプロジェクト");
+    defaultPath = await invoke("opus_project_root_path");
   } catch (e) {
     console.warn("[project] Script_Output default path unavailable:", e);
   }
@@ -217,8 +217,7 @@ function buildProjectTextFileName({ workName, volume, projectName }) {
 
 async function defaultProjectRoot() {
   const { invoke } = await import("@tauri-apps/api/core");
-  const scriptOutput = await invoke("script_output_dir");
-  return joinPath(scriptOutput, "OPUSプロジェクト");
+  return invoke("opus_project_root_path");
 }
 
 async function chooseProjectRoot(currentRoot) {
@@ -738,7 +737,6 @@ export async function openProject() {
 
 export function bindProjectButtons() {
   document.getElementById("project-open-btn")?.addEventListener("click", () => { openProject(); });
-  document.getElementById("project-save-btn")?.addEventListener("click", () => { saveProject(); });
   window.addEventListener("psdesign:psd-loaded", () => {
     clearCurrentProject();
     updateProjectButtons();

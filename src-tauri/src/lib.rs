@@ -108,6 +108,8 @@ pub struct LayerEdit {
     pub char_kernings: Option<HashMap<String, f64>>,
     #[serde(rename = "charTateChuYokos", default)]
     pub char_tate_chu_yokos: Option<HashMap<String, bool>>,
+    #[serde(rename = "charFillColors", default)]
+    pub char_fill_colors: Option<HashMap<String, String>>,
     // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
     #[serde(rename = "syntheticBold", default)]
     pub synthetic_bold: Option<bool>,
@@ -168,6 +170,8 @@ pub struct NewLayer {
     pub char_kernings: Option<HashMap<String, f64>>,
     #[serde(rename = "charTateChuYokos", default)]
     pub char_tate_chu_yokos: Option<HashMap<String, bool>>,
+    #[serde(rename = "charFillColors", default)]
+    pub char_fill_colors: Option<HashMap<String, String>>,
     // 【v1.22.0】合成太字（faux bold）。layer 全体の bold flag。
     #[serde(rename = "syntheticBold", default)]
     pub synthetic_bold: Option<bool>,
@@ -352,8 +356,7 @@ fn sanitize_project_dir_name(name: &str) -> String {
     }
 }
 
-#[tauri::command]
-async fn create_opus_project_dir(name: String) -> Result<String, String> {
+fn opus_project_root_dir() -> Result<PathBuf, String> {
     let desktop = dirs::desktop_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
         .ok_or_else(|| "Desktop folder was not found".to_string())?;
@@ -365,7 +368,17 @@ async fn create_opus_project_dir(name: String) -> Result<String, String> {
             e
         )
     })?;
+    Ok(root)
+}
 
+#[tauri::command]
+async fn opus_project_root_path() -> Result<String, String> {
+    Ok(opus_project_root_dir()?.to_string_lossy().to_string())
+}
+
+#[tauri::command]
+async fn create_opus_project_dir(name: String) -> Result<String, String> {
+    let root = opus_project_root_dir()?;
     let candidate = root.join(sanitize_project_dir_name(&name));
     fs::create_dir_all(&candidate).map_err(|e| {
         format!(
@@ -1074,6 +1087,7 @@ pub fn run() {
             read_text_file,
             write_text_file,
             copy_file,
+            opus_project_root_path,
             create_opus_project_dir,
             script_output_dir,
             save_editor_text_to_script_output,

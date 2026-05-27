@@ -353,6 +353,7 @@ export function refreshActiveInPlaceEditPreview(sel = _lastInplaceSelection) {
       { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
       { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
       { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
+      { ...(layer.charFillColors ?? {}), ...(edit.charFillColors ?? {}) },
     );
     inner.contentEditable = "true";
     return syncInplaceSelectionHighlight(sel);
@@ -386,6 +387,7 @@ export function refreshActiveInPlaceEditPreview(sel = _lastInplaceSelection) {
       nl.charTrackings,
       nl.charKernings,
       nl.charTateChuYokos,
+      nl.charFillColors,
     );
     inner.contentEditable = "true";
     return syncInplaceSelectionHighlight(sel);
@@ -1676,15 +1678,19 @@ function rectsIntersect(a, b) {
 
 const HEX_FILL_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 
+function cssFillColor(fillColor) {
+  if (fillColor === "white") return "#fff";
+  if (fillColor === "black") return "#000";
+  if (typeof fillColor === "string" && HEX_FILL_COLOR_RE.test(fillColor)) return fillColor;
+  return "";
+}
+
 // fillColor === "default" はプレビュー上も編集前の表示を維持するため何も設定しない。
 // white/black/HEX のときだけ CSS color を上書きする。
 function applyFillPreview(inner, fillColor) {
   inner.classList.add("text-preview-no-white-shadow");
-  if (fillColor === "white") inner.style.color = "#fff";
-  else if (fillColor === "black") inner.style.color = "#000";
-  else if (typeof fillColor === "string" && HEX_FILL_COLOR_RE.test(fillColor)) {
-    inner.style.color = fillColor;
-  }
+  const color = cssFillColor(fillColor);
+  if (color) inner.style.color = color;
 }
 
 function appendStrokePreviewUnderlay(box, inner, strokeColor, strokeWidthPx, pxPerPsd) {
@@ -1785,6 +1791,7 @@ function renderOverlay(ctx) {
       { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
       { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
       { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
+      { ...(layer.charFillColors ?? {}), ...(edit.charFillColors ?? {}) },
     );
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
@@ -1880,6 +1887,7 @@ function renderOverlay(ctx) {
       nl.charTrackings,
       nl.charKernings,
       nl.charTateChuYokos,
+      nl.charFillColors,
     );
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
@@ -2843,7 +2851,7 @@ function findTcyPairs(line) {
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
 //
 // 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
-function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null) {
+function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null, charFillColors = null) {
   if (!line.length) {
     // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
     parentEl.appendChild(document.createTextNode("​"));
@@ -2881,6 +2889,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
   const hasCharItalics = charItalics && Object.keys(charItalics).length > 0;
+  const hasCharFillColors = charFillColors && Object.keys(charFillColors).length > 0;
   const hasCharHorizontalScales = charHorizontalScales && Object.keys(charHorizontalScales).length > 0;
   const hasCharVerticalScales = charVerticalScales && Object.keys(charVerticalScales).length > 0;
   const baseTracking = Number.isFinite(Number(trackingMille)) ? Number(trackingMille) : 0;
@@ -2920,7 +2929,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   }
 
   // 高速パス：何も装飾なし → 単純テキストノード 1 つで終わり
-  if (!trackingActive && !hasLetterSpacing && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !hasCharItalics && !hasCharHorizontalScales && !hasCharVerticalScales && !punctActive && !hasRuby) {
+  if (!trackingActive && !hasLetterSpacing && tcyPairs.length === 0 && !hasCharSizes && !hasCharFonts && !symbolActive && !hasCharBolds && !hasCharItalics && !hasCharFillColors && !hasCharHorizontalScales && !hasCharVerticalScales && !punctActive && !hasRuby) {
     parentEl.appendChild(document.createTextNode(line));
     return;
   }
@@ -2967,7 +2976,8 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
         appendStyledSegment(parentEl, sub.slice(pos, pair.start),
           fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
           hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg,
-          charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
+          charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
+          charFillColors, hasCharFillColors);
       }
       const span = document.createElement("span");
       span.className = "tcy-span";
@@ -2988,7 +2998,8 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
       appendStyledSegment(parentEl, sub.slice(pos),
         fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
         hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg,
-        charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
+        charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
+        charFillColors, hasCharFillColors);
     }
   };
 
@@ -3001,7 +3012,8 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
         trackings, charSizes, defaultSizePt, charFonts,
         symbolActive ? symbolFontPS : null, charBolds, charItalics,
         hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, tsumeArg,
-        charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
+        charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
+        charFillColors, hasCharFillColors);
       cursor = seg.end;
     }
     if (cursor < line.length) emitNonRubyRange(cursor, line.length);
@@ -3031,7 +3043,8 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
                             symbolFontPS, charBolds, charItalics,
                             hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, punctTsumeMag,
                             charHorizontalScales = null, charVerticalScales = null,
-                            hasCharHorizontalScales = false, hasCharVerticalScales = false) {
+                            hasCharHorizontalScales = false, hasCharVerticalScales = false,
+                            charFillColors = null, hasCharFillColors = false) {
   if (!parentText.length || !entry || typeof entry.text !== "string") return;
   const isNakaguroRubyText = (value) => {
     const chars = Array.from(String(value ?? ""));
@@ -3108,7 +3121,8 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     appendStyledSegment(base, segText,
       segLocalStart, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
       hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag,
-      charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
+      charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
+      charFillColors, hasCharFillColors);
     wrap.appendChild(base);
     const rt = document.createElement("span");
     rt.className = `ruby-text${isNakaguroRubyText(rubyText) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(rubyText) ? " ruby-text-overlay-same-position" : ""}`;
@@ -3163,7 +3177,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
 // lineStartIdx: line が full contents のどの位置から始まるか（charSizes / charFonts の絶対 index 算出用）
 // 【v1.x.0】punctTsumeMag (0..1) で句読点/括弧を縮める。例: 0.5 で 0.5em 詰める。
 //   始め括弧（「/〝）は前側、その他は後ろ側を詰める。
-function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag, charHorizontalScales = null, charVerticalScales = null, hasCharHorizontalScales = false, hasCharVerticalScales = false) {
+function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag, charHorizontalScales = null, charVerticalScales = null, hasCharHorizontalScales = false, hasCharVerticalScales = false, charFillColors = null, hasCharFillColors = false) {
   if (!segText.length) return;
   // 【v1.22.0】per-char font 解決: ユーザー手動指定 (charFonts[idx]) があれば最優先、
   // 無ければ symbol char に対しては symbolFontPS で自動置換、それでも無ければ undefined（layer 既定）。
@@ -3193,6 +3207,7 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     // 【v1.22.0】per-char 合成太字 (charBolds[absIdx])。boolean があれば signature に含める。
     const sigBold = hasCharBolds ? charBolds[absIdx] : undefined;
     const sigItalic = hasCharItalics ? charItalics[absIdx] : undefined;
+    const sigFill = hasCharFillColors ? charFillColors[absIdx] : undefined;
     const sigHScale = hasCharHorizontalScales ? charHorizontalScales[absIdx] : undefined;
     const sigVScale = hasCharVerticalScales ? charVerticalScales[absIdx] : undefined;
     // 【v1.x.0】句読点ツメ。signature に含めて同じ詰め方向の連続文字を 1 span にまとめる。
@@ -3205,11 +3220,13 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       const f = effectiveFontAt(absJ, segText[j]);
       const b = hasCharBolds ? charBolds[absJ] : undefined;
       const it = hasCharItalics ? charItalics[absJ] : undefined;
+      const fl = hasCharFillColors ? charFillColors[absJ] : undefined;
       const hs = hasCharHorizontalScales ? charHorizontalScales[absJ] : undefined;
       const vs = hasCharVerticalScales ? charVerticalScales[absJ] : undefined;
       const tu = tsumeForChar(segText[j]);
       if (
         s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || it !== sigItalic ||
+        fl !== sigFill ||
         hs !== sigHScale || vs !== sigVScale ||
         tu.before !== sigTsume.before || tu.after !== sigTsume.after
       ) break;
@@ -3219,10 +3236,12 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     // 後ろ詰めは letter-spacing、前詰めは margin-inline-start。連続記号ツメは letter-spacing に合算する。
     const effectiveLetterSpacingEm = sigTrack + (sigTsume.after > 0 ? -sigTsume.after : 0);
     const effectiveMarginInlineStartEm = sigTsume.before > 0 ? -sigTsume.before : 0;
+    const fillCss = cssFillColor(sigFill);
     const needsSpan = Number.isFinite(sigSize) || effectiveLetterSpacingEm !== 0 || effectiveMarginInlineStartEm !== 0
       || (typeof sigFont === "string" && sigFont.length > 0)
       || typeof sigBold === "boolean"
       || typeof sigItalic === "boolean"
+      || !!fillCss
       || (Number.isFinite(sigHScale) && sigHScale !== 100)
       || (Number.isFinite(sigVScale) && sigVScale !== 100);
     if (needsSpan) {
@@ -3250,6 +3269,10 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       }
       if (typeof sigItalic === "boolean") {
         span.style.fontStyle = sigItalic ? "italic" : "normal";
+      }
+      if (fillCss) {
+        span.style.color = fillCss;
+        span.style.textShadow = "none";
       }
       if ((Number.isFinite(sigHScale) && sigHScale !== 100) || (Number.isFinite(sigVScale) && sigVScale !== 100)) {
         const sx = Number.isFinite(sigHScale) ? sigHScale / 100 : 1;
@@ -3279,13 +3302,14 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
 // それ以外は単一テキストノードで描画（最軽量）。
 // isVertical: true なら writing-mode: vertical-rl 想定で per-line の幅 (列幅) を切替える。
 // defaultSizePt: layer 全体の sizePt（charSizes の em 換算に使う）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumePct, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null) {
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumePct, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null, charFillColors = null) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
   const hasCharFonts = charFonts && Object.keys(charFonts).length > 0;
   const hasCharBolds = charBolds && Object.keys(charBolds).length > 0;
   const hasCharItalics = charItalics && Object.keys(charItalics).length > 0;
+  const hasCharFillColors = charFillColors && Object.keys(charFillColors).length > 0;
   const hasCharScales = (charHorizontalScales && Object.keys(charHorizontalScales).length > 0)
     || (charVerticalScales && Object.keys(charVerticalScales).length > 0);
   const hasCharTateChuYokos = charTateChuYokos && Object.keys(charTateChuYokos).length > 0;
@@ -3313,7 +3337,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const punctTsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
   const punctHits = punctTsumeMag > 0 && lineHasPunctTsumeChar(fullText);
   // 高速パス：何も装飾なし（charBolds / 句読点ツメ / charRubies も含めて全部空のときだけ通る）
-  if (!overrides && !trackingHits && !spacingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !hasCharItalics && !hasCharScales && !punctHits && !hasCharRubies) {
+  if (!overrides && !trackingHits && !spacingHits && !tcyHits && !hasCharSizes && !hasCharFonts && !symbolHits && !hasCharBolds && !hasCharItalics && !hasCharFillColors && !hasCharScales && !punctHits && !hasCharRubies) {
     inner.textContent = fullText;
     inner.style.lineHeight = fallback;
     return;
@@ -3359,7 +3383,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
           lineEl.style.marginBlockStart = `${extra}em`;
         }
       }
-      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos);
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos, charFillColors);
       inner.appendChild(lineEl);
     }
   } else {
@@ -3373,7 +3397,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // charRubies を渡すように修正。
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createTextNode("\n"));
-      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos, charFillColors);
     }
   }
 }
@@ -4466,6 +4490,9 @@ function startContentEditableEdit(ctx, target, options = {}) {
   const startCharTateChuYokos = isExisting
     ? { ...(target.layer.charTateChuYokos ?? {}), ...(startEdit.charTateChuYokos ?? {}) }
     : { ...(target.nl.charTateChuYokos ?? {}) };
+  const startCharFillColors = isExisting
+    ? { ...(target.layer.charFillColors ?? {}), ...(startEdit.charFillColors ?? {}) }
+    : { ...(target.nl.charFillColors ?? {}) };
   // 位置（x,y / dx,dy）も snapshot。recenterBox が edit 中に書き換えるので、
   // cancel 時に元の位置に戻すために必要。
   const startDx = isExisting ? (startEdit.dx ?? 0) : null;
@@ -4499,6 +4526,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
       startCharTrackings,
       startCharKernings,
       startCharTateChuYokos,
+      startCharFillColors,
     );
   } else {
     const dashMille = Number(getDefault("dashRunTrackingMille")) || 0;
@@ -4525,6 +4553,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
       startCharTrackings,
       startCharKernings,
       startCharTateChuYokos,
+      startCharFillColors,
     );
   }
 
@@ -4627,6 +4656,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charTrackings: { ...(target.layer.charTrackings ?? {}), ...(e.charTrackings ?? {}) },
         charKernings: { ...(target.layer.charKernings ?? {}), ...(e.charKernings ?? {}) },
         charTateChuYokos: { ...(target.layer.charTateChuYokos ?? {}), ...(e.charTateChuYokos ?? {}) },
+        charFillColors: { ...(target.layer.charFillColors ?? {}), ...(e.charFillColors ?? {}) },
         lineLeadings: e.lineLeadings ?? {},
       };
     }
@@ -4643,6 +4673,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
       charTrackings: nl.charTrackings ?? {},
       charKernings: nl.charKernings ?? {},
       charTateChuYokos: nl.charTateChuYokos ?? {},
+      charFillColors: nl.charFillColors ?? {},
       lineLeadings: nl.lineLeadings ?? {},
     };
   };
@@ -5069,7 +5100,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
       return;
     }
     const diff = computeStringDiff(lastContents, newContents);
-    const { charSizes, charFonts, charBolds, charItalics, charRubies, charHorizontalScales, charVerticalScales, charTrackings, charKernings, charTateChuYokos, lineLeadings } = readCurrentMaps();
+    const { charSizes, charFonts, charBolds, charItalics, charRubies, charHorizontalScales, charVerticalScales, charTrackings, charKernings, charTateChuYokos, charFillColors, lineLeadings } = readCurrentMaps();
     const newCharSizes = shiftCharMap(charSizes, diff.pos, diff.deleted, diff.inserted);
     const newCharFonts = shiftCharMap(charFonts, diff.pos, diff.deleted, diff.inserted);
     // 【v1.26.0】charBolds も同じ shiftCharMap を適用（v1.22.0 で抜けていた既存バグ修正）。
@@ -5080,6 +5111,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     const newCharTrackings = shiftCharMap(charTrackings, diff.pos, diff.deleted, diff.inserted);
     const newCharKernings = shiftCharMap(charKernings, diff.pos, diff.deleted, diff.inserted);
     const newCharTateChuYokos = shiftCharMap(charTateChuYokos, diff.pos, diff.deleted, diff.inserted);
+    const newCharFillColors = shiftCharMap(charFillColors, diff.pos, diff.deleted, diff.inserted);
     // 【v1.26.0】charRubies はキーが range の start なので shiftRubyMap を使う。
     const newCharRubies = shiftRubyMap(charRubies, diff.pos, diff.deleted, diff.inserted);
     const newLineLeadings = shiftLineMap(
@@ -5099,6 +5131,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charTrackings: newCharTrackings,
         charKernings: newCharKernings,
         charTateChuYokos: newCharTateChuYokos,
+        charFillColors: newCharFillColors,
         charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });
@@ -5114,6 +5147,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         charTrackings: newCharTrackings,
         charKernings: newCharKernings,
         charTateChuYokos: newCharTateChuYokos,
+        charFillColors: newCharFillColors,
         charRubies: newCharRubies,
         lineLeadings: newLineLeadings,
       });
@@ -5229,6 +5263,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
           charTrackings: startCharTrackings,
           charKernings: startCharKernings,
           charTateChuYokos: startCharTateChuYokos,
+          charFillColors: startCharFillColors,
           dx: startDx,
           dy: startDy,
         });
@@ -5243,6 +5278,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
           charTrackings: startCharTrackings,
           charKernings: startCharKernings,
           charTateChuYokos: startCharTateChuYokos,
+          charFillColors: startCharFillColors,
           x: startX,
           y: startY,
         });

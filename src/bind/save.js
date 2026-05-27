@@ -17,6 +17,7 @@ import {
 import { baseName, joinPath, parentDir } from "../utils/path.js";
 import { launchKenbanPsdPdf } from "../services/kenban.js";
 import { launchTachimiWithPaths } from "../services/tachimi.js";
+import { saveProject } from "../services/project.js";
 // 【v1.29.x UI-coord】保存前に全 page のルビ wrap 実描画位置を同期測定して state に書き戻す。
 // これにより exportEdits が「最新の UI 上の位置」を含む payload を返し、JSX 側 createRubyLayer が
 // ビューアーと完全一致した位置にルビレイヤーを配置できる (rAF 遅延を待たずに済む)。
@@ -39,8 +40,19 @@ export function getHasSavedThisSession() { return hasSavedThisSession; }
 export function setHasSavedThisSession(v) { hasSavedThisSession = !!v; }
 
 export function updateSaveButton() {
-  const btn = document.getElementById("save-btn");
-  if (btn) btn.disabled = getPages().length === 0;
+  const hasPages = getPages().length > 0;
+  const btn = document.getElementById("project-save-btn");
+  const projectItem = document.getElementById("save-project-menu-item");
+  const psdItem = document.getElementById("save-psd-menu-item");
+  const bothItem = document.getElementById("save-both-menu-item");
+  if (btn) {
+    btn.disabled = !hasPages;
+    btn.title = "保存";
+    btn.setAttribute("aria-label", "保存メニュー");
+  }
+  if (projectItem) projectItem.disabled = !hasPages;
+  if (psdItem) psdItem.disabled = !hasPages || saveInflight;
+  if (bothItem) bothItem.disabled = !hasPages || saveInflight;
 }
 
 function flushActiveSidebarInputBeforeSave() {
@@ -505,7 +517,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     targetDir: targetDir ?? null,
   };
   saveInflight = true;
-  const saveBtn = document.getElementById("save-btn");
+  const saveBtn = document.getElementById("project-save-btn");
   if (saveBtn) saveBtn.disabled = true;
   let unlistenProgress = null;
   showProgress({
@@ -584,6 +596,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     saveInflight = false;
     // pages 0 件なら disabled のまま。ある場合のみ復帰。
     if (saveBtn) saveBtn.disabled = getPages().length === 0;
+    updateSaveButton();
   }
 }
 
@@ -651,13 +664,56 @@ export async function handleSave() {
 // save-btn は単独でクリックされ、handleSave を呼ぶだけのシンプルな構造になった。
 // 関数名 bindSaveMenu は main.js 側の import を壊さないため温存。
 export function bindSaveMenu() {
-  const btn = document.getElementById("save-btn");
+  const btn = document.getElementById("project-save-btn");
+  const menu = document.getElementById("save-menu");
+  const projectItem = document.getElementById("save-project-menu-item");
+  const psdItem = document.getElementById("save-psd-menu-item");
+  const bothItem = document.getElementById("save-both-menu-item");
   if (!btn) return;
-  btn.setAttribute("aria-haspopup", "false");
-  btn.removeAttribute("aria-expanded");
+  const setOpen = (open) => {
+    if (!menu) return;
+    menu.hidden = !open;
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+  const closeMenu = () => setOpen(false);
+  const runAndClose = async (fn) => {
+    closeMenu();
+    await fn();
+    updateSaveButton();
+  };
+  btn.setAttribute("aria-haspopup", "true");
+  btn.setAttribute("aria-expanded", "false");
   btn.addEventListener("click", (e) => {
     e.stopPropagation();
-    handleSave();
+    if (btn.disabled) return;
+    updateSaveButton();
+    setOpen(menu?.hidden !== false);
+  });
+  projectItem?.addEventListener("click", () => {
+    if (projectItem.disabled) return;
+    void runAndClose(saveProject);
+  });
+  psdItem?.addEventListener("click", () => {
+    if (psdItem.disabled) return;
+    void runAndClose(handleSave);
+  });
+  bothItem?.addEventListener("click", () => {
+    if (bothItem.disabled) return;
+    void runAndClose(async () => {
+      await saveProject();
+      await handleSave();
+    });
+  });
+  document.addEventListener("click", (e) => {
+    if (!menu || menu.hidden) return;
+    if (e.target?.closest?.(".save-container")) return;
+    closeMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !menu || menu.hidden) return;
+    e.preventDefault();
+    closeMenu();
+    btn.focus();
   });
   window.addEventListener("psdesign:psd-loaded", updateSaveButton);
   updateSaveButton();

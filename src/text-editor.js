@@ -1187,6 +1187,24 @@ function positionLayerFontPanel() {
   const panelW = Math.max(250, Math.min(320, measured.width || panel.offsetWidth || 280));
   const panelH = Math.max(180, measured.height || panel.offsetHeight || 320);
   const clamp = (v, min, max) => Math.max(min, Math.min(Math.max(min, max), v));
+  const overlapArea = (a, b) => {
+    const w = Math.max(0, Math.min(a.right, b.right) - Math.max(a.left, b.left));
+    const h = Math.max(0, Math.min(a.bottom, b.bottom) - Math.max(a.top, b.top));
+    return w * h;
+  };
+  const visibleRectFor = (el) => {
+    if (!el || typeof el.getBoundingClientRect !== "function") return null;
+    const style = window.getComputedStyle(el);
+    if (style.display === "none" || style.visibility === "hidden") return null;
+    const rect = el.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return null;
+    if (rect.right <= 0 || rect.left >= viewportW || rect.bottom <= 0 || rect.top >= viewportH) return null;
+    return rect;
+  };
+  const obstacleRects = Array.from(document.querySelectorAll(".side-toolbar, .side-panel"))
+    .map(visibleRectFor)
+    .filter(Boolean);
+  const obstacleOverlap = (rect) => obstacleRects.reduce((sum, obstacle) => sum + overlapArea(rect, obstacle), 0);
   const fitLeftMax = viewportW - panelW - margin;
   const fitTopMax = viewportH - panelH - margin;
   const candidates = [
@@ -1194,10 +1212,21 @@ function positionLayerFontPanel() {
     { left: r.left - gap - panelW, top: r.top },
     { left: r.left, top: r.bottom + gap },
     { left: r.left, top: r.top - gap - panelH },
-  ].map((p) => ({
-    left: clamp(p.left, margin, fitLeftMax),
-    top: clamp(p.top, margin, fitTopMax),
-  }));
+    { left: r.left + (r.right - r.left - panelW) / 2, top: r.bottom + gap },
+    { left: r.left + (r.right - r.left - panelW) / 2, top: r.top - gap - panelH },
+  ].map((p) => {
+    const left = clamp(p.left, margin, fitLeftMax);
+    const top = clamp(p.top, margin, fitTopMax);
+    const rect = { left, top, right: left + panelW, bottom: top + panelH };
+    return {
+      left,
+      top,
+      obstacleOverlap: obstacleOverlap(rect),
+      anchorOverlap: overlapArea(rect, r),
+      distance: Math.abs(left - (r.right + gap)) + Math.abs(top - r.top),
+    };
+  });
+  candidates.sort((a, b) => (a.obstacleOverlap - b.obstacleOverlap) || (a.anchorOverlap - b.anchorOverlap) || (a.distance - b.distance));
   panel.style.left = `${Math.round(candidates[0].left)}px`;
   panel.style.top = `${Math.round(candidates[0].top)}px`;
 }

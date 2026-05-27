@@ -21,8 +21,30 @@ import {
 } from "./ui-feedback.js";
 
 const MODAL_ID = "find-change-modal";
+const lastReplacementBySearch = new Map();
+let modalDefaultsSynced = false;
+let fontComboItems = [];
+let fontComboHighlighted = -1;
+let fontComboOpen = false;
 
 function $(id) { return document.getElementById(id); }
+
+function searchMemoryKey(query, caseSensitive) {
+  return `${caseSensitive ? "case" : "nocase"}\u0000${query}`;
+}
+
+function normalizeFontSearchText(value) {
+  return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ja");
+}
+
+function fontSearchHaystack(font) {
+  const aliases = Array.isArray(font?.aliases) ? font.aliases : [];
+  return normalizeFontSearchText([
+    font?.name,
+    font?.postScriptName,
+    ...aliases,
+  ].filter(Boolean).join("\n"));
+}
 
 function cloneMap(map) {
   return map && typeof map === "object" ? { ...map } : {};
@@ -145,14 +167,30 @@ function mapIndexAfterReplace(index, matches, replacementLength) {
   return index + offset;
 }
 
-function shiftCharMap(map, matches, replacementLength) {
+function shiftCharMap(map, matches, replacementLength, { preserveMatchedValues = false } = {}) {
+  const source = cloneMap(map);
   const out = {};
-  for (const [key, value] of Object.entries(cloneMap(map))) {
+  for (const [key, value] of Object.entries(source)) {
     const index = Number(key);
     if (!Number.isInteger(index) || index < 0) continue;
     const next = mapIndexAfterReplace(index, matches, replacementLength);
     if (next == null || next < 0) continue;
     out[String(next)] = value;
+  }
+  if (preserveMatchedValues) {
+    let offset = 0;
+    for (const match of matches) {
+      const sourceLength = Math.max(1, match.end - match.start);
+      const targetStart = match.start + offset;
+      for (let i = 0; i < replacementLength; i++) {
+        const sourceIndex = match.start + Math.min(i, sourceLength - 1);
+        const sourceKey = String(sourceIndex);
+        if (Object.prototype.hasOwnProperty.call(source, sourceKey)) {
+          out[String(targetStart + i)] = source[sourceKey];
+        }
+      }
+      offset += replacementLength - (match.end - match.start);
+    }
   }
   return out;
 }
@@ -182,12 +220,6 @@ function applyStyleRanges(map, ranges, value) {
     for (let i = range.start; i < range.end; i++) out[String(i)] = value;
   }
   return out;
-}
-
-function addIfDefined(changes, key, value) {
-  if (value === null || value === undefined) return;
-  if (typeof value === "number" && !Number.isFinite(value)) return;
-  changes[key] = value;
 }
 
 function createModal() {
@@ -232,7 +264,12 @@ function createModal() {
             <input id="find-change-font-enabled" type="checkbox">
             <span>フォント</span>
           </label>
-          <select id="find-change-font" class="find-change-input" data-enables="find-change-font-enabled"></select>
+          <div id="find-change-font-combobox" class="font-combobox find-change-font-combobox">
+            <input id="find-change-font" type="hidden">
+            <input id="find-change-font-search" class="find-change-input font-input" type="text" autocomplete="off" spellcheck="false" data-enables="find-change-font-enabled">
+            <button id="find-change-font-toggle" class="font-combobox-toggle" type="button" aria-label="フォント一覧" title="フォント一覧">▼</button>
+            <ul id="find-change-font-list" class="font-combobox-list find-change-font-list" role="listbox" hidden></ul>
+          </div>
         </div>
         <div class="find-change-style-panel">
           <div class="find-change-style-title">基本スタイル</div>
@@ -337,10 +374,12 @@ function createModal() {
 }
 
 function populateFontSelect() {
-  const select = $("find-change-font");
-  if (!select) return;
-  const current = select.value;
-  select.textContent = "";
+  const list = $("find-change-font-list");
+  if (!list) return;
+  const current = $("find-change-font")?.value ?? "";
+  list.textContent = "";
+  fontComboItems = [];
+  fontComboHighlighted = -1;
   const fonts = [...getFonts()].sort((a, b) => {
     const an = (a.name || a.postScriptName || "").toLocaleLowerCase();
     const bn = (b.name || b.postScriptName || "").toLocaleLowerCase();
@@ -348,14 +387,150 @@ function populateFontSelect() {
   });
   for (const font of fonts) {
     if (!font?.postScriptName) continue;
-    const opt = document.createElement("option");
-    opt.value = font.postScriptName;
-    opt.textContent = font.name && font.name !== font.postScriptName
-      ? `${font.name} (${font.postScriptName})`
-      : font.postScriptName;
-    select.appendChild(opt);
+    const item = document.createElement("li");
+    item.className = "font-combobox-item";
+    item.setAttribute("role", "option");
+
+    const name = document.createElement("span");
+    name.className = "font-combobox-name";
+    name.textContent = font.name || font.postScriptName;
+    item.appendChild(name);
+
+    if (font.name && font.name !== font.postScriptName) {
+      const sub = document.createElement("span");
+      sub.className = "font-combobox-sub";
+      sub.textContent = font.postScriptName;
+      item.appendChild(sub);
+    }
+
+    item.addEventListener("mousedown", (e) => e.preventDefault());
+    item.addEventListener("click", () => {
+      setFindChangeFont(font, { enable: true });
+      closeFontCombo();
+      $("find-change-font-search")?.blur();
+    });
+    list.appendChild(item);
+    fontComboItems.push({ el: item, font });
   }
-  if (current && [...select.options].some((opt) => opt.value === current)) select.value = current;
+  if (current) syncFindChangeFontDisplay();
+}
+
+function fontDisplayName(font) {
+  return font?.name || font?.postScriptName || "";
+}
+
+function findFontByPostScriptName(ps) {
+  if (!ps) return null;
+  return getFonts().find((font) => font.postScriptName === ps) ?? null;
+}
+
+function resolveFindChangeFontFromInput(value) {
+  const typed = String(value ?? "").trim();
+  if (!typed) return null;
+  const fonts = getFonts();
+  const exactName = fonts.find((font) => (font.name ?? "") === typed);
+  if (exactName) return exactName;
+  const exactPs = fonts.find((font) => (font.postScriptName ?? "") === typed);
+  if (exactPs) return exactPs;
+  const lower = typed.toLocaleLowerCase("ja");
+  return fonts.find((font) => (font.name ?? "").toLocaleLowerCase("ja") === lower)
+    ?? fonts.find((font) => (font.postScriptName ?? "").toLocaleLowerCase("ja") === lower)
+    ?? null;
+}
+
+function setFindChangeFont(fontOrPs, { enable = false } = {}) {
+  const hidden = $("find-change-font");
+  const input = $("find-change-font-search");
+  if (!hidden || !input) return;
+  const font = typeof fontOrPs === "string"
+    ? findFontByPostScriptName(fontOrPs) ?? { postScriptName: fontOrPs, name: fontOrPs }
+    : fontOrPs;
+  hidden.value = font?.postScriptName ?? "";
+  input.value = fontDisplayName(font);
+  input.dataset.ps = hidden.value;
+  if (enable) {
+    const checkbox = $("find-change-font-enabled");
+    if (checkbox) checkbox.checked = true;
+  }
+}
+
+function syncFindChangeFontDisplay() {
+  const hidden = $("find-change-font");
+  if (!hidden?.value) return;
+  setFindChangeFont(hidden.value);
+}
+
+function setFontComboHighlight(idx) {
+  if (fontComboHighlighted >= 0 && fontComboItems[fontComboHighlighted]) {
+    fontComboItems[fontComboHighlighted].el.classList.remove("highlight");
+  }
+  fontComboHighlighted = idx;
+  if (idx >= 0 && fontComboItems[idx]) {
+    const el = fontComboItems[idx].el;
+    el.classList.add("highlight");
+    el.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function filterFontCombo(query) {
+  const q = normalizeFontSearchText(query).trim();
+  let firstVisible = -1;
+  for (let i = 0; i < fontComboItems.length; i++) {
+    const { el, font } = fontComboItems[i];
+    const match = q === "" || fontSearchHaystack(font).includes(q);
+    el.style.display = match ? "" : "none";
+    if (match && firstVisible < 0) firstVisible = i;
+  }
+  setFontComboHighlight(firstVisible);
+}
+
+function positionFontCombo() {
+  const list = $("find-change-font-list");
+  const combo = $("find-change-font-combobox");
+  if (!list || !combo) return;
+  const r = combo.getBoundingClientRect();
+  list.style.top = `${r.bottom + 2}px`;
+  list.style.left = `${r.left}px`;
+  list.style.width = `${r.width}px`;
+}
+
+function openFontCombo(showAll = false) {
+  populateFontSelect();
+  const list = $("find-change-font-list");
+  const input = $("find-change-font-search");
+  if (!list || !input || !fontComboItems.length) return;
+  list.hidden = false;
+  fontComboOpen = true;
+  positionFontCombo();
+  filterFontCombo(showAll ? "" : input.value);
+  const current = $("find-change-font")?.value ?? "";
+  if (current) {
+    const idx = fontComboItems.findIndex(({ el, font }) =>
+      el.style.display !== "none" && font.postScriptName === current);
+    if (idx >= 0) setFontComboHighlight(idx);
+  }
+}
+
+function closeFontCombo() {
+  const list = $("find-change-font-list");
+  if (list) list.hidden = true;
+  fontComboOpen = false;
+}
+
+function moveFontComboHighlight(delta) {
+  if (!fontComboItems.length) return;
+  const visible = fontComboItems
+    .map((item, index) => ({ item, index }))
+    .filter(({ item }) => item.el.style.display !== "none");
+  if (!visible.length) {
+    setFontComboHighlight(-1);
+    return;
+  }
+  const currentVisibleIndex = visible.findIndex(({ index }) => index === fontComboHighlighted);
+  const next = currentVisibleIndex < 0
+    ? visible[0].index
+    : visible[(currentVisibleIndex + delta + visible.length) % visible.length].index;
+  setFontComboHighlight(next);
 }
 
 function syncModalStyleDefaults() {
@@ -363,11 +538,8 @@ function syncModalStyleDefaults() {
   const currentSize = normalizeSizePt(getTextSize());
   if (sizeInput && Number.isFinite(currentSize)) sizeInput.value = String(currentSize);
 
-  const select = $("find-change-font");
   const currentFont = getCurrentFont();
-  if (select && currentFont && [...select.options].some((opt) => opt.value === currentFont)) {
-    select.value = currentFont;
-  }
+  if (currentFont) setFindChangeFont(currentFont);
 
   const fill = normalizeFillColor(getFillColor());
   const fillSelect = $("find-change-fill");
@@ -408,7 +580,9 @@ function readOptions() {
   const sizeEnabled = $("find-change-size-enabled")?.checked === true;
   const fontEnabled = $("find-change-font-enabled")?.checked === true;
   const sizePt = normalizeSizePt($("find-change-size")?.value);
-  const fontPostScriptName = $("find-change-font")?.value ?? "";
+  const fontPostScriptName = $("find-change-font")?.value
+    || resolveFindChangeFontFromInput($("find-change-font-search")?.value)?.postScriptName
+    || "";
   const dialogStyle = readDialogStyle();
   return {
     query,
@@ -426,6 +600,36 @@ function readOptions() {
 function layerText(page, layer) {
   const edit = getEdit(page.path, layer.id) ?? {};
   return String(edit.contents ?? layer.text ?? "");
+}
+
+function countMatchesAcrossLayers(needle, caseSensitive) {
+  if (!needle) return 0;
+  let count = 0;
+  for (const page of getPages()) {
+    for (const layer of page.textLayers ?? []) {
+      count += findLiteralMatches(layerText(page, layer), needle, caseSensitive).length;
+    }
+    for (const nl of getNewLayersForPsd(page.path)) {
+      count += findLiteralMatches(String(nl.contents ?? ""), needle, caseSensitive).length;
+    }
+  }
+  return count;
+}
+
+function findFallbackNeedle(options) {
+  const candidates = [];
+  const remembered = lastReplacementBySearch.get(searchMemoryKey(options.query, options.caseSensitive));
+  if (remembered && remembered !== options.query) candidates.push(remembered);
+  if (options.replacement && options.replacement !== options.query) candidates.push(options.replacement);
+
+  const seen = new Set();
+  for (const needle of candidates) {
+    if (seen.has(needle)) continue;
+    seen.add(needle);
+    const count = countMatchesAcrossLayers(needle, options.caseSensitive);
+    if (count > 0) return { needle, count };
+  }
+  return null;
 }
 
 function transformLayer({
@@ -446,16 +650,18 @@ function transformLayer({
   const styleRanges = replaced?.ranges ?? matches;
   const changedText = replaceEnabled && nextText !== text;
 
-  let charSizes = replaceEnabled ? shiftCharMap(maps.charSizes, matches, replacementLength) : cloneMap(maps.charSizes);
-  let charFonts = replaceEnabled ? shiftCharMap(maps.charFonts, matches, replacementLength) : cloneMap(maps.charFonts);
-  let charBolds = replaceEnabled ? shiftCharMap(maps.charBolds, matches, replacementLength) : cloneMap(maps.charBolds);
-  let charItalics = replaceEnabled ? shiftCharMap(maps.charItalics, matches, replacementLength) : cloneMap(maps.charItalics);
+  const preserveReplacementStyle = { preserveMatchedValues: true };
+  let charSizes = replaceEnabled ? shiftCharMap(maps.charSizes, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charSizes);
+  let charFonts = replaceEnabled ? shiftCharMap(maps.charFonts, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charFonts);
+  let charBolds = replaceEnabled ? shiftCharMap(maps.charBolds, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charBolds);
+  let charItalics = replaceEnabled ? shiftCharMap(maps.charItalics, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charItalics);
   const charRubies = replaceEnabled ? shiftRubyMap(maps.charRubies, matches, replacementLength) : cloneMap(maps.charRubies);
-  let charHorizontalScales = replaceEnabled ? shiftCharMap(maps.charHorizontalScales, matches, replacementLength) : cloneMap(maps.charHorizontalScales);
-  let charVerticalScales = replaceEnabled ? shiftCharMap(maps.charVerticalScales, matches, replacementLength) : cloneMap(maps.charVerticalScales);
-  let charTrackings = replaceEnabled ? shiftCharMap(maps.charTrackings, matches, replacementLength) : cloneMap(maps.charTrackings);
-  let charKernings = replaceEnabled ? shiftCharMap(maps.charKernings, matches, replacementLength) : cloneMap(maps.charKernings);
-  const charTateChuYokos = replaceEnabled ? shiftCharMap(maps.charTateChuYokos, matches, replacementLength) : cloneMap(maps.charTateChuYokos);
+  let charHorizontalScales = replaceEnabled ? shiftCharMap(maps.charHorizontalScales, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charHorizontalScales);
+  let charVerticalScales = replaceEnabled ? shiftCharMap(maps.charVerticalScales, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charVerticalScales);
+  let charTrackings = replaceEnabled ? shiftCharMap(maps.charTrackings, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charTrackings);
+  let charKernings = replaceEnabled ? shiftCharMap(maps.charKernings, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charKernings);
+  const charTateChuYokos = replaceEnabled ? shiftCharMap(maps.charTateChuYokos, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charTateChuYokos);
+  let charFillColors = replaceEnabled ? shiftCharMap(maps.charFillColors, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charFillColors);
 
   if (sizeEnabled) charSizes = applyStyleRanges(charSizes, styleRanges, sizePt);
   if (fontEnabled) charFonts = applyStyleRanges(charFonts, styleRanges, fontPostScriptName);
@@ -474,44 +680,36 @@ function transformLayer({
       charTrackings,
       charKernings,
       charTateChuYokos,
+      charFillColors,
     } : {}),
   };
 
   if (dialogStyle) {
-    if (dialogStyle.fillEnabled) {
-      addIfDefined(changes, "fillColor", dialogStyle.fillColor);
-    }
-    if (dialogStyle.strokeEnabled) {
-      addIfDefined(changes, "strokeColor", dialogStyle.strokeColor);
-      addIfDefined(changes, "strokeWidthPx", dialogStyle.strokeWidthPx);
+    if (dialogStyle.fillEnabled && dialogStyle.fillColor !== "default") {
+      charFillColors = applyStyleRanges(charFillColors, styleRanges, dialogStyle.fillColor);
+      changes.charFillColors = charFillColors;
     }
     if (dialogStyle.horizontalScaleEnabled && Number.isFinite(dialogStyle.horizontalScale)) {
-      addIfDefined(changes, "horizontalScale", dialogStyle.horizontalScale);
       charHorizontalScales = applyStyleRanges(charHorizontalScales, styleRanges, dialogStyle.horizontalScale);
       changes.charHorizontalScales = charHorizontalScales;
     }
     if (dialogStyle.verticalScaleEnabled && Number.isFinite(dialogStyle.verticalScale)) {
-      addIfDefined(changes, "verticalScale", dialogStyle.verticalScale);
       charVerticalScales = applyStyleRanges(charVerticalScales, styleRanges, dialogStyle.verticalScale);
       changes.charVerticalScales = charVerticalScales;
     }
     if (dialogStyle.kerningEnabled && Number.isFinite(dialogStyle.kerningMille)) {
-      addIfDefined(changes, "kerningMille", dialogStyle.kerningMille);
       charKernings = applyStyleRanges(charKernings, styleRanges, dialogStyle.kerningMille);
       changes.charKernings = charKernings;
     }
     if (dialogStyle.trackingEnabled && Number.isFinite(dialogStyle.trackingMille)) {
-      addIfDefined(changes, "trackingMille", dialogStyle.trackingMille);
       charTrackings = applyStyleRanges(charTrackings, styleRanges, dialogStyle.trackingMille);
       changes.charTrackings = charTrackings;
     }
     if (dialogStyle.boldEnabled) {
-      changes.syntheticBold = dialogStyle.syntheticBold === true;
       charBolds = applyStyleRanges(charBolds, styleRanges, dialogStyle.syntheticBold === true);
       changes.charBolds = charBolds;
     }
     if (dialogStyle.italicEnabled) {
-      changes.syntheticItalic = dialogStyle.syntheticItalic === true;
       charItalics = applyStyleRanges(charItalics, styleRanges, dialogStyle.syntheticItalic === true);
       changes.charItalics = charItalics;
     }
@@ -522,8 +720,7 @@ function transformLayer({
 
 function hasDialogStyleEdits(style) {
   return !!style && (
-    style.fillEnabled
-    || style.strokeEnabled
+    (style.fillEnabled && style.fillColor !== "default")
     || style.horizontalScaleEnabled
     || style.verticalScaleEnabled
     || style.kerningEnabled
@@ -568,6 +765,17 @@ function applyFindChange(options) {
     return;
   }
 
+  const queryMatchCount = countMatchesAcrossLayers(options.query, options.caseSensitive);
+  const fallback = queryMatchCount === 0 ? findFallbackNeedle(options) : null;
+  const activeQuery = fallback?.needle ?? options.query;
+  const shouldReplaceFallback = !!fallback
+    && options.replaceEnabled
+    && options.replacement
+    && options.replacement !== activeQuery;
+  const transformOptions = fallback && !shouldReplaceFallback
+    ? { ...options, replaceEnabled: false }
+    : options;
+
   let layerCount = 0;
   let matchCount = 0;
   const mutated = withHistoryTransient(() => {
@@ -575,11 +783,11 @@ function applyFindChange(options) {
     for (const page of getPages()) {
       for (const layer of page.textLayers ?? []) {
         const text = layerText(page, layer);
-        const matches = findLiteralMatches(text, options.query, options.caseSensitive);
+        const matches = findLiteralMatches(text, activeQuery, options.caseSensitive);
         if (matches.length === 0) continue;
         const edit = getEdit(page.path, layer.id) ?? {};
         const result = transformLayer({
-          ...options,
+          ...transformOptions,
           text,
           matches,
           maps: {
@@ -593,6 +801,7 @@ function applyFindChange(options) {
             charTrackings: edit.charTrackings ?? layer.charTrackings,
             charKernings: edit.charKernings ?? layer.charKernings,
             charTateChuYokos: edit.charTateChuYokos ?? layer.charTateChuYokos,
+            charFillColors: edit.charFillColors ?? layer.charFillColors,
           },
         });
         if (Object.keys(result.changes).length === 0) continue;
@@ -604,10 +813,10 @@ function applyFindChange(options) {
 
       for (const nl of getNewLayersForPsd(page.path)) {
         const text = String(nl.contents ?? "");
-        const matches = findLiteralMatches(text, options.query, options.caseSensitive);
+        const matches = findLiteralMatches(text, activeQuery, options.caseSensitive);
         if (matches.length === 0) continue;
         const result = transformLayer({
-          ...options,
+          ...transformOptions,
           text,
           matches,
           maps: {
@@ -621,6 +830,7 @@ function applyFindChange(options) {
             charTrackings: nl.charTrackings,
             charKernings: nl.charKernings,
             charTateChuYokos: nl.charTateChuYokos,
+            charFillColors: nl.charFillColors,
           },
         });
         if (Object.keys(result.changes).length === 0) continue;
@@ -645,6 +855,9 @@ function applyFindChange(options) {
   rebuildLayerList();
   refreshAllOverlays();
   import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
+  if (options.replaceEnabled && options.replacement && options.replacement !== options.query) {
+    lastReplacementBySearch.set(searchMemoryKey(options.query, options.caseSensitive), options.replacement);
+  }
   closeModal();
   toast(`${layerCount} レイヤー / ${matchCount} 箇所を全変換しました`, { kind: "success", duration: 2600 });
 }
@@ -652,12 +865,18 @@ function applyFindChange(options) {
 function openModal() {
   const modal = createModal();
   populateFontSelect();
-  syncModalStyleDefaults();
+  if (!modalDefaultsSynced) {
+    syncModalStyleDefaults();
+    modalDefaultsSynced = true;
+  } else {
+    syncFindChangeFontDisplay();
+  }
   showModalAnimated(modal);
   requestAnimationFrame(() => $("find-change-query")?.focus());
 }
 
 function closeModal() {
+  closeFontCombo();
   hideModalAnimated($(MODAL_ID));
 }
 
@@ -668,7 +887,8 @@ function bindModalEvents() {
   const fontEnabled = $("find-change-font-enabled");
   const replaceInput = $("find-change-replace");
   const sizeInput = $("find-change-size");
-  const fontSelect = $("find-change-font");
+  const fontInput = $("find-change-font-search");
+  const fontToggle = $("find-change-font-toggle");
   const fillSelect = $("find-change-fill");
   const fillCustom = $("find-change-fill-custom");
   $("find-change-cancel")?.addEventListener("click", closeModal);
@@ -678,7 +898,56 @@ function bindModalEvents() {
   replaceInput?.addEventListener("input", () => { if (replaceEnabled) replaceEnabled.checked = true; });
   replaceInput?.addEventListener("focus", () => { if (replaceEnabled) replaceEnabled.checked = true; });
   sizeInput?.addEventListener("input", () => { if (sizeEnabled) sizeEnabled.checked = true; });
-  fontSelect?.addEventListener("change", () => { if (fontEnabled) fontEnabled.checked = true; });
+  fontInput?.addEventListener("focus", () => openFontCombo(true));
+  fontInput?.addEventListener("input", () => {
+    if (fontEnabled) fontEnabled.checked = true;
+    const hidden = $("find-change-font");
+    if (hidden) hidden.value = "";
+    if (!fontComboOpen) openFontCombo();
+    else filterFontCombo(fontInput.value);
+  });
+  fontInput?.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      if (!fontComboOpen) openFontCombo(true);
+      else moveFontComboHighlight(+1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!fontComboOpen) openFontCombo(true);
+      else moveFontComboHighlight(-1);
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      if (fontComboOpen && fontComboHighlighted >= 0) {
+        setFindChangeFont(fontComboItems[fontComboHighlighted].font, { enable: true });
+        closeFontCombo();
+      } else {
+        const font = resolveFindChangeFontFromInput(fontInput.value);
+        if (font) setFindChangeFont(font, { enable: true });
+      }
+      fontInput.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      closeFontCombo();
+      syncFindChangeFontDisplay();
+      fontInput.blur();
+    }
+  });
+  fontInput?.addEventListener("blur", () => {
+    setTimeout(() => {
+      const combo = $("find-change-font-combobox");
+      if (!combo?.contains(document.activeElement)) closeFontCombo();
+      const hidden = $("find-change-font");
+      if (hidden?.value) syncFindChangeFontDisplay();
+    }, 120);
+  });
+  fontToggle?.addEventListener("mousedown", (e) => {
+    e.preventDefault();
+    if (fontComboOpen) closeFontCombo();
+    else {
+      fontInput?.focus();
+      openFontCombo(true);
+    }
+  });
   fillCustom?.addEventListener("input", () => { if (fillSelect) fillSelect.value = "custom"; });
   fillCustom?.addEventListener("change", () => { if (fillSelect) fillSelect.value = "custom"; });
   modal.querySelectorAll("[data-enables]").forEach((control) => {
@@ -691,6 +960,7 @@ function bindModalEvents() {
     control.addEventListener("change", enable);
   });
   modal.addEventListener("mousedown", (e) => {
+    if (fontComboOpen && !$("find-change-font-combobox")?.contains(e.target)) closeFontCombo();
     if (e.target === modal) closeModal();
   });
   modal.addEventListener("keydown", (e) => {
@@ -703,6 +973,11 @@ function bindModalEvents() {
       applyFindChange(readOptions());
     }
   });
+  const repositionFontList = () => {
+    if (fontComboOpen) positionFontCombo();
+  };
+  modal.querySelector(".find-change-body")?.addEventListener("scroll", repositionFontList);
+  window.addEventListener("resize", repositionFontList);
 }
 
 export function bindFindChangeMode() {

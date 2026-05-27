@@ -1588,6 +1588,7 @@ export function addNewLayer({
     charTrackings: {},
     charKernings: {},
     charTateChuYokos: {},
+    charFillColors: {},
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     // 値あり → layer の syntheticBold より優先。値なし → layer 値にフォールバック。
     charBolds: {},

@@ -29,7 +29,7 @@ import {
   removeEditModeRubyFromRange,
   removeEditModeRubyTextFromRange,
 } from "./canvas-tools.js";
-import { onFontsRegistered } from "./font-loader.js";
+import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh, setNextPsdZoomAnchorFromClientPoint } from "./spread-view.js";
 import {
   bindEditorEvents,
@@ -90,6 +90,7 @@ import {
   getShortcut,
   matchShortcut,
   onSettingsChange,
+  setDefault,
 } from "./settings.js";
 import { initSettingsUi } from "./settings-ui.js";
 import {
@@ -131,7 +132,11 @@ import {
   getTxtSource,
   hasEdits,
   getEditorLeftPaneMode,
+  getCurrentFont,
+  getFontDisplayName,
+  getFonts,
   setEditorLeftPaneMode,
+  setCurrentFont,
   onEditorLeftPaneModeChange,
   onActivePaneChange,
   onHistoryChange,
@@ -1566,7 +1571,11 @@ function clampSize(n) {
 }
 
 function getSizeStep() {
-  const v = Number(getDefault("textSizeStep"));
+  return normalizeSizeStep(getDefault("textSizeStep"));
+}
+
+function normalizeSizeStep(value) {
+  const v = Number(value);
   if (v === 0.25 || v === 0.5) return v;
   return 0.1;
 }
@@ -1650,9 +1659,17 @@ function bindRubyTool() {
   const modeAuto = document.getElementById("ruby-mode-auto-btn");
   const modeMono = document.getElementById("ruby-mode-mono-btn");
   const modeGroup = document.getElementById("ruby-mode-group-btn");
+  const rubyFloatingTabs = panelEl?.querySelector(".ruby-floating-tabs");
+  const rubyFloatingTabButtons = Array.from(panelEl?.querySelectorAll(".ruby-floating-tab[data-ruby-floating-tab]") ?? []);
+  const rubyFloatingPanels = Array.from(panelEl?.querySelectorAll(".ruby-floating-tab-panel[data-ruby-floating-panel]") ?? []);
+  const rubyDetailPanel = panelEl?.querySelector(".ruby-detail-panel");
+  const detailControls = Array.from(document.querySelectorAll(".panel-section[data-section='style'] .style-controls-panel"));
   if (!panelEl || !parentEl || !inputEl || !applyBtn || !removeBtn) return;
 
   let currentMode = "auto"; // "auto" | "mono" | "group"
+  let currentFloatingTab = "ruby";
+  let detailControlsMounted = false;
+  const detailControlPlaceholders = new Map();
   const panelHome = panelEl.parentElement;
   const panelPlaceholder = document.createComment("ruby-panel-home");
   if (panelHome) panelHome.insertBefore(panelPlaceholder, panelEl);
@@ -1675,6 +1692,59 @@ function bindRubyTool() {
   modeAuto?.addEventListener("click", () => setMode("auto"));
   modeMono?.addEventListener("click", () => setMode("mono"));
   modeGroup?.addEventListener("click", () => setMode("group"));
+
+  const mountDetailControls = () => {
+    if (!rubyDetailPanel || detailControlsMounted) return;
+    for (const el of detailControls) {
+      if (!el?.parentNode) continue;
+      if (!detailControlPlaceholders.has(el)) {
+        const placeholder = document.createComment(`ruby-detail-home:${el.dataset.tabPanel || ""}`);
+        el.parentNode.insertBefore(placeholder, el);
+        detailControlPlaceholders.set(el, placeholder);
+      }
+      rubyDetailPanel.appendChild(el);
+    }
+    detailControlsMounted = true;
+  };
+
+  const restoreDetailControls = () => {
+    for (const el of detailControls) {
+      const placeholder = detailControlPlaceholders.get(el);
+      if (placeholder?.parentNode) {
+        placeholder.parentNode.insertBefore(el, placeholder);
+        placeholder.remove();
+      }
+    }
+    detailControlPlaceholders.clear();
+    detailControlsMounted = false;
+  };
+
+  const syncFloatingTabs = () => {
+    const active = currentFloatingTab === "detail" ? "detail" : "ruby";
+    panelEl.classList.toggle("ruby-detail-active", active === "detail");
+    rubyFloatingTabs?.removeAttribute("hidden");
+    rubyFloatingTabButtons.forEach((btn) => {
+      const isActive = btn.dataset.rubyFloatingTab === active;
+      btn.classList.toggle("active", isActive);
+      btn.setAttribute("aria-selected", isActive ? "true" : "false");
+    });
+    rubyFloatingPanels.forEach((panel) => {
+      panel.hidden = panel.dataset.rubyFloatingPanel !== active;
+    });
+  };
+
+  const setFloatingTab = (tab, options = {}) => {
+    currentFloatingTab = tab === "detail" ? "detail" : "ruby";
+    if (currentFloatingTab === "detail") mountDetailControls();
+    else restoreDetailControls();
+    syncFloatingTabs();
+    if (options.reposition !== false) requestAnimationFrame(placeRubyPanelNearText);
+  };
+
+  rubyFloatingTabButtons.forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => setFloatingTab(btn.dataset.rubyFloatingTab));
+  });
 
   const clampRubyScale = (n) => {
     const v = Number(n);
@@ -1766,7 +1836,10 @@ function bindRubyTool() {
   };
 
   const restoreRubyPanelHome = () => {
+    setFloatingTab("ruby", { reposition: false });
+    rubyFloatingTabs?.setAttribute("hidden", "");
     panelEl.classList.remove("ruby-panel-floating");
+    panelEl.classList.remove("ruby-detail-active");
     panelEl.style.left = "";
     panelEl.style.top = "";
     panelEl.style.maxHeight = "";
@@ -1789,6 +1862,8 @@ function bindRubyTool() {
     if (panelEl.parentElement !== document.body) document.body.appendChild(panelEl);
     panelEl.hidden = false;
     panelEl.classList.add("ruby-panel-floating");
+    if (currentFloatingTab === "detail") mountDetailControls();
+    syncFloatingTabs();
     const gap = 10;
     const margin = 8;
     const viewportW = window.innerWidth;
@@ -1797,7 +1872,8 @@ function bindRubyTool() {
     panelEl.style.overflowY = "auto";
     const r = getInplaceSelectionRect(target) ?? anchor.getBoundingClientRect();
     const measuredPanel = panelEl.getBoundingClientRect();
-    const panelW = Math.max(230, Math.min(270, measuredPanel.width || panelEl.offsetWidth || 250));
+    const maxPanelW = panelEl.classList.contains("ruby-detail-active") ? 340 : 300;
+    const panelW = Math.max(230, Math.min(maxPanelW, measuredPanel.width || panelEl.offsetWidth || 250));
     const panelH = Math.max(120, measuredPanel.height || panelEl.offsetHeight || 156);
     const clamp = (v, min, max) => {
       const safeMax = Math.max(min, max);
@@ -2434,13 +2510,20 @@ function bindSizeTool() {
   const input = document.getElementById("size-input");
   const dec = document.getElementById("size-dec-btn");
   const inc = document.getElementById("size-inc-btn");
+  const stepButtons = Array.from(document.querySelectorAll(".size-step-btn[data-size-step]"));
   if (!input || !dec || !inc) return;
 
-  const applyStepAttr = () => {
-    input.step = String(getSizeStep());
+  const syncStepControls = () => {
+    const step = getSizeStep();
+    input.step = String(step);
+    stepButtons.forEach((btn) => {
+      const active = normalizeSizeStep(btn.dataset.sizeStep) === step;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
   };
-  applyStepAttr();
-  onSettingsChange(applyStepAttr);
+  syncStepControls();
+  onSettingsChange(syncStepControls);
 
   input.value = String(getTextSize());
   onTextSizeChange((v) => {
@@ -2460,6 +2543,13 @@ function bindSizeTool() {
   });
   dec.addEventListener("mousedown", (e) => e.preventDefault());
   inc.addEventListener("mousedown", (e) => e.preventDefault());
+  stepButtons.forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
+      setDefault("textSizeStep", normalizeSizeStep(btn.dataset.sizeStep));
+      syncStepControls();
+    });
+  });
   dec.addEventListener("click", () => stepTextSize(-1));
   inc.addEventListener("click", () => stepTextSize(+1));
 }
@@ -2469,7 +2559,14 @@ function applyLeading(n) {
   const ec = getEditingContext();
   if (ec) {
     const targetId = ec.tempId ?? ec.layerId;
-    setLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0, v);
+    const targetLines = leadingTargetLinesForEditingContext(ec);
+    withHistoryTransient(() => {
+      for (const lineIndex of targetLines) {
+        setLineLeading(ec.psdPath, targetId, lineIndex, v);
+      }
+    });
+    resizeActiveInPlaceEditBoxToState();
+    refreshActiveInPlaceEditPreview();
     refreshAllOverlays();
     rebuildLayerList();
     syncLeadingInputForEditingContext();
@@ -2484,11 +2581,44 @@ function clampLeading(n) {
   return Math.max(50, Math.min(500, Math.round(v)));
 }
 
+function lineIndexAtTextOffset(text, index) {
+  const head = String(text ?? "").slice(0, Math.max(0, index));
+  return head.split(/\r\n|\r|\n/).length - 1;
+}
+
+function leadingTargetLinesForEditingContext(ec) {
+  if (!ec) return [];
+  const totalLines = Math.max(1, Number(ec.totalLines) || 1);
+  const contents = String(ec.contents ?? "");
+  const start = Math.max(0, Number(ec.selectionStart) || 0);
+  const end = Math.max(start, Number(ec.selectionEnd) || start);
+  if (end > start) {
+    const startLine = lineIndexAtTextOffset(contents, start);
+    const endLine = lineIndexAtTextOffset(contents, Math.max(start, end - 1));
+    const targets = [];
+    for (let line = startLine; line <= endLine; line++) {
+      if (line > 0) targets.push(line - 1);
+    }
+    if (!targets.length && totalLines > 1) targets.push(0);
+    return [...new Set(targets)];
+  }
+  const line = Math.max(0, Number(ec.currentLineIndex) || 0);
+  if (line > 0) return [line - 1];
+  return totalLines > 1 ? [0] : [0];
+}
+
+function leadingValueForEditingContext(ec) {
+  if (!ec) return getLeadingPct();
+  const targetId = ec.tempId ?? ec.layerId;
+  const targets = leadingTargetLinesForEditingContext(ec);
+  const first = targets[0] ?? 0;
+  return getLineLeading(ec.psdPath, targetId, first) ?? getLeadingPct();
+}
+
 function adjustLeading(delta) {
   const ec = getEditingContext();
   if (ec) {
-    const targetId = ec.tempId ?? ec.layerId;
-    const cur = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
+    const cur = leadingValueForEditingContext(ec);
     applyLeading(cur + delta);
     return;
   }
@@ -2500,8 +2630,7 @@ function syncLeadingInputForEditingContext() {
   if (!input) return;
   const ec = getEditingContext();
   if (!ec) return;
-  const targetId = ec.tempId ?? ec.layerId;
-  const v = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
+  const v = leadingValueForEditingContext(ec);
   if (document.activeElement !== input) input.value = String(v);
 }
 
@@ -2525,7 +2654,7 @@ function bindLeadingTool() {
     const ec = getEditingContext();
     if (ec) {
       const targetId = ec.tempId ?? ec.layerId;
-      const v = getLineLeading(ec.psdPath, targetId, ec.currentLineIndex ?? 0) ?? getLeadingPct();
+      const v = leadingValueForEditingContext(ec);
       input.value = String(v);
       return;
     }
@@ -2886,9 +3015,60 @@ function bindWindowControls() {
     const mod = await import("@tauri-apps/api/window");
     return mod.getCurrentWindow();
   };
+  let closeConfirmOpen = false;
+  let allowWindowClose = false;
+  const exitAppWithoutSaving = async (win) => {
+    allowWindowClose = true;
+    const fallbackTimer = window.setTimeout(() => {
+      import("@tauri-apps/plugin-process")
+        .then(({ exit }) => exit(0))
+        .catch((e) => console.warn("process exit fallback failed:", e));
+    }, 250);
+    try {
+      await win.destroy();
+    } catch (e) {
+      console.warn("window destroy failed, falling back to process exit:", e);
+      try {
+        const { exit } = await import("@tauri-apps/plugin-process");
+        await exit(0);
+      } catch (exitErr) {
+        console.error("process exit failed:", exitErr);
+      }
+    } finally {
+      window.clearTimeout(fallbackTimer);
+    }
+  };
+  const confirmAndCloseWindow = async (win) => {
+    if (closeConfirmOpen) return false;
+    if (!hasEdits()) {
+      await win.close();
+      return true;
+    }
+    closeConfirmOpen = true;
+    try {
+      const ok = await confirmDialog({
+        title: "未保存の編集があります",
+        message: "保存していない編集内容があります。保存せずに終了しますか？",
+        confirmLabel: "保存せずに終了",
+        cancelLabel: "キャンセル",
+        kind: "warning",
+      });
+      if (!ok) return false;
+      await exitAppWithoutSaving(win);
+      return true;
+    } finally {
+      closeConfirmOpen = false;
+    }
+  };
   min.addEventListener("click", async () => { (await getWin()).minimize(); });
   max.addEventListener("click", async () => { (await getWin()).toggleMaximize(); });
-  close.addEventListener("click", async () => { (await getWin()).close(); });
+  close.addEventListener("click", async () => { await confirmAndCloseWindow(await getWin()); });
+  void getWin().then((win) => win.onCloseRequested(async (event) => {
+    if (allowWindowClose) return;
+    if (!hasEdits()) return;
+    event.preventDefault();
+    await confirmAndCloseWindow(win);
+  })).catch((e) => console.warn("close-request listener failed:", e));
 }
 
 function showHomeScreen() {
@@ -3198,6 +3378,31 @@ function openReferenceHiddenPicker(paths, selectedPages = new Set()) {
   });
 }
 
+function homeTypesetFontSearchText(font) {
+  const aliases = Array.isArray(font?.aliases) ? font.aliases : [];
+  return [
+    font?.name,
+    font?.postScriptName,
+    ...aliases,
+  ].filter(Boolean).join(" ").toLowerCase();
+}
+
+function homeTypesetDisplayFontName(psName) {
+  return getFontDisplayName(psName) || psName || "";
+}
+
+function resolveHomeTypesetFont(value) {
+  const text = String(value ?? "").trim();
+  if (!text) return null;
+  const lower = text.toLowerCase();
+  return getFonts().find((font) => font.postScriptName === text)
+    ?? getFonts().find((font) => font.name === text)
+    ?? getFonts().find((font) => homeTypesetDisplayFontName(font.postScriptName).toLowerCase() === lower)
+    ?? getFonts().find((font) => (font.postScriptName ?? "").toLowerCase() === lower)
+    ?? getFonts().find((font) => (font.name ?? "").toLowerCase() === lower)
+    ?? null;
+}
+
 function openHomeTypesetDialog() {
   return new Promise((resolve) => {
     let referencePaths = [];
@@ -3208,6 +3413,9 @@ function openHomeTypesetDialog() {
     let referencePageCount = null;
     let hiddenReferencePages = new Set();
     let referenceLoading = false;
+    let baseTextSize = clampSize(getDefault("textSize") ?? getTextSize());
+    let baseFontPs = String(getDefault("fontPostScriptName") || getCurrentFont() || "");
+    let fontComboOpen = false;
     const modal = document.createElement("div");
     modal.className = "home-typeset-modal";
     modal.hidden = true;
@@ -3243,6 +3451,23 @@ function openHomeTypesetDialog() {
               <span class="home-typeset-row-file" data-file="txt">未選択</span>
             </div>
             <button class="home-typeset-pick-btn" data-pick="txt" type="button">選択</button>
+          </div>
+        </div>
+        <div class="home-typeset-settings" aria-label="写植設定">
+          <div class="home-typeset-setting home-typeset-size-setting">
+            <span class="home-typeset-setting-label">基本ポイント数</span>
+            <span class="home-typeset-size-field">
+              <input id="home-typeset-size" class="home-typeset-size-input" type="number" min="6" max="999" step="0.1" inputmode="decimal" aria-label="基本ポイント数" />
+              <span class="home-typeset-size-unit">pt</span>
+            </span>
+          </div>
+          <div class="home-typeset-setting home-typeset-font-setting">
+            <span class="home-typeset-setting-label">基本フォント</span>
+            <span class="home-typeset-font-combo" id="home-typeset-font-combo">
+              <input id="home-typeset-font" class="home-typeset-font-input" type="search" autocomplete="off" spellcheck="false" aria-label="基本フォント" />
+              <button class="home-typeset-font-toggle" type="button" aria-label="フォント一覧を開く">⌃</button>
+              <ul class="home-typeset-font-list" id="home-typeset-font-list" hidden></ul>
+            </span>
           </div>
         </div>
         <div class="home-typeset-actions">
@@ -3293,6 +3518,142 @@ function openHomeTypesetDialog() {
       '<button class="home-typeset-pick-btn home-typeset-hide-btn" data-reference-hide type="button" disabled>非表示選択</button>'
     );
     const startBtn = modal.querySelector(".home-typeset-start");
+    const sizeInput = modal.querySelector("#home-typeset-size");
+    const fontInput = modal.querySelector("#home-typeset-font");
+    const fontCombo = modal.querySelector("#home-typeset-font-combo");
+    const fontToggle = modal.querySelector(".home-typeset-font-toggle");
+    const fontList = modal.querySelector("#home-typeset-font-list");
+    const fontFamilyFor = (font) => {
+      const parts = [];
+      if (font?.name) parts.push(`"${String(font.name).replace(/"/g, '\\"')}"`);
+      if (font?.postScriptName && font.postScriptName !== font.name) {
+        parts.push(`"${String(font.postScriptName).replace(/"/g, '\\"')}"`);
+      }
+      parts.push("sans-serif");
+      return parts.join(", ");
+    };
+    const syncSizeInput = () => {
+      if (sizeInput) sizeInput.value = String(baseTextSize);
+    };
+    const syncFontInput = () => {
+      if (!fontInput) return;
+      fontInput.dataset.ps = baseFontPs;
+      fontInput.value = homeTypesetDisplayFontName(baseFontPs);
+      const font = getFonts().find((f) => f.postScriptName === baseFontPs);
+      fontInput.style.fontFamily = font ? fontFamilyFor(font) : "";
+    };
+    const renderFontOptions = (query = "") => {
+      if (!fontList) return;
+      fontList.innerHTML = "";
+      const q = String(query ?? "").trim().toLowerCase();
+      const fonts = getFonts();
+      const matches = fonts
+        .filter((font) => !q || homeTypesetFontSearchText(font).includes(q) || homeTypesetDisplayFontName(font.postScriptName).toLowerCase().includes(q))
+        .slice(0, 80);
+      if (!matches.length) {
+        const empty = document.createElement("li");
+        empty.className = "home-typeset-font-empty";
+        empty.textContent = fonts.length ? "該当するフォントがありません" : "フォント一覧を読み込み中です";
+        fontList.appendChild(empty);
+        return;
+      }
+      for (const font of matches) {
+        const li = document.createElement("li");
+        li.className = "home-typeset-font-item";
+        li.dataset.ps = font.postScriptName || "";
+        li.style.fontFamily = fontFamilyFor(font);
+        li.textContent = homeTypesetDisplayFontName(font.postScriptName) || font.name || font.postScriptName || "";
+        li.title = font.postScriptName || li.textContent;
+        li.setAttribute("aria-selected", font.postScriptName === baseFontPs ? "true" : "false");
+        li.addEventListener("mousedown", (e) => e.preventDefault());
+        li.addEventListener("click", () => {
+          if (!font.postScriptName) return;
+          baseFontPs = font.postScriptName;
+          ensureFontLoaded(baseFontPs);
+          syncFontInput();
+          closeFontCombo();
+        });
+        fontList.appendChild(li);
+      }
+    };
+    const openFontCombo = (query = "") => {
+      if (!fontList) return;
+      fontComboOpen = true;
+      renderFontOptions(query);
+      fontList.hidden = false;
+      fontCombo?.classList.add("open");
+    };
+    const closeFontCombo = () => {
+      fontComboOpen = false;
+      if (fontList) fontList.hidden = true;
+      fontCombo?.classList.remove("open");
+    };
+    const commitFontInput = () => {
+      if (!fontInput) return;
+      const font = resolveHomeTypesetFont(fontInput.value);
+      if (font?.postScriptName) {
+        baseFontPs = font.postScriptName;
+        ensureFontLoaded(baseFontPs);
+      }
+      syncFontInput();
+      closeFontCombo();
+    };
+    const applyTypesetDefaults = () => {
+      baseTextSize = clampSize(sizeInput?.value ?? baseTextSize);
+      const font = resolveHomeTypesetFont(fontInput?.value) ?? getFonts().find((f) => f.postScriptName === baseFontPs);
+      if (font?.postScriptName) baseFontPs = font.postScriptName;
+      setDefault("textSize", baseTextSize);
+      setTextSize(baseTextSize);
+      if (baseFontPs) {
+        setDefault("fontPostScriptName", baseFontPs);
+        setCurrentFont(baseFontPs);
+        ensureFontLoaded(baseFontPs);
+      }
+      syncSizeInput();
+      syncFontInput();
+    };
+    const onFontsLoadedForTypeset = () => {
+      syncFontInput();
+      if (fontComboOpen) renderFontOptions(fontInput?.value ?? "");
+    };
+    syncSizeInput();
+    syncFontInput();
+    window.addEventListener("psdesign:fonts-loaded", onFontsLoadedForTypeset);
+    sizeInput?.addEventListener("change", () => {
+      baseTextSize = clampSize(sizeInput.value);
+      syncSizeInput();
+    });
+    sizeInput?.addEventListener("blur", () => {
+      baseTextSize = clampSize(sizeInput.value);
+      syncSizeInput();
+    });
+    fontInput?.addEventListener("focus", () => openFontCombo(""));
+    fontInput?.addEventListener("input", () => openFontCombo(fontInput.value));
+    fontInput?.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        commitFontInput();
+      } else if (e.key === "Escape" && fontComboOpen) {
+        e.preventDefault();
+        syncFontInput();
+        closeFontCombo();
+      }
+    });
+    fontInput?.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (!fontCombo?.contains(document.activeElement)) commitFontInput();
+      }, 0);
+    });
+    fontToggle?.addEventListener("click", () => {
+      if (fontComboOpen) closeFontCombo();
+      else {
+        fontInput?.focus();
+        openFontCombo("");
+      }
+    });
+    modal.addEventListener("mousedown", (e) => {
+      if (!fontCombo?.contains(e.target)) closeFontCombo();
+    });
     const getReferenceDisplayCount = () => Number.isFinite(referencePageCount) ? referencePageCount : referencePaths.length;
     const loadSelectedReference = async () => {
       const paths = [...referencePaths];
@@ -3466,12 +3827,19 @@ function openHomeTypesetDialog() {
       if (homeTypesetDragOverHandler === handleHomeTypesetDragOver) homeTypesetDragOverHandler = null;
       if (homeTypesetDragLeaveHandler === clearDragOverRows) homeTypesetDragLeaveHandler = null;
       window.removeEventListener("keydown", onKeyDown, true);
+      window.removeEventListener("psdesign:fonts-loaded", onFontsLoadedForTypeset);
       hideModalAnimated(modal);
       setTimeout(() => modal.remove(), 260);
       resolve(value);
     };
     const onKeyDown = (e) => {
       if (pickingFile) return;
+      if (e.key === "Escape" && fontComboOpen) {
+        e.preventDefault();
+        syncFontInput();
+        closeFontCombo();
+        return;
+      }
       if (e.key === "Escape") cleanup(null);
     };
     const pickWithHomeDialogHidden = async (pickFn) => {
@@ -3563,7 +3931,8 @@ function openHomeTypesetDialog() {
         });
         return;
       }
-      cleanup({ referencePaths, psdPaths, txtPath, hiddenReferencePages: [...hiddenReferencePages] });
+      applyTypesetDefaults();
+      cleanup({ referencePaths, psdPaths, txtPath, hiddenReferencePages: [...hiddenReferencePages], baseTextSize, baseFontPs });
     });
     window.addEventListener("keydown", onKeyDown, true);
     homeTypesetDropHandler = handleHomeTypesetDrop;
