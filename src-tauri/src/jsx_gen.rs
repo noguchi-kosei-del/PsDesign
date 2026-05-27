@@ -796,6 +796,32 @@ function scaleRubyAbsoluteCoords(charRubies, sx, sy) {
   return out;
 }
 
+function buildRubyLineLeadings(contents, charRubies, explicitLineLeadings, rubyLeadingPct) {
+  var out = {};
+  var hasAny = false;
+  if (explicitLineLeadings) {
+    for (var k in explicitLineLeadings) {
+      if (!explicitLineLeadings.hasOwnProperty(k)) continue;
+      var explicitPct = explicitLineLeadings[k];
+      if (typeof explicitPct === "number" && isFinite(explicitPct) && explicitPct > 0) {
+        out[String(k)] = explicitPct;
+        hasAny = true;
+      }
+    }
+  }
+  if (charRubies && !isObjEmpty(charRubies) &&
+      typeof rubyLeadingPct === "number" && isFinite(rubyLeadingPct) && rubyLeadingPct > 0) {
+    var rubyLines = computeRubyLineIndices(contents, charRubies, "vertical");
+    for (var i = 0; i < rubyLines.length; i++) {
+      var idx = parseInt(rubyLines[i], 10);
+      if (isNaN(idx) || idx < 0) continue;
+      out[String(idx)] = rubyLeadingPct;
+      hasAny = true;
+    }
+  }
+  return hasAny ? out : null;
+}
+
 function copyDescKey(src, dst, key) {
   var t = src.getType(key);
   switch (t) {
@@ -2070,11 +2096,6 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
     if (isNakaguroRubyText(rubyText) && lineIndexForCharIndex(contents, fromCh) === 0) {
       parentMarkOffsetEm = NAKAGURO_FIRST_LINE_PARENT_MARK_OFFSET_EM;
     }
-    if (isParentMarkRuby) {
-      // Parent marks are positioned from the parent range; old UI coords can include the ruby-line offset.
-      hasUiOffset = false;
-      hasUiAbs = false;
-    }
     if (hasUiAbs || hasUiOffset) {
       // ルビ中心:
       //   縦書き: UI 側も Photoshop 側も、親テキスト右端基準の offsetX として扱う。
@@ -3036,10 +3057,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       // autoLeadingPercentage を行ごとに当てる (参考: 共有プラグイン ruby/index.js)。
       // ルビなしのときは従来通り applyLineLeadings (ユーザー手動の per-line override)。
       var __hasRubyE = (e.charRubies && !isObjEmpty(e.charRubies));
-      if (!__hasRubyE && e.lineLeadings && !isObjEmpty(e.lineLeadings)) {
+      var __lineLeadingsE = __hasRubyE
+        ? buildRubyLineLeadings(ti.contents, e.charRubies, e.lineLeadings, rubyLeadingPct)
+        : e.lineLeadings;
+      if (__lineLeadingsE && !isObjEmpty(__lineLeadingsE)) {
         try {
           var __sz = ti.size.value;
-          applyLineLeadings(layer, e.lineLeadings, ti.contents, __sz);
+          applyLineLeadings(layer, __lineLeadingsE, ti.contents, __sz);
         } catch (eLineLead) {
           addWarning("行ごとの行間の適用に失敗 (layer " + e.id + "): " + eLineLead);
         }
@@ -3092,7 +3116,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         // ルビあり行 (= main.js doApply で setLineLeading 済みの行) の
         // paragraphStyle.autoLeadingPercentage を rubyLeadingPct/100 に上書き。
         // 【v1.29.x】direction で対象行を分岐 (縦書き=当該行 / 横書き=前の行)。
-        if (typeof rubyLeadingPct === "number" && rubyLeadingPct > 0) {
+        if (!(__lineLeadingsE && !isObjEmpty(__lineLeadingsE)) &&
+            typeof rubyLeadingPct === "number" && rubyLeadingPct > 0) {
           try {
             var __dirRubyLP = (typeof e.direction === "string") ? e.direction
                               : (ti.direction === Direction.VERTICAL ? "vertical" : "horizontal");
@@ -3284,10 +3309,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         // 代わりに後段の applyRubyAutoLeadingPercentage で paragraphStyleRange を分割する。
         // ルビなしのときだけユーザーの手動 per-line override を当てる。
         var __hasRubyNL = (nl.charRubies && !isObjEmpty(nl.charRubies));
-        if (!__hasRubyNL && nl.lineLeadings && !isObjEmpty(nl.lineLeadings)) {
+        var __lineLeadingsNL = __hasRubyNL
+          ? buildRubyLineLeadings(nti.contents, nl.charRubies, nl.lineLeadings, rubyLeadingPct)
+          : nl.lineLeadings;
+        if (__lineLeadingsNL && !isObjEmpty(__lineLeadingsNL)) {
           try {
             var __szNew = nti.size.value;
-            applyLineLeadings(layerRef, nl.lineLeadings, nti.contents, __szNew);
+            applyLineLeadings(layerRef, __lineLeadingsNL, nti.contents, __szNew);
           } catch (eLineLeadNew) {
             addWarning("新規レイヤーの行ごとの行間適用に失敗: " + eLineLeadNew);
           }
@@ -3340,7 +3368,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           // ルビあり行 (= main.js doApply で setLineLeading 済みの行) の
           // paragraphStyle.autoLeadingPercentage を rubyLeadingPct/100 に上書き。
           // 【v1.29.x】direction で対象行を分岐 (縦書き=当該行 / 横書き=前の行)。
-          if (typeof rubyLeadingPct === "number" && rubyLeadingPct > 0) {
+          if (!(__lineLeadingsNL && !isObjEmpty(__lineLeadingsNL)) &&
+              typeof rubyLeadingPct === "number" && rubyLeadingPct > 0) {
             try {
               var __dirRubyLPN = nl.direction || "vertical";
               var __rubyLinesN = computeRubyLineIndices(nti.contents, nl.charRubies, __dirRubyLPN);

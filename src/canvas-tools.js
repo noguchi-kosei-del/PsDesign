@@ -164,7 +164,10 @@ function setLastInplaceSelection(v) {
   if (a === b) return;
   if (a && b && a.start === b.start && a.end === b.end
       && a.psdPath === b.psdPath
-      && a.layerId === b.layerId && a.tempId === b.tempId) return;
+      && a.layerId === b.layerId && a.tempId === b.tempId
+      && !!a.rubyOnly === !!b.rubyOnly
+      && !!a.rubyOverlay === !!b.rubyOverlay
+      && (a.rubyText ?? "") === (b.rubyText ?? "")) return;
   _lastInplaceSelection = b;
   syncInplaceSelectionHighlight(b);
   for (const fn of _selectionChangeListeners) fn(b);
@@ -175,11 +178,39 @@ function clearInplaceSelectionHighlight() {
   try {
     if (window.CSS?.highlights) CSS.highlights.delete("opus-inplace-selection");
   } catch (_) {}
+  try {
+    document.querySelectorAll(".ruby-text-selected").forEach((el) => el.classList.remove("ruby-text-selected"));
+  } catch (_) {}
+}
+
+function findRubySelectionElement(sel) {
+  if (!sel?.rubyOnly) return null;
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return null;
+  const texts = editing.querySelectorAll(".ruby-text");
+  for (const rt of texts) {
+    const start = Number(rt.dataset.rubyStart);
+    const end = Number(rt.dataset.rubyEnd);
+    if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
+    if (start !== sel.start || end !== sel.end) continue;
+    if ((rt.dataset.rubyText ?? rt.textContent ?? "") !== (sel.rubyText ?? "")) continue;
+    if ((rt.dataset.rubyOverlay === "true") !== (sel.rubyOverlay === true)) continue;
+    return rt;
+  }
+  return null;
+}
+
+function syncRubySelectionHighlight(sel) {
+  const rt = findRubySelectionElement(sel);
+  if (!rt) return false;
+  rt.classList.add("ruby-text-selected");
+  return true;
 }
 
 function syncInplaceSelectionHighlight(sel) {
   clearInplaceSelectionHighlight();
   if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return false;
+  if (sel.rubyOnly) return syncRubySelectionHighlight(sel);
   if (!window.CSS?.highlights || typeof Highlight === "undefined") return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
@@ -200,11 +231,19 @@ function syncInplaceSelectionHighlight(sel) {
 }
 
 export function restoreInplaceSelection(sel) {
-  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end < sel.start) return false;
+  if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
   const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return false;
+  if (sel.rubyOnly) {
+    const selection = window.getSelection();
+    inner.focus({ preventScroll: true });
+    selection?.removeAllRanges?.();
+    syncInplaceSelectionHighlight(sel);
+    setLastInplaceSelection({ ...sel });
+    return true;
+  }
   const startPos = charIndexToNodeOffset(inner, sel.start);
   const endPos = charIndexToNodeOffset(inner, sel.end);
   if (!startPos || !endPos) return false;
@@ -227,6 +266,11 @@ export function restoreInplaceSelection(sel) {
 
 export function getInplaceSelectionRect(sel = _lastInplaceSelection) {
   if (!sel || !Number.isInteger(sel.start) || !Number.isInteger(sel.end) || sel.end <= sel.start) return null;
+  if (sel.rubyOnly) {
+    const rt = findRubySelectionElement(sel);
+    const rect = rt?.getBoundingClientRect?.();
+    if (rect && rect.width > 0 && rect.height > 0) return rect;
+  }
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return null;
   const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
@@ -261,7 +305,7 @@ export function getInplaceSelectionRect(sel = _lastInplaceSelection) {
 
 function shouldKeepInPlaceEditForTarget(target) {
   return !!(target && typeof target.closest === "function"
-    && target.closest(".editor, .side-panel .editor, .ruby-panel-floating, .font-panel-floating, .size-panel-floating, .stroke-panel-floating, .side-panel-tabs, .side-panel-tab"));
+    && target.closest(".editor, .side-panel .editor, .ruby-panel-floating, .ruby-parent-dialog, .font-panel-floating, .size-panel-floating, .stroke-panel-floating, .side-panel-tabs, .side-panel-tab"));
 }
 
 export function showInplaceSelectionHighlightOnly(sel = _lastInplaceSelection) {
@@ -958,24 +1002,198 @@ export function removeEditModeRubyFromRange(start, end) {
 }
 
 // inner 内の text node を順に走査し、char index に対応する (text node, offset) を返す。
-function charIndexToNodeOffset(rootEl, charIndex) {
-  let remaining = Math.max(0, charIndex);
-  const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT);
-  let lastNode = null;
-  let node = walker.nextNode();
-  while (node) {
-    if (node.parentElement?.closest?.(".ruby-text")) {
-      node = walker.nextNode();
+function isEditableLineBlock(node) {
+  return node?.nodeType === Node.ELEMENT_NODE
+    && (node.tagName === "DIV" || node.tagName === "P");
+}
+
+function isRubyTextElement(node) {
+  return node?.nodeType === Node.ELEMENT_NODE
+    && node.classList?.contains("ruby-text");
+}
+
+function isInsideRubyText(node, rootEl) {
+  let p = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  while (p && p !== rootEl) {
+    if (isRubyTextElement(p)) return true;
+    p = p.parentElement;
+  }
+  return false;
+}
+
+function normalizedEditableText(value) {
+  return String(value ?? "").replace(/\r\n?/g, "\n").replace(/\u200b/g, "");
+}
+
+function rawOffsetForNormalizedIndex(value, targetIndex) {
+  const raw = String(value ?? "");
+  const target = Math.max(0, targetIndex);
+  let seen = 0;
+  for (let i = 0; i < raw.length; i++) {
+    const ch = raw[i];
+    if (ch === "\u200b") continue;
+    if (ch === "\r") {
+      if (seen >= target) return i;
+      seen++;
+      if (raw[i + 1] === "\n") i++;
       continue;
     }
-    const len = node.nodeValue.length;
-    if (remaining <= len) return { node, offset: remaining };
-    remaining -= len;
-    lastNode = node;
-    node = walker.nextNode();
+    if (seen >= target) return i;
+    seen++;
   }
-  if (lastNode) return { node: lastNode, offset: lastNode.nodeValue.length };
-  return { node: rootEl, offset: 0 };
+  return raw.length;
+}
+
+function childOffsetInParent(node) {
+  const parent = node?.parentNode;
+  if (!parent) return 0;
+  return Array.prototype.indexOf.call(parent.childNodes, node);
+}
+
+function firstEditableTextPosition(node, rootEl, fallbackOffset = 0) {
+  if (!node) return { node: rootEl, offset: fallbackOffset };
+  if (node.nodeType === Node.TEXT_NODE && !isInsideRubyText(node, rootEl)) {
+    return { node, offset: 0 };
+  }
+  if (isRubyTextElement(node)) return { node: rootEl, offset: fallbackOffset };
+  for (const child of Array.from(node.childNodes ?? [])) {
+    const pos = firstEditableTextPosition(child, rootEl, fallbackOffset);
+    if (pos && pos.node !== rootEl) return pos;
+  }
+  return { node: rootEl, offset: fallbackOffset };
+}
+
+function appendVirtualLineBreak(parts) {
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (!parts[i]) continue;
+    if (parts[i].endsWith("\n")) return;
+    break;
+  }
+  parts.push("\n");
+}
+
+function serializeEditableText(rootEl, stopContainer = null, stopOffset = null) {
+  const parts = [];
+  let done = false;
+
+  const appendNode = (node) => {
+    if (!node || done) return;
+    if (node === stopContainer) {
+      if (node.nodeType === Node.TEXT_NODE) {
+        if (!isInsideRubyText(node, rootEl)) {
+          parts.push(String(node.nodeValue ?? "").slice(0, Math.max(0, stopOffset ?? 0)));
+        }
+        done = true;
+        return;
+      }
+      if (node.nodeType === Node.ELEMENT_NODE || node === rootEl) {
+        appendChildren(node, Math.max(0, stopOffset ?? 0));
+        done = true;
+        return;
+      }
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (!isInsideRubyText(node, rootEl)) parts.push(node.textContent ?? "");
+      return;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return;
+    if (isRubyTextElement(node)) return;
+    if (node.tagName === "BR") {
+      parts.push("\n");
+      return;
+    }
+    appendChildren(node);
+  };
+
+  const appendChildren = (parent, limit = null) => {
+    const children = Array.from(parent.childNodes ?? []);
+    const end = limit == null ? children.length : Math.min(limit, children.length);
+    let sawLineBlock = false;
+    for (let i = 0; i < end && !done; i++) {
+      const child = children[i];
+      if (parent === rootEl && isEditableLineBlock(child)) {
+        if (sawLineBlock) appendVirtualLineBreak(parts);
+        sawLineBlock = true;
+      }
+      appendNode(child);
+    }
+  };
+
+  appendChildren(rootEl);
+  return normalizedEditableText(parts.join(""));
+}
+
+function textLengthToDomPoint(rootEl, container, offset) {
+  return serializeEditableText(rootEl, container, offset).length;
+}
+
+function charIndexToNodeOffset(rootEl, charIndex) {
+  const target = Math.max(0, charIndex);
+  let index = 0;
+  let best = { node: rootEl, offset: 0 };
+  let lastChar = "";
+
+  const consumeVirtualLineBreak = (nextNode, nextOffset) => {
+    if (target <= index) return best;
+    if (lastChar !== "\n") {
+      if (target === index + 1) {
+        return firstEditableTextPosition(nextNode, rootEl, nextOffset);
+      }
+      index += 1;
+      lastChar = "\n";
+      best = firstEditableTextPosition(nextNode, rootEl, nextOffset);
+    }
+    return null;
+  };
+
+  const visit = (node) => {
+    if (!node) return null;
+    if (node.nodeType === Node.TEXT_NODE) {
+      if (isInsideRubyText(node, rootEl)) return null;
+      const text = normalizedEditableText(node.nodeValue);
+      const len = text.length;
+      if (target <= index + len) {
+        return { node, offset: rawOffsetForNormalizedIndex(node.nodeValue, target - index) };
+      }
+      index += len;
+      if (len > 0) lastChar = text[text.length - 1];
+      best = { node, offset: node.nodeValue.length };
+      return null;
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) return null;
+    if (isRubyTextElement(node)) return null;
+    if (node.tagName === "BR") {
+      if (target <= index) return best;
+      const parent = node.parentNode ?? rootEl;
+      const offset = childOffsetInParent(node) + 1;
+      if (target === index + 1) return { node: parent, offset };
+      index += 1;
+      lastChar = "\n";
+      best = { node: parent, offset };
+      return null;
+    }
+    for (const child of Array.from(node.childNodes)) {
+      const hit = visit(child);
+      if (hit) return hit;
+    }
+    return null;
+  };
+
+  let sawLineBlock = false;
+  const children = Array.from(rootEl.childNodes);
+  for (let i = 0; i < children.length; i++) {
+    const child = children[i];
+    if (isEditableLineBlock(child)) {
+      if (sawLineBlock) {
+        const hit = consumeVirtualLineBreak(child, i);
+        if (hit) return hit;
+      }
+      sawLineBlock = true;
+    }
+    const hit = visit(child);
+    if (hit) return hit;
+  }
+  return best;
 }
 
 // 範囲内の span で指定 styleProp を持つものを unwrap（中身の child を親に展開して span を削除）。
@@ -1356,7 +1574,8 @@ export function layerRectForExisting(page, layer, edit) {
   const lineStartsE = getLineStartOffsets(previewText);
   let thickSum = 0;
   for (let i = 0; i < lineCount; i++) {
-    const v = (i > 0 && Number.isFinite(lineLeadings[i])) ? lineLeadings[i] / 100 : leadingFactor;
+    // lineLeadings[N] is the leading of line N, so it opens the gap before line N + 1.
+    const v = (i > 0 && Number.isFinite(lineLeadings[i - 1])) ? lineLeadings[i - 1] / 100 : leadingFactor;
     const leading = Math.max(1.25, v);
     let lineMaxRatio = 1;
     const line = linesArrE[i] ?? "";
@@ -1423,7 +1642,8 @@ export function layerRectForNew(page, nl) {
   const lineStartsN = getLineStartOffsets(contents);
   let thickSum = 0;
   for (let i = 0; i < lineCount; i++) {
-    const v = (i > 0 && Number.isFinite(lineLeadings[i])) ? lineLeadings[i] / 100 : leadingFactor;
+    // lineLeadings[N] is the leading of line N, so it opens the gap before line N + 1.
+    const v = (i > 0 && Number.isFinite(lineLeadings[i - 1])) ? lineLeadings[i - 1] / 100 : leadingFactor;
     let lineMaxRatio = 1;
     const line = linesArrN[i] ?? "";
     const startIdx = lineStartsN[i] ?? 0;
@@ -1745,6 +1965,19 @@ function centerOfRect(rect) {
   };
 }
 
+function isParentMarkRubyElement(rt) {
+  return rt?.classList?.contains("ruby-text-nakaguro")
+    || rt?.classList?.contains("ruby-text-overlay-same-position");
+}
+
+function resetRubyTextInlinePosition(rt) {
+  if (!rt) return;
+  rt.style.left = "";
+  rt.style.top = "";
+  rt.style.bottom = "";
+  rt.style.transform = "";
+}
+
 function layoutRectWithoutRuby(element) {
   if (!element?.getBoundingClientRect) return null;
   const rubyTexts = Array.from(element.querySelectorAll?.(".ruby-text") ?? []);
@@ -1818,6 +2051,79 @@ function rubyPlacementBaseRect(wrap, box, vertical) {
   };
 }
 
+function lineRangesForEditableText(text) {
+  const full = String(text ?? "");
+  const ranges = [];
+  const re = /\r\n|\r|\n/g;
+  let start = 0;
+  let m;
+  while ((m = re.exec(full)) !== null) {
+    ranges.push({ start, end: m.index });
+    start = m.index + m[0].length;
+  }
+  ranges.push({ start, end: full.length });
+  return ranges;
+}
+
+function lineIndexForEditableOffset(ranges, index) {
+  const idx = Math.max(0, Number(index) || 0);
+  for (let i = 0; i < ranges.length; i++) {
+    const range = ranges[i];
+    const next = ranges[i + 1];
+    if (idx >= range.start && (!next || idx < next.start)) return i;
+  }
+  return Math.max(0, ranges.length - 1);
+}
+
+function textRangeRectWithoutRuby(rootEl, start, end) {
+  if (!rootEl || end <= start) return null;
+  const startPos = charIndexToNodeOffset(rootEl, start);
+  const endPos = charIndexToNodeOffset(rootEl, end);
+  if (!startPos || !endPos) return null;
+  const rubyTexts = Array.from(rootEl.querySelectorAll?.(".ruby-text") ?? []);
+  const prevDisplays = rubyTexts.map((rt) => rt.style.display);
+  let range = null;
+  try {
+    for (const rt of rubyTexts) rt.style.display = "none";
+    range = document.createRange();
+    range.setStart(startPos.node, startPos.offset);
+    range.setEnd(endPos.node, endPos.offset);
+    const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
+    if (rects.length === 0) return null;
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const rect of rects) {
+      if (rect.left < left) left = rect.left;
+      if (rect.top < top) top = rect.top;
+      if (rect.right > right) right = rect.right;
+      if (rect.bottom > bottom) bottom = rect.bottom;
+    }
+    if (!Number.isFinite(left) || !Number.isFinite(top) || right <= left || bottom <= top) return null;
+    return { left, top, right, bottom, width: right - left, height: bottom - top };
+  } catch (_) {
+    return null;
+  } finally {
+    rubyTexts.forEach((rt, i) => { rt.style.display = prevDisplays[i]; });
+    try { range?.detach?.(); } catch (_) {}
+  }
+}
+
+function previousEditableLineRectForRubyWrap(wrap, box) {
+  const inner = box?.querySelector?.(".new-layer-text:not(.stroke-preview-underlay), .existing-layer-text:not(.stroke-preview-underlay)");
+  if (!inner) return null;
+  const start = Number(wrap?.dataset?.rubyStart);
+  if (!Number.isInteger(start)) return null;
+  const text = serializeEditableText(inner);
+  const ranges = lineRangesForEditableText(text);
+  if (ranges.length <= 1) return null;
+  const lineIndex = lineIndexForEditableOffset(ranges, start);
+  if (lineIndex <= 0) return null;
+  const prev = ranges[lineIndex - 1];
+  return textRangeRectWithoutRuby(inner, prev.start, prev.end);
+}
+
 function screenPointToPsd(canvasRect, page, screenX, screenY) {
   const rotation = getPsdRotation();
   const rotated90 = rotation === 90 || rotation === 270;
@@ -1852,16 +2158,19 @@ function rectsOverlapOnCrossAxis(a, b, vertical) {
 }
 
 function findNeighborLineRect(overlay, box, wrap, baseRect, vertical) {
+  const previousLineRect = previousEditableLineRectForRubyWrap(wrap, box);
+  if (previousLineRect) return previousLineRect;
+
   const wrapCenter = centerOfRect(baseRect);
   let best = null;
   const candidates = [];
   const inner = box?.querySelector?.(".new-layer-text:not(.stroke-preview-underlay), .existing-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return null;
-  const lineChildren = Array.from(inner.children).filter((el) => el instanceof HTMLElement);
+  const lineChildren = Array.from(inner.children).filter((el) => el instanceof HTMLElement && isEditableLineBlock(el));
   if (lineChildren.length > 0) {
     for (const child of lineChildren) candidates.push(child);
   } else {
-    candidates.push(inner);
+    return null;
   }
   for (const el of candidates) {
     if (el.contains(wrap)) continue;
@@ -1891,6 +2200,10 @@ function placeRubyAtLineMidpointsForOverlay(overlay, options = {}) {
     for (const wrap of wraps) {
       const rt = wrap.querySelector(".ruby-text");
       if (!rt) continue;
+      if (isParentMarkRubyElement(rt)) {
+        resetRubyTextInlinePosition(rt);
+        continue;
+      }
       const anchorRect = rubyBaseRect(wrap);
       const baseRect = rubyPlacementBaseRect(wrap, box, vertical);
       if (!anchorRect || !baseRect) continue;
@@ -1900,30 +2213,8 @@ function placeRubyAtLineMidpointsForOverlay(overlay, options = {}) {
       let targetY = baseCenter.y;
       let neighbor = findNeighborLineRect(overlay, box, wrap, baseRect, vertical);
       if (!neighbor) {
-        const rubyAdvance = rubyFallbackAdvancePx(box, rt);
-        const rubyPct = Number(getDefault("rubyLeadingPct")) || 150;
-        const layerPct = Number(getDefault("leadingPct")) || 125;
-        const fontPx = rubyPct > 0 ? rubyAdvance / (rubyPct / 100) : 0;
-        const virtualGap = Math.max(0, fontPx * (rubyPct - layerPct) / 100);
-        if (vertical) {
-          neighbor = {
-            left: baseRect.right + virtualGap,
-            right: baseRect.right + virtualGap + rubyAdvance,
-            top: baseRect.top,
-            bottom: baseRect.bottom,
-            width: rubyAdvance,
-            height: baseRect.height,
-          };
-        } else {
-          neighbor = {
-            left: baseRect.left,
-            right: baseRect.right,
-            top: baseRect.top - virtualGap - rubyAdvance,
-            bottom: baseRect.top - virtualGap,
-            width: baseRect.width,
-            height: rubyAdvance,
-          };
-        }
+        resetRubyTextInlinePosition(rt);
+        continue;
       }
       if (vertical) {
         const middleX = (baseRect.right + neighbor.left) / 2;
@@ -1989,15 +2280,11 @@ function measureRubyOffsetsForOverlay(overlay, canvas, page) {
       const rubyTexts = Array.from(wrap.querySelectorAll(":scope > .ruby-text"));
       for (const rt of rubyTexts) {
         const isOverlayRuby = rt.dataset.rubyOverlay === "true";
-        const isParentMarkRuby =
-          rt.classList.contains("ruby-text-nakaguro") ||
-          rt.classList.contains("ruby-text-overlay-same-position");
         const startStr = rt.dataset.rubyStart || wrap.dataset.rubyStart;
         if (!startStr) continue;
         const start = Number(startStr);
         const end = Number(rt.dataset.rubyEnd || wrap.dataset.rubyEnd);
         if (!Number.isInteger(start)) continue;
-        if (isParentMarkRuby) continue;
         if (isOverlayRuby) {
           const overlayKey = `${startStr}\u0001${rt.dataset.rubyEnd || ""}\u0001${rt.dataset.rubyText || rt.textContent || ""}`;
           if (seenOverlays.has(overlayKey)) continue;
@@ -3034,7 +3321,9 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const lines = fullText.split(/\r?\n/);
   const lineStarts = getLineStartOffsets(fullText);
   inner.style.lineHeight = fallback;
-  if (overrides || hasCharRubies) {
+  // Ruby alone must keep the newline text-node path. In vertical writing,
+  // wrapping every line in block elements can hide later columns.
+  if (overrides) {
     const layerFactor = (defaultLeadingPct ?? 125) / 100;
     for (let i = 0; i < lines.length; i++) {
       const lineEl = document.createElement("div");
@@ -3062,8 +3351,9 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
       // 行 i の override 値 = 行 i-1 と 行 i の隙間のみ（margin-block-start で表現）。
       // layer 全体の leadingFactor との差分だけを margin に追加する。
       // 行 0 は「前の行」が無いので override を無視。
-      if (i > 0 && Number.isFinite(overrides[i])) {
-        const overrideFactor = overrides[i] / 100;
+      // lineLeadings[N] is stored on the previous line, matching Photoshop leading.
+      if (i > 0 && Number.isFinite(overrides[i - 1])) {
+        const overrideFactor = overrides[i - 1] / 100;
         const extra = overrideFactor - layerFactor;
         if (Math.abs(extra) > 0.001) {
           lineEl.style.marginBlockStart = `${extra}em`;
@@ -4275,13 +4565,51 @@ function startContentEditableEdit(ctx, target, options = {}) {
   }
 
   const layerMeta = isExisting
-    ? { psdPath: page.path, layerId: target.layer.id }
-    : { psdPath: page.path, tempId: target.nl.tempId };
+    ? { psdPath: page.path, layerId: target.layer.id, direction: editDirection }
+    : { psdPath: page.path, tempId: target.nl.tempId, direction: editDirection };
 
   // === 内部 state ===
   let lastContents = startContents;
   let imeComposing = false;
   let finished = false;
+
+  const lineIndexAtChar = (text, index) => {
+    const head = String(text ?? "").slice(0, Math.max(0, index));
+    return head.split(/\r\n|\r|\n/).length - 1;
+  };
+
+  const onRubyMouseDown = (e) => {
+    const rawTarget = e.target?.nodeType === Node.TEXT_NODE ? e.target.parentElement : e.target;
+    const rt = rawTarget?.closest?.(".ruby-text");
+    if (!rt || !inner.contains(rt)) return;
+    const start = Number(rt.dataset.rubyStart);
+    const end = Number(rt.dataset.rubyEnd);
+    if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return;
+    e.preventDefault();
+    e.stopPropagation();
+    inner.focus({ preventScroll: true });
+    window.getSelection?.()?.removeAllRanges?.();
+    const rubySel = {
+      ...layerMeta,
+      start,
+      end,
+      rubyOnly: true,
+      rubyText: rt.dataset.rubyText ?? rt.textContent ?? "",
+      rubyOverlay: rt.dataset.rubyOverlay === "true",
+    };
+    setLastInplaceSelection(rubySel);
+    const lineIndex = lineIndexAtChar(lastContents, start);
+    const totalLines = (lastContents.match(/\n/g) ?? []).length + 1;
+    setEditingContext({
+      ...layerMeta,
+      currentLineIndex: lineIndex,
+      totalLines,
+      contents: lastContents,
+      selectionStart: start,
+      selectionEnd: end,
+    });
+  };
+  inner.addEventListener("mousedown", onRubyMouseDown, true);
 
   // 現在のレイヤー state から最新の per-char/line override を取り出す
   // 【v1.26.0】charBolds / charRubies も含めて取得 → 編集時の index shift で全て同期。
@@ -4326,17 +4654,9 @@ function startContentEditableEdit(ctx, target, options = {}) {
     if (!s || s.rangeCount === 0) return null;
     const r = s.getRangeAt(0);
     if (!inner.contains(r.startContainer) && r.startContainer !== inner) return null;
-    const textLengthTo = (container, offset) => {
-      const probe = document.createRange();
-      probe.selectNodeContents(inner);
-      probe.setEnd(container, offset);
-      const frag = probe.cloneContents();
-      frag.querySelectorAll?.(".ruby-text").forEach((el) => el.remove());
-      return frag.textContent.length;
-    };
     try {
-      const startIdx = textLengthTo(r.startContainer, r.startOffset);
-      const endIdx = textLengthTo(r.endContainer, r.endOffset);
+      const startIdx = textLengthToDomPoint(inner, r.startContainer, r.startOffset);
+      const endIdx = textLengthToDomPoint(inner, r.endContainer, r.endOffset);
       return { start: Math.min(startIdx, endIdx), end: Math.max(startIdx, endIdx) };
     } catch (e) {
       return null;
@@ -4378,28 +4698,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
   // 経由する。readContents 自身は変換せず DOM の生テキストを返す（diff 計算が
   // 一致する必要があるため）。
   const readContents = () => {
-    let out = "";
     // 【v1.27.0】.ruby-text（編集中プレビューのふりがな）の text node は state.contents から除外。
     // これがないと「親（ふりがな）」のふりがな文字が contents に紛れ込み、その後の onInput で
     // 巨大な textShift 差分として誤検出 → shiftCharMap が壊れて per-char 属性が崩壊する。
     // .ruby-text は contenteditable="false" なので caret も入らない（ユーザーが触れない）。
-    const walker = document.createTreeWalker(inner, NodeFilter.SHOW_TEXT, {
-      acceptNode(node) {
-        let p = node.parentNode;
-        while (p && p !== inner) {
-          if (p.classList && p.classList.contains("ruby-text")) {
-            return NodeFilter.FILTER_REJECT;
-          }
-          p = p.parentNode;
-        }
-        return NodeFilter.FILTER_ACCEPT;
-      },
-    });
-    let node;
-    while ((node = walker.nextNode())) {
-      out += node.textContent;
-    }
-    return out.replace(/\r\n?/g, "\n").replace(/​/g, "");
+    return serializeEditableText(inner);
   };
 
   // 編集中の inner DOM を「plain text の text node 1 個」構造に正規化する。
@@ -4519,6 +4822,17 @@ function startContentEditableEdit(ctx, target, options = {}) {
     if (!map || typeof map !== "object") return {};
     const result = {};
     const delta = inserted - deleted;
+    const shiftOverlays = (entry, entryDelta) => {
+      if (!Array.isArray(entry.overlays)) return entry;
+      return {
+        ...entry,
+        overlays: entry.overlays.map((overlay) => ({
+          ...overlay,
+          start: Number(overlay.start) + entryDelta,
+          end: Number(overlay.end) + entryDelta,
+        })),
+      };
+    };
     for (const k of Object.keys(map)) {
       const start = Number(k);
       const entry = map[k];
@@ -4528,9 +4842,9 @@ function startContentEditableEdit(ctx, target, options = {}) {
       const editEnd = pos + deleted;
       if (pos < end && editEnd > start) continue;
       if (start >= editEnd) {
-        result[String(start + delta)] = { ...entry, end: end + delta };
+        result[String(start + delta)] = shiftOverlays({ ...entry, end: end + delta }, delta);
       } else {
-        result[String(start)] = { ...entry };
+        result[String(start)] = shiftOverlays({ ...entry }, 0);
       }
     }
     return result;
@@ -4569,12 +4883,16 @@ function startContentEditableEdit(ctx, target, options = {}) {
     const range = getSelRange();
     if (!range) return;
     const { start, end } = range;
-    setLastInplaceSelection({
-      start, end,
-      psdPath: layerMeta.psdPath,
-      layerId: layerMeta.layerId ?? null,
-      tempId: layerMeta.tempId ?? null,
-    });
+    if (end > start) {
+      setLastInplaceSelection({
+        start, end,
+        psdPath: layerMeta.psdPath,
+        layerId: layerMeta.layerId ?? null,
+        tempId: layerMeta.tempId ?? null,
+      });
+    } else {
+      setLastInplaceSelection(null);
+    }
     const lineIndex = countNewlinesBefore(lastContents, start);
     const totalLines = (lastContents.match(/\n/g) ?? []).length + 1;
     setEditingContext({
@@ -4860,6 +5178,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     inner.removeEventListener("input", onInput);
     inner.removeEventListener("keydown", onKeydown);
     inner.removeEventListener("blur", onBlur);
+    inner.removeEventListener("mousedown", onRubyMouseDown, true);
 
     box.classList.remove("editing");
     inner.removeAttribute("contenteditable");

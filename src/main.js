@@ -2189,10 +2189,8 @@ function bindRubyTool() {
       for (const app of applications) {
         applyEditModeRubyToRange(app.start, app.end, app.text, app.type, app.scale, { appendOverlay: !!app.overlay });
       }
-      if (didAdjustLeading) {
-        resizeActiveInPlaceEditBoxToState(sel);
-        refreshActiveInPlaceEditPreview(sel);
-      }
+      if (didAdjustLeading) resizeActiveInPlaceEditBoxToState(sel);
+      refreshActiveInPlaceEditPreview(sel);
     }
     refreshAllOverlays();
     rebuildLayerList();
