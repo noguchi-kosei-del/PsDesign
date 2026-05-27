@@ -631,7 +631,9 @@ export async function runScanExtractForFiles(files, { loadText = true, maxPages 
   await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place", loadText, maxPages, excludedPages, keepProgressOpen, progressFlow });
 }
 
-export async function runScanExtractForTranscription(files) {
+export async function runScanExtractForTranscription(files, { keepProgressOpen = false } = {}) {
+  // v2.2.x: keepProgressOpen を pass-through。startHomeTranscribeFlow が完了時に
+  // 自前の transitionToWorkspaceWithStars (星空ディゾルブ) を流したい場合は true を渡す。
   await runScanExtract(files, {
     notifyOnComplete: false,
     icon: SCAN_ICON_SVG,
@@ -639,6 +641,7 @@ export async function runScanExtractForTranscription(files) {
     variant: "scan",
     loadText: true,
     consumeText: false,
+    keepProgressOpen,
   });
 }
 

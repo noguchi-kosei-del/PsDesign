@@ -119,10 +119,13 @@ function readDialogStyle() {
     kerningMille: normalizeSpacingMille($("find-change-kerning")?.value),
     trackingEnabled: readEnabled("find-change-tracking-enabled"),
     trackingMille: normalizeSpacingMille($("find-change-tracking")?.value),
-    boldEnabled: readEnabled("find-change-bold-enabled"),
-    syntheticBold: $("find-change-bold")?.value === "true",
-    italicEnabled: readEnabled("find-change-italic-enabled"),
-    syntheticItalic: $("find-change-italic")?.value === "true",
+    // 太字 / 斜体は相互排他チェックボックス（ON のときだけ true、OFF は変更しない）。
+    // 旧仕様: 専用の「太字にする / 通常にする」select があり enable + value で制御。
+    // 新仕様: チェックボックス自体が「太字にする」を表し、両方 ON にはできない。
+    boldEnabled: readEnabled("find-change-bold"),
+    syntheticBold: readEnabled("find-change-bold"),
+    italicEnabled: readEnabled("find-change-italic"),
+    syntheticItalic: readEnabled("find-change-italic"),
   };
 }
 
@@ -233,9 +236,14 @@ function createModal() {
   modal.innerHTML = `
     <div class="find-change-card" role="dialog" aria-modal="true" aria-labelledby="find-change-title">
       <div class="find-change-header">
-        <div id="find-change-title" class="find-change-title">検索置換 / 全変換</div>
+        <div id="find-change-title" class="find-change-title">検索・置換 / 全変換</div>
+      </div>
+      <div class="find-change-tabs" role="tablist">
+        <button id="find-change-tab-replace" class="find-change-tab active" data-tab="replace" type="button" role="tab" aria-selected="true">検索・置換</button>
+        <button id="find-change-tab-convert" class="find-change-tab" data-tab="convert" type="button" role="tab" aria-selected="false">全変換</button>
       </div>
       <div class="find-change-body">
+        <!-- 共有: 検索文字 + 大文字/小文字区別 -->
         <label class="find-change-field">
           <span>検索文字</span>
           <input id="find-change-query" class="find-change-input" type="text" autocomplete="off" spellcheck="false">
@@ -244,128 +252,122 @@ function createModal() {
           <input id="find-change-case" type="checkbox">
           <span>大文字 / 小文字を区別</span>
         </label>
-        <label class="find-change-checkrow">
-          <input id="find-change-replace-enabled" type="checkbox" checked>
-          <span>文字を置換</span>
-        </label>
-        <label class="find-change-field">
-          <span>置換文字</span>
-          <input id="find-change-replace" class="find-change-input" type="text" autocomplete="off" spellcheck="false">
-        </label>
-        <div class="find-change-grid">
+        <!-- 検索置換タブ専用 -->
+        <div class="find-change-tab-panel" data-tab-panel="replace">
           <label class="find-change-checkrow">
-            <input id="find-change-size-enabled" type="checkbox">
-            <span>文字サイズ</span>
+            <input id="find-change-replace-enabled" type="checkbox" checked>
+            <span>文字を置換</span>
           </label>
-          <input id="find-change-size" class="find-change-input" type="number" min="1" max="999" step="0.5" value="24" data-enables="find-change-size-enabled">
-        </div>
-        <div class="find-change-grid">
-          <label class="find-change-checkrow">
-            <input id="find-change-font-enabled" type="checkbox">
-            <span>フォント</span>
+          <label class="find-change-field">
+            <span>置換文字</span>
+            <input id="find-change-replace" class="find-change-input" type="text" autocomplete="off" spellcheck="false">
           </label>
-          <div id="find-change-font-combobox" class="font-combobox find-change-font-combobox">
-            <input id="find-change-font" type="hidden">
-            <input id="find-change-font-search" class="find-change-input font-input" type="text" autocomplete="off" spellcheck="false" data-enables="find-change-font-enabled">
-            <button id="find-change-font-toggle" class="font-combobox-toggle" type="button" aria-label="フォント一覧" title="フォント一覧">▼</button>
-            <ul id="find-change-font-list" class="font-combobox-list find-change-font-list" role="listbox" hidden></ul>
+        </div>
+        <!-- 全変換タブ専用 -->
+        <div class="find-change-tab-panel" data-tab-panel="convert" hidden>
+          <div class="find-change-grid">
+            <label class="find-change-checkrow">
+              <input id="find-change-size-enabled" type="checkbox">
+              <span>文字サイズ</span>
+            </label>
+            <input id="find-change-size" class="find-change-input" type="number" min="1" max="999" step="0.5" value="24" data-enables="find-change-size-enabled">
+          </div>
+          <div class="find-change-grid">
+            <label class="find-change-checkrow">
+              <input id="find-change-font-enabled" type="checkbox">
+              <span>フォント</span>
+            </label>
+            <div id="find-change-font-combobox" class="font-combobox find-change-font-combobox">
+              <input id="find-change-font" type="hidden">
+              <input id="find-change-font-search" class="find-change-input font-input" type="text" autocomplete="off" spellcheck="false" data-enables="find-change-font-enabled">
+              <button id="find-change-font-toggle" class="font-combobox-toggle" type="button" aria-label="フォント一覧" title="フォント一覧">▼</button>
+              <ul id="find-change-font-list" class="font-combobox-list find-change-font-list" role="listbox" hidden></ul>
+            </div>
+          </div>
+          <div class="find-change-style-panel">
+            <div class="find-change-style-title">基本スタイル</div>
+            <div class="find-change-grid">
+              <label class="find-change-checkrow">
+                <input id="find-change-fill-enabled" type="checkbox">
+                <span>文字色</span>
+              </label>
+              <div class="find-change-inline">
+                <select id="find-change-fill" class="find-change-input" data-enables="find-change-fill-enabled">
+                  <option value="default">そのまま</option>
+                  <option value="black">黒</option>
+                  <option value="white">白</option>
+                  <option value="#ff0000">赤</option>
+                  <option value="#0000ff">青</option>
+                  <option value="custom">カスタム</option>
+                </select>
+                <input id="find-change-fill-custom" class="find-change-color-input" type="color" value="#ff0000" data-enables="find-change-fill-enabled">
+              </div>
+            </div>
+            <div class="find-change-grid">
+              <label class="find-change-checkrow">
+                <input id="find-change-stroke-enabled" type="checkbox">
+                <span>フチ</span>
+              </label>
+              <div class="find-change-inline">
+                <select id="find-change-stroke-color" class="find-change-input" data-enables="find-change-stroke-enabled">
+                  <option value="none">なし</option>
+                  <option value="white">白</option>
+                  <option value="black">黒</option>
+                </select>
+                <input id="find-change-stroke-width" class="find-change-input find-change-compact-input" type="number" min="0" max="999" step="0.5" value="20" data-enables="find-change-stroke-enabled">
+                <span class="find-change-unit">px</span>
+              </div>
+            </div>
+            <div class="find-change-style-title">文字詳細</div>
+            <div class="find-change-grid">
+              <label class="find-change-checkrow">
+                <input id="find-change-horizontal-scale-enabled" type="checkbox">
+                <span>長体</span>
+              </label>
+              <div class="find-change-inline">
+                <input id="find-change-horizontal-scale" class="find-change-input find-change-compact-input" type="number" min="10" max="400" step="1" value="100" data-enables="find-change-horizontal-scale-enabled">
+                <span class="find-change-unit">%</span>
+              </div>
+            </div>
+            <div class="find-change-grid">
+              <label class="find-change-checkrow">
+                <input id="find-change-vertical-scale-enabled" type="checkbox">
+                <span>平体</span>
+              </label>
+              <div class="find-change-inline">
+                <input id="find-change-vertical-scale" class="find-change-input find-change-compact-input" type="number" min="10" max="400" step="1" value="100" data-enables="find-change-vertical-scale-enabled">
+                <span class="find-change-unit">%</span>
+              </div>
+            </div>
+            <div class="find-change-grid">
+              <label class="find-change-checkrow">
+                <input id="find-change-kerning-enabled" type="checkbox">
+                <span>カーニング</span>
+              </label>
+              <input id="find-change-kerning" class="find-change-input" type="number" min="-1000" max="1000" step="10" value="0" data-enables="find-change-kerning-enabled">
+            </div>
+            <div class="find-change-grid">
+              <label class="find-change-checkrow">
+                <input id="find-change-tracking-enabled" type="checkbox">
+                <span>トラッキング</span>
+              </label>
+              <input id="find-change-tracking" class="find-change-input" type="number" min="-1000" max="1000" step="10" value="0" data-enables="find-change-tracking-enabled">
+            </div>
+            <!-- 太字 / 斜体: 相互排他のチェックボックス（ON 一方のみ） -->
+            <label class="find-change-checkrow">
+              <input id="find-change-bold" type="checkbox">
+              <span>太字にする</span>
+            </label>
+            <label class="find-change-checkrow">
+              <input id="find-change-italic" type="checkbox">
+              <span>斜体にする</span>
+            </label>
           </div>
         </div>
-        <div class="find-change-style-panel">
-          <div class="find-change-style-title">基本スタイル</div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-fill-enabled" type="checkbox">
-              <span>文字色</span>
-            </label>
-            <div class="find-change-inline">
-              <select id="find-change-fill" class="find-change-input" data-enables="find-change-fill-enabled">
-                <option value="default">そのまま</option>
-                <option value="black">黒</option>
-                <option value="white">白</option>
-                <option value="#ff0000">赤</option>
-                <option value="#0000ff">青</option>
-                <option value="custom">カスタム</option>
-              </select>
-              <input id="find-change-fill-custom" class="find-change-color-input" type="color" value="#ff0000" data-enables="find-change-fill-enabled">
-            </div>
-          </div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-stroke-enabled" type="checkbox">
-              <span>フチ</span>
-            </label>
-            <div class="find-change-inline">
-              <select id="find-change-stroke-color" class="find-change-input" data-enables="find-change-stroke-enabled">
-                <option value="none">なし</option>
-                <option value="white">白</option>
-                <option value="black">黒</option>
-              </select>
-              <input id="find-change-stroke-width" class="find-change-input find-change-compact-input" type="number" min="0" max="999" step="0.5" value="20" data-enables="find-change-stroke-enabled">
-              <span class="find-change-unit">px</span>
-            </div>
-          </div>
-          <div class="find-change-style-title">文字詳細</div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-horizontal-scale-enabled" type="checkbox">
-              <span>長体</span>
-            </label>
-            <div class="find-change-inline">
-              <input id="find-change-horizontal-scale" class="find-change-input find-change-compact-input" type="number" min="10" max="400" step="1" value="100" data-enables="find-change-horizontal-scale-enabled">
-              <span class="find-change-unit">%</span>
-            </div>
-          </div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-vertical-scale-enabled" type="checkbox">
-              <span>平体</span>
-            </label>
-            <div class="find-change-inline">
-              <input id="find-change-vertical-scale" class="find-change-input find-change-compact-input" type="number" min="10" max="400" step="1" value="100" data-enables="find-change-vertical-scale-enabled">
-              <span class="find-change-unit">%</span>
-            </div>
-          </div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-kerning-enabled" type="checkbox">
-              <span>カーニング</span>
-            </label>
-            <input id="find-change-kerning" class="find-change-input" type="number" min="-1000" max="1000" step="10" value="0" data-enables="find-change-kerning-enabled">
-          </div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-tracking-enabled" type="checkbox">
-              <span>トラッキング</span>
-            </label>
-            <input id="find-change-tracking" class="find-change-input" type="number" min="-1000" max="1000" step="10" value="0" data-enables="find-change-tracking-enabled">
-          </div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-bold-enabled" type="checkbox">
-              <span>太字</span>
-            </label>
-            <select id="find-change-bold" class="find-change-input" data-enables="find-change-bold-enabled">
-              <option value="true">太字にする</option>
-              <option value="false">通常にする</option>
-            </select>
-          </div>
-          <div class="find-change-grid">
-            <label class="find-change-checkrow">
-              <input id="find-change-italic-enabled" type="checkbox">
-              <span>斜体</span>
-            </label>
-            <select id="find-change-italic" class="find-change-input" data-enables="find-change-italic-enabled">
-              <option value="true">斜体にする</option>
-              <option value="false">通常にする</option>
-            </select>
-          </div>
-        </div>
-        <div id="find-change-summary" class="find-change-summary">全PSDのテキストレイヤーを対象にします。</div>
       </div>
       <div class="find-change-footer">
         <button id="find-change-cancel" class="find-change-btn" type="button">キャンセル</button>
-        <button id="find-change-apply" class="find-change-btn find-change-btn-primary" type="button">全変換</button>
+        <button id="find-change-apply" class="find-change-btn find-change-btn-primary" type="button">置換</button>
       </div>
     </div>
   `;
@@ -576,14 +578,22 @@ function syncModalStyleDefaults() {
 
 function readOptions() {
   const query = $("find-change-query")?.value ?? "";
-  const replaceEnabled = $("find-change-replace-enabled")?.checked === true;
-  const sizeEnabled = $("find-change-size-enabled")?.checked === true;
-  const fontEnabled = $("find-change-font-enabled")?.checked === true;
+  // 検索置換タブのとき: replace 関連のみ動作、全変換項目 (size/font/style) は無視。
+  // 全変換タブのとき:   replace を無効化、それ以外をスタイル変換として送る。
+  const activeTab = getFindChangeActiveTab();
+  const replaceEnabled = activeTab === "replace"
+    && $("find-change-replace-enabled")?.checked === true;
+  const styleAllowed = activeTab === "convert";
+  const sizeEnabled = styleAllowed && $("find-change-size-enabled")?.checked === true;
+  const fontEnabled = styleAllowed && $("find-change-font-enabled")?.checked === true;
   const sizePt = normalizeSizePt($("find-change-size")?.value);
   const fontPostScriptName = $("find-change-font")?.value
     || resolveFindChangeFontFromInput($("find-change-font-search")?.value)?.postScriptName
     || "";
-  const dialogStyle = readDialogStyle();
+  const dialogStyle = styleAllowed
+    ? readDialogStyle()
+    : Object.fromEntries(Object.entries(readDialogStyle()).map(([k, v]) =>
+        k.endsWith("Enabled") ? [k, false] : [k, v]));
   return {
     query,
     caseSensitive: $("find-change-case")?.checked === true,
@@ -880,6 +890,28 @@ function closeModal() {
   hideModalAnimated($(MODAL_ID));
 }
 
+function getFindChangeActiveTab() {
+  return $("find-change-tab-replace")?.classList.contains("active") ? "replace" : "convert";
+}
+
+function setFindChangeActiveTab(tab) {
+  const replaceTab = $("find-change-tab-replace");
+  const convertTab = $("find-change-tab-convert");
+  if (!replaceTab || !convertTab) return;
+  const active = tab === "convert" ? "convert" : "replace";
+  replaceTab.classList.toggle("active", active === "replace");
+  convertTab.classList.toggle("active", active === "convert");
+  replaceTab.setAttribute("aria-selected", active === "replace" ? "true" : "false");
+  convertTab.setAttribute("aria-selected", active === "convert" ? "true" : "false");
+  // パネル切替
+  document.querySelectorAll(".find-change-tab-panel").forEach((p) => {
+    p.hidden = p.getAttribute("data-tab-panel") !== active;
+  });
+  // 適用ボタンのラベル切替
+  const applyBtn = $("find-change-apply");
+  if (applyBtn) applyBtn.textContent = active === "replace" ? "置換" : "全変換";
+}
+
 function bindModalEvents() {
   const modal = createModal();
   const replaceEnabled = $("find-change-replace-enabled");
@@ -891,6 +923,21 @@ function bindModalEvents() {
   const fontToggle = $("find-change-font-toggle");
   const fillSelect = $("find-change-fill");
   const fillCustom = $("find-change-fill-custom");
+  const boldCheckbox = $("find-change-bold");
+  const italicCheckbox = $("find-change-italic");
+  // 太字/斜体の相互排他: 一方を ON にしたら他方を OFF。
+  // (ユーザー仕様: チェックボックスのみで「どちらか一方を選ぶ」を表現)
+  boldCheckbox?.addEventListener("change", () => {
+    if (boldCheckbox.checked && italicCheckbox) italicCheckbox.checked = false;
+  });
+  italicCheckbox?.addEventListener("change", () => {
+    if (italicCheckbox.checked && boldCheckbox) boldCheckbox.checked = false;
+  });
+  // タブ切替
+  $("find-change-tab-replace")?.addEventListener("click", () => setFindChangeActiveTab("replace"));
+  $("find-change-tab-convert")?.addEventListener("click", () => setFindChangeActiveTab("convert"));
+  // 初期表示は「検索置換」タブ
+  setFindChangeActiveTab("replace");
   $("find-change-cancel")?.addEventListener("click", closeModal);
   $("find-change-apply")?.addEventListener("click", () => {
     applyFindChange(readOptions());

@@ -45,19 +45,19 @@ const boundHandlers = {
 };
 
 export function bindViewerMode() {
-  viewerBtn = document.getElementById("viewer-mode-btn");
-  if (!viewerBtn) return;
+  // 【v2.2.x】viewer-mode-btn は上部バーから撤去 (View ▾ ドロップダウンに統合済み)。
+  // 起動経路: View ▾ → toggleViewerMode 直呼び / Esc キー。終了: Esc / × ボタン。
 
   navHint = document.createElement("div");
   navHint.className = "viewer-nav-hint";
-  navHint.textContent = "Esc または × で閲覧モードを終了";
+  navHint.textContent = "Esc または × でPSD全画面モードを終了";
   document.body.appendChild(navHint);
 
   closeBtn = document.createElement("button");
   closeBtn.type = "button";
   closeBtn.className = "viewer-close-btn";
-  closeBtn.title = "閲覧モードを終了";
-  closeBtn.setAttribute("aria-label", "閲覧モードを終了");
+  closeBtn.title = "PSD全画面モードを終了";
+  closeBtn.setAttribute("aria-label", "PSD全画面モードを終了");
   closeBtn.innerHTML =
     '<svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' +
     '<line x1="18" y1="6" x2="6" y2="18"/>' +
@@ -65,17 +65,12 @@ export function bindViewerMode() {
     "</svg>";
   mountCloseBtn();
 
-  boundHandlers.btnClick = () => toggle();
   boundHandlers.closeClick = () => exit();
-  viewerBtn.addEventListener("click", boundHandlers.btnClick);
   closeBtn.addEventListener("click", boundHandlers.closeClick);
 
-  // PSD 未読込時はボタンを disabled。
-  // psdesign:psd-loaded（読込完了時）と onPageIndexChange（ホームに戻る等で
-  // ページインデックスが変わるタイミング）の両方で再評価する。
+  // PSD 未読込中に viewer-mode が active で残らないように、ページ変化時に確認。
   const sync = () => {
     const enabled = getPages().length > 0;
-    viewerBtn.disabled = !enabled;
     if (!enabled && isActive) exit();
   };
   window.addEventListener("psdesign:psd-loaded", sync);
@@ -189,16 +184,27 @@ function exit() {
   cleanupEventListeners();
 
   setPsdZoom(previousZoom);
+  // PSD は viewer-mode 中も DOM が表示されていたので即時 layout refresh で OK。
   schedulePsdStageLayoutRefresh({
     durationMs: 420,
     recenter: !previousViewportCenter,
     viewportCenter: previousViewportCenter,
   });
-  schedulePdfStageLayoutRefresh({
-    durationMs: 420,
-    recenter: !previousPdfViewportCenter,
-    viewportCenter: previousPdfViewportCenter,
-  });
+  // PDF area は viewer-mode 中に hidden + width:0 になっていたため、body.viewer-mode
+  // を外した直後はまだ stage の clientWidth/Height が 0 のまま。ResizeObserver が
+  // 走って PDF page DOM が再描画されたあとでないと、capturePdfViewportCenter の
+  // 復元が正しく動かない (元の表示位置にずれる)。
+  // → CSS reflow + ResizeObserver の発火を待つため複数 rAF + setTimeout で遅延させる。
+  const restorePdf = () => {
+    schedulePdfStageLayoutRefresh({
+      durationMs: 420,
+      recenter: !previousPdfViewportCenter,
+      viewportCenter: previousPdfViewportCenter,
+    });
+  };
+  requestAnimationFrame(() => requestAnimationFrame(restorePdf));
+  setTimeout(restorePdf, 120);
+  setTimeout(restorePdf, 320);
   previousViewportCenter = null;
   previousPdfViewportCenter = null;
 }

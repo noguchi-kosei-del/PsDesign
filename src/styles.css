@@ -25,7 +25,8 @@
   --home-text: #ffffff;
   --home-muted: rgba(255, 255, 255, 0.94);
   --home-line: rgba(235, 235, 235, 0.86);
-  --home-version-color: rgba(205, 215, 240, 0.85);
+  /* v2.2.x: Ver 表記は「品のある薄いグレー」で控えめに。青みは抜いてニュートラル寄り。 */
+  --home-version-color: rgba(190, 192, 200, 0.52);
   --home-divider-color: rgba(184, 184, 184, 0.72);
   --home-border: rgba(180, 180, 180, 0.78);
   --home-button-hover: rgba(255, 255, 255, 0.13);
@@ -50,6 +51,24 @@
   --home-logo-glow-far: rgba(80, 130, 220, 0.32);
   --home-title-glow: rgba(180, 200, 255, 0.42);
   --home-title-glow-far: rgba(120, 140, 220, 0.22);
+  /* OPUS Dialog 共通デザイントークン: 写植用ファイル選択 / 位置調整 / 将来追加される
+     ダイアログで「ホーム世界観 (夜空・上品さ)」を共有するための変数。 */
+  --opus-dialog-overlay: rgba(0, 0, 0, 0.9);
+  --opus-dialog-card-bg: linear-gradient(180deg, rgba(28, 28, 28, 0.92) 0%, rgba(14, 14, 14, 0.88) 100%);
+  --opus-dialog-card-border: rgba(255, 255, 255, 0.28);
+  --opus-dialog-card-radius: 20px;
+  --opus-dialog-card-shadow: 0 24px 60px rgba(0, 0, 0, 0.44);
+  --opus-dialog-card-blur: blur(8px);
+  --opus-dialog-pad-x: 28px;
+  --opus-dialog-pad-y: 24px;
+  --opus-dialog-title-size: 24px;
+  --opus-dialog-subtitle-color: rgba(255, 255, 255, 0.54);
+  --opus-dialog-inner-card-bg: var(--home-card-bg);
+  --opus-dialog-inner-card-border: var(--home-card-border);
+  --opus-dialog-inner-card-shadow:
+    var(--home-card-shadow, 0 22px 34px rgba(0, 0, 0, 0.38)),
+    inset 0 1px 0 var(--home-card-highlight, rgba(255, 255, 255, 0.14));
+  --opus-dialog-inner-card-radius: 16px;
   color-scheme: dark;
 }
 * {
@@ -522,13 +541,99 @@ body.home-mode .toolbar .settings-toolbar-btn {
    左ボタン群 (logo / hamburger / settings / home) と右ボタン群 (history / actions /
    window-controls) は flex 順に詰めて並び、view-mode は flex フローから外れて
    中央に固定される。 */
-.toolbar .view-mode-segment {
+.toolbar .view-mode-segment,
+.toolbar .view-mode-dropdown {
   position: absolute;
   left: 50%;
   top: 50%;
   transform: translate(-50%, -50%);
   z-index: 2;
   -webkit-app-region: no-drag;
+}
+/* View ▾ トリガーボタン: 中立的でコンパクトな segment 風デザイン */
+.view-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 72px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-hover);
+  color: var(--text);
+  font: 600 12px var(--ui-font);
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+.view-mode-trigger:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-hover));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.view-mode-trigger[aria-expanded="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.view-mode-trigger-caret {
+  font-size: 9px;
+  opacity: 0.8;
+  margin-left: 2px;
+}
+/* メニュー本体: trigger の真下に配置 (absolute) */
+.view-mode-dropdown {
+  /* trigger 位置の anchor。.toolbar 内の絶対配置のままで OK */
+}
+.view-mode-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 3;
+}
+.view-mode-menu[hidden] { display: none; }
+.view-mode-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: 500 12px var(--ui-font);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.view-mode-menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.view-mode-menu-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+.view-mode-menu-item svg {
+  flex: 0 0 14px;
+  stroke: currentColor;
+}
+.view-mode-menu-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+.view-mode-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 4px;
 }
 .window-controls {
   display: flex;
@@ -1390,11 +1495,16 @@ body.home-returning .workspace {
   content: none;
 }
 .home-divider {
-  position: relative;
+  /* v2.2.x: .home-version と同じく hero グラデ境界のやや下に絶対配置。
+     Ver の直下に並ぶように top を +24px して align。 */
+  position: absolute;
   z-index: 6;
+  top: calc(clamp(282px, 47vh, 470px) + 26px);
+  left: 50%;
+  transform: translateX(-50%);
   width: 112px;
   height: 1px;
-  margin: clamp(142px, calc(42vh - 170px), 244px) auto 0;
+  margin: 0;
   background: linear-gradient(90deg, transparent 0%, rgba(180, 200, 255, 0.68) 50%, transparent 100%);
   box-shadow:
     0 0 6px rgba(180, 200, 255, 0.48),
@@ -1407,20 +1517,88 @@ body.home-mode .home-screen {
   justify-content: center;
 }
 body.home-starting .home-screen {
+  /* v2.2.x: ホーム画面のフェードは廃止し、全画面の黒い暗転 (.scene-fade-black) が
+     swap を覆い隠す方式に切替え。ここでは pointer-events だけ抑止して、
+     遷移中のクリックを無効化する役割だけ残す。 */
   pointer-events: none;
-  animation: home-start-fade-out 360ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
 }
-@keyframes home-start-fade-out {
-  0% {
-    opacity: 1;
-    transform: scale(1);
-    filter: blur(0);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(0.985);
-    filter: blur(2px);
-  }
+
+/* v2.2.x: 「設定画面 → アニメーション画面」のジャンプカット風暗転。
+   ボタン押下 → 100ms で fade in to black → 200ms 黒を hold → 100ms で fade out。
+   hold 中に modal の入替え / home の hide を行うことで、ユーザーには
+   「一瞬黒くなって、進捗画面に切り替わった」というシネマ的な場面転換になる。 */
+.scene-fade-black {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: #000;
+  opacity: 0;
+  will-change: opacity;
+  animation: scene-fade-black-anim 400ms linear both;
+}
+@keyframes scene-fade-black-anim {
+  0%   { opacity: 0; }
+  25%  { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* v2.2.x: 黒い暗転のあとに「ゆっくり星空がフェードインして消える」幻想的な veil を重ねる。
+   OPUS のホーム背景や splash の星空モチーフと連動し、設定 → 進捗画面の場面転換に
+   詩的な間を生む。z-index 9998 で .scene-fade-black (9999) の直下、progress modal の上。
+   コンテナは深い夜空色の vignette が淡くフェードイン→ホールド→フェードアウトし、
+   その中で 60 個の星 (.scene-starry-star) が個別の delay でちらちらと瞬く。 */
+.scene-starry-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  /* v2.2.x: 背景は完全 opaque な夜空グラデにする。
+     旧 (rgba 0.0 → 0.6) は中心が透明で、コンテナ opacity が 1 でも作業画面が透けてしまい、
+     星が灯り始めた時に裏の workspace が見えてしまう問題があった。
+     新: 中心 #0c1228 (深い夜青) → 周縁 #02040a (ほぼ黒) の opaque グラデにし、
+     workspace は完全に hide。透けて見える reveal は container の opacity transition のみが司る。 */
+  background:
+    radial-gradient(ellipse at center, #0c1228 0%, #02040a 100%);
+  opacity: 0;
+  will-change: opacity;
+  /* ゆっくりディゾルブを意識した長尺 (3000ms)。
+     22% (660ms) かけて veil 自体がふわっと夜空色に染まり、
+     53% (1590ms) かけて星空をたっぷり見せ、
+     25% (750ms) かけて静かにフェードアウト → workspace / progress modal が顔を出す。 */
+  animation: scene-starry-veil-fade 3000ms ease both;
+}
+@keyframes scene-starry-veil-fade {
+  /* v2.2.x: 黒い暗転 (400ms) が消える前に veil が完全 opaque に達するよう、fade-in を
+     5% (150ms) に短縮。黒 → 夜空色のクロスフェードが滑らかになり、間で workspace が透ける
+     瞬間が消える。
+     5-75% (150-2250ms) は星空を見せる長い hold、75-100% (2250-3000ms) でゆっくり消える。 */
+  0%   { opacity: 0; }
+  5%   { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+.scene-starry-star {
+  position: absolute;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 4px 1px rgba(220, 230, 255, 0.65),
+    0 0 12px 3px rgba(180, 200, 255, 0.3);
+  opacity: 0;
+  will-change: opacity, transform;
+  /* 個別の星は 2600ms かけてゆっくり灯る。delay 0-1100ms ばらつきで
+     「一斉に光らず、ちらほら現れて広がっていく」段階的な reveal を演出。 */
+  animation: scene-star-twinkle 2600ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+}
+@keyframes scene-star-twinkle {
+  0%   { opacity: 0; transform: scale(0.2); }
+  25%  { opacity: 1; transform: scale(1.3); }
+  40%  { opacity: 0.85; transform: scale(1); }
+  60%  { opacity: 0.7; transform: scale(1.1); }
+  80%  { opacity: 0.5; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.6); }
 }
 .home-screen-inner {
   position: relative;
@@ -1474,11 +1652,18 @@ body.home-starting .home-screen {
     0 0 48px var(--home-title-glow-far);
 }
 .home-version {
+  /* v2.2.x: 背景の hero グラデーション境界 (`.home-screen::before { height: 45vh }`)
+     の「やや下」に Ver + 横線をセットで置く。グラデが薄れる境界線とちょうど重なる
+     位置になり、上下のトーン切替に視覚的なリズム線として馴染む。
+     絶対配置で .home-screen の縦中央付近に固定するため、メディアクエリの clamp は
+     共有しない (これ自身の `top` clamp で全画面サイズに追従する)。 */
   position: absolute;
   z-index: 8;
-  top: 28px;
-  right: 34px;
-  margin-top: 0;
+  top: clamp(282px, 47vh, 470px);
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  display: block;
   color: var(--home-version-color);
   font-family: "Cinzel", "Times New Roman", serif;
   font-size: 12px;
@@ -1486,9 +1671,10 @@ body.home-starting .home-screen {
   line-height: 1;
   letter-spacing: 0.18em;
   text-transform: uppercase;
+  text-align: center;
   user-select: none;
   -webkit-user-select: none;
-  text-shadow: 0 0 8px rgba(180, 200, 255, 0.35);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.45);
 }
 .home-start-grid {
   display: grid;
@@ -1496,7 +1682,9 @@ body.home-starting .home-screen {
   justify-content: center;
   gap: 28px;
   width: min(900px, calc(100vw - 120px));
-  margin-top: clamp(16px, 2.4vh, 34px);
+  /* v2.2.x: Ver + 光の横線が hero グラデ境界に絶対配置。カード grid は divider より
+     下に来るよう margin-top を確保しつつ、下げ過ぎないバランス値に。 */
+  margin-top: clamp(120px, 22vh, 240px);
 }
 .home-scan-engine-warning {
   position: absolute;
@@ -2596,6 +2784,105 @@ body.home-starting .home-screen {
   display: flex;
   gap: 8px;
 }
+
+/* ================================================================
+   v2.2.x: 「非表示にする見本を選択」ダイアログを OPUS 世界観に統一。
+   home-typeset-modal / 位置調整 modal と同じ --opus-dialog-* / --home-* トークンを使い、
+   ダーク背景 + 上品な border-radius + 控えめな highlight ハイライトで統一感を出す。
+   ================================================================ */
+.reference-hidden-modal {
+  background: var(--opus-dialog-overlay, rgba(0, 0, 0, 0.9));
+}
+.reference-hidden-card {
+  background: var(--home-bg);
+  color: var(--home-text);
+  border: 1px solid var(--opus-dialog-card-border, rgba(255, 255, 255, 0.28));
+  border-radius: var(--opus-dialog-card-radius, 20px);
+  box-shadow: var(--opus-dialog-card-shadow, 0 24px 60px rgba(0, 0, 0, 0.44));
+  backdrop-filter: var(--opus-dialog-card-blur, blur(8px));
+}
+.reference-hidden-header {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 36px 56px 22px;
+  border-bottom: 0;
+  text-align: center;
+}
+.reference-hidden-title {
+  font-size: var(--opus-dialog-title-size, 24px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--home-text);
+}
+.reference-hidden-subtitle {
+  margin-top: 6px;
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+  font-size: 12px;
+  font-weight: 300;
+  line-height: 1.4;
+}
+.reference-hidden-body {
+  padding: 8px 36px 20px;
+}
+.reference-hidden-loading {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+  font-weight: 500;
+}
+.reference-hidden-grid {
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 14px;
+}
+.reference-hidden-page-card {
+  padding: 10px;
+  background: var(--home-card-bg);
+  border: 1px solid var(--opus-dialog-inner-card-border, var(--home-card-border, rgba(255, 255, 255, 0.28)));
+  border-radius: var(--opus-dialog-inner-card-radius, 16px);
+  color: var(--home-text);
+  box-shadow:
+    var(--home-card-shadow, 0 22px 34px rgba(0, 0, 0, 0.38)),
+    inset 0 1px 0 var(--home-card-highlight, rgba(255, 255, 255, 0.14));
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.reference-hidden-page-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, rgba(255, 255, 255, 0.28));
+  transform: translateY(-1px);
+}
+.reference-hidden-page-card.hidden-selected {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 36%, transparent),
+    var(--home-card-shadow, 0 22px 34px rgba(0, 0, 0, 0.38));
+}
+.reference-hidden-thumb {
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.reference-hidden-thumb-empty {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+}
+.reference-hidden-overlay {
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+  letter-spacing: 0.04em;
+}
+.reference-hidden-page {
+  color: var(--home-text);
+}
+.reference-hidden-name {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+}
+.reference-hidden-footer {
+  padding: 16px 36px 24px;
+  border-top: 0;
+}
+.reference-hidden-count {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+  font-size: 12px;
+  font-weight: 400;
+}
+
 @media (max-width: 840px) {
   .home-typeset-list {
     grid-template-columns: 1fr;
@@ -2622,14 +2909,17 @@ body.home-starting .home-screen {
   }
   .home-title-icon { width: 66px; }
   .home-title-word { margin-top: 22px; }
+  .home-version {
+    margin: clamp(28px, 4.5vh, 56px) auto 0;
+  }
   .home-divider {
-    margin-top: clamp(100px, calc(36vh - 146px), 196px);
+    margin-top: 10px;
   }
   .home-start-grid {
     grid-template-columns: 1fr;
     gap: 16px;
     width: min(620px, calc(100vw - 64px));
-    margin-top: 18px;
+    margin-top: clamp(48px, 10vh, 96px);
   }
   .home-start-card { min-height: 150px; }
 }
@@ -2647,11 +2937,14 @@ body.home-starting .home-screen {
   .home-title-word {
     margin-top: 24px;
   }
+  .home-version {
+    margin: clamp(24px, 4vh, 48px) auto 0;
+  }
   .home-divider {
-    margin-top: clamp(98px, calc(45vh - 162px), 160px);
+    margin-top: 8px;
   }
   .home-start-grid {
-    margin-top: 16px;
+    margin-top: clamp(40px, 8vh, 80px);
   }
   .home-start-card {
     min-height: 176px;
@@ -4137,6 +4430,10 @@ body.home-starting .home-screen {
   align-items: center;
   justify-content: center;
   gap: 2px;
+  /* 縦書きレイヤー (.layer-box[data-direction="vertical"]) の writing-mode を継承させない。
+     これがないとバッジ全体が縦書きになり、フォント名や数字が縦に描画されてしまう。 */
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
 }
 .layer-size-badge::before {
   content: "";
@@ -4173,12 +4470,36 @@ body.home-starting .home-screen {
   background: rgba(255, 255, 255, 0.18);
 }
 .layer-size-badge-font-multi {
-  /* 複数フォント混在を示す薄い枠線アクセント。長くなる時はワード切れて折返し可。 */
-  outline: 1px dashed rgba(255, 255, 255, 0.45);
-  outline-offset: 0;
-  word-break: break-word;
-  white-space: normal;
-  max-width: 240px;
+  /* 複数フォント混在: 各フォント名を行ごとに <div> でラップし縦に並べる。
+     1 ファイル全体のフォント数が増えても横幅は単一フォント時と同じく自然な
+     intrinsic width を維持する（縦書きフレーム上で badge が縦長にならない）。 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  cursor: default;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  max-width: 220px;
+}
+.layer-size-badge-font-multi:hover {
+  background: transparent;
+}
+.layer-size-badge-font-row {
+  display: block;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1px 3px;
+  margin: 0;
+  border-radius: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.layer-size-badge-font-row:hover {
+  background: rgba(255, 255, 255, 0.18);
 }
 .layer-size-badge-size {
   display: inline-flex;
@@ -7267,7 +7588,14 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   background: rgba(0, 0, 0, 0.55);
   pointer-events: none;
   will-change: transform;
-  transition: transform 0.45s cubic-bezier(0.55, 0.05, 0.4, 1);
+  /* v2.2.x (close 用): 退場は控えめに 0.5s で済ます。
+     open は下の `.visible:not(.closing)` で別途 1.4s のゆっくり立ち上がりに差し替える。 */
+  transition: transform 0.5s cubic-bezier(0.55, 0.05, 0.4, 1);
+}
+/* v2.2.x: 入場専用に長尺アニメ。星空が消えてゆくのに合わせて curtain がふわっと
+   立ち上がり、進捗画面が静かに姿を現す印象に。 */
+.progress-modal.visible:not(.closing) .progress-bg {
+  transition: transform 1.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 /* 初期状態 (visible なし) は画面外。開く時に translateY(0) へ animate して
    「上下からカーテンが中央に閉じる」入場アニメになる。 */
@@ -9496,6 +9824,44 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   color: var(--text-muted);
   font-size: 11px;
 }
+/* タブ UI: 検索置換 / 全変換 を切替える segment ボタン */
+.find-change-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.find-change-tab {
+  flex: 0 0 auto;
+  min-width: 96px;
+  padding: 8px 16px 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  color: var(--text-muted);
+  font: 600 12px var(--ui-font);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.find-change-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.find-change-tab.active {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--border);
+  /* tab 下の border を打ち消して body と連結して見せる */
+  margin-bottom: -1px;
+  padding-bottom: 10px;
+}
+.find-change-tab-panel {
+  display: contents;
+}
+.find-change-tab-panel[hidden] {
+  display: none;
+}
 .find-change-btn {
   min-width: 92px;
   min-height: 30px;
@@ -11151,7 +11517,10 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .file-picker-modal {
   position: fixed;
   inset: 0;
-  z-index: 250;
+  /* v2.2.x: home-typeset-modal (260) より上に重ねることで、写植用ファイル選択
+     ダイアログから file-picker を起動した瞬間に typeset 側を隠す必要が無くなり、
+     hide → 一瞬ホーム画面が見える → file-picker 表示 の flash を排除できる。 */
+  z-index: 280;
   background: rgba(0, 0, 0, 0.9);
   display: flex;
   align-items: center;
@@ -11459,12 +11828,8 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
    閲覧モード — PSD をウインドウいっぱいに表示
    MojiQ ver_2.24 viewer-mode を移植。body.viewer-mode で activate。
    ========================================= */
-/* ボタン アクティブ状態 */
-body.viewer-mode #viewer-mode-btn {
-  background: var(--accent);
-  color: #fff;
-}
-body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
+/* viewer-mode-btn は v2.2.x で削除済み (View ▾ ドロップダウンに統合)。
+   旧 `body.viewer-mode #viewer-mode-btn { ... }` 系の selector は不要のため撤去。 */
 body.viewer-mode .toolbar {
   opacity: 0 !important;
   transform: translateY(-12px);
@@ -12016,4 +12381,305 @@ button.overlay-align-btn-primary:hover:not(:disabled) svg {
 button.home-scan-engine-install-btn:hover,
 button.home-scan-engine-install-btn:hover:not(:disabled) {
   color: #60a5fa;
+}
+
+/* ====================================================================
+   OPUS Dialog 統一スタイル (v2.2.x)
+   写植用ファイル選択 / 位置調整 / 将来追加されるダイアログを共通の
+   「ホーム世界観 (夜空・上品さ)」に揃える。--opus-dialog-* トークンを使用。
+   ==================================================================== */
+
+/* ---- 写植用ファイル選択ダイアログを位置調整ダイアログと同じ世界観に統一 ---- */
+.home-typeset-modal {
+  background: var(--opus-dialog-overlay);
+}
+.home-typeset-modal .home-typeset-card {
+  background: var(--opus-dialog-card-bg) !important;
+  border: 1px solid var(--opus-dialog-card-border) !important;
+  border-radius: var(--opus-dialog-card-radius) !important;
+  box-shadow: var(--opus-dialog-card-shadow) !important;
+  backdrop-filter: var(--opus-dialog-card-blur);
+  -webkit-backdrop-filter: var(--opus-dialog-card-blur);
+  overflow: hidden;
+}
+/* タイトル: 旧 30px → 統一サイズに */
+.home-typeset-modal .home-typeset-header {
+  padding: var(--opus-dialog-pad-y) var(--opus-dialog-pad-x) 14px !important;
+  gap: 4px;
+  border-bottom: 1px solid var(--opus-dialog-card-border) !important;
+}
+.home-typeset-modal .home-typeset-title {
+  font-size: var(--opus-dialog-title-size) !important;
+  letter-spacing: 0;
+}
+.home-typeset-modal .home-typeset-subtitle {
+  color: var(--opus-dialog-subtitle-color);
+}
+/* ファイル選択カード row: 装飾的な dashed border を撤去 (位置調整側に合わせる) */
+.home-typeset-modal .home-typeset-row {
+  border: 1px solid var(--opus-dialog-inner-card-border) !important;
+  border-radius: var(--opus-dialog-inner-card-radius) !important;
+  background: var(--opus-dialog-inner-card-bg) !important;
+  box-shadow: var(--opus-dialog-inner-card-shadow) !important;
+}
+.home-typeset-modal .home-typeset-row::before {
+  display: none !important;
+}
+.home-typeset-modal .home-typeset-row.drag-over {
+  border-color: var(--accent) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+    var(--opus-dialog-inner-card-shadow) !important;
+}
+/* list の左右 padding をダイアログ標準に揃える */
+.home-typeset-modal .home-typeset-list {
+  padding: 18px var(--opus-dialog-pad-x) 6px !important;
+}
+/* 「基本サイズ/基本フォント」を独立した設定カードに。
+   コンテンツのみを中央に寄せて、左右に大きな余白が残らないようコンパクトに揃える。 */
+.home-typeset-modal .home-typeset-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 32px;
+  align-items: center;
+  justify-content: center;
+  margin: 14px var(--opus-dialog-pad-x) 6px !important;
+  padding: 16px 22px !important;
+  border: 1px solid var(--opus-dialog-inner-card-border) !important;
+  border-radius: var(--opus-dialog-inner-card-radius) !important;
+  background: var(--opus-dialog-inner-card-bg) !important;
+  box-shadow: var(--opus-dialog-inner-card-shadow) !important;
+}
+.home-typeset-modal .home-typeset-setting {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  grid-template-columns: none;
+}
+.home-typeset-modal .home-typeset-size-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  grid-template-columns: none;
+}
+.home-typeset-modal .home-typeset-size-input {
+  width: 80px;
+  min-width: 0;
+  flex: 0 0 80px;
+}
+.home-typeset-modal .home-typeset-font-combo {
+  width: clamp(220px, 30vw, 320px);
+  flex: 0 0 auto;
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+}
+.home-typeset-modal .home-typeset-setting-label {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.home-typeset-modal .home-typeset-size-input,
+.home-typeset-modal .home-typeset-font-input {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.home-typeset-modal .home-typeset-font-toggle {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+/* actions の余分な背景を撤去してダイアログ下部に自然に並べる */
+.home-typeset-modal .home-typeset-actions {
+  margin: 8px 0 0 !important;
+  padding: 12px var(--opus-dialog-pad-x) var(--opus-dialog-pad-y) !important;
+  background: transparent !important;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* ---- 位置調整ダイアログも共通トークンに参照を切替（既存値と同じだが将来一元管理） ---- */
+.scan-adjust-choice-modal {
+  background: var(--opus-dialog-overlay);
+}
+.scan-adjust-choice-card {
+  background: var(--opus-dialog-card-bg);
+  border-color: var(--opus-dialog-card-border);
+  border-radius: var(--opus-dialog-card-radius);
+  box-shadow: var(--opus-dialog-card-shadow);
+  backdrop-filter: var(--opus-dialog-card-blur);
+  -webkit-backdrop-filter: var(--opus-dialog-card-blur);
+}
+.scan-adjust-choice-header {
+  padding: 18px var(--opus-dialog-pad-x) 14px;
+  border-bottom-color: var(--opus-dialog-card-border);
+}
+.scan-adjust-choice-title {
+  font-size: var(--opus-dialog-title-size);
+  letter-spacing: 0;
+}
+.scan-adjust-choice-list {
+  padding: 20px var(--opus-dialog-pad-x) 18px;
+}
+.scan-adjust-choice-actions {
+  padding: 0 var(--opus-dialog-pad-x) var(--opus-dialog-pad-y);
+}
+.scan-adjust-choice-option {
+  border-color: var(--opus-dialog-inner-card-border);
+  border-radius: var(--opus-dialog-inner-card-radius);
+  background: var(--opus-dialog-inner-card-bg);
+  box-shadow: var(--opus-dialog-inner-card-shadow);
+}
+
+/* ---- ファイル / フォルダ選択エクスプローラー (file-picker) を OPUS Dialog 世界観へ ---- */
+.file-picker-modal {
+  background: var(--opus-dialog-overlay);
+}
+.file-picker-card {
+  width: min(820px, 100%);
+  height: min(620px, 90vh);
+  background: var(--opus-dialog-card-bg) !important;
+  border: 1px solid var(--opus-dialog-card-border) !important;
+  border-radius: var(--opus-dialog-card-radius) !important;
+  box-shadow: var(--opus-dialog-card-shadow) !important;
+  backdrop-filter: var(--opus-dialog-card-blur);
+  -webkit-backdrop-filter: var(--opus-dialog-card-blur);
+  color: var(--home-text);
+}
+.file-picker-card .file-picker-header,
+.file-picker-card .file-picker-toolbar,
+.file-picker-card .file-picker-savebar,
+.file-picker-card .file-picker-footer {
+  background: transparent !important;
+  border-color: var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-header {
+  padding: 14px 22px !important;
+}
+.file-picker-card .file-picker-title {
+  font-size: 16px !important;
+  color: var(--home-text) !important;
+  letter-spacing: 0.02em;
+}
+.file-picker-card .file-picker-toolbar {
+  padding: 10px 18px !important;
+}
+.file-picker-card .file-picker-drive-btn,
+.file-picker-card .file-picker-nav-btn,
+.file-picker-card .file-picker-desktop-btn {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: var(--home-text) !important;
+  border-radius: 6px !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.file-picker-card .file-picker-drive-btn:hover,
+.file-picker-card .file-picker-nav-btn:hover:not(:disabled),
+.file-picker-card .file-picker-desktop-btn:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent) 60%, rgba(255, 255, 255, 0.2)) !important;
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-drive-btn.active {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+.file-picker-card .file-picker-nav-btn:disabled {
+  background: rgba(255, 255, 255, 0.025) !important;
+  color: rgba(255, 255, 255, 0.32) !important;
+}
+.file-picker-card .file-picker-path {
+  background: rgba(0, 0, 0, 0.34) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  color: var(--home-text) !important;
+  border-radius: 6px !important;
+  padding: 5px 12px !important;
+}
+.file-picker-card .file-picker-path::placeholder {
+  color: rgba(255, 255, 255, 0.42) !important;
+}
+.file-picker-card .file-picker-path:focus {
+  background: rgba(0, 0, 0, 0.44) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+.file-picker-card .file-picker-list {
+  background: rgba(0, 0, 0, 0.22) !important;
+  border-top: 1px solid var(--opus-dialog-card-border) !important;
+  border-bottom: 1px solid var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-row {
+  color: var(--home-text) !important;
+  padding: 8px 18px !important;
+}
+.file-picker-card .file-picker-row:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+.file-picker-card .file-picker-row.selected {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+.file-picker-card .file-picker-row-icon {
+  color: rgba(255, 255, 255, 0.62) !important;
+}
+.file-picker-card .file-picker-row.folder .file-picker-row-icon {
+  color: color-mix(in srgb, var(--accent) 92%, white) !important;
+}
+.file-picker-card .file-picker-row.selected .file-picker-row-icon {
+  color: #fff !important;
+}
+.file-picker-card .file-picker-loading,
+.file-picker-card .file-picker-empty {
+  color: rgba(255, 255, 255, 0.5) !important;
+}
+.file-picker-card .file-picker-savebar {
+  padding: 10px 18px !important;
+  border-top: 1px solid var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-savebar-label {
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-name-input {
+  background: rgba(0, 0, 0, 0.34) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: var(--home-text) !important;
+  border-radius: 6px !important;
+}
+.file-picker-card .file-picker-name-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+.file-picker-card .file-picker-footer {
+  padding: 14px 22px !important;
+  border-top: 1px solid var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-counter {
+  color: rgba(255, 255, 255, 0.52) !important;
+}
+.file-picker-card .file-picker-cancel-btn,
+.file-picker-card .file-picker-confirm-btn {
+  border-radius: 6px !important;
+  font-weight: 700;
+}
+.file-picker-card .file-picker-cancel-btn {
+  background: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-cancel-btn:hover {
+  background: var(--home-button-hover, rgba(255, 255, 255, 0.12)) !important;
+  border-color: rgba(255, 255, 255, 0.42) !important;
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-confirm-btn {
+  background: var(--accent) !important;
+  border: 1px solid var(--accent) !important;
+  color: #fff !important;
+}
+.file-picker-card .file-picker-confirm-btn:hover:not(:disabled) {
+  background: var(--accent-hover, var(--accent)) !important;
+  border-color: var(--accent-hover, var(--accent)) !important;
+}
+.file-picker-card .file-picker-list:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent) !important;
 }

@@ -1191,6 +1191,10 @@ export async function runAutoPlace({
   positionOnlyScan = false,
   positionAdjustMode = null,
   progressFlowId = null,
+  // v2.2.x: 完了 → workspace の星空ディゾルブ演出を呼び出し側で実施したい場合は
+  // true を渡す。runAutoPlace の最終 hideProgress(success: true) を skip するので、
+  // 呼び出し側で hideProgress + scene transition を担当する。
+  skipFinalHide = false,
 } = {}) {
   if (runningPlacePromise) return runningPlacePromise;
   runningPlacePromise = (async () => {
@@ -1387,11 +1391,19 @@ export async function runAutoPlace({
     // catch で notifyDialog を表示する。
     const willRunExternalAlign = positionAdjustMode === "mode3" && progressFlowId;
     if (willRunExternalAlign) {
+      // mode3: 中間 close (overlay-align に手渡すため必ず実行、skipFinalHide とは無関係)
       await hideProgress();
     } else if (progressOpenForAutoPlace) {
-      await closeAutoPlaceProgress({ success: true });
+      if (skipFinalHide) {
+        // 呼び出し側が close を担当するので、内部 state だけリセット
+        progressOpenForAutoPlace = false;
+      } else {
+        await closeAutoPlaceProgress({ success: true });
+      }
     } else {
-      await hideProgress({ success: true });
+      if (!skipFinalHide) {
+        await hideProgress({ success: true });
+      }
     }
     await wait(320);
     setActivePane("psd");
@@ -2197,12 +2209,14 @@ async function runOverlayAlign(options = {}) {
     completeProgressFlowStep(progressFlow, { detail: "重ね調整 完了" });
     await waitForTransitionPaint();
   }
-  await hideProgress({ success: true });
-  await notifyDialog({
-    title: "重ね調整 完了",
-    message: `${movedCount} 件のレイヤーを調整しました。`,
-    kind: "success",
-  });
+  if (!options.skipFinalHide) {
+    await hideProgress({ success: true });
+    await notifyDialog({
+      title: "重ね調整 完了",
+      message: `${movedCount} 件のレイヤーを調整しました。`,
+      kind: "success",
+    });
+  }
 }
 
 const POSITION_ADJUST_OPTIONS = [
@@ -2347,7 +2361,11 @@ function closePositionAdjustDialog() {
   window.setTimeout(() => { modal.hidden = true; }, 120);
 }
 
-export function choosePositionAdjustMode() {
+// options.keepOpen が true なら、ユーザーが OK を選んでも modal を閉じずに保持する。
+// 呼び出し側で progress modal をフェードイン完了させた後に明示的に
+// closePositionAdjustDialogExternal() を呼ぶことで「位置調整 → progress への引き継ぎ」
+// 中にホーム画面が透けて見える事故を避ける用途。cancel (null) のときは即時 close する。
+export function choosePositionAdjustMode(options = {}) {
   return new Promise((resolve) => {
     const modal = ensurePositionAdjustDialog();
     let settled = false;
@@ -2377,7 +2395,11 @@ export function choosePositionAdjustMode() {
       delete modal.dataset.chooseOnly;
       modal.removeEventListener("click", onClick, true);
       window.removeEventListener("keydown", onKey, true);
-      closePositionAdjustDialog();
+      // OK 選択 + keepOpen のとき modal は表示維持（呼出側が後で閉じる）。
+      // それ以外 (cancel / keepOpen 無し) は即時クローズ。
+      if (!options.keepOpen || value == null) {
+        closePositionAdjustDialog();
+      }
       resolve(value);
     };
     modal.dataset.chooseOnly = "1";
@@ -2389,6 +2411,11 @@ export function choosePositionAdjustMode() {
       modal.querySelector(".scan-adjust-choice-option")?.focus();
     });
   });
+}
+
+// 外部から位置調整 modal を閉じるための公開 API（keepOpen 経路用）。
+export function closePositionAdjustModalExternal() {
+  closePositionAdjustDialog();
 }
 
 export function bindPositionAdjustButton() {

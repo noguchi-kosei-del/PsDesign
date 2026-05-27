@@ -1928,6 +1928,29 @@ const PROGRESS_CLOSE_ANIM_MS = 500;
 const OPUS_CLOSE_ANIM_MS = 620;
 const OPUS_SUCCESS_HOLD_MS = 1500;
 const OPUS_EXIT_FADE_MS = 240;
+
+// v2.2.x: 進捗 100% 完了の OPUS 成功アニメ (sparkle 含む + 「完了」テキスト) だけを発火し、
+// modal は閉じない。外部から「100% 完了 → 別の演出 (星空ディゾルブ等) → close」と
+// シーケンスを組みたい時に使う。OPUS モード以外の進捗 modal では何もしない (= false 返却)。
+export function showOpusProgressComplete() {
+  const modal = $("progress-modal");
+  if (!modal || modal.hidden) return false;
+  if (!isOpusProgressActive(modal)) return false;
+  try {
+    completeOpusProgress();
+  } catch (e) {
+    console.error("showOpusProgressComplete: completeOpusProgress failed", e);
+    return false;
+  }
+  const loadingText = $("progress-loading-text");
+  if (loadingText) loadingText.textContent = "完了";
+  return true;
+}
+
+// 完了演出の hold 時間 (sparkle が消えるまでの余韻含む)。
+// 呼び出し側 (transitionToWorkspaceWithStars 等) が `await new Promise(r => setTimeout(r, OPUS_SUCCESS_HOLD_DURATION))`
+// で同じ間を取れるよう export。
+export const OPUS_SUCCESS_HOLD_DURATION = OPUS_SUCCESS_HOLD_MS;
 export function hideProgress({ success = false, variant = null } = {}) {
   return new Promise((resolve) => {
     const modal = $("progress-modal");

@@ -3554,15 +3554,26 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
     const fontEl = document.createElement("div");
     fontEl.className = "layer-size-badge-font";
     const labels = fontList.map((f) => getFontDisplayName(f) ?? f);
-    fontEl.textContent = labels.join(" / ");
-    if (fontList.length > 1) {
+    if (fontList.length === 1) {
+      fontEl.textContent = labels[0];
+      fontEl.title = "フォントを変更";
+      fontEl.addEventListener("mousedown", (e) => onBadgeFontMouseDown(e, fontList[0]));
+    } else {
+      // 複数フォント混在: 各フォントを行 <div> として並べる。バッジが縦長に
+      // ならず横書きで読める。各行は個別にクリック可能 → その oldFont を持つ
+      // 文字だけを新フォントに置換する起点に使える（案 A）。
       fontEl.classList.add("layer-size-badge-font-multi");
       fontEl.title = `フォント混在 (${labels.length}): ${labels.join(" / ")}`;
-    } else {
-      fontEl.title = "フォントを変更";
+      labels.forEach((label, idx) => {
+        const row = document.createElement("div");
+        row.className = "layer-size-badge-font-row";
+        row.textContent = label;
+        row.title = label;
+        const ps = fontList[idx];
+        row.addEventListener("mousedown", (e) => onBadgeFontMouseDown(e, ps));
+        fontEl.appendChild(row);
+      });
     }
-    // クリックは「主たるフォント」(= 先頭 = layer 既定) を編集対象として開く。
-    fontEl.addEventListener("mousedown", (e) => onBadgeFontMouseDown(e, fontList[0]));
     el.appendChild(fontEl);
   }
   const sizeEl = document.createElement("div");
@@ -4988,9 +4999,14 @@ function startContentEditableEdit(ctx, target, options = {}) {
         layerId: layerMeta.layerId ?? null,
         tempId: layerMeta.tempId ?? null,
       });
-    } else {
-      setLastInplaceSelection(null);
     }
+    // 【v2.2.x】collapse 時の setLastInplaceSelection(null) は撤去。
+    // v1.20.0 設計の「_lastInplaceSelection は明示的にクリアされるまで保持」
+    // (CLAUDE.md B2) を尊重する。撤去理由: ユーザーが contenteditable で文字選択
+    // → サイドバーのフォント検索 input にフォーカスを移すと、ブラウザ既定で
+    // selection が一時的に collapse → reportCursor が null をセット → commitFont
+    // が selection なしと判定し layer 全体変更に陥る現象があった。明示的なクリアは
+    // finalize / ruby mousedown 経路だけに任せ、focus 移動による collapse は無視する。
     const lineIndex = countNewlinesBefore(lastContents, start);
     const totalLines = (lastContents.match(/\n/g) ?? []).length + 1;
     setEditingContext({

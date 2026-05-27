@@ -22,11 +22,17 @@ import {
   getSelectedLayers,
   setFontPickerStuck,
   getFonts,
+  setCharFontsRange,
 } from "./state.js";
-import { commitFontToSelections } from "./text-editor.js";
+import { commitFontToSelections, rebuildLayerList } from "./text-editor.js";
 import { showModalAnimated, hideModalAnimated } from "./ui-feedback.js";
 import { onFontsRegistered, ensureFontLoaded } from "./font-loader.js";
-import { cssFontFamily } from "./canvas-tools.js";
+import {
+  applyEditModeStyleToRange,
+  cssFontFamily,
+  getLastInplaceSelection,
+  refreshAllOverlays,
+} from "./canvas-tools.js";
 
 // 校正パネルと同じ共有ドライブベース。stylepallet オリジナルの ROOT_PATH を踏襲。
 const STYLE_PALETTE_ROOT_PATH =
@@ -289,6 +295,25 @@ function createPresetItem(preset) {
 // ---------- プリセット適用 ----------
 function applyPreset(preset) {
   if (!preset?.fontName) return;
+  // 【v2.2.x】in-place 編集中で文字選択がある場合は per-char 適用。
+  // それまでは commitFontToSelections (layer 全体変更) しか呼ばれず、
+  // 「一部選択でフォントを変えたつもりが全体に適用される」事故が起きていた。
+  // 経路は text-editor.js commitFont の per-char 分岐と同じロジック。
+  const charSel = getLastInplaceSelection();
+  if (charSel && charSel.end > charSel.start) {
+    const targetId = charSel.tempId ?? charSel.layerId;
+    setCharFontsRange(charSel.psdPath, targetId, charSel.start, charSel.end, preset.fontName);
+    // 編集中の DOM にも span ラップで即時反映（commit 前のフィードバック）。
+    const fam = cssFontFamily(preset.fontName);
+    if (fam) applyEditModeStyleToRange(charSel.start, charSel.end, { fontFamily: fam });
+    refreshAllOverlays();
+    rebuildLayerList();
+    // per-char 適用時も brush sticky を立てて、後続の V ツールクリックで「同じ
+    // プリセットを次のフレームへブラシ転写」できるようにする。currentFont も更新。
+    setCurrentFont(preset.fontName);
+    setFontPickerStuck(true);
+    return;
+  }
   const sel = getSelectedLayers();
   if (sel.length > 0) {
     // 選択中のレイヤーがあれば一括適用（Ctrl+Z 1 回で巻き戻る）。

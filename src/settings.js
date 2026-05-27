@@ -179,7 +179,7 @@ export const FIXED_SHORTCUTS = [
   { id: "cycleTxtBlock", shortcut: "Alt + ↑ / Alt + ↓", description: "原稿テキストの選択を切替" },
   { id: "temporaryPan", shortcut: "Space 長押し", description: "パンツールに一時切替" },
   { id: "toggleTextProperties", shortcut: "Ctrl + Shift", description: "テキストプロパティの表示切替" },
-  { id: "viewerMode", shortcut: "Esc", description: "閲覧モードの表示/終了" },
+  { id: "viewerMode", shortcut: "Esc", description: "PSD全画面モードの表示/終了" },
   { id: "commitTextInput", shortcut: "Ctrl + Enter", description: "テキスト入力を配置 / 編集確定" },
 ];
 
