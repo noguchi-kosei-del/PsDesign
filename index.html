@@ -75,6 +75,19 @@
           </svg>
         </button>
         <div class="sync-segment view-mode-segment" role="group" aria-label="表示モード">
+          <button id="view-parallel-btn" class="sync-seg-btn active" type="button" title="PDF / PSD を並列表示" aria-label="並列表示" aria-pressed="true">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="3" y="5" width="8" height="14" rx="1"/>
+              <rect x="13" y="5" width="8" height="14" rx="1"/>
+            </svg>
+          </button>
+          <button id="view-spread-edit-btn" class="sync-seg-btn" type="button" title="見開き編集" aria-label="見開き編集" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 5.5h6.2c1 0 1.8.8 1.8 1.8v11.2c0-.9-.8-1.6-1.8-1.6H4z"/>
+              <path d="M20 5.5h-6.2c-1 0-1.8.8-1.8 1.8v11.2c0-.9.8-1.6 1.8-1.6H20z"/>
+              <path d="m15.5 12.2 2.1-2.1 1.3 1.3-2.1 2.1-1.5.2z"/>
+            </svg>
+          </button>
           <button id="view-proofread-btn" class="sync-seg-btn" type="button" title="PDF + 校正パネル表示" aria-label="校正" aria-pressed="false">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M9 11l3 3L22 4"/>
@@ -187,6 +200,8 @@
           <div class="home-shooting-star s2"></div>
           <div class="home-shooting-star s3"></div>
           <div class="home-shooting-star s4"></div>
+          <div class="home-shooting-star s5 is-inner"></div>
+          <div class="home-shooting-star s6 is-inner"></div>
         </div>
         <div class="home-screen-inner">
           <h2 class="home-title">
@@ -234,10 +249,10 @@
                   <path d="M4 7.5a2 2 0 0 1 2-2h4.1l1.8 2H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
                   <path d="M8.25 12.25h7.5M8.25 15.5h5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
                 </svg>
-                <span>プロジェクトを開く</span>
+                <span>プロジェクト</span>
               </h3>
               <div class="home-card-rule" aria-hidden="true"></div>
-              <p>保存済みプロジェクトを開く</p>
+              <p>保存した作業を再開</p>
               <button id="home-project-open-btn" class="home-start-btn" type="button">
                 <span>OPEN</span>
                 <span class="home-start-arrow" aria-hidden="true">▶</span>
@@ -560,21 +575,6 @@
                 </button>
               </div>
             </aside>
-          </div>
-          <div class="sync-segment view-mode-segment side-view-mode-segment" role="group" aria-label="表示モード">
-            <button id="view-parallel-btn" class="sync-seg-btn active" type="button" title="PDF / PSD を並列表示" aria-label="並列表示" aria-pressed="true">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <rect x="3" y="5" width="8" height="14" rx="1"/>
-                <rect x="13" y="5" width="8" height="14" rx="1"/>
-              </svg>
-            </button>
-            <button id="view-spread-edit-btn" class="sync-seg-btn" type="button" title="見開き編集" aria-label="見開き編集" aria-pressed="false">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M4 5.5h6.2c1 0 1.8.8 1.8 1.8v11.2c0-.9-.8-1.6-1.8-1.6H4z"/>
-                <path d="M20 5.5h-6.2c-1 0-1.8.8-1.8 1.8v11.2c0-.9.8-1.6 1.8-1.6H20z"/>
-                <path d="m15.5 12.2 2.1-2.1 1.3 1.3-2.1 2.1-1.5.2z"/>
-              </svg>
-            </button>
           </div>
           <div class="side-page-zoom" role="group" aria-label="ズーム">
             <button id="zoom-in-btn" class="icon-btn page-zoom-btn" type="button" title="ズームイン (Alt+スクロール)" aria-label="ズームイン">
@@ -1024,6 +1024,42 @@
         <div class="page-jump-actions">
           <button type="button" id="page-jump-cancel" class="page-jump-btn">キャンセル</button>
           <button type="button" id="page-jump-ok" class="page-jump-btn page-jump-btn-primary">ジャンプ</button>
+        </div>
+      </div>
+    </div>
+    <div class="progress-modal" id="save-folder-modal" hidden>
+      <div class="progress-card save-folder-card" role="dialog" aria-modal="true" aria-label="保存先フォルダ">
+        <div class="progress-title">保存先フォルダ</div>
+        <div class="save-folder-grid">
+          <label class="save-folder-row">
+            <span class="save-folder-label">タイトル</span>
+            <input id="save-folder-title" type="text" class="save-folder-input" placeholder="作品名" />
+          </label>
+          <label class="save-folder-row">
+            <span class="save-folder-label">巻</span>
+            <input id="save-folder-volume" type="number" min="1" max="999" step="1" class="save-folder-input save-folder-input-small" />
+            <span class="save-folder-suffix">巻</span>
+          </label>
+          <label class="save-folder-row">
+            <span class="save-folder-label">校数</span>
+            <select id="save-folder-kousu" class="save-folder-input save-folder-select">
+              <option value="初校">初校</option>
+              <option value="再校">再校</option>
+              <option value="三校">三校</option>
+              <option value="四校">四校</option>
+              <option value="五校">五校</option>
+              <option value="六校">六校</option>
+              <option value="念校">念校</option>
+            </select>
+          </label>
+        </div>
+        <div class="save-folder-preview">
+          <span class="save-folder-preview-label">保存先フォルダ名:</span>
+          <span class="save-folder-preview-value" id="save-folder-preview"></span>
+        </div>
+        <div class="page-jump-actions">
+          <button type="button" id="save-folder-cancel" class="page-jump-btn">キャンセル</button>
+          <button type="button" id="save-folder-ok" class="page-jump-btn page-jump-btn-primary">保存</button>
         </div>
       </div>
     </div>

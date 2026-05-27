@@ -1820,10 +1820,20 @@ function renderOverlay(ctx) {
       if (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments)) {
         const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
         const charSizes = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
+        const charFontsMerged = { ...(layer.charFonts ?? {}), ...(edit.charFonts ?? {}) };
+        const symbolReplaceOnExisting = getDefault("symbolFontReplaceEnabled") !== false;
+        const symbolFontPSExisting = symbolReplaceOnExisting ? String(getDefault("symbolFontPostScriptName") || "") : "";
+        const layerContentsExisting = edit.contents ?? layer.contents ?? "";
+        const fontList = collectLayerFontValues(
+          edit.fontPostScriptName ?? layer.font ?? null,
+          charFontsMerged,
+          layerContentsExisting,
+          symbolFontPSExisting,
+        );
         const badge = createSizeBadge(
           collectLayerSizeValues(effectivePt, charSizes),
           page,
-          edit.fontPostScriptName ?? layer.font ?? null,
+          fontList,
           edit.strokeColor ?? layer.strokeColor ?? "none",
           edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
         );
@@ -1909,10 +1919,16 @@ function renderOverlay(ctx) {
       if (isMultiSelect) box.classList.add("multi-selected");
       if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
       if (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments)) {
+        const fontListNew = collectLayerFontValues(
+          nl.fontPostScriptName ?? null,
+          nl.charFonts ?? {},
+          nl.contents ?? "",
+          symbolFontPSNew,
+        );
         const newBadge = createSizeBadge(
           collectLayerSizeValues(nl.sizePt ?? 24, nl.charSizes),
           page,
-          nl.fontPostScriptName ?? null,
+          fontListNew,
           nl.strokeColor ?? "none",
           nl.strokeWidthPx ?? 20,
         );
@@ -3447,6 +3463,40 @@ function collectLayerSizeValues(defaultSizePt, charSizes) {
   return values;
 }
 
+// layer 内で実効的に使われるフォント (PostScript 名) のユニーク列を返す。
+// 優先順は appendStyledSegment の effectiveFontAt と一致:
+//   1. ユーザー手動の charFonts[i]
+//   2. 記号自動置換 (SYMBOL_CHAR_CODES) で symbolFontPS が設定されていれば
+//   3. layer 既定 (defaultFont)
+// contents が空 / 未定義の場合は defaultFont のみ返す。
+function collectLayerFontValues(defaultFont, charFonts, contents, symbolFontPS) {
+  const seen = new Set();
+  const result = [];
+  const add = (font) => {
+    if (typeof font !== "string" || !font) return;
+    if (seen.has(font)) return;
+    seen.add(font);
+    result.push(font);
+  };
+  const text = typeof contents === "string" ? contents : "";
+  if (!text) {
+    add(defaultFont);
+    return result;
+  }
+  const useSymbol = typeof symbolFontPS === "string" && !!symbolFontPS;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "\n" || ch === "\r") continue;
+    const userFont = charFonts ? charFonts[String(i)] : null;
+    if (typeof userFont === "string" && userFont) add(userFont);
+    else if (useSymbol && SYMBOL_CHAR_CODES.has(text.charCodeAt(i))) add(symbolFontPS);
+    else add(defaultFont);
+  }
+  // contents が改行のみ等で何も追加されなかった場合に保険として既定を追加。
+  if (result.length === 0) add(defaultFont);
+  return result;
+}
+
 function formatBadgeSizeLabel(sizePtOrValues, page) {
   const values = Array.isArray(sizePtOrValues) ? sizePtOrValues : [sizePtOrValues];
   return values
@@ -3493,14 +3543,26 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
   el.className = "layer-size-badge";
   // 基準PSD 比で換算した pt を表示。複数サイズ混在時は 13pt/15pt のように列挙する。
   const sizeLabel = formatBadgeSizeLabel(sizePt, page);
-  const fontName = fontPostScriptName ? (getFontDisplayName(fontPostScriptName) ?? fontPostScriptName) : "";
+  // フォントは配列（複数フォント混在）と単一文字列の両方を受け付ける。
+  // 混在ケース: layer 既定 + per-char overrides + 自動記号置換（♡ → 小塚ゴシック等）。
+  const fontList = (Array.isArray(fontPostScriptName)
+    ? fontPostScriptName
+    : (fontPostScriptName ? [fontPostScriptName] : []))
+    .filter((f) => typeof f === "string" && f);
   // フォント名と文字サイズを 2 行に分けて表示（フォント上 / サイズ下）。
-  if (fontName) {
+  if (fontList.length > 0) {
     const fontEl = document.createElement("div");
     fontEl.className = "layer-size-badge-font";
-    fontEl.textContent = fontName;
-    fontEl.title = "フォントを変更";
-    fontEl.addEventListener("mousedown", (e) => onBadgeFontMouseDown(e, fontPostScriptName));
+    const labels = fontList.map((f) => getFontDisplayName(f) ?? f);
+    fontEl.textContent = labels.join(" / ");
+    if (fontList.length > 1) {
+      fontEl.classList.add("layer-size-badge-font-multi");
+      fontEl.title = `フォント混在 (${labels.length}): ${labels.join(" / ")}`;
+    } else {
+      fontEl.title = "フォントを変更";
+    }
+    // クリックは「主たるフォント」(= 先頭 = layer 既定) を編集対象として開く。
+    fontEl.addEventListener("mousedown", (e) => onBadgeFontMouseDown(e, fontList[0]));
     el.appendChild(fontEl);
   }
   const sizeEl = document.createElement("div");
@@ -4948,7 +5010,63 @@ function startContentEditableEdit(ctx, target, options = {}) {
     if (a !== inner && !inner.contains(a)) return;
     reportCursor();
   };
-  document.addEventListener("selectionchange", onSelChange);
+  // 初回 selection（startContentEditableEdit 冒頭の selectAll / collapse）は
+  // listener 登録より前に確定するため selectionchange イベントを捉えられない。
+  // selectAll: true のときは DOM 走査に頼らず明示的に全範囲の selection state を
+  // 注入する（getSelRange は inner.focus 直後のブラウザ内部状態によって
+  // range が collapse として返ってくることがあり不安定）。
+  let initialSelectAllPending = !!(options.selectAll && startContents && startContents.length > 0);
+  if (initialSelectAllPending) {
+    setLastInplaceSelection({
+      start: 0,
+      end: startContents.length,
+      psdPath: layerMeta.psdPath,
+      layerId: layerMeta.layerId ?? null,
+      tempId: layerMeta.tempId ?? null,
+    });
+    setEditingContext({
+      ...layerMeta,
+      currentLineIndex: 0,
+      totalLines: (startContents.match(/\n/g) ?? []).length + 1,
+      contents: startContents,
+      selectionStart: 0,
+      selectionEnd: startContents.length,
+    });
+  } else {
+    // 末尾カーソル等の通常経路は reportCursor で同期する。
+    reportCursor();
+  }
+
+  // ★ initialSelectAllPending を保護した wrapper として onSelChange を上書き定義。
+  //   listener が即発火するブラウザ実装で、selectAll 直後に collapse 状態が
+  //   報告されて _lastInplaceSelection が null に潰されるのを防ぐ。ユーザーの
+  //   実操作 (マウスドラッグ / 矢印キー / Ctrl+A) で selection が変わった瞬間
+  //   フラグを下ろす。
+  const onSelChangeGuarded = () => {
+    if (!inner.isConnected) return;
+    const a = document.activeElement;
+    if (a !== inner && !inner.contains(a)) return;
+    if (initialSelectAllPending) {
+      // 初回 selectionchange の発火が初期 selectNodeContents 由来かを判定する。
+      // getSelRange が end > start を返したらまだ selectAll 状態と一致しているので
+      // 何もしない。collapse なら pending を解除して通常の reportCursor フローに戻す。
+      const range = getSelRange();
+      if (!range || range.end <= range.start) {
+        // ブラウザ一時的な collapse — 無視
+        return;
+      }
+      // 全選択がそのまま保持されていれば pending を保ったまま通常 update
+      if (range.start === 0 && range.end === startContents.length) {
+        return;
+      }
+      // ユーザー操作で選択範囲が変化した。pending を下ろして reportCursor 経路に戻す。
+      initialSelectAllPending = false;
+    }
+    reportCursor();
+  };
+  document.addEventListener("selectionchange", onSelChangeGuarded);
+  // onSelChange の元 listener を流用したい呼び出し元がある場合に備えて参照は残す。
+  void onSelChange;
 
   // IME 中は input イベントを無視（中間文字を contents に書き込まない）
   const onCompStart = () => { imeComposing = true; };
@@ -5209,7 +5327,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     if (finished) return;
     finished = true;
 
-    document.removeEventListener("selectionchange", onSelChange);
+    document.removeEventListener("selectionchange", onSelChangeGuarded);
     inner.removeEventListener("compositionstart", onCompStart);
     inner.removeEventListener("compositionend", onCompEnd);
     inner.removeEventListener("beforeinput", onBeforeInput);
@@ -5300,7 +5418,10 @@ function startContentEditableEdit(ctx, target, options = {}) {
 
   box.__finalize = finalize;
 
-  reportCursor();
+  // selectAll が pending な間は reportCursor を呼ばない（ブラウザの一時 collapse 状態で
+  // _lastInplaceSelection が null に上書きされる事故を防ぐ）。pending でなければ
+  // 通常通り initial cursor 状態を listener へ通知する。
+  if (!initialSelectAllPending) reportCursor();
   return { finalize, box, inner };
 }
 

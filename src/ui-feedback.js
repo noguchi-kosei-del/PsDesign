@@ -2214,7 +2214,10 @@ export function notifyDialog({
       actionPending = true;
       try { await action.onClick(); } catch (err) { console.error("notifyDialog action error", err); }
       actionPending = false;
-      cleanup();
+      // 【v2.x】action.keepOpen が true ならダイアログを閉じずに残す。
+      // 「PSD 保存後に PDF 化・ProGen 起動など複数アクションを連続実行したい」
+      // ケース向け。OK ボタンや Esc / 背景クリックで通常通り閉じる。
+      if (!action.keepOpen) cleanup();
     };
     const onOverlay = (e) => { if (e.target === modal && !actionPending) cleanup(); };
     const onKey = (e) => {
