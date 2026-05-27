@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="OpusProjectFileIconRegistry" Guid="D4F84D18-0897-4F57-8A88-9145C9D0E574" Win64="yes">
+        <RemoveRegistryKey
+          Root="HKCU"
+          Key="Software\Microsoft\Windows\CurrentVersion\Explorer\FileExts\.opus\UserChoice"
+          Action="removeOnInstall" />
+        <RegistryValue
+          Root="HKCR"
+          Key=".opus"
+          Name="Content Type"
+          Type="string"
+          Value="application/x-opus-project" />
+        <RegistryValue
+          Root="HKCR"
+          Key=".opus"
+          Name="PerceivedType"
+          Type="string"
+          Value="document" />
+        <RegistryValue
+          Root="HKCR"
+          Key=".opus\DefaultIcon"
+          Type="string"
+          Value="&quot;[INSTALLDIR]resources\opus-project.ico&quot;,0" />
+        <RegistryValue
+          Root="HKCR"
+          Key="OPUS.opus\DefaultIcon"
+          Type="string"
+          Value="&quot;[INSTALLDIR]resources\opus-project.ico&quot;,0"
+          KeyPath="yes" />
+        <RegistryValue
+          Root="HKCR"
+          Key="OPUS Project\DefaultIcon"
+          Type="string"
+          Value="&quot;[INSTALLDIR]resources\opus-project.ico&quot;,0" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

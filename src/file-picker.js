@@ -658,7 +658,6 @@ let bound = false;
 function bindUiOnce() {
   if (bound) return;
   bound = true;
-  const close = $("file-picker-close-btn");
   const cancelBtn = $("file-picker-cancel-btn");
   const confirmBtn = $("file-picker-confirm-btn");
   const back = $("file-picker-back-btn");
@@ -667,7 +666,6 @@ function bindUiOnce() {
   const modal = $("file-picker-modal");
   const input = $("file-picker-name-input");
 
-  if (close) close.addEventListener("click", () => cancel());
   if (cancelBtn) cancelBtn.addEventListener("click", () => cancel());
   if (confirmBtn) confirmBtn.addEventListener("click", () => confirm());
   if (back) back.addEventListener("click", () => void goBack());

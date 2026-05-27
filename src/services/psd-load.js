@@ -19,13 +19,56 @@ function isUnsupportedBitmapPsdError(error) {
   return error instanceof UnsupportedBitmapPsdError || error?.code === "UNSUPPORTED_BITMAP_PSD";
 }
 
-function formatUnsupportedBitmapMessage(paths) {
+export function formatUnsupportedBitmapMessage(paths) {
   if (paths.length === 1) {
     return `「${baseName(paths[0])}」はモノクロ2階調のPSDのため読み込めません。RGBカラーまたはグレースケールに変換してから開いてください。`;
   }
   const shown = paths.slice(0, 10).map((path) => `・${baseName(path)}`).join("\n");
   const rest = paths.length > 10 ? `\nほか ${paths.length - 10} 件` : "";
   return `以下のPSDはモノクロ2階調のため読み込めません。\n\n${shown}${rest}\n\nRGBカラーまたはグレースケールに変換してから開いてください。`;
+}
+
+function isBitmapPsdHeader(bytes) {
+  if (!bytes || bytes.length < 26) return false;
+  const sig =
+    String.fromCharCode(bytes[0]) +
+    String.fromCharCode(bytes[1]) +
+    String.fromCharCode(bytes[2]) +
+    String.fromCharCode(bytes[3]);
+  if (sig !== "8BPS") return false;
+  const colorMode = (bytes[24] << 8) | bytes[25];
+  return colorMode === 0;
+}
+
+async function isUnsupportedBitmapPsdPath(path) {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const raw = await invoke("read_binary_file", { path });
+    const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
+    return isBitmapPsdHeader(bytes);
+  } catch (e) {
+    console.warn("[psd-load] PSD bitmap preflight failed:", path, e);
+    return false;
+  }
+}
+
+export async function findUnsupportedBitmapPsdFiles(files) {
+  const list = Array.isArray(files) ? files : [];
+  const unsupported = [];
+  for (const path of list) {
+    if (typeof path !== "string" || !path) continue;
+    if (await isUnsupportedBitmapPsdPath(path)) unsupported.push(path);
+  }
+  return unsupported;
+}
+
+export async function notifyUnsupportedBitmapPsdFiles(paths) {
+  if (!Array.isArray(paths) || paths.length === 0) return;
+  await notifyDialog({
+    title: "モノクロ2階調のPSDは読み込めません",
+    message: formatUnsupportedBitmapMessage(paths),
+    kind: "warning",
+  });
 }
 
 export async function pickPsdFiles() {
@@ -141,11 +184,7 @@ export async function loadPsdFilesByPaths(files, {
     await hideProgress({ success: !allFailed });
   }
   if (unsupportedBitmapFiles.length) {
-    await notifyDialog({
-      title: "モノクロ2階調のPSDは読み込めません",
-      message: formatUnsupportedBitmapMessage(unsupportedBitmapFiles),
-      kind: "warning",
-    });
+    await notifyUnsupportedBitmapPsdFiles(unsupportedBitmapFiles);
   }
   if (failures.length) {
     const first = failures[0];

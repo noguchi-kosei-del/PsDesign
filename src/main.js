@@ -17,14 +17,17 @@ import {
   snapNextSize,
   getLastInplaceSelection,
   getInplaceSelectionRect,
+  getExistingLayerEffectiveSizePt,
   onInplaceSelectionChange,
   applyEditModeStyleToRange,
   recenterActiveInPlaceEditBox,
+  resizeActiveInPlaceEditBoxToState,
   refreshActiveInPlaceEditPreview,
   restoreInplaceSelection,
   showInplaceSelectionHighlightOnly,
   applyEditModeRubyToRange,
   removeEditModeRubyFromRange,
+  removeEditModeRubyTextFromRange,
 } from "./canvas-tools.js";
 import { onFontsRegistered } from "./font-loader.js";
 import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh, setNextPsdZoomAnchorFromClientPoint } from "./spread-view.js";
@@ -77,7 +80,7 @@ import {
   pickPsdFiles,
 } from "./services/psd-load.js";
 import { bindSaveMenu, handleSave } from "./bind/save.js";
-import { bindProjectButtons, openProjectFromPath, saveProject } from "./services/project.js";
+import { bindProjectButtons, openProject, openProjectFromPath, saveProject } from "./services/project.js";
 import {
   findShortcutMatch,
   applyThemeColor,
@@ -110,6 +113,7 @@ import {
   clearScanExtractDoc,
   getActivePane,
   getCurrentPageIndex,
+  getEdit,
   getNewLayersForPsd,
   getPages,
   getParallelSyncMode,
@@ -170,9 +174,14 @@ import {
   setCharBoldsRange,
   setCharItalicsRange,
   setCharRubiesRange,
+  setCharRubyScale,
+  getCharRubies,
+  getCharRubyForRange,
   removeCharRubyAt,
   getCharRubyAt,
   rangeHasAnyRuby,
+  rangeHasRubyText,
+  removeRubyTextRange,
   withHistoryTransient,
   getSelectedLayers,
   getNewTextDirection,
@@ -1210,17 +1219,18 @@ const EDITOR_LEFT_PANE_LS_KEY = "psdesign_editor_left_pane_mode";
 function bindParallelViewMode() {
   const parallelBtn = document.getElementById("view-parallel-btn");
   const proofreadBtn = document.getElementById("view-proofread-btn");
+  const spreadEditBtn = document.getElementById("view-spread-edit-btn");
   const editorBtn = document.getElementById("view-editor-btn");
   const proofreadArea = document.getElementById("spreads-proofread-area");
   const editorArea = document.getElementById("spreads-editor-area");
   const proofreadPanel = document.getElementById("proofread-panel");
   const leftProofreadBtn = document.getElementById("editor-left-proofread-btn");
   const leftPdfBtn = document.getElementById("editor-left-pdf-btn");
-  if (!parallelBtn || !proofreadBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
+  if (!parallelBtn || !proofreadBtn || !spreadEditBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
 
   try {
     const saved = localStorage.getItem(VIEW_MODE_LS_KEY);
-    if (saved === "parallel" || saved === "proofread" || saved === "editor") {
+    if (saved === "parallel" || saved === "proofread" || saved === "editor" || saved === "spreadEdit") {
       setParallelViewMode(saved);
     }
   } catch {}
@@ -1258,6 +1268,7 @@ function bindParallelViewMode() {
   };
   parallelBtn.addEventListener("click", () => switchViewMode("parallel"));
   proofreadBtn.addEventListener("click", () => switchViewMode("proofread"));
+  spreadEditBtn.addEventListener("click", () => switchViewMode("spreadEdit"));
   editorBtn.addEventListener("click", () => switchViewMode("editor"));
   if (leftProofreadBtn) {
     leftProofreadBtn.addEventListener("click", () => setEditorLeftPaneMode("proofread"));
@@ -1279,9 +1290,11 @@ function bindParallelViewMode() {
     const mode = getParallelViewMode();
     const showEditor = mode === "editor";
     const showProofread = mode === "proofread";
+    const showSpreadEdit = mode === "spreadEdit";
     if (workspace) {
       workspace.classList.toggle("editor-mode", showEditor);
       workspace.classList.toggle("proofread-mode", showProofread);
+      workspace.classList.toggle("spread-edit-mode", showSpreadEdit);
     }
     if (stage) {
       stage.classList.toggle("proofread-visible", showProofread || showEditor);
@@ -1289,9 +1302,11 @@ function bindParallelViewMode() {
     }
     parallelBtn.classList.toggle("active", mode === "parallel");
     proofreadBtn.classList.toggle("active", mode === "proofread");
+    spreadEditBtn.classList.toggle("active", mode === "spreadEdit");
     editorBtn.classList.toggle("active", mode === "editor");
     parallelBtn.setAttribute("aria-pressed", mode === "parallel" ? "true" : "false");
     proofreadBtn.setAttribute("aria-pressed", mode === "proofread" ? "true" : "false");
+    spreadEditBtn.setAttribute("aria-pressed", mode === "spreadEdit" ? "true" : "false");
     editorBtn.setAttribute("aria-pressed", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
     applyEditorLeftPaneClass();
@@ -1409,8 +1424,122 @@ function bindParallelViewMode() {
   sync();
 }
 
+function rubyTargetId(sel) {
+  return sel ? (sel.tempId ?? sel.layerId) : null;
+}
+
+function isDakutenRubyMarkerText(text) {
+  const chars = Array.from(String(text ?? ""));
+  return chars.length > 0 && chars.every((ch) => {
+    const code = ch.charCodeAt(0);
+    return code === 0x309b || code === 0xff9e || code === 0x3099;
+  });
+}
+
+function isNakaguroRubyMarkerText(text) {
+  const chars = Array.from(String(text ?? ""));
+  return chars.length > 0 && chars.every((ch) => {
+    const code = ch.charCodeAt(0);
+    return code === 0x30fb || code === 0xff65;
+  });
+}
+
+function isSpecialRubyMarkerText(text) {
+  return isDakutenRubyMarkerText(text) || isNakaguroRubyMarkerText(text);
+}
+
+function clampRubyScalePercent(n, snapToFive = false) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return 50;
+  const scaled = snapToFive ? Math.round(v / 5) * 5 : Math.round(v * 100) / 100;
+  return Math.max(20, Math.min(100, scaled));
+}
+
+function getRubyParentSizePt(sel) {
+  if (!sel?.rubyOnly) return null;
+  const targetId = rubyTargetId(sel);
+  if (targetId == null) return null;
+  const page = getPages().find((p) => p.path === sel.psdPath);
+  if (!page) return null;
+  if (typeof targetId === "string") {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === targetId);
+    const size = Number(nl?.sizePt ?? 24);
+    return Number.isFinite(size) && size > 0 ? size : null;
+  }
+  const layer = page.textLayers?.find((l) => Number(l.id) === Number(targetId));
+  if (!layer) return null;
+  const edit = getEdit(page.path, targetId) ?? {};
+  const size = Number(getExistingLayerEffectiveSizePt(page, layer, edit));
+  return Number.isFinite(size) && size > 0 ? size : null;
+}
+
+function getRubySelectionEntry(sel) {
+  if (!sel?.rubyOnly) return null;
+  const targetId = rubyTargetId(sel);
+  if (targetId == null) return null;
+  return getCharRubyForRange(sel.psdPath, targetId, sel.start, sel.end, sel.rubyText ?? "", {
+    overlay: sel.rubyOverlay === true,
+  });
+}
+
+function getRubySelectionSizePt(sel) {
+  const parentSize = getRubyParentSizePt(sel);
+  const entry = getRubySelectionEntry(sel);
+  if (!Number.isFinite(parentSize) || !entry) return null;
+  if (isSpecialRubyMarkerText(entry.text ?? sel?.rubyText ?? "")) {
+    return Math.round(parentSize * 100) / 100;
+  }
+  const scale = Number(entry.scale ?? 50);
+  if (!Number.isFinite(scale) || scale <= 0) return null;
+  return Math.round(parentSize * (scale / 100) * 100) / 100;
+}
+
+function syncTextSizeFromRubySelection(sel = getLastInplaceSelection()) {
+  if (!sel?.rubyOnly) return false;
+  const sizePt = getRubySelectionSizePt(sel);
+  if (!Number.isFinite(sizePt)) return false;
+  setTextSize(sizePt);
+  return true;
+}
+
+function applyRubyScaleToSelection(sel, scale) {
+  if (!sel?.rubyOnly) return false;
+  const targetId = rubyTargetId(sel);
+  if (targetId == null) return false;
+  const entry = getRubySelectionEntry(sel);
+  if (isSpecialRubyMarkerText(entry?.text ?? sel.rubyText)) {
+    syncTextSizeFromRubySelection(sel);
+    return false;
+  }
+  const nextScale = clampRubyScalePercent(scale);
+  const changed = setCharRubyScale(sel.psdPath, targetId, sel.start, sel.end, sel.rubyText ?? "", nextScale, {
+    overlay: sel.rubyOverlay === true,
+  });
+  syncTextSizeFromRubySelection(sel);
+  if (!changed) return false;
+  refreshActiveInPlaceEditPreview(sel);
+  refreshAllOverlays();
+  rebuildLayerList();
+  import("./txt-source.js").then((mod) => mod.renderTxtSourceViewer?.()).catch(() => {});
+  refreshEditorPaneViewer();
+  showInplaceSelectionHighlightOnly(sel);
+  requestAnimationFrame(() => showInplaceSelectionHighlightOnly(sel));
+  return true;
+}
+
+function applyRubySizeToSelection(sel, sizePt) {
+  const parentSize = getRubyParentSizePt(sel);
+  const actual = Number(sizePt);
+  if (!Number.isFinite(parentSize) || parentSize <= 0 || !Number.isFinite(actual)) return false;
+  return applyRubyScaleToSelection(sel, (actual / parentSize) * 100);
+}
+
 function applyTextSize(n) {
   const sel = getLastInplaceSelection();
+  if (sel?.rubyOnly) {
+    applyRubySizeToSelection(sel, clampSize(n));
+    return;
+  }
   if (sel && sel.end > sel.start) {
     const v = clampSize(n);
     const targetId = sel.tempId ?? sel.layerId;
@@ -1464,6 +1593,7 @@ function bindBoldToggle() {
     if (btn.disabled) return;
     const newValue = btn.getAttribute("aria-pressed") !== "true";
     const sel = getLastInplaceSelection();
+    if (sel?.rubyOnly) return;
     if (sel && sel.end > sel.start) {
       const targetId = sel.tempId ?? sel.layerId;
       setCharBoldsRange(sel.psdPath, targetId, sel.start, sel.end, newValue);
@@ -1490,6 +1620,7 @@ function bindItalicToggle() {
     if (btn.disabled) return;
     const newValue = btn.getAttribute("aria-pressed") !== "true";
     const sel = getLastInplaceSelection();
+    if (sel?.rubyOnly) return;
     if (sel && sel.end > sel.start) {
       const targetId = sel.tempId ?? sel.layerId;
       setCharItalicsRange(sel.psdPath, targetId, sel.start, sel.end, newValue);
@@ -1513,6 +1644,9 @@ function bindRubyTool() {
   const scaleEl = document.getElementById("ruby-scale-input");
   const applyBtn = document.getElementById("ruby-apply-btn");
   const removeBtn = document.getElementById("ruby-remove-btn");
+  const parentSelectBtn = document.getElementById("ruby-parent-select-btn");
+  const dakutenBtn = document.getElementById("ruby-dakuten-btn");
+  const nakaguroBtn = document.getElementById("ruby-nakaguro-btn");
   const modeAuto = document.getElementById("ruby-mode-auto-btn");
   const modeMono = document.getElementById("ruby-mode-mono-btn");
   const modeGroup = document.getElementById("ruby-mode-group-btn");
@@ -1526,7 +1660,7 @@ function bindRubyTool() {
   if (panelEl.parentElement !== document.body) document.body.appendChild(panelEl);
 
   const noFocusSteal = (el) => el && el.addEventListener("mousedown", (e) => e.preventDefault());
-  [applyBtn, removeBtn, modeAuto, modeMono, modeGroup].forEach(noFocusSteal);
+  [applyBtn, removeBtn, parentSelectBtn, dakutenBtn, nakaguroBtn, modeAuto, modeMono, modeGroup].forEach(noFocusSteal);
 
   const setMode = (m) => {
     currentMode = m;
@@ -1559,10 +1693,73 @@ function bindRubyTool() {
     return "group";
   };
 
+  let manualParentRanges = [];
+
+  const splitRubyTextParts = (text) => String(text ?? "")
+    .split(/[,\s\u3000.、]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  const isDakutenChar = (ch) => {
+    const code = String(ch ?? "").charCodeAt(0);
+    return code === 0x309b || code === 0xff9e || code === 0x3099;
+  };
+  const isNakaguroChar = (ch) => {
+    const code = String(ch ?? "").charCodeAt(0);
+    return code === 0x30fb || code === 0xff65;
+  };
+  const isSpecialRubyText = (text) => {
+    const chars = Array.from(String(text ?? ""));
+    return chars.length > 0 && chars.every((ch) => isDakutenChar(ch) || isNakaguroChar(ch));
+  };
+  const DAKUTEN_RUBY = "\u309b";
+  const NAKAGURO_RUBY = "\u30fb";
+  const SPECIAL_BUTTONS = [
+    { button: dakutenBtn, text: DAKUTEN_RUBY },
+    { button: nakaguroBtn, text: NAKAGURO_RUBY },
+  ];
+  const SMALL_KANA_RE = /[ぁぃぅぇぉっゃゅょゎァィゥェォッャュョヮヵヶｧｨｩｪｫｯｬｭｮ]/;
+
+  const activeEditTarget = () => {
+    const ec = getEditingContext();
+    if (!ec?.psdPath) return null;
+    const targetId = ec.tempId ?? ec.layerId;
+    if (targetId == null) return null;
+    return {
+      psdPath: ec.psdPath,
+      layerId: ec.layerId ?? null,
+      tempId: ec.tempId ?? null,
+      direction: ec.direction === "horizontal" ? "horizontal" : "vertical",
+      start: Number(ec.selectionStart) || 0,
+      end: Number(ec.selectionEnd) || 0,
+      contents: String(ec.contents ?? ""),
+      objectSelection: false,
+    };
+  };
+
+  const normalizeManualRanges = (ranges, contents) => {
+    const len = String(contents ?? "").length;
+    return ranges
+      .map((r) => ({
+        start: Math.max(0, Math.min(len, Number(r.start))),
+        end: Math.max(0, Math.min(len, Number(r.end))),
+      }))
+      .filter((r) => Number.isInteger(r.start) && Number.isInteger(r.end) && r.end > r.start)
+      .sort((a, b) => a.start - b.start);
+  };
+
   const currentRubyTarget = () => {
+    const editTarget = activeEditTarget();
+    if (editTarget && manualParentRanges.length > 0) {
+      const ranges = normalizeManualRanges(manualParentRanges, editTarget.contents);
+      if (ranges.length > 0) {
+        return { ...editTarget, start: ranges[0].start, end: ranges[ranges.length - 1].end, manualRanges: ranges };
+      }
+    }
     const sel = getLastInplaceSelection();
     if (sel && sel.end > sel.start) {
       const ec = getEditingContext();
+      manualParentRanges = [];
       return { ...sel, contents: String(ec?.contents ?? ""), objectSelection: false };
     }
     return null;
@@ -1659,17 +1856,218 @@ function bindRubyTool() {
     panelEl.style.top = `${Math.round(candidates[0].top)}px`;
   };
 
+  const textForRanges = (contents, ranges) => ranges
+    .map((r) => String(contents ?? "").slice(r.start, r.end))
+    .filter(Boolean)
+    .join(" / ");
+
+  const selectedRanges = (sel) => sel?.manualRanges ?? (sel ? [{ start: sel.start, end: sel.end }] : []);
+
+  const selectionContainsSmallKana = (sel) => {
+    if (!sel) return false;
+    const contents = String(sel.contents ?? "");
+    return selectedRanges(sel).some((range) => SMALL_KANA_RE.test(contents.slice(range.start, range.end)));
+  };
+
+  const rubyTextMatchesForButton = (value, buttonText) => {
+    if (typeof value !== "string" || !value || typeof buttonText !== "string" || !buttonText) return false;
+    if (value === buttonText) return true;
+    if (isNakaguroRubyMarkerText(value) && isNakaguroRubyMarkerText(buttonText)) return true;
+    if (isDakutenRubyMarkerText(value) && isDakutenRubyMarkerText(buttonText)) return true;
+    const chars = Array.from(value);
+    return chars.length > 0 && chars.every((ch) => ch === buttonText);
+  };
+
+  const rangeHasRubyButtonText = (sel, range, text) => {
+    const targetId = sel?.tempId ?? sel?.layerId;
+    if (!sel?.psdPath || targetId == null || !range || typeof text !== "string" || !text) return false;
+    if (!isSpecialRubyText(text)) return rangeHasRubyText(sel.psdPath, targetId, range.start, range.end, text);
+    const map = getCharRubies(sel.psdPath, targetId);
+    for (const k of Object.keys(map)) {
+      const start = Number(k);
+      const entry = map[k];
+      const end = Number(entry?.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || !(start < range.end && end > range.start)) continue;
+      if (rubyTextMatchesForButton(entry?.text, text)) return true;
+      if (Array.isArray(entry?.overlays)) {
+        for (const overlay of entry.overlays) {
+          const overlayStart = Number(overlay?.start);
+          const overlayEnd = Number(overlay?.end);
+          if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd)) continue;
+          if (overlayStart < range.end && overlayEnd > range.start && rubyTextMatchesForButton(overlay?.text, text)) return true;
+        }
+      }
+    }
+    return false;
+  };
+
+  const splitRangeByLineBreaks = (contents, range) => {
+    const text = String(contents ?? "");
+    const len = text.length;
+    const from = Math.max(0, Math.min(len, Number(range?.start) || 0));
+    const to = Math.max(0, Math.min(len, Number(range?.end) || 0));
+    const segments = [];
+    let start = from;
+    let i = from;
+    while (i < to) {
+      const ch = text[i];
+      if (ch === "\r" || ch === "\n") {
+        if (start < i) segments.push({ start, end: i });
+        if (ch === "\r" && i + 1 < to && text[i + 1] === "\n") i += 1;
+        start = i + 1;
+      }
+      i += 1;
+    }
+    if (start < to) segments.push({ start, end: to });
+    return segments;
+  };
+
+  const selectionHasRubyText = (sel, text) => {
+    if (!sel) return false;
+    return selectedRanges(sel).some((range) => rangeHasRubyButtonText(sel, range, text));
+  };
+
+  const setSpecialButtonState = (sel) => {
+    for (const { button, text } of SPECIAL_BUTTONS) {
+      if (!button) continue;
+      const active = !!sel && selectionHasRubyText(sel, text);
+      const warning = active && text === NAKAGURO_RUBY && selectionContainsSmallKana(sel);
+      button.classList.toggle("active", active);
+      button.classList.toggle("ruby-special-warning", warning);
+      button.setAttribute("aria-pressed", active ? "true" : "false");
+    }
+  };
+
+  const rangesFromSelectedCells = (grid) => {
+    const indices = Array.from(grid.querySelectorAll(".ruby-parent-cell.selected"))
+      .map((cell) => Number(cell.dataset.index))
+      .filter(Number.isInteger)
+      .sort((a, b) => a - b);
+    if (indices.length === 0) return [];
+    const dividerAfter = new Set(
+      Array.from(grid.querySelectorAll(".ruby-parent-divider.active"))
+        .map((el) => Number(el.dataset.after))
+        .filter(Number.isInteger),
+    );
+    const ranges = [];
+    let start = indices[0];
+    let prev = indices[0];
+    for (let i = 1; i < indices.length; i++) {
+      const cur = indices[i];
+      if (cur !== prev + 1 || dividerAfter.has(prev)) {
+        ranges.push({ start, end: prev + 1 });
+        start = cur;
+      }
+      prev = cur;
+    }
+    ranges.push({ start, end: prev + 1 });
+    return ranges;
+  };
+
+  const openParentSelectDialog = () => {
+    const target = activeEditTarget();
+    if (!target || !target.contents) return;
+    const existing = manualParentRanges.length > 0
+      ? normalizeManualRanges(manualParentRanges, target.contents)
+      : (target.end > target.start ? [{ start: target.start, end: target.end }] : []);
+    const selected = new Set();
+    const dividers = new Set();
+    for (let i = 0; i < existing.length; i++) {
+      const r = existing[i];
+      for (let n = r.start; n < r.end; n++) selected.add(n);
+      if (i + 1 < existing.length && existing[i + 1].start === r.end) dividers.add(r.end - 1);
+    }
+
+    const overlay = document.createElement("div");
+    const isVertical = target.direction === "vertical";
+    overlay.className = `ruby-parent-dialog ${isVertical ? "ruby-parent-dialog-vertical" : "ruby-parent-dialog-horizontal"}`;
+    overlay.innerHTML = `
+      <div class="ruby-parent-dialog-panel" role="dialog" aria-modal="true" aria-label="親文字指定">
+        <div class="ruby-parent-dialog-head">
+          <strong>親文字指定</strong>
+          <button class="ruby-parent-dialog-close" type="button" aria-label="閉じる">×</button>
+        </div>
+        <div class="ruby-parent-grid" tabindex="0"></div>
+        <div class="ruby-parent-dialog-actions">
+          <button class="ruby-parent-clear-btn" type="button">クリア</button>
+          <button class="ruby-parent-cancel-btn" type="button">キャンセル</button>
+          <button class="ruby-parent-ok-btn" type="button">OK</button>
+        </div>
+      </div>`;
+    const grid = overlay.querySelector(".ruby-parent-grid");
+    let line = document.createElement("div");
+    line.className = "ruby-parent-line";
+    let lastCharIndex = -1;
+    const addDivider = () => {
+      const divider = document.createElement("button");
+      divider.className = "ruby-parent-divider";
+      divider.type = "button";
+      divider.dataset.after = String(lastCharIndex);
+      divider.title = "ここで親文字を分割";
+      if (dividers.has(lastCharIndex)) divider.classList.add("active");
+      divider.addEventListener("click", () => divider.classList.toggle("active"));
+      line.appendChild(divider);
+    };
+    const textIndices = Array.from({ length: target.contents.length }, (_, i) => i);
+    for (const i of textIndices) {
+      const ch = target.contents[i];
+      if (ch === "\r" || ch === "\n") {
+        if (ch === "\r" && target.contents[i + 1] === "\n") continue;
+        grid.appendChild(line);
+        line = document.createElement("div");
+        line.className = "ruby-parent-line";
+        lastCharIndex = -1;
+        continue;
+      }
+      if (lastCharIndex >= 0) addDivider();
+      const cell = document.createElement("button");
+      cell.className = "ruby-parent-cell";
+      cell.type = "button";
+      cell.dataset.index = String(i);
+      cell.textContent = ch;
+      if (selected.has(i)) cell.classList.add("selected");
+      cell.addEventListener("click", () => cell.classList.toggle("selected"));
+      line.appendChild(cell);
+      lastCharIndex = i;
+    }
+    grid.appendChild(line);
+
+    const close = () => overlay.remove();
+    overlay.querySelector(".ruby-parent-dialog-close")?.addEventListener("click", close);
+    overlay.querySelector(".ruby-parent-cancel-btn")?.addEventListener("click", close);
+    overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+    overlay.querySelector(".ruby-parent-clear-btn")?.addEventListener("click", () => {
+      manualParentRanges = [];
+      close();
+      updateSelection();
+    });
+    overlay.querySelector(".ruby-parent-ok-btn")?.addEventListener("click", () => {
+      manualParentRanges = normalizeManualRanges(rangesFromSelectedCells(grid), target.contents);
+      close();
+      updateSelection();
+    });
+    document.body.appendChild(overlay);
+    grid.focus();
+  };
+
   const updateSelection = () => {
     const sel = currentRubyTarget();
     if (sel && sel.end > sel.start) {
       const targetId = sel.tempId ?? sel.layerId;
       const contents = sel.contents ?? "";
-      const parentText = contents.substring(sel.start, sel.end);
+      const ranges = sel.manualRanges ?? [{ start: sel.start, end: sel.end }];
+      const parentText = textForRanges(contents, ranges);
       parentEl.textContent = parentText || "（選択範囲）";
       inputEl.disabled = false;
       applyBtn.disabled = false;
-      const existing = getCharRubyAt(sel.psdPath, targetId, sel.start);
-      if (existing && existing.end === sel.end) {
+      if (parentSelectBtn) parentSelectBtn.disabled = false;
+      if (dakutenBtn) dakutenBtn.disabled = false;
+      if (nakaguroBtn) nakaguroBtn.disabled = false;
+      setSpecialButtonState(sel);
+      const existing = sel.rubyOnly
+        ? getCharRubyForRange(sel.psdPath, targetId, sel.start, sel.end, sel.rubyText ?? "", { overlay: sel.rubyOverlay === true })
+        : getCharRubyAt(sel.psdPath, targetId, sel.start);
+      if (existing && (sel.rubyOnly || existing.end === sel.end)) {
         inputEl.value = existing.text;
         if (existing.scale) scaleEl.value = String(existing.scale);
         if (existing.type) setMode(existing.type);
@@ -1684,6 +2082,10 @@ function bindRubyTool() {
       parentEl.innerHTML = '<span class="ruby-parent-empty">文字を選択</span>';
       inputEl.disabled = true;
       applyBtn.disabled = true;
+      if (parentSelectBtn) parentSelectBtn.disabled = !activeEditTarget();
+      if (dakutenBtn) dakutenBtn.disabled = true;
+      if (nakaguroBtn) nakaguroBtn.disabled = true;
+      setSpecialButtonState(null);
       removeBtn.disabled = true;
       inputEl.value = "";
       scaleEl.value = "50";
@@ -1697,37 +2099,101 @@ function bindRubyTool() {
   window.addEventListener("scroll", placeRubyPanelNearText, true);
   updateSelection();
 
-  const doApply = () => {
+  parentSelectBtn?.addEventListener("click", openParentSelectDialog);
+
+  const buildRubyApplications = (sel, text, scale) => {
+    const ranges = sel.manualRanges ?? [{ start: sel.start, end: sel.end }];
+    if (isSpecialRubyText(text)) {
+      const chars = Array.from(text);
+      const apps = [];
+      for (const range of ranges) {
+        if (chars.length === 1 && isNakaguroChar(chars[0])) {
+          for (const segment of splitRangeByLineBreaks(sel.contents ?? "", range)) {
+            const parentText = String(sel.contents ?? "").slice(segment.start, segment.end);
+            const count = Array.from(parentText).length;
+            if (count <= 0) continue;
+            apps.push({
+              ...segment,
+              text: NAKAGURO_RUBY.repeat(count),
+              type: "group",
+              scale: 100,
+              adjustLeading: true,
+              overlay: true,
+            });
+          }
+          continue;
+        }
+        for (const segment of splitRangeByLineBreaks(sel.contents ?? "", range)) {
+          for (let i = segment.start; i < segment.end; i++) {
+            const ch = chars[(i - segment.start) % chars.length];
+            apps.push({ start: i, end: i + 1, text: ch, type: "mono", scale: 100, adjustLeading: !isDakutenChar(ch), overlay: true });
+          }
+        }
+      }
+      return apps;
+    }
+    const parts = splitRubyTextParts(text);
+    if (ranges.length > 1 && parts.length === ranges.length) {
+      return ranges.map((range, i) => ({
+        ...range,
+        text: parts[i],
+        type: decideRubyType(currentMode, parts[i], String(sel.contents ?? "").slice(range.start, range.end)),
+        scale,
+      }));
+    }
+    if (ranges.length > 1 && parts.length === 1) {
+      return ranges.map((range) => ({
+        ...range,
+        text,
+        type: decideRubyType(currentMode, text, String(sel.contents ?? "").slice(range.start, range.end)),
+        scale,
+      }));
+    }
+    const parentText = textForRanges(sel.contents ?? "", ranges);
+    return [{ start: sel.start, end: sel.end, text, type: decideRubyType(currentMode, text, parentText), scale }];
+  };
+
+  const doApply = (rubyTextOverride = null, options = {}) => {
     const sel = currentRubyTarget();
     if (!sel || sel.end <= sel.start) return;
-    const text = inputEl.value.trim();
+    const hasTextOverride = typeof rubyTextOverride === "string";
+    const text = String(hasTextOverride ? rubyTextOverride : inputEl.value).trim();
     if (!text) return;
+    if (!hasTextOverride && isSpecialRubyText(text) && selectionHasRubyText(sel, text)) return;
     const targetId = sel.tempId ?? sel.layerId;
-    const parentText = parentEl.textContent || "";
     const scale = clampRubyScale(scaleEl.value);
-    const type = decideRubyType(currentMode, text, parentText);
     const contents = sel.contents ?? "";
+    const applications = buildRubyApplications(sel, text, scale);
+    if (applications.length === 0) return;
     const rubyLeadingPct = Number(getDefault("rubyLeadingPct")) || 150;
     const lineIndexAt = (index) => {
       const head = contents.slice(0, Math.max(0, index));
       return head.split(/\r\n|\r|\n/).length - 1;
     };
-    const startLine = lineIndexAt(sel.start);
-    const endLine = lineIndexAt(Math.max(sel.start, sel.end - 1));
+    let didAdjustLeading = false;
     withHistoryTransient(() => {
-      setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, text, type, scale);
-      for (let li = startLine; li <= endLine; li++) {
-        setLineLeading(sel.psdPath, targetId, li, rubyLeadingPct);
+      for (const app of applications) {
+        setCharRubiesRange(sel.psdPath, targetId, app.start, app.end, app.text, app.type, app.scale, { appendOverlay: !!app.overlay });
+        if (app.adjustLeading === false) continue;
+        const startLine = lineIndexAt(app.start);
+        const endLine = lineIndexAt(Math.max(app.start, app.end - 1));
+        for (let li = startLine; li <= endLine; li++) {
+          const targetLine = li - 1;
+          if (targetLine < 0) continue;
+          setLineLeading(sel.psdPath, targetId, targetLine, rubyLeadingPct);
+          didAdjustLeading = true;
+        }
       }
     });
-    const editingBox = document.querySelector(".layer-box.editing");
-    if (editingBox) {
-      const inner = editingBox.querySelector(".existing-layer-text, .new-layer-text");
-      if (inner) {
-        inner.style.lineHeight = String(rubyLeadingPct / 100);
+    if (!sel.objectSelection) {
+      for (const app of applications) {
+        applyEditModeRubyToRange(app.start, app.end, app.text, app.type, app.scale, { appendOverlay: !!app.overlay });
+      }
+      if (didAdjustLeading) {
+        resizeActiveInPlaceEditBoxToState(sel);
+        refreshActiveInPlaceEditPreview(sel);
       }
     }
-    if (!sel.objectSelection) applyEditModeRubyToRange(sel.start, sel.end, text, type, scale);
     refreshAllOverlays();
     rebuildLayerList();
     if (!sel.objectSelection) {
@@ -1735,9 +2201,123 @@ function bindRubyTool() {
       requestAnimationFrame(() => restoreInplaceSelection(sel));
     }
     removeBtn.disabled = false;
-    requestAnimationFrame(updateSelection);
+    requestAnimationFrame(() => {
+      updateSelection();
+      if (typeof options.preserveInputValue === "string") inputEl.value = options.preserveInputValue;
+    });
   };
+
+  const toggleSpecialRuby = (rubyText) => {
+    const sel = currentRubyTarget();
+    if (!sel || sel.end <= sel.start) return;
+    const previousInputValue = inputEl.value;
+    const targetId = sel.tempId ?? sel.layerId;
+    const applications = buildRubyApplications(sel, rubyText, 100);
+    const hasMatchingRuby = applications.some((app) => rangeHasRubyButtonText(sel, app, rubyText))
+      || selectionHasRubyText(sel, rubyText);
+    if (!hasMatchingRuby) {
+      doApply(rubyText, { preserveInputValue: previousInputValue });
+      return;
+    }
+    const contents = sel.contents ?? "";
+    const lineIndexAt = (index) => {
+      const head = contents.slice(0, Math.max(0, index));
+      return head.split(/\r\n|\r|\n/).length - 1;
+    };
+    const lineRangeAt = (lineIndex) => {
+      let start = 0;
+      let current = 0;
+      const re = /\r\n|\r|\n/g;
+      let m;
+      while ((m = re.exec(contents))) {
+        if (current === lineIndex) return { start, end: m.index };
+        current += 1;
+        start = m.index + m[0].length;
+      }
+      return current === lineIndex ? { start, end: contents.length } : null;
+    };
+    const rangeHasAnyLeadingRuby = (from, to) => {
+      const map = getCharRubies(sel.psdPath, targetId);
+      for (const k of Object.keys(map)) {
+        const start = Number(k);
+        const entry = map[k];
+        const end = Number(entry?.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        if (start < to && end > from && !isDakutenRubyMarkerText(entry?.text)) return true;
+        if (Array.isArray(entry?.overlays)) {
+          for (const overlay of entry.overlays) {
+            const overlayStart = Number(overlay?.start);
+            const overlayEnd = Number(overlay?.end);
+            if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd)) continue;
+            if (overlayStart < to && overlayEnd > from && !isDakutenRubyMarkerText(overlay?.text)) return true;
+          }
+        }
+      }
+      return false;
+    };
+    const clearRubyLineLeadingIfEmpty = (from, to) => {
+      const startLine = lineIndexAt(from);
+      const endLine = lineIndexAt(Math.max(from, to - 1));
+      for (let li = startLine; li <= endLine; li++) {
+        const targetLine = li - 1;
+        if (targetLine < 0) continue;
+        const range = lineRangeAt(li);
+        if (!range) continue;
+        if (!rangeHasAnyLeadingRuby(range.start, range.end)) {
+          setLineLeading(sel.psdPath, targetId, targetLine, null);
+        }
+      }
+    };
+    const ranges = applications.length > 0 ? applications : selectedRanges(sel);
+    let didAdjustLeading = false;
+    withHistoryTransient(() => {
+      for (const range of ranges) {
+        removeRubyTextRange(sel.psdPath, targetId, range.start, range.end, rubyText);
+        if (range.adjustLeading !== false) {
+          clearRubyLineLeadingIfEmpty(range.start, range.end);
+          didAdjustLeading = true;
+        }
+      }
+    });
+    if (!sel.objectSelection) {
+      for (const range of ranges) {
+        removeEditModeRubyTextFromRange(range.start, range.end, rubyText);
+      }
+      if (didAdjustLeading) resizeActiveInPlaceEditBoxToState(sel);
+      refreshActiveInPlaceEditPreview(sel);
+    }
+    refreshAllOverlays();
+    rebuildLayerList();
+    if (!sel.objectSelection) {
+      restoreInplaceSelection(sel);
+      requestAnimationFrame(() => restoreInplaceSelection(sel));
+    }
+    inputEl.value = previousInputValue === rubyText ? "" : previousInputValue;
+    requestAnimationFrame(() => {
+      updateSelection();
+      if (previousInputValue && previousInputValue !== rubyText) inputEl.value = previousInputValue;
+    });
+  };
+
   applyBtn.addEventListener("click", doApply);
+  scaleEl?.addEventListener("input", () => {
+    const sel = currentRubyTarget();
+    if (!sel?.rubyOnly) return;
+    const scale = clampRubyScale(scaleEl.value);
+    applyRubyScaleToSelection(sel, scale);
+  });
+  scaleEl?.addEventListener("blur", () => {
+    const sel = currentRubyTarget();
+    if (!sel?.rubyOnly) return;
+    const entry = getRubySelectionEntry(sel);
+    if (entry?.scale) scaleEl.value = String(entry.scale);
+  });
+  dakutenBtn?.addEventListener("click", () => {
+    toggleSpecialRuby(DAKUTEN_RUBY);
+  });
+  nakaguroBtn?.addEventListener("click", () => {
+    toggleSpecialRuby(NAKAGURO_RUBY);
+  });
 
   // 蜑企勁
   removeBtn.addEventListener("click", () => {
@@ -1761,22 +2341,64 @@ function bindRubyTool() {
       }
       return current === lineIndex ? { start, end: contents.length } : null;
     };
+    const rangeHasAnyLeadingRuby = (from, to) => {
+      const map = getCharRubies(sel.psdPath, targetId);
+      for (const k of Object.keys(map)) {
+        const start = Number(k);
+        const entry = map[k];
+        const end = Number(entry?.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        if (start < to && end > from && !isDakutenRubyMarkerText(entry?.text)) return true;
+        if (Array.isArray(entry?.overlays)) {
+          for (const overlay of entry.overlays) {
+            const overlayStart = Number(overlay?.start);
+            const overlayEnd = Number(overlay?.end);
+            if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd)) continue;
+            if (overlayStart < to && overlayEnd > from && !isDakutenRubyMarkerText(overlay?.text)) return true;
+          }
+        }
+      }
+      return false;
+    };
     const clearRubyLineLeadingIfEmpty = (from, to) => {
       const startLine = lineIndexAt(from);
       const endLine = lineIndexAt(Math.max(from, to - 1));
       for (let li = startLine; li <= endLine; li++) {
+        const targetLine = li - 1;
+        if (targetLine < 0) continue;
         const range = lineRangeAt(li);
         if (!range) continue;
-        if (!rangeHasAnyRuby(sel.psdPath, targetId, range.start, range.end)) {
-          setLineLeading(sel.psdPath, targetId, li, null);
+        if (!rangeHasAnyLeadingRuby(range.start, range.end)) {
+          setLineLeading(sel.psdPath, targetId, targetLine, null);
         }
       }
     };
+    if (sel.rubyOnly) {
+      withHistoryTransient(() => {
+        if (sel.rubyOverlay) {
+          removeRubyTextRange(sel.psdPath, targetId, sel.start, sel.end, sel.rubyText ?? "");
+        } else {
+          removeCharRubyAt(sel.psdPath, targetId, sel.start);
+          setCharRubiesRange(sel.psdPath, targetId, sel.start, sel.end, "", "group", 50);
+        }
+        clearRubyLineLeadingIfEmpty(sel.start, sel.end);
+      });
+      if (!sel.objectSelection) {
+        if (sel.rubyOverlay) removeEditModeRubyTextFromRange(sel.start, sel.end, sel.rubyText ?? "");
+        else removeEditModeRubyFromRange(sel.start, sel.end);
+      }
+      refreshAllOverlays();
+      rebuildLayerList();
+      inputEl.value = "";
+      removeBtn.disabled = true;
+      requestAnimationFrame(updateSelection);
+      return;
+    }
     const rubyAtStart = getCharRubyAt(sel.psdPath, targetId, sel.start);
     const rubyAtEnd = getCharRubyAt(sel.psdPath, targetId, Math.max(sel.start, sel.end - 1));
     const rubyToRemove = rubyAtStart ?? rubyAtEnd ?? null;
-    const removeStart = rubyToRemove?.start ?? sel.start;
-    const removeEnd = rubyToRemove?.end ?? sel.end;
+    const removeStart = sel.manualRanges ? sel.start : (rubyToRemove?.start ?? sel.start);
+    const removeEnd = sel.manualRanges ? sel.end : (rubyToRemove?.end ?? sel.end);
     const removedRubies = !sel.objectSelection ? removeEditModeRubyFromRange(sel.start, sel.end) : [];
     withHistoryTransient(() => {
       removeCharRubyAt(sel.psdPath, targetId, removeStart);
@@ -1825,6 +2447,9 @@ function bindSizeTool() {
   input.value = String(getTextSize());
   onTextSizeChange((v) => {
     if (document.activeElement !== input) input.value = String(v);
+  });
+  onInplaceSelectionChange((sel) => {
+    if (sel?.rubyOnly) syncTextSizeFromRubySelection(sel);
   });
 
   input.addEventListener("input", () => {
@@ -2450,7 +3075,6 @@ function openReferenceHiddenPicker(paths, selectedPages = new Set()) {
             <div class="reference-hidden-title" id="reference-hidden-title">非表示にする見本を選択</div>
             <div class="reference-hidden-subtitle">選択した見本は表示とページ計算から除外されます</div>
           </div>
-          <button class="reference-hidden-close" type="button" aria-label="閉じる">×</button>
         </div>
         <div class="reference-hidden-body">
           <div class="reference-hidden-loading">見本を読み込み中...</div>
@@ -2531,7 +3155,6 @@ function openReferenceHiddenPicker(paths, selectedPages = new Set()) {
       setTimeout(() => modal.remove(), 260);
       resolve(value);
     };
-    modal.querySelector(".reference-hidden-close")?.addEventListener("click", () => cleanup(null));
     modal.querySelector(".reference-hidden-cancel")?.addEventListener("click", () => cleanup(null));
     modal.querySelector(".reference-hidden-clear")?.addEventListener("click", () => {
       selected.clear();
@@ -2594,7 +3217,6 @@ function openHomeTypesetDialog() {
       <div class="home-typeset-card" role="dialog" aria-modal="true" aria-labelledby="home-typeset-title">
         <div class="home-typeset-header">
           <span class="home-typeset-title" id="home-typeset-title">写植用ファイルを選択</span>
-          <button class="home-typeset-close" type="button" aria-label="閉じる">×</button>
         </div>
         <div class="home-typeset-list">
           <div class="home-typeset-row" data-slot="reference">
@@ -2638,12 +3260,10 @@ function openHomeTypesetDialog() {
     );
     const homeTypeSetLabels = {
       reference: { title: "見本", desc: "PDF / JPEG / PNG", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><circle cx="10" cy="12" r="2"/><path d="m20 17-1.296-1.296a2.41 2.41 0 0 0-3.408 0L9 22"/></svg>' },
-      psd: { title: "PSD", desc: "複数選択できます", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/><text x="12" y="17" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: var(--ui-font); font-weight: 700;">PSD</text></svg>' },
+      psd: { title: "PSD", desc: "複数選択できます", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><polyline points="14 2 14 8 20 8"/><text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: var(--ui-font); font-weight: 700;">PSD</text></svg>' },
       txt: { title: "テキスト", desc: "未選択の場合は画像スキャン結果を使用", icon: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><polyline points="14 2 14 8 20 8"/><text x="12" y="19" font-size="7" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: var(--ui-font); font-weight: 700;">TXT</text></svg>' },
     };
     modal.querySelector(".home-typeset-title").textContent = "写植用ファイルを選択";
-    modal.querySelector(".home-typeset-close").textContent = "×";
-    modal.querySelector(".home-typeset-close").setAttribute("aria-label", "閉じる");
     modal.querySelector(".home-typeset-cancel").textContent = "キャンセル";
     modal.querySelector(".home-typeset-start").textContent = "開始";
     for (const row of modal.querySelectorAll(".home-typeset-row")) {
@@ -2868,7 +3488,6 @@ function openHomeTypesetDialog() {
       }
     };
 
-    modal.querySelector(".home-typeset-close")?.addEventListener("click", () => cleanup(null));
     modal.querySelector(".home-typeset-cancel")?.addEventListener("click", () => cleanup(null));
     modal.querySelector("[data-reference-hide]")?.addEventListener("click", async () => {
       if (referencePaths.length === 0 || referenceLoading) return;
@@ -2890,14 +3509,22 @@ function openHomeTypesetDialog() {
       btn.disabled = true;
       try {
         if (kind === "reference") {
-          referencePaths = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickReferenceFiles()));
-          hiddenReferencePages = new Set();
-          referencePageCount = null;
-          await loadSelectedReference();
+          const picked = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickReferenceFiles()));
+          if (picked.length > 0) {
+            const changed = !samePathList(referencePaths, picked);
+            referencePaths = picked;
+            if (changed) {
+              hiddenReferencePages = new Set();
+              referencePageCount = null;
+              await loadSelectedReference();
+            }
+          }
         } else if (kind === "psd") {
-          psdPaths = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickPsdFiles()));
+          const picked = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickPsdFiles()));
+          if (picked.length > 0) psdPaths = picked;
         } else if (kind === "txt") {
-          txtPath = await pickWithHomeDialogHidden(() => pickTxtPath());
+          const picked = await pickWithHomeDialogHidden(() => pickTxtPath());
+          if (picked) txtPath = picked;
         }
         update();
       } catch (err) {
@@ -3064,6 +3691,7 @@ async function startHomeTranscribeFlow() {
 function bindHomeScreen() {
   document.getElementById("home-transcribe-start-btn")?.addEventListener("click", () => { void startHomeTranscribeFlow(); });
   document.getElementById("home-typeset-start-btn")?.addEventListener("click", () => { void startHomeTypesetFlow(); });
+  document.getElementById("home-project-open-btn")?.addEventListener("click", () => { void openProject(); });
   window.addEventListener("psdesign:scan-model-status", (e) => {
     setHomeScanEngineState(!!e.detail?.available);
   });

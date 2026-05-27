@@ -54,7 +54,7 @@
     <div id="app" class="app">
       <header class="toolbar" data-tauri-drag-region>
         <h1 data-tauri-drag-region class="app-logo" aria-label="OPUS">
-          <img class="app-logo-icon" src="/PsDesign_icon.png" alt="OPUS" draggable="false" />
+          <img class="app-logo-icon" src="/opus_icon.png" alt="OPUS" draggable="false" />
         </h1>
         <button id="hamburger-btn" class="icon-btn hamburger-btn" type="button" title="メニュー" aria-label="メニュー">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -85,6 +85,13 @@
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M9 11l3 3L22 4"/>
               <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+            </svg>
+          </button>
+          <button id="view-spread-edit-btn" class="sync-seg-btn" type="button" title="見開き編集" aria-label="見開き編集" aria-pressed="false">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 5.5h6.2c1 0 1.8.8 1.8 1.8v11.2c0-.9-.8-1.6-1.8-1.6H4z"/>
+              <path d="M20 5.5h-6.2c-1 0-1.8.8-1.8 1.8v11.2c0-.9.8-1.6 1.8-1.6H20z"/>
+              <path d="m15.5 12.2 2.1-2.1 1.3 1.3-2.1 2.1-1.5.2z"/>
             </svg>
           </button>
           <button id="view-editor-btn" class="sync-seg-btn" type="button" title="テキストエディタ表示" aria-label="エディタ" aria-pressed="false">
@@ -131,8 +138,8 @@
             </svg>
           </button>
           <button id="save-btn" class="icon-btn file-open-btn psd-save-btn" type="button" title="PSDを保存 (Ctrl+Shift+S)" aria-label="PSDを保存" disabled>
-            <svg class="psd-save-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-              <path class="psd-save-star" d="M12 1.25l3.12 6.33 6.98 1.01-5.05 4.93 1.19 6.95L12 17.18l-6.24 3.29 1.19-6.95L1.9 8.59l6.98-1.01L12 1.25z"/>
+            <svg class="psd-save-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path class="psd-save-star" d="M12 2.2l2.9 5.88 6.49.94-4.69 4.57 1.1 6.46L12 17l-5.8 3.05 1.1-6.46-4.69-4.57 6.49-.94L12 2.2z"/>
               <text class="psd-save-label" x="12" y="12.9" text-anchor="middle" dominant-baseline="middle">Ps</text>
             </svg>
           </button>
@@ -164,12 +171,24 @@
         </div>
       </header>
       <section id="home-screen" class="home-screen" aria-label="ホーム">
+        <div class="home-nebula home-nebula-purple" aria-hidden="true"></div>
+        <div class="home-nebula home-nebula-blue" aria-hidden="true"></div>
+        <div class="home-stars home-stars-faint" aria-hidden="true"></div>
+        <div class="home-stars home-stars-mid" aria-hidden="true"></div>
+        <div class="home-stars home-stars-bright" aria-hidden="true"></div>
+        <div class="home-sky-motion" aria-hidden="true">
+          <div class="home-shooting-star s1"></div>
+          <div class="home-shooting-star s2"></div>
+          <div class="home-shooting-star s3"></div>
+          <div class="home-shooting-star s4"></div>
+        </div>
         <div class="home-screen-inner">
           <h2 class="home-title">
-            <img class="home-title-icon" src="/PsDesign_icon.png" alt="" draggable="false" />
+            <img class="home-title-icon" src="/opus_icon.png" alt="" draggable="false" />
             <span class="home-title-word">OPUS</span>
           </h2>
           <span id="home-version" class="home-version">Ver -</span>
+          <div class="home-divider" aria-hidden="true"></div>
           <div class="home-start-grid">
             <article class="home-start-card">
               <h3>
@@ -200,6 +219,21 @@
               <p>自動配置による写植</p>
               <button id="home-typeset-start-btn" class="home-start-btn" type="button">
                 <span>START</span>
+                <span class="home-start-arrow" aria-hidden="true">▶</span>
+              </button>
+            </article>
+            <article class="home-start-card home-project-card">
+              <h3>
+                <svg class="home-card-icon" width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                  <path d="M4 7.5a2 2 0 0 1 2-2h4.1l1.8 2H18a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+                  <path d="M8.25 12.25h7.5M8.25 15.5h5.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+                </svg>
+                <span>プロジェクトを開く</span>
+              </h3>
+              <div class="home-card-rule" aria-hidden="true"></div>
+              <p>保存済みプロジェクトを開く</p>
+              <button id="home-project-open-btn" class="home-start-btn" type="button">
+                <span>OPEN</span>
                 <span class="home-start-arrow" aria-hidden="true">▶</span>
               </button>
             </article>
@@ -464,14 +498,12 @@
             </svg>
           </button>
           <button id="find-change-btn" class="icon-btn side-tool-btn" type="button" title="検索置換 / 全変換" aria-label="検索置換 / 全変換">
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <path d="M21 21l-4.3-4.3"/>
-              <circle cx="10.5" cy="10.5" r="6.5"/>
-              <path d="M8 9h5"/>
-              <path d="M11 6v6"/>
-              <path d="M14 17h6"/>
-              <path d="M17 14l3 3-3 3"/>
-            </svg>
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M15.5 20H17a3 3 0 0 0 3-3V5"/>
+                <path d="M16.4 8.6 20 5l2.5 3.6"/>
+                <path d="M8.5 4H7a3 3 0 0 0-3 3v12"/>
+                <path d="M7.6 15.4 4 19l-2.5-3.6"/>
+              </svg>
           </button>
           <button id="tool-pan" class="tool-btn icon-btn side-tool-btn" data-tool="pan" title="パンツール (Space長押し)" aria-label="パンツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -686,6 +718,7 @@
               <div class="editor-tab-panel" data-tab-panel="ruby">
                 <div class="editor-panel-label">ルビ</div>
                 <div class="ruby-row">
+                  <button id="ruby-parent-select-btn" class="ruby-parent-select-btn" type="button" disabled>親文字指定</button>
                   <div class="ruby-parent-display" id="ruby-parent-display" title="選択中の親文字" aria-live="polite">
                     <span class="ruby-parent-empty">文字を選択</span>
                   </div>
@@ -694,6 +727,10 @@
                   <input id="ruby-text-input" class="ruby-text-input" type="text"
                          placeholder="ふりがな" aria-label="ふりがな"
                          autocomplete="off" autocorrect="off" spellcheck="false" disabled />
+                </div>
+                <div class="ruby-row ruby-special-actions" role="group" aria-label="special ruby">
+                  <button id="ruby-dakuten-btn" class="ruby-special-btn" type="button" disabled title="dakuten ruby">&#12443;</button>
+                  <button id="ruby-nakaguro-btn" class="ruby-special-btn" type="button" disabled title="nakaguro ruby">&#12539;</button>
                 </div>
                 <div class="ruby-row">
                   <div class="ruby-mode-toggle" role="group" aria-label="ルビ種別">
@@ -920,15 +957,6 @@
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" aria-hidden="true">
             <polygon class="flip-left-arrow" points="2,12 10,4 10,20"/>
             <polygon class="flip-right-arrow" points="22,12 14,4 14,20"/>
-          </svg>
-        </button>
-        <button id="theme-toggle-btn" class="menu-icon-btn" type="button" title="テーマ切替" aria-label="テーマ切替">
-          <svg class="theme-icon-moon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/>
-          </svg>
-          <svg class="theme-icon-sun" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="12" cy="12" r="4"/>
-            <path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/>
           </svg>
         </button>
         <button id="scan-install-btn" class="menu-icon-btn scan-install-menu-btn" type="button" title="スキャンエンジンインストール" aria-label="スキャンエンジンインストール">
@@ -1299,7 +1327,7 @@
     </div>
     <div class="welcome-modal" id="first-run-welcome-modal" hidden>
       <div class="welcome-card" role="dialog" aria-modal="true" aria-labelledby="welcome-title">
-        <img src="/PsDesign_icon.png" class="welcome-logo" alt="OPUS" />
+        <img src="/opus_icon.png" class="welcome-logo" alt="OPUS" />
         <h2 class="welcome-title" id="welcome-title">OPUS へようこそ</h2>
         <p class="welcome-message">
           本アプリでは 画像スキャン による画像スキャンエンジンを使った<br>
@@ -1383,9 +1411,6 @@
       <div class="file-picker-card" role="dialog" aria-modal="true" aria-labelledby="file-picker-title">
         <div class="file-picker-header">
           <h2 id="file-picker-title" class="file-picker-title"></h2>
-          <button id="file-picker-close-btn" class="file-picker-close-btn" type="button" aria-label="閉じる" title="閉じる">
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
-          </button>
         </div>
         <div class="file-picker-toolbar">
           <div id="file-picker-drives" class="file-picker-drives"></div>

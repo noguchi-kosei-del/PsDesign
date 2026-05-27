@@ -452,6 +452,44 @@ fn emit_char_rubies(out: &mut String, m: &std::collections::HashMap<String, crat
                 s.push_str(&format!(", absY: {}", ay));
             }
         }
+        if !v.overlays.is_empty() {
+            s.push_str(", overlays: [");
+            for (i, overlay) in v.overlays.iter().enumerate() {
+                if i > 0 {
+                    s.push_str(", ");
+                }
+                s.push_str(&format!(
+                    "{{start: {}, end: {}, text: {}, rubyType: {}, scale: {}",
+                    overlay.start,
+                    overlay.end,
+                    js_string(&overlay.text),
+                    js_string(&overlay.ruby_type),
+                    overlay.scale
+                ));
+                if let Some(ox) = overlay.offset_x {
+                    if ox.is_finite() {
+                        s.push_str(&format!(", offsetX: {}", ox));
+                    }
+                }
+                if let Some(oy) = overlay.offset_y {
+                    if oy.is_finite() {
+                        s.push_str(&format!(", offsetY: {}", oy));
+                    }
+                }
+                if let Some(ax) = overlay.abs_x {
+                    if ax.is_finite() {
+                        s.push_str(&format!(", absX: {}", ax));
+                    }
+                }
+                if let Some(ay) = overlay.abs_y {
+                    if ay.is_finite() {
+                        s.push_str(&format!(", absY: {}", ay));
+                    }
+                }
+                s.push('}');
+            }
+            s.push(']');
+        }
         s.push('}');
         s
     });
@@ -1572,10 +1610,10 @@ function computeRubyLineIndices(contents, charRubies, direction) {
   if (!charRubies) return out;
   var normContents = String(contents || "");
   var lineStarts = [0];
-  for (var ci = 0; ci < normContents.length; ci++) {
-    if (normContents.charAt(ci) === "\n" || normContents.charAt(ci) === "\r") {
-      lineStarts.push(ci + 1);
-    }
+  var lineBreakRe = /\r\n|\r|\n/g;
+  var lineBreak;
+  while ((lineBreak = lineBreakRe.exec(normContents)) !== null) {
+    lineStarts.push(lineBreak.index + lineBreak[0].length);
   }
   function charIndexToLine(idx) {
     var lo = 0, hi = lineStarts.length - 1;
@@ -1586,17 +1624,33 @@ function computeRubyLineIndices(contents, charRubies, direction) {
     return lo;
   }
   var seen = {};
+  function addRubyLineForStart(start) {
+    var parentLine = charIndexToLine(start);
+    // 縦書き・横書きとも「親文字行の一つ前 (i-1)」を target。0 行目スキップ。
+    var targetLine = parentLine - 1;
+    if (targetLine < 0) return;
+    if (!seen[String(targetLine)]) {
+      seen[String(targetLine)] = true;
+      out.push(targetLine);
+    }
+  }
   for (var k in charRubies) {
     if (!charRubies.hasOwnProperty(k)) continue;
     var start = parseInt(k, 10);
     if (isNaN(start)) continue;
-    var parentLine = charIndexToLine(start);
-    // 縦書き・横書きとも「親文字行の一つ前 (i-1)」を target。0 行目スキップ。
-    var targetLine = parentLine - 1;
-    if (targetLine < 0) continue;
-    if (!seen[String(targetLine)]) {
-      seen[String(targetLine)] = true;
-      out.push(targetLine);
+    var entry = charRubies[k];
+    if (entry && typeof entry.text === "string" && entry.text.length > 0 && !isDakutenRubyText(entry.text)) {
+      addRubyLineForStart(start);
+    }
+    if (entry && entry.overlays && entry.overlays.length) {
+      for (var oi = 0; oi < entry.overlays.length; oi++) {
+        var ov = entry.overlays[oi];
+        if (!ov || typeof ov.text !== "string" || ov.text.length === 0) continue;
+        if (isDakutenRubyText(ov.text)) continue;
+        var ovStart = parseInt(ov.start, 10);
+        if (isNaN(ovStart)) continue;
+        addRubyLineForStart(ovStart);
+      }
     }
   }
   return out;
@@ -1618,9 +1672,195 @@ function computeRubyLineIndices(contents, charRubies, direction) {
 // null のときは現在の親 bounds をそのまま使う (旧挙動)。
 // 【v1.29.x】rubyPhotoshopOffsetEm / rubyPhotoshopBiasPx: ルビ位置 Photoshop 微調整値。
 // settings (写植設定) で変更可能。デフォルト 0 / 0。
+function isNakaguroRubyText(text) {
+  var s = String(text || "");
+  if (s.length === 0) return false;
+  for (var i = 0; i < s.length; i++) {
+    var code = s.charCodeAt(i);
+    if (code !== 0x30FB && code !== 0xFF65) return false;
+  }
+  return true;
+}
+
+function isDakutenRubyText(text) {
+  var s = String(text || "");
+  if (s.length === 0) return false;
+  for (var i = 0; i < s.length; i++) {
+    var code = s.charCodeAt(i);
+    if (code !== 0x309B && code !== 0xFF9E && code !== 0x3099) return false;
+  }
+  return true;
+}
+
+function isSpecialParentMarkRubyText(text) {
+  return isNakaguroRubyText(text) || isDakutenRubyText(text);
+}
+
+function rubyLayerNameFor(parentSubText, rubyText) {
+  return String(rubyText || "") + "（" + String(parentSubText || "") + "）";
+}
+
+function addRubyLayerName(names, parentSubText, rubyText) {
+  var name = rubyLayerNameFor(parentSubText, rubyText);
+  if (name && name !== "（）") names[name] = true;
+}
+
+function collectRubyLayerNames(contents, charRubies) {
+  var names = {};
+  if (!charRubies) return names;
+  for (var key in charRubies) {
+    if (!charRubies.hasOwnProperty(key)) continue;
+    var startChar = parseInt(key, 10);
+    if (isNaN(startChar)) continue;
+    var entry = charRubies[key];
+    if (!entry || typeof entry.text !== "string" || entry.text.length === 0) continue;
+    var endChar = entry.end;
+    if (!(endChar > startChar) || endChar > String(contents).length) continue;
+    var parentText = String(contents).substring(startChar, endChar);
+    var rubyText = entry.text;
+    var rubyType = entry.rubyType || "group";
+    var monoSegments = null;
+    if (rubyType === "mono") {
+      var parts = rubyText.split(/[ 　]+/);
+      if (parts.length === parentText.length) monoSegments = parts;
+    }
+    if (monoSegments) {
+      for (var mi = 0; mi < parentText.length; mi++) {
+        addRubyLayerName(names, parentText.charAt(mi), monoSegments[mi]);
+      }
+    } else {
+      addRubyLayerName(names, parentText, rubyText);
+    }
+    if (entry.overlays && entry.overlays.length) {
+      for (var oi = 0; oi < entry.overlays.length; oi++) {
+        var ov = entry.overlays[oi];
+        if (!ov || typeof ov.text !== "string" || ov.text.length === 0) continue;
+        var ovStart = parseInt(ov.start, 10);
+        var ovEnd = parseInt(ov.end, 10);
+        if (isNaN(ovStart) || isNaN(ovEnd) || !(ovEnd > ovStart) || ovEnd > String(contents).length) continue;
+        addRubyLayerName(names, String(contents).substring(ovStart, ovEnd), ov.text);
+      }
+    }
+  }
+  return names;
+}
+
+function removeExistingGeneratedRubyLayers(parentLayer, rubyNames) {
+  try {
+    if (!parentLayer || !rubyNames || isObjEmpty(rubyNames)) return;
+    var parentBounds = getLayerBoundsPx(parentLayer);
+    if (!parentBounds) return;
+    var pad = Math.max(
+      200,
+      Math.abs(parentBounds.right - parentBounds.left) * 1.5,
+      Math.abs(parentBounds.bottom - parentBounds.top) * 1.5
+    );
+    var parentId = null;
+    try { parentId = parentLayer.id; } catch (ePid) {}
+    function matchesRubyName(name) {
+      if (typeof name !== "string" || name.length === 0) return false;
+      for (var rn in rubyNames) {
+        if (!rubyNames.hasOwnProperty(rn)) continue;
+        if (name === rn || name.indexOf(rn + " ") === 0) return true;
+      }
+      return false;
+    }
+    var targets = [];
+    function collectTargets(container) {
+      if (!container || !container.layers) return;
+      var layers = container.layers;
+      for (var li = layers.length - 1; li >= 0; li--) {
+        var layer = layers[li];
+        if (!layer) continue;
+        try {
+          if (layer.typename === "LayerSet") collectTargets(layer);
+        } catch (eSet) {}
+        if (!matchesRubyName(layer.name)) continue;
+        try {
+          if (parentId !== null && layer.id === parentId) continue;
+        } catch (eSame) {}
+        try {
+          if (layer.typename !== "ArtLayer" || layer.kind !== LayerKind.TEXT) continue;
+        } catch (eKind) {
+          continue;
+        }
+        var b = getLayerBoundsPx(layer);
+        if (!b) continue;
+        var nearParent = !(
+          b.right < parentBounds.left - pad ||
+          b.left > parentBounds.right + pad ||
+          b.bottom < parentBounds.top - pad ||
+          b.top > parentBounds.bottom + pad
+        );
+        if (!nearParent) continue;
+        targets.push(layer);
+      }
+    }
+    collectTargets(app.activeDocument);
+    for (var ti = 0; ti < targets.length; ti++) {
+      var layer = targets[ti];
+      try {
+        if (parentId !== null && layer.id === parentId) continue;
+      } catch (eSame) {}
+      try { layer.remove(); } catch (eRemoveRuby) {}
+    }
+  } catch (eRemoveExistingRuby) {}
+}
+
+function parentEmPxForLayer(parentLayer, doc) {
+  var parentEmPx = 200;
+  try {
+    var pSizePt = parentLayer.textItem.size.value;
+    var dpiVal = doc.resolution;
+    if (typeof pSizePt === "number" && pSizePt > 0
+        && typeof dpiVal === "number" && dpiVal > 0) {
+      parentEmPx = pSizePt * (dpiVal / 72);
+    }
+  } catch (eEm) {}
+  return parentEmPx;
+}
+
+var PARENT_MARK_OFFSET_EM = 0.55;
+var NAKAGURO_PARENT_MARK_OFFSET_EM = 0.72;
+var NAKAGURO_FIRST_LINE_PARENT_MARK_OFFSET_EM = 0.84;
+
+function lineIndexForCharIndex(contents, idx) {
+  var fullText = String(contents || "");
+  var target = parseInt(idx, 10);
+  if (isNaN(target) || target <= 0) return 0;
+  var line = 0;
+  for (var i = 0; i < fullText.length && i < target; i++) {
+    var ch = fullText.charAt(i);
+    if (ch === "\r") {
+      line++;
+      if (fullText.charAt(i + 1) === "\n") i++;
+    } else if (ch === "\n") {
+      line++;
+    }
+  }
+  return line;
+}
+
 function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirection, parentFontPS, parentFillColor, parentTopLeftOverride, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx) {
   if (!charRubies || isObjEmpty(charRubies)) return [];
   var __createdRubyLayers = [];
+  var __emittedRubyKeys = {};
+  var __emittedNakaguroRanges = [];
+  function emitRubyOnce(fromCh, toCh, rubyText) {
+    if (isNakaguroRubyText(rubyText)) {
+      for (var nri = 0; nri < __emittedNakaguroRanges.length; nri++) {
+        var nr = __emittedNakaguroRanges[nri];
+        if (fromCh < nr.end && toCh > nr.start) return false;
+      }
+      __emittedNakaguroRanges.push({ start: fromCh, end: toCh });
+    }
+    var emitKey = String(fromCh) + "\u0001" + String(toCh) + "\u0001" + String(rubyText || "");
+    if (__emittedRubyKeys[emitKey]) return false;
+    __emittedRubyKeys[emitKey] = true;
+    return true;
+  }
+
+  removeExistingGeneratedRubyLayers(parentLayer, collectRubyLayerNames(contents, charRubies));
 
   for (var key in charRubies) {
     if (!charRubies.hasOwnProperty(key)) continue;
@@ -1662,6 +1902,7 @@ function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirect
 
     if (monoSegments) {
       for (var mi = 0; mi < parentText.length; mi++) {
+        if (!emitRubyOnce(startChar + mi, startChar + mi + 1, monoSegments[mi])) continue;
         try {
           var __mrLayer = createRubyLayer(parentLayer, contents, startChar + mi, startChar + mi + 1,
                           parentText.charAt(mi), monoSegments[mi],
@@ -1678,16 +1919,60 @@ function applyRubies(parentLayer, contents, charRubies, fontSizePt, parentDirect
         }
       }
     } else {
-      try {
-        var __grLayer = createRubyLayer(parentLayer, contents, startChar, endChar,
-                        parentText, rubyText,
-                        rubySizePt, parentDirection, parentFontPS, parentFillColor,
-                        uiOffsetX, uiOffsetY, uiAbsX, uiAbsY,
-                        parentTopLeftOverride,
-                        rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
-        if (__grLayer) __createdRubyLayers.push(__grLayer);
-      } catch (eGroup) {
-        addWarning("グループルビ「" + parentText + "（" + rubyText + "）」適用失敗: " + eGroup);
+      if (emitRubyOnce(startChar, endChar, rubyText)) {
+        try {
+          var __grLayer = createRubyLayer(parentLayer, contents, startChar, endChar,
+                          parentText, rubyText,
+                          rubySizePt, parentDirection, parentFontPS, parentFillColor,
+                          uiOffsetX, uiOffsetY, uiAbsX, uiAbsY,
+                          parentTopLeftOverride,
+                          rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
+          if (__grLayer) __createdRubyLayers.push(__grLayer);
+        } catch (eGroup) {
+          addWarning("グループルビ「" + parentText + "（" + rubyText + "）」適用失敗: " + eGroup);
+        }
+      }
+    }
+
+    if (entry.overlays && entry.overlays.length) {
+      for (var oi = 0; oi < entry.overlays.length; oi++) {
+        var ov = entry.overlays[oi];
+        if (!ov || typeof ov.text !== "string" || ov.text.length === 0) continue;
+        var ovStart = parseInt(ov.start, 10);
+        var ovEnd = parseInt(ov.end, 10);
+        if (isNaN(ovStart) || isNaN(ovEnd) || !(ovEnd > ovStart) || ovEnd > String(contents).length) continue;
+        var ovScale = (typeof ov.scale === "number" && ov.scale > 0) ? ov.scale : 50;
+        var ovSizePt = fontSizePt * (ovScale / 100);
+        var ovParentText = String(contents).substring(ovStart, ovEnd);
+        var ovHasUiOffset = (typeof ov.offsetX === "number" && typeof ov.offsetY === "number"
+                            && isFinite(ov.offsetX) && isFinite(ov.offsetY));
+        var ovOffsetX = ovHasUiOffset ? ov.offsetX : null;
+        var ovOffsetY = ovHasUiOffset ? ov.offsetY : null;
+        var ovHasUiAbs = (typeof ov.absX === "number" && typeof ov.absY === "number"
+                          && isFinite(ov.absX) && isFinite(ov.absY));
+        var ovAbsX = ovHasUiAbs ? ov.absX : null;
+        var ovAbsY = ovHasUiAbs ? ov.absY : null;
+        if (!emitRubyOnce(ovStart, ovEnd, ov.text)) continue;
+        try {
+          var __ovLayer = createRubyLayer(parentLayer, contents, ovStart, ovEnd,
+                          ovParentText, ov.text,
+                          ovSizePt, parentDirection, parentFontPS, parentFillColor,
+                          ovOffsetX, ovOffsetY, ovAbsX, ovAbsY,
+                          parentTopLeftOverride,
+                          rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
+          if (__ovLayer) {
+            if (!isSpecialParentMarkRubyText(ov.text)) {
+              try {
+                var stackPx = fontSizePt * 0.62 * (oi + 1);
+                if (parentDirection === "vertical") __ovLayer.translate(new UnitValue(0, "px"), new UnitValue(stackPx, "px"));
+                else __ovLayer.translate(new UnitValue(stackPx, "px"), new UnitValue(0, "px"));
+              } catch (eOvShift) {}
+            }
+            __createdRubyLayers.push(__ovLayer);
+          }
+        } catch (eOverlay) {
+          addWarning("追加ルビ「" + ovParentText + "（" + ov.text + "）」適用失敗: " + eOverlay);
+        }
       }
     }
   }
@@ -1739,7 +2024,7 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
   // 新規テキストレイヤー（doc 直下に作成 → 親直前に move の 2 段階パターン）。
   var rubyLayer = doc.artLayers.add();
   rubyLayer.kind = LayerKind.TEXT;
-  rubyLayer.name = rubyText + "（" + parentSubText + "）";
+  rubyLayer.name = rubyLayerNameFor(parentSubText, rubyText);
   var rti = rubyLayer.textItem;
   // direction 継承
   try {
@@ -1780,6 +2065,16 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
                       && isFinite(uiOffsetX) && isFinite(uiOffsetY));
     var hasUiAbs = (typeof uiAbsX === "number" && typeof uiAbsY === "number"
                     && isFinite(uiAbsX) && isFinite(uiAbsY));
+    var isParentMarkRuby = isSpecialParentMarkRubyText(rubyText);
+    var parentMarkOffsetEm = isNakaguroRubyText(rubyText) ? NAKAGURO_PARENT_MARK_OFFSET_EM : PARENT_MARK_OFFSET_EM;
+    if (isNakaguroRubyText(rubyText) && lineIndexForCharIndex(contents, fromCh) === 0) {
+      parentMarkOffsetEm = NAKAGURO_FIRST_LINE_PARENT_MARK_OFFSET_EM;
+    }
+    if (isParentMarkRuby) {
+      // Parent marks are positioned from the parent range; old UI coords can include the ruby-line offset.
+      hasUiOffset = false;
+      hasUiAbs = false;
+    }
     if (hasUiAbs || hasUiOffset) {
       // ルビ中心:
       //   縦書き: UI 側も Photoshop 側も、親テキスト右端基準の offsetX として扱う。
@@ -1819,15 +2114,7 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
       } catch (ePtBias) {}
       var PHOTOSHOP_RUBY_PARENT_BIAS_PX = __biasPxBase * (__parentSizePtForBias / PHOTOSHOP_RUBY_PARENT_BIAS_REF_PT);
       // 親 1em の PSD px 値を取得 (親 fontSize * dpi/72)
-      var parentEmPx = 200; // フォールバック (24pt × 600/72)
-      try {
-        var pSizePt = parentLayer.textItem.size.value;
-        var dpiVal = doc.resolution;
-        if (typeof pSizePt === "number" && pSizePt > 0
-            && typeof dpiVal === "number" && dpiVal > 0) {
-          parentEmPx = pSizePt * (dpiVal / 72);
-        }
-      } catch (eEm) {}
+      var parentEmPx = parentEmPxForLayer(parentLayer, doc);
       if (!hasUiAbs) {
         if (parentDirection === "vertical") {
           rubyCenterX -= parentEmPx * PHOTOSHOP_RUBY_TO_PARENT_OFFSET_EM;
@@ -1846,14 +2133,25 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
       var gap = 2;
       if (parentDirection === "vertical") {
         // 縦書き: ルビは親 char range の **右** に配置。
-        targetLeft = rangeBounds.right + gap;
         var rangeMidV = (rangeBounds.top + rangeBounds.bottom) / 2;
+        if (isParentMarkRuby) {
+          var parentMarkCenterX = (rangeBounds.left + rangeBounds.right) / 2 + parentEmPxForLayer(parentLayer, doc) * parentMarkOffsetEm;
+          targetLeft = parentMarkCenterX - rubyWidth / 2;
+        } else {
+          targetLeft = rangeBounds.right + gap;
+        }
         targetTop = rangeMidV - rubyHeight / 2;
       } else {
         // 横書き: ルビは親 char range の **上** に配置。
         var rangeMidH = (rangeBounds.left + rangeBounds.right) / 2;
         targetLeft = rangeMidH - rubyWidth / 2;
-        targetTop = rangeBounds.top - rubyHeight - gap;
+        if (isParentMarkRuby) {
+          var parentMarkCenterXH = rangeMidH + parentEmPxForLayer(parentLayer, doc) * parentMarkOffsetEm;
+          targetLeft = parentMarkCenterXH - rubyWidth / 2;
+          targetTop = (rangeBounds.top + rangeBounds.bottom) / 2 - rubyHeight / 2;
+        } else {
+          targetTop = rangeBounds.top - rubyHeight - gap;
+        }
       }
     }
     var dx = targetLeft - actualLeft;

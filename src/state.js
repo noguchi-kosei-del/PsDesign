@@ -127,10 +127,10 @@ const _normFillColor = (v) => {
   return "default";
 };
 const _normActivePane = (v) => (v === "pdf" ? "pdf" : "psd");
-// "psdOnly" モードは廃止。3 モード ("parallel" | "proofread" | "editor") のみ受け入れ、
+// "psdOnly" モードは廃止。4 モード ("parallel" | "proofread" | "editor" | "spreadEdit") のみ受け入れ、
 // それ以外（旧 "psdOnly" 等）は "parallel" にフォールバックする。
 const _normParallelViewMode = (v) =>
-  v === "editor" ? "editor" : v === "proofread" ? "proofread" : "parallel";
+  v === "spreadEdit" ? "spreadEdit" : v === "editor" ? "editor" : v === "proofread" ? "proofread" : "parallel";
 // editor モード時の左側ペイン表示。"proofread" = 校正パネル / "pdf" = 見本画像（spreads-pdf-area）。
 // 校正パネルのヘッダー左端のセグメントトグルで切替、editor モード以外では参照されない。
 const _normEditorLeftPaneMode = (v) => (v === "pdf" ? "pdf" : "proofread");
@@ -583,6 +583,29 @@ function normalizeCharRubiesMap(map) {
       type: entry.type === "mono" ? "mono" : "group",
       scale: Number.isFinite(Number(entry.scale)) ? Number(entry.scale) : 50,
     };
+    if (Array.isArray(entry.overlays)) {
+      const overlays = entry.overlays
+        .map((overlay) => {
+          if (!overlay || typeof overlay !== "object") return null;
+          const overlayStart = Number(overlay.start);
+          const overlayEnd = Number(overlay.end);
+          const overlayText = typeof overlay.text === "string" ? overlay.text : "";
+          if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd) || overlayEnd <= overlayStart || !overlayText) return null;
+          return {
+            start: overlayStart,
+            end: overlayEnd,
+            text: overlayText,
+            type: overlay.type === "mono" ? "mono" : "group",
+            scale: Number.isFinite(Number(overlay.scale)) ? Number(overlay.scale) : 50,
+            ...(Number.isFinite(Number(overlay.offsetX)) ? { offsetX: Number(overlay.offsetX) } : {}),
+            ...(Number.isFinite(Number(overlay.offsetY)) ? { offsetY: Number(overlay.offsetY) } : {}),
+            ...(Number.isFinite(Number(overlay.absX)) ? { absX: Number(overlay.absX) } : {}),
+            ...(Number.isFinite(Number(overlay.absY)) ? { absY: Number(overlay.absY) } : {}),
+          };
+        })
+        .filter(Boolean);
+      if (overlays.length > 0) normalized.overlays = overlays;
+    }
     // 【v1.29.x UI-coord】ビューアー上のルビ wrap の実描画位置を PSD 座標 (親レイヤー基準) で
     // 保持。canvas-tools.js が renderOverlay 後に setCharRubyOffset() で書き込む。
     // 値があれば JSX 側の createRubyLayer はこの座標をそのまま使う (計算ズレ排除)。
@@ -609,7 +632,119 @@ function dropOverlapping(map, from, to) {
   return out;
 }
 
-export function setCharRubiesRange(psdPath, layerIdOrTempId, from, to, text, type, scale) {
+function isDakutenRubyText(text) {
+  const chars = Array.from(String(text ?? ""));
+  return chars.length > 0 && chars.every((ch) => {
+    const code = ch.charCodeAt(0);
+    return code === 0x309b || code === 0xff9e || code === 0x3099;
+  });
+}
+
+function isNakaguroRubyText(text) {
+  const chars = Array.from(String(text ?? ""));
+  return chars.length > 0 && chars.every((ch) => {
+    const code = ch.charCodeAt(0);
+    return code === 0x30fb || code === 0xff65;
+  });
+}
+
+function isSpecialRubyText(text) {
+  return isDakutenRubyText(text) || isNakaguroRubyText(text);
+}
+
+function pushUniqueRubyOverlay(overlays, overlay) {
+  if (!overlay || typeof overlay.text !== "string" || !overlay.text) return;
+  const start = Number(overlay.start);
+  const end = Number(overlay.end);
+  if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) return;
+  const exists = overlays.some((cur) =>
+    Number(cur.start) === start
+    && Number(cur.end) === end
+    && cur.text === overlay.text);
+  if (!exists) overlays.push({ ...overlay, start, end });
+}
+
+function collectSpecialRubyOverlays(map, from, to) {
+  const overlays = [];
+  for (const k of Object.keys(map)) {
+    const start = Number(k);
+    const entry = map[k];
+    const end = Number(entry?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || !(start < to && end > from)) continue;
+    if (isSpecialRubyText(entry.text)) {
+      const overlay = {
+        start,
+        end,
+        text: entry.text,
+        type: entry.type === "mono" ? "mono" : "group",
+        scale: Number.isFinite(Number(entry.scale)) ? Number(entry.scale) : 100,
+      };
+      if (Number.isFinite(Number(entry.offsetX))) overlay.offsetX = Number(entry.offsetX);
+      if (Number.isFinite(Number(entry.offsetY))) overlay.offsetY = Number(entry.offsetY);
+      if (Number.isFinite(Number(entry.absX))) overlay.absX = Number(entry.absX);
+      if (Number.isFinite(Number(entry.absY))) overlay.absY = Number(entry.absY);
+      pushUniqueRubyOverlay(overlays, overlay);
+    }
+    if (Array.isArray(entry.overlays)) {
+      for (const overlay of entry.overlays) {
+        if (!isSpecialRubyText(overlay?.text)) continue;
+        const overlayStart = Number(overlay.start);
+        const overlayEnd = Number(overlay.end);
+        if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd) || !(overlayStart < to && overlayEnd > from)) continue;
+        pushUniqueRubyOverlay(overlays, overlay);
+      }
+    }
+  }
+  return overlays;
+}
+
+function addRubyOverlay(map, from, to, text, type, scale) {
+  for (const k of Object.keys(map)) {
+    const start = Number(k);
+    const entry = map[k];
+    const end = Number(entry?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    if (from < end && to > start) {
+      if (rubyEntryMatchesText(entry, text)) return true;
+      const overlays = Array.isArray(entry.overlays) ? entry.overlays.slice() : [];
+      const nextOverlay = { start: from, end: to, text, type, scale };
+      const sameIndex = overlays.findIndex((overlay) =>
+        Number(overlay?.start) === from
+        && Number(overlay?.end) === to
+        && overlay?.text === text);
+      if (sameIndex >= 0) overlays[sameIndex] = nextOverlay;
+      else overlays.push(nextOverlay);
+      map[k] = { ...entry, overlays };
+      return true;
+    }
+  }
+  return false;
+}
+
+function rubyEntryMatchesText(entry, text) {
+  if (typeof entry?.text !== "string" || typeof text !== "string" || !text) return false;
+  if (entry.text === text) return true;
+  if (isNakaguroRubyText(entry.text) && isNakaguroRubyText(text)) return true;
+  if (isDakutenRubyText(entry.text) && isDakutenRubyText(text)) return true;
+  return Array.from(entry.text).length > 0 && Array.from(entry.text).every((ch) => ch === text);
+}
+
+function rubyOverlayMatchesText(overlay, from, to, text) {
+  const start = Number(overlay?.start);
+  const end = Number(overlay?.end);
+  const overlayText = typeof overlay?.text === "string" ? overlay.text : "";
+  const textMatches = overlayText === text
+    || (isNakaguroRubyText(overlayText) && isNakaguroRubyText(text))
+    || (isDakutenRubyText(overlayText) && isDakutenRubyText(text))
+    || (Array.from(overlayText).length > 0 && Array.from(overlayText).every((ch) => ch === text));
+  return Number.isFinite(start)
+    && Number.isFinite(end)
+    && start < to
+    && end > from
+    && textMatches;
+}
+
+export function setCharRubiesRange(psdPath, layerIdOrTempId, from, to, text, type, scale, options = {}) {
   if (!Number.isInteger(from) || !Number.isInteger(to)) return;
   if (from >= to) return;
   const ttxt = typeof text === "string" ? text : "";
@@ -619,21 +754,205 @@ export function setCharRubiesRange(psdPath, layerIdOrTempId, from, to, text, typ
     const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
     if (idx < 0) return;
     let cur = normalizeCharRubiesMap(state.newLayers[idx].charRubies);
+    const preservedSpecialOverlays = ttxt.length > 0 && !isSpecialRubyText(ttxt)
+      ? collectSpecialRubyOverlays(cur, from, to)
+      : [];
+    if (options?.appendOverlay && ttxt.length > 0 && addRubyOverlay(cur, from, to, ttxt, rtype, rscale)) {
+      state.newLayers[idx] = { ...state.newLayers[idx], charRubies: cur };
+      pushHistorySnapshot();
+      return;
+    }
     cur = dropOverlapping(cur, from, to);
     if (ttxt.length > 0) {
-      cur[String(from)] = { end: to, text: ttxt, type: rtype, scale: rscale };
+      cur[String(from)] = {
+        end: to,
+        text: ttxt,
+        type: rtype,
+        scale: rscale,
+        ...(preservedSpecialOverlays.length > 0 ? { overlays: preservedSpecialOverlays } : {}),
+      };
     }
     state.newLayers[idx] = { ...state.newLayers[idx], charRubies: cur };
     pushHistorySnapshot();
   } else {
     const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
     let cur = normalizeCharRubiesMap(existing.charRubies);
+    const preservedSpecialOverlays = ttxt.length > 0 && !isSpecialRubyText(ttxt)
+      ? collectSpecialRubyOverlays(cur, from, to)
+      : [];
+    if (options?.appendOverlay && ttxt.length > 0 && addRubyOverlay(cur, from, to, ttxt, rtype, rscale)) {
+      setEdit(psdPath, layerIdOrTempId, { charRubies: cur });
+      return;
+    }
     cur = dropOverlapping(cur, from, to);
     if (ttxt.length > 0) {
-      cur[String(from)] = { end: to, text: ttxt, type: rtype, scale: rscale };
+      cur[String(from)] = {
+        end: to,
+        text: ttxt,
+        type: rtype,
+        scale: rscale,
+        ...(preservedSpecialOverlays.length > 0 ? { overlays: preservedSpecialOverlays } : {}),
+      };
     }
     setEdit(psdPath, layerIdOrTempId, { charRubies: cur });
   }
+}
+
+function normalizeRubyScaleValue(scale) {
+  const n = Number(scale);
+  if (!Number.isFinite(n)) return 50;
+  return Math.max(1, Math.min(300, Math.round(n * 100) / 100));
+}
+
+function clearRubyMeasuredOffsets(entry) {
+  if (!entry || typeof entry !== "object") return entry;
+  const { offsetX, offsetY, absX, absY, ...rest } = entry;
+  return rest;
+}
+
+function getRubyForRangeFromMap(map, from, to, text, options = {}) {
+  const cur = normalizeCharRubiesMap(map);
+  const targetText = typeof text === "string" ? text : "";
+  const wantsOverlay = options?.overlay === true;
+  for (const k of Object.keys(cur)) {
+    const start = Number(k);
+    const entry = cur[k];
+    const end = Number(entry?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    if (wantsOverlay) {
+      if (!Array.isArray(entry.overlays)) continue;
+      for (let i = 0; i < entry.overlays.length; i++) {
+        const overlay = entry.overlays[i];
+        const overlayStart = Number(overlay?.start);
+        const overlayEnd = Number(overlay?.end);
+        if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd)) continue;
+        if (overlayStart !== from || overlayEnd !== to) continue;
+        if (targetText && overlay.text !== targetText) continue;
+        return { ...overlay, overlay: true, overlayIndex: i, ownerStart: start };
+      }
+      continue;
+    }
+    if (start !== from || end !== to) continue;
+    if (targetText && entry.text !== targetText) continue;
+    return { start, end, text: entry.text, type: entry.type, scale: entry.scale, overlay: false };
+  }
+  return null;
+}
+
+export function getCharRubyForRange(psdPath, layerIdOrTempId, from, to, text, options = {}) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to) return null;
+  const map = getCharRubies(psdPath, layerIdOrTempId);
+  return getRubyForRangeFromMap(map, from, to, text, options);
+}
+
+function setRubyScaleInMap(map, from, to, text, scale, options = {}) {
+  const cur = normalizeCharRubiesMap(map);
+  const targetText = typeof text === "string" ? text : "";
+  const wantsOverlay = options?.overlay === true;
+  const nextScale = normalizeRubyScaleValue(scale);
+  let changed = false;
+  for (const k of Object.keys(cur)) {
+    const start = Number(k);
+    const entry = cur[k];
+    const end = Number(entry?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    if (wantsOverlay) {
+      if (!Array.isArray(entry.overlays)) continue;
+      const overlays = entry.overlays.map((overlay) => {
+        const overlayStart = Number(overlay?.start);
+        const overlayEnd = Number(overlay?.end);
+        if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd)) return overlay;
+        if (overlayStart !== from || overlayEnd !== to) return overlay;
+        if (targetText && overlay.text !== targetText) return overlay;
+        if (Math.abs((Number(overlay.scale) || 50) - nextScale) < 1e-9) return overlay;
+        changed = true;
+        return { ...clearRubyMeasuredOffsets(overlay), scale: nextScale };
+      });
+      if (changed) cur[k] = { ...entry, overlays };
+      continue;
+    }
+    if (start !== from || end !== to) continue;
+    if (targetText && entry.text !== targetText) continue;
+    if (Math.abs((Number(entry.scale) || 50) - nextScale) < 1e-9) continue;
+    cur[k] = { ...clearRubyMeasuredOffsets(entry), scale: nextScale };
+    changed = true;
+  }
+  return { map: cur, changed };
+}
+
+export function setCharRubyScale(psdPath, layerIdOrTempId, from, to, text, scale, options = {}) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to) return false;
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return false;
+    const { map, changed } = setRubyScaleInMap(state.newLayers[idx].charRubies, from, to, text, scale, options);
+    if (!changed) return false;
+    state.newLayers[idx] = { ...state.newLayers[idx], charRubies: map };
+    pushHistorySnapshot();
+    return true;
+  }
+  const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+  const { map, changed } = setRubyScaleInMap(existing.charRubies, from, to, text, scale, options);
+  if (!changed) return false;
+  setEdit(psdPath, layerIdOrTempId, { charRubies: map });
+  return true;
+}
+
+export function rangeHasRubyText(psdPath, layerIdOrTempId, from, to, text) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to || typeof text !== "string" || !text) return false;
+  const map = getCharRubies(psdPath, layerIdOrTempId);
+  for (const k of Object.keys(map)) {
+    const start = Number(k);
+    const entry = map[k];
+    const end = Number(entry?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end) || !(start < to && end > from)) continue;
+    if (rubyEntryMatchesText(entry, text)) return true;
+    if (Array.isArray(entry.overlays) && entry.overlays.some((overlay) => rubyOverlayMatchesText(overlay, from, to, text))) return true;
+  }
+  return false;
+}
+
+export function removeRubyTextRange(psdPath, layerIdOrTempId, from, to, text) {
+  if (!Number.isInteger(from) || !Number.isInteger(to) || from >= to || typeof text !== "string" || !text) return false;
+  const removeFromMap = (map) => {
+    const cur = normalizeCharRubiesMap(map);
+    let changed = false;
+    for (const k of Object.keys(cur)) {
+      const start = Number(k);
+      const entry = cur[k];
+      const end = Number(entry?.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end) || !(start < to && end > from)) continue;
+      if (rubyEntryMatchesText(entry, text)) {
+        delete cur[k];
+        changed = true;
+        continue;
+      }
+      if (Array.isArray(entry.overlays)) {
+        const overlays = entry.overlays.filter((overlay) => !rubyOverlayMatchesText(overlay, from, to, text));
+        if (overlays.length !== entry.overlays.length) {
+          cur[k] = overlays.length > 0 ? { ...entry, overlays } : { ...entry, overlays: undefined };
+          changed = true;
+        }
+      }
+    }
+    return { map: cur, changed };
+  };
+
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return false;
+    const { map, changed } = removeFromMap(state.newLayers[idx].charRubies);
+    if (!changed) return false;
+    state.newLayers[idx] = { ...state.newLayers[idx], charRubies: map };
+    pushHistorySnapshot();
+    return true;
+  }
+
+  const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+  const { map, changed } = removeFromMap(existing.charRubies);
+  if (!changed) return false;
+  setEdit(psdPath, layerIdOrTempId, { charRubies: map });
+  return true;
 }
 
 export function removeCharRubyAt(psdPath, layerIdOrTempId, charIndex) {
@@ -707,6 +1026,57 @@ export function setCharRubyOffset(psdPath, layerIdOrTempId, start, offsetX, offs
     const e = state.edits.get(eKey) ?? { psdPath, layerId: layerIdOrTempId };
     state.edits.set(eKey, { ...e, charRubies: cur });
   }
+}
+
+export function setCharRubyVisualOffset(psdPath, layerIdOrTempId, start, end, text, overlay, offsetX, offsetY, absX = null, absY = null) {
+  if (!Number.isInteger(start) || !Number.isFinite(offsetX) || !Number.isFinite(offsetY)) return;
+  const endNum = Number(end);
+  const targetText = typeof text === "string" ? text : "";
+  const absolute = {};
+  if (Number.isFinite(Number(absX))) absolute.absX = Number(absX);
+  if (Number.isFinite(Number(absY))) absolute.absY = Number(absY);
+  const applyToMap = (map) => {
+    const cur = { ...(map ?? {}) };
+    if (overlay === true) {
+      if (!Number.isFinite(endNum) || endNum <= start) return { map: cur, changed: false };
+      for (const key of Object.keys(cur)) {
+        const entry = cur[key];
+        if (!Array.isArray(entry?.overlays)) continue;
+        let changed = false;
+        const overlays = entry.overlays.map((ov) => {
+          if (Number(ov?.start) !== start || Number(ov?.end) !== endNum) return ov;
+          if (targetText && ov?.text !== targetText) return ov;
+          changed = true;
+          return { ...ov, offsetX, offsetY, ...absolute };
+        });
+        if (changed) {
+          cur[key] = { ...entry, overlays };
+          return { map: cur, changed: true };
+        }
+      }
+      return { map: cur, changed: false };
+    }
+    const key = String(start);
+    if (!cur[key]) return { map: cur, changed: false };
+    cur[key] = { ...cur[key], offsetX, offsetY, ...absolute };
+    return { map: cur, changed: true };
+  };
+
+  if (typeof layerIdOrTempId === "string") {
+    const idx = state.newLayers.findIndex((l) => l.tempId === layerIdOrTempId);
+    if (idx < 0) return;
+    const { map, changed } = applyToMap(state.newLayers[idx].charRubies);
+    if (!changed) return;
+    state.newLayers[idx] = { ...state.newLayers[idx], charRubies: map };
+    return;
+  }
+
+  const existing = getEdit(psdPath, layerIdOrTempId) ?? {};
+  const { map, changed } = applyToMap(existing.charRubies);
+  if (!changed) return;
+  const eKey = `${psdPath}::${layerIdOrTempId}`;
+  const e = state.edits.get(eKey) ?? { psdPath, layerId: layerIdOrTempId };
+  state.edits.set(eKey, { ...e, charRubies: map });
 }
 
 // 指定 char index を完全に覆う ruby エントリを返す（無ければ null）。

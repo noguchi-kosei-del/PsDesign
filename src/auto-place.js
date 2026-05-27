@@ -2283,7 +2283,6 @@ function ensurePositionAdjustDialog() {
     <div class="scan-adjust-choice-card" role="dialog" aria-modal="true" aria-labelledby="scan-adjust-choice-title">
       <div class="scan-adjust-choice-header">
         <span class="scan-adjust-choice-title" id="scan-adjust-choice-title">位置調整を選択</span>
-        <button class="scan-adjust-choice-close" type="button" data-close="1" aria-label="閉じる">×</button>
       </div>
       <div class="scan-adjust-choice-list">
         ${POSITION_ADJUST_OPTIONS.map((option) => `
@@ -2295,6 +2294,9 @@ function ensurePositionAdjustDialog() {
             ${renderPositionAdjustPreview(option.mode)}
           </button>
         `).join("")}
+      </div>
+      <div class="scan-adjust-choice-actions">
+        <button class="scan-adjust-choice-cancel" type="button" data-close="1">キャンセル</button>
       </div>
     </div>`;
   modal.addEventListener("click", (e) => {

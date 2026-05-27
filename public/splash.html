@@ -2,47 +2,248 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <link rel="preload" href="/PsDesign_icon.png" as="image" />
+  <link rel="preload" href="/opus_icon.png" as="image" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600&display=swap" rel="stylesheet" />
   <style>
+    :root {
+      --splash-text: #f3f5ff;
+      --breath-core: rgba(255, 248, 224, 1);
+      --breath-glow-near: rgba(255, 240, 200, 0.78);
+      --breath-glow-far: rgba(255, 230, 180, 0.32);
+      --breath-ring-color: rgba(180, 210, 255, 0.5);
+      --breath-ring-soft: rgba(180, 210, 255, 0.18);
+      --splash-far-blue: rgba(40, 60, 120, 0.18);
+      --splash-far-violet: rgba(70, 50, 120, 0.14);
+      color-scheme: dark;
+    }
     * { box-sizing: border-box; }
-    html, body {
+    html,
+    body {
       margin: 0;
       width: 100%;
       height: 100%;
       overflow: hidden;
-      font-family: "Hiragino Kaku Gothic ProN", "Hiragino Kaku Gothic Pro", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif;
-      background: #212121;
+      background: #02030a;
+      font-family: "Hiragino Kaku Gothic ProN", "Hiragino Sans", "Yu Gothic", Meiryo, sans-serif;
+    }
+    body {
+      display: flex;
+      align-items: center;
+      justify-content: center;
     }
     .splash {
-      width: 100vw;
-      height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      padding: 0 47px;
-      background: #212121;
+      position: relative;
+      width: 520px;
+      height: 320px;
       border-radius: 10px;
-      color: #ffffff;
+      overflow: hidden;
+      background: #02030a;
+      color: var(--splash-text);
+      box-shadow:
+        0 30px 60px rgba(0, 0, 0, 0.6),
+        0 0 0 1px rgba(180, 200, 255, 0.05);
+      isolation: isolate;
+      transform: scale(1);
+      transition: transform 0.9s cubic-bezier(0.22, 1, 0.32, 1);
+    }
+    .splash::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: 0;
+      background:
+        radial-gradient(ellipse 70% 60% at 50% 38%, var(--splash-far-blue) 0%, var(--splash-far-violet) 36%, transparent 72%),
+        linear-gradient(180deg, #050714 0%, #02030a 70%, #010108 100%);
+      pointer-events: none;
+    }
+    .splash-stars {
+      position: absolute;
+      top: 0;
+      left: 0;
+      z-index: 1;
+      width: 1px;
+      height: 1px;
+      background: transparent;
+      pointer-events: none;
+    }
+    .splash-stars.faint {
+      box-shadow:
+        60px 50px 0 0 rgba(255,255,255,0.18),
+        120px 110px 0 0 rgba(255,255,255,0.22),
+        210px 30px 0 0 rgba(255,255,255,0.18),
+        360px 60px 0 0 rgba(255,255,255,0.22),
+        450px 130px 0 0 rgba(255,255,255,0.18),
+        80px 230px 0 0 rgba(255,255,255,0.22),
+        180px 270px 0 0 rgba(255,255,255,0.18),
+        300px 240px 0 0 rgba(255,255,255,0.22),
+        420px 250px 0 0 rgba(255,255,255,0.18),
+        470px 200px 0 0 rgba(255,255,255,0.22);
+      opacity: 0;
+      animation:
+        splash-stars-wake 2.6s ease-out 0.3s forwards,
+        splash-stars-twinkle 9s ease-in-out 3s infinite alternate;
+    }
+    @keyframes splash-stars-wake { to { opacity: 0.55; } }
+    @keyframes splash-stars-twinkle {
+      from { opacity: 0.35; }
+      to { opacity: 0.7; }
     }
     .brand-pane {
+      position: absolute;
+      inset: 0;
+      z-index: 5;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 22px;
+      padding: 24px 32px 44px;
+    }
+    .brand-icon-wrap {
+      position: relative;
+      width: 84px;
+      height: 84px;
       display: flex;
       align-items: center;
       justify-content: center;
-      gap: 31px;
-      min-width: 0;
+    }
+    .breath {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      z-index: 0;
+      width: 0;
+      height: 0;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    .breath-core {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 6px;
+      height: 6px;
+      margin: -3px 0 0 -3px;
+      border-radius: 50%;
+      background: radial-gradient(circle, var(--breath-core) 0%, var(--breath-glow-near) 35%, var(--breath-glow-far) 70%, transparent 100%);
+      box-shadow:
+        0 0 22px var(--breath-glow-near),
+        0 0 54px var(--breath-glow-far),
+        0 0 82px rgba(180, 210, 255, 0.14);
+      opacity: 0;
+      transform: scale(0.4);
+      animation:
+        splash-core-wake 1.2s ease-out 0.08s forwards,
+        splash-core-breath 4.2s ease-in-out 1.3s infinite;
+    }
+    @keyframes splash-core-wake {
+      0% { opacity: 0; transform: scale(0.4); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    @keyframes splash-core-breath {
+      0%, 100% { transform: scale(1); filter: brightness(1); }
+      50% { transform: scale(1.4); filter: brightness(1.35); }
+    }
+    .breath-ring {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 24px;
+      height: 24px;
+      margin: -12px 0 0 -12px;
+      border: 1px solid var(--breath-ring-color);
+      border-radius: 50%;
+      box-shadow:
+        inset 0 0 12px var(--breath-ring-soft),
+        0 0 14px var(--breath-ring-soft);
+      opacity: 0;
+      transform: scale(0.4);
+      animation: splash-ring-breath 4.2s ease-out infinite;
+    }
+    .breath-ring.r1 { animation-delay: 1.4s; }
+    .breath-ring.r2 { animation-delay: 2.8s; }
+    .breath-ring.r3 { animation-delay: 4.2s; }
+    .breath-ring.r0 {
+      width: 16px;
+      height: 16px;
+      margin: -8px 0 0 -8px;
+      border-color: rgba(235, 244, 255, 0.44);
+      animation: splash-ring-first 1.55s 0.26s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    @keyframes splash-ring-breath {
+      0% { opacity: 0; transform: scale(0.4); }
+      18% { opacity: 0.85; }
+      100% { opacity: 0; transform: scale(7); border-color: transparent; }
+    }
+    @keyframes splash-ring-first {
+      0% { opacity: 0; transform: scale(0.35); }
+      24% { opacity: 0.76; }
+      100% { opacity: 0; transform: scale(8.2); border-color: transparent; }
+    }
+    .breath-spark {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 3px;
+      height: 3px;
+      margin: -1.5px 0 0 -1.5px;
+      border-radius: 50%;
+      background: rgba(255, 248, 224, 0.96);
+      box-shadow:
+        0 0 8px rgba(255, 240, 200, 0.86),
+        0 0 18px rgba(180, 210, 255, 0.34);
+      opacity: 0;
+      transform: rotate(var(--spark-angle)) translateX(0) scale(0.4);
+      animation: splash-spark-wake 1.55s var(--spark-delay) cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+    .breath-spark.s1 { --spark-angle: 28deg; --spark-distance: 28px; --spark-delay: 0.18s; }
+    .breath-spark.s2 { --spark-angle: 112deg; --spark-distance: 22px; --spark-delay: 0.32s; }
+    .breath-spark.s3 { --spark-angle: 214deg; --spark-distance: 26px; --spark-delay: 0.42s; }
+    .breath-spark.s4 { --spark-angle: 306deg; --spark-distance: 31px; --spark-delay: 0.56s; }
+    @keyframes splash-spark-wake {
+      0% { opacity: 0; transform: rotate(var(--spark-angle)) translateX(0) scale(0.4); }
+      28% { opacity: 0.92; }
+      100% { opacity: 0; transform: rotate(var(--spark-angle)) translateX(var(--spark-distance)) scale(0.92); }
     }
     .brand-icon {
-      width: 110px;
-      height: 110px;
+      position: relative;
+      z-index: 1;
+      width: 84px;
+      height: 84px;
       object-fit: contain;
       opacity: 0;
-      transform: translateY(18px) scale(0.94);
-      will-change: opacity, transform;
+      transform: translateY(8px) scale(0.92);
+      will-change: opacity, transform, filter;
       user-select: none;
       -webkit-user-drag: none;
+      filter:
+        drop-shadow(0 0 14px var(--breath-glow-near))
+        drop-shadow(0 0 28px rgba(180, 210, 255, 0.34))
+        drop-shadow(0 6px 8px rgba(0, 0, 0, 0.5));
+      animation:
+        splash-brand-awake 1.8s cubic-bezier(0.22, 1, 0.32, 1) 0.45s forwards,
+        splash-icon-breath 4.2s ease-in-out 2.25s infinite;
+    }
+    @keyframes splash-brand-awake {
+      0% { opacity: 0; transform: translateY(8px) scale(0.92); }
+      60% { opacity: 1; }
+      100% { opacity: 1; transform: translateY(0) scale(1); }
+    }
+    @keyframes splash-icon-breath {
+      0%, 100% {
+        filter:
+          drop-shadow(0 0 14px var(--breath-glow-near))
+          drop-shadow(0 0 28px rgba(180, 210, 255, 0.34))
+          drop-shadow(0 6px 8px rgba(0, 0, 0, 0.5));
+      }
+      50% {
+        filter:
+          drop-shadow(0 0 22px var(--breath-glow-near))
+          drop-shadow(0 0 44px rgba(180, 210, 255, 0.5))
+          drop-shadow(0 6px 8px rgba(0, 0, 0, 0.5));
+      }
     }
     .brand-name {
       margin: 0;
@@ -50,61 +251,86 @@
     }
     .home-title-word {
       display: block;
-      padding-left: 0.64em;
-      opacity: 0;
-      color: #ffffff;
+      margin-top: 0;
+      padding-left: 0.62em;
+      color: var(--splash-text);
       font-family: "Cinzel", "Times New Roman", serif;
-      font-size: 76px;
+      font-size: 50px;
       font-weight: 600;
-      letter-spacing: 0.64em;
+      letter-spacing: 0.62em;
       line-height: 1;
-      text-shadow: 0 12px 24px rgba(0, 0, 0, 0.52);
-      transform: translateY(18px) scale(0.94);
-      will-change: opacity, transform;
+      opacity: 0;
+      text-shadow:
+        0 8px 18px rgba(0, 0, 0, 0.55),
+        0 0 18px rgba(180, 210, 255, 0.32),
+        0 0 36px rgba(120, 150, 220, 0.18);
+      transform: translateY(8px);
+      will-change: opacity, transform, text-shadow;
       user-select: none;
       -webkit-user-drag: none;
+      animation:
+        splash-word-awake 1.8s cubic-bezier(0.22, 1, 0.32, 1) 0.75s forwards,
+        splash-word-breath 4.2s ease-in-out 2.55s infinite;
+    }
+    @keyframes splash-word-awake {
+      0% { opacity: 0; transform: translateY(8px); letter-spacing: 0.46em; }
+      60% { opacity: 1; }
+      100% { opacity: 1; transform: translateY(0); letter-spacing: 0.62em; }
+    }
+    @keyframes splash-word-breath {
+      0%, 100% {
+        text-shadow:
+          0 8px 18px rgba(0, 0, 0, 0.55),
+          0 0 18px rgba(180, 210, 255, 0.32),
+          0 0 36px rgba(120, 150, 220, 0.18);
+      }
+      50% {
+        text-shadow:
+          0 8px 18px rgba(0, 0, 0, 0.55),
+          0 0 26px rgba(200, 220, 255, 0.5),
+          0 0 50px rgba(160, 190, 240, 0.28);
+      }
     }
     .progress-pane {
       display: none;
     }
-    .splash.is-ready .brand-icon,
-    .splash.is-ready .home-title-word {
-      animation: splash-brand-in 1.25s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-    }
-    .splash.is-ready .home-title-word {
-      animation-delay: 0.08s;
-    }
-    @keyframes splash-brand-in {
-      0% {
-        opacity: 0;
-        transform: translateY(18px) scale(0.94);
-      }
-      58% {
-        opacity: 1;
-      }
-      100% {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-      }
-    }
     @media (prefers-reduced-motion: reduce) {
+      .splash-stars,
+      .breath-core,
+      .breath-ring,
       .brand-icon,
       .home-title-word {
         animation: none !important;
         opacity: 1;
         transform: none;
       }
+      .breath-ring { opacity: 0; }
     }
   </style>
 </head>
-<body>
+<body data-tauri-drag-region>
   <div class="splash" data-tauri-drag-region>
+    <div class="splash-stars faint" aria-hidden="true"></div>
     <div class="brand-pane" data-tauri-drag-region>
-      <img class="brand-icon" src="/PsDesign_icon.png" alt="OPUS" draggable="false" />
+      <div class="brand-icon-wrap">
+        <div class="breath" aria-hidden="true">
+          <span class="breath-core"></span>
+          <span class="breath-ring r0"></span>
+          <span class="breath-ring r1"></span>
+          <span class="breath-ring r2"></span>
+          <span class="breath-ring r3"></span>
+          <span class="breath-spark s1"></span>
+          <span class="breath-spark s2"></span>
+          <span class="breath-spark s3"></span>
+          <span class="breath-spark s4"></span>
+        </div>
+        <img class="brand-icon" src="/opus_icon.png" alt="OPUS" draggable="false" />
+      </div>
       <h1 class="brand-name" data-tauri-drag-region>
         <span class="home-title-word">OPUS</span>
       </h1>
     </div>
+    <div class="progress-pane" aria-hidden="true"></div>
   </div>
   <script>
     let current = 0;

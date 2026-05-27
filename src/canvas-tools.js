@@ -35,6 +35,7 @@ import {
   updateNewLayer,
   // 【v1.29.x UI-coord】ルビ wrap の実描画位置を PSD 座標で state に書き戻すため
   setCharRubyOffset,
+  setCharRubyVisualOffset,
 } from "./state.js";
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
@@ -410,6 +411,33 @@ export function recenterActiveInPlaceEditBox(sel = _lastInplaceSelection) {
   return false;
 }
 
+export function resizeActiveInPlaceEditBoxToState(sel = _lastInplaceSelection) {
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing || !sel) return false;
+  const pages = getPages();
+  const page = pages.find((p) => p.path === sel.psdPath) ?? pages[getCurrentPageIndex()];
+  if (!page) return false;
+
+  if (sel.layerId != null) {
+    const layerId = Number(sel.layerId);
+    const layer = page.textLayers?.find((l) => Number(l.id) === layerId);
+    if (!layer) return false;
+    const edit = getEdit(page.path, layer.id) ?? {};
+    const rect = layerRectForExisting(page, layer, edit);
+    applyEditingBoxRect(editing, page, rect);
+    return true;
+  }
+
+  if (sel.tempId != null) {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.tempId);
+    if (!nl) return false;
+    const rect = layerRectForNew(page, nl);
+    applyEditingBoxRect(editing, page, rect);
+    return true;
+  }
+  return false;
+}
+
 let panState = null;
 // マーキー（V ツールの矩形選択）状態。
 let marqueeState = null;
@@ -574,13 +602,143 @@ export function applyEditModeStyleToRange(start, end, styleProps) {
 //
 // 引数: start, end (char 範囲)、rubyText, rubyType, rubyScale
 // 戻り値: 編集中レイヤーが無い / range 解決失敗で false。
-export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubyScale) {
+export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubyScale, options = {}) {
   if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return false;
   const editing = document.querySelector(".layer-box.editing");
   if (!editing) return false;
   const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return false;
   if (typeof rubyText !== "string" || rubyText.length === 0) return false;
+  const isNakaguroRubyText = (value) => {
+    const chars = Array.from(String(value ?? ""));
+    return chars.length > 0 && chars.every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x30fb || code === 0xff65;
+    });
+  };
+  const isDakutenRubyText = (value) => {
+    const chars = Array.from(String(value ?? ""));
+    return chars.length > 0 && chars.every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x309b || code === 0xff9e || code === 0x3099;
+    });
+  };
+  const isSpecialRubyText = (value) => isNakaguroRubyText(value) || isDakutenRubyText(value);
+  const rubyTextMatches = (value, target) => {
+    if (typeof value !== "string" || typeof target !== "string" || !target) return false;
+    if (value === target) return true;
+    const chars = Array.from(value);
+    return chars.length > 0 && chars.every((ch) => ch === target);
+  };
+  const rubyMarkerTextMatches = (a, b) => {
+    if (rubyTextMatches(a, b) || rubyTextMatches(b, a)) return true;
+    if (!isSpecialRubyText(a) || !isSpecialRubyText(b)) return false;
+    const aChars = Array.from(a);
+    const bChars = Array.from(b);
+    return aChars.length > 0
+      && bChars.length > 0
+      && aChars.every((ch) => ch === aChars[0])
+      && bChars.every((ch) => ch === bChars[0])
+      && aChars[0] === bChars[0];
+  };
+  const isFirstLineRange = (idx) => {
+    const before = String(inner?.textContent ?? "").slice(0, Math.max(0, Number(idx) || 0));
+    return !/[\r\n]/.test(before);
+  };
+  const positionOverlayWithinWrap = (rt, wrap, overlayStart, overlayEnd) => {
+    const wrapStart = Number(wrap?.dataset?.rubyStart);
+    const wrapEnd = Number(wrap?.dataset?.rubyEnd);
+    if (!Number.isFinite(wrapStart) || !Number.isFinite(wrapEnd) || wrapEnd <= wrapStart) return;
+    const from = Math.max(wrapStart, Math.min(wrapEnd, Number(overlayStart)));
+    const to = Math.max(wrapStart, Math.min(wrapEnd, Number(overlayEnd)));
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return;
+    const pct = ((from + to) / 2 - wrapStart) / (wrapEnd - wrapStart) * 100;
+    if (!Number.isFinite(pct)) return;
+    if (editing.dataset.direction === "vertical") rt.style.top = `${pct}%`;
+    else rt.style.left = `${pct}%`;
+  };
+  const appendSpecialOverlayToHost = (host, text, from, to, scale, stackIndex = 1) => {
+    for (const existing of Array.from(host.querySelectorAll(":scope > .ruby-text-overlay"))) {
+      const existingStart = Number(existing.dataset.rubyStart);
+      const existingEnd = Number(existing.dataset.rubyEnd);
+      const existingText = existing.dataset.rubyText ?? existing.textContent ?? "";
+      if (Number.isFinite(existingStart)
+        && Number.isFinite(existingEnd)
+        && from < existingEnd
+        && to > existingStart
+        && rubyMarkerTextMatches(existingText, text)) {
+        existing.remove();
+      }
+    }
+    const rt = document.createElement("span");
+    rt.className = `ruby-text ruby-text-overlay${isNakaguroRubyText(text) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(text) ? " ruby-text-overlay-same-position" : ""}`;
+    if (isNakaguroRubyText(text) && isFirstLineRange(from)) rt.classList.add("ruby-text-first-line");
+    rt.contentEditable = "false";
+    rt.setAttribute("aria-hidden", "true");
+    rt.dataset.rubyStart = String(from);
+    rt.dataset.rubyEnd = String(to);
+    rt.dataset.rubyText = text;
+    rt.dataset.rubyOverlay = "true";
+    rt.textContent = text;
+    rt.style.setProperty("--ruby-scale", `${((Number(scale) || 50) / 100)}em`);
+    rt.style.setProperty("--ruby-stack-index", String(stackIndex));
+    positionOverlayWithinWrap(rt, host, from, to);
+    host.appendChild(rt);
+    return rt;
+  };
+  if (options?.appendOverlay) {
+    const targets = Array.from(inner.querySelectorAll(".ruby-wrap")).filter((wrap) => {
+      const rubyStart = Number(wrap.dataset.rubyStart);
+      const rubyEnd = Number(wrap.dataset.rubyEnd);
+      return Number.isFinite(rubyStart)
+        && Number.isFinite(rubyEnd)
+        && start < rubyEnd
+        && end > rubyStart;
+    });
+    if (targets.length > 0) {
+      if (rubyType === "group" && isSpecialRubyText(rubyText) && targets.length > 1) {
+        const hostStart = Math.min(...targets.map((wrap) => Number(wrap.dataset.rubyStart)).filter(Number.isFinite));
+        const hostEnd = Math.max(...targets.map((wrap) => Number(wrap.dataset.rubyEnd)).filter(Number.isFinite));
+        let host = targets[0].closest(".ruby-mono-group");
+        const hostContainsAll = host && targets.every((wrap) => host.contains(wrap));
+        if (!hostContainsAll) {
+          host = document.createElement("span");
+          host.className = "ruby-mono-group ruby-edit-pending";
+          host.dataset.rubyStart = String(hostStart);
+          host.dataset.rubyEnd = String(hostEnd);
+          targets[0].parentNode?.insertBefore(host, targets[0]);
+          for (const wrap of targets) host.appendChild(wrap);
+        } else {
+          host.dataset.rubyStart = String(hostStart);
+          host.dataset.rubyEnd = String(hostEnd);
+        }
+        appendSpecialOverlayToHost(host, rubyText, start, end, rubyScale, 1);
+        inner.classList.add("has-ruby");
+        return true;
+      }
+      const overlayTargets = rubyType === "group" ? targets.slice(0, 1) : targets;
+      for (const wrap of overlayTargets) {
+        const baseRuby = wrap.querySelector(":scope > .ruby-text:not(.ruby-text-overlay)");
+        const baseRubyText = baseRuby?.dataset?.rubyText ?? baseRuby?.textContent ?? "";
+        if (rubyMarkerTextMatches(baseRubyText, rubyText)) continue;
+        for (const existing of Array.from(wrap.querySelectorAll(":scope > .ruby-text-overlay"))) {
+          const existingStart = Number(existing.dataset.rubyStart);
+          const existingEnd = Number(existing.dataset.rubyEnd);
+          const existingText = existing.dataset.rubyText ?? existing.textContent ?? "";
+          if (Number.isFinite(existingStart)
+            && Number.isFinite(existingEnd)
+            && start < existingEnd
+            && end > existingStart
+            && rubyMarkerTextMatches(existingText, rubyText)) {
+            existing.remove();
+          }
+        }
+        appendSpecialOverlayToHost(wrap, rubyText, start, end, rubyScale, wrap.querySelectorAll(".ruby-text-overlay").length + 1);
+      }
+      inner.classList.add("has-ruby");
+      return true;
+    }
+  }
 
   const startPos = charIndexToNodeOffset(inner, start);
   const endPos = charIndexToNodeOffset(inner, end);
@@ -637,9 +795,14 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
   // ふりがな部分: 実 DOM の <span class="ruby-text"> として追加。
   // contenteditable="false" で caret 進入を禁止 + readContents 側で除外する。
   const rt = document.createElement("span");
-  rt.className = "ruby-text";
+  rt.className = `ruby-text${isNakaguroRubyText(rubyText) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(rubyText) ? " ruby-text-overlay-same-position" : ""}`;
+  if (isNakaguroRubyText(rubyText) && isFirstLineRange(start)) rt.classList.add("ruby-text-first-line");
   rt.contentEditable = "false";
   rt.setAttribute("aria-hidden", "true");
+  rt.dataset.rubyStart = String(start);
+  rt.dataset.rubyEnd = String(end);
+  rt.dataset.rubyText = rubyText;
+  rt.dataset.rubyOverlay = "false";
   rt.textContent = rubyText;
   wrap.appendChild(rt);
   try {
@@ -694,6 +857,83 @@ function unwrapRubyInRange(inner, range) {
   // text node 内 offset に正しく解決されるようにするため。
   inner.normalize();
   return removed;
+}
+
+export function removeEditModeRubyTextFromRange(start, end, rubyText) {
+  const editing = document.querySelector(".layer-box.editing");
+  if (!editing) return false;
+  const inner = editing.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
+  if (!inner || typeof rubyText !== "string" || !rubyText) return false;
+  const isDakutenText = (value) => {
+    const chars = Array.from(String(value ?? ""));
+    return chars.length > 0 && chars.every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x309b || code === 0xff9e || code === 0x3099;
+    });
+  };
+  const isNakaguroText = (value) => {
+    const chars = Array.from(String(value ?? ""));
+    return chars.length > 0 && chars.every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x30fb || code === 0xff65;
+    });
+  };
+  const matchesRubyText = (value) => {
+    if (typeof value !== "string" || !value) return false;
+    if (value === rubyText) return true;
+    if (isNakaguroText(value) && isNakaguroText(rubyText)) return true;
+    if (isDakutenText(value) && isDakutenText(rubyText)) return true;
+    const chars = Array.from(value);
+    return chars.length > 0 && chars.every((ch) => ch === rubyText);
+  };
+  let changed = false;
+  const cleanupEmptyRubyGroups = () => {
+    for (const group of Array.from(inner.querySelectorAll(".ruby-mono-group"))) {
+      if (group.querySelector(":scope > .ruby-text-overlay")) continue;
+      const parent = group.parentNode;
+      if (!parent) continue;
+      while (group.firstChild) parent.insertBefore(group.firstChild, group);
+      parent.removeChild(group);
+    }
+  };
+  for (const group of Array.from(inner.querySelectorAll(".ruby-mono-group"))) {
+    const rubyStart = Number(group.dataset.rubyStart);
+    const rubyEnd = Number(group.dataset.rubyEnd);
+    if (!Number.isFinite(rubyStart) || !Number.isFinite(rubyEnd) || !(start < rubyEnd && end > rubyStart)) continue;
+    for (const rt of Array.from(group.querySelectorAll(":scope > .ruby-text-overlay"))) {
+      if (matchesRubyText(rt.textContent)) {
+        rt.remove();
+        changed = true;
+      }
+    }
+  }
+  cleanupEmptyRubyGroups();
+  for (const wrap of Array.from(inner.querySelectorAll(".ruby-wrap"))) {
+    const rubyStart = Number(wrap.dataset.rubyStart);
+    const rubyEnd = Number(wrap.dataset.rubyEnd);
+    if (!Number.isFinite(rubyStart) || !Number.isFinite(rubyEnd) || !(start < rubyEnd && end > rubyStart)) continue;
+    const baseRuby = wrap.querySelector(":scope > .ruby-text:not(.ruby-text-overlay)");
+    if (matchesRubyText(baseRuby?.textContent)) {
+      const parent = wrap.parentNode;
+      const base = wrap.querySelector(":scope > .ruby-base");
+      if (parent && base) {
+        while (base.firstChild) parent.insertBefore(base.firstChild, wrap);
+        parent.removeChild(wrap);
+        changed = true;
+      }
+      continue;
+    }
+    for (const rt of Array.from(wrap.querySelectorAll(":scope > .ruby-text-overlay"))) {
+      if (matchesRubyText(rt.textContent)) {
+        rt.remove();
+        changed = true;
+      }
+    }
+  }
+  cleanupEmptyRubyGroups();
+  inner.normalize();
+  inner.classList.toggle("has-ruby", !!inner.querySelector(".ruby-wrap"));
+  return changed;
 }
 
 export function removeEditModeRubyFromRange(start, end) {
@@ -1474,6 +1714,16 @@ function renderOverlay(ctx) {
   scheduleRubyOffsetMeasure(ctx);
 }
 
+export function renderStaticPageOverlay({ canvas, overlay, page, pageIndex = 0 }) {
+  if (!canvas || !overlay || !page) return;
+  const ctx = { canvas, overlay, page, pageIndex, staticPreview: true };
+  renderOverlay(ctx);
+  overlay.classList.add("selection-adornments-hidden", "finish-review-static-overlay");
+  for (const el of overlay.querySelectorAll(".layer-box")) {
+    el.style.pointerEvents = "none";
+  }
+}
+
 function rubyFallbackAdvancePx(box, rt) {
   const rootStyle = getComputedStyle(document.documentElement);
   const pct = Number(rootStyle.getPropertyValue("--ruby-row-leading-pct")) || Number(getDefault("rubyLeadingPct")) || 150;
@@ -1724,7 +1974,7 @@ function measureRubyOffsetsForOverlay(overlay, canvas, page) {
   // overlay 内の全 layer-box (.editing 含む) を走査。
   const boxes = overlay.querySelectorAll(".layer-box");
   for (const box of boxes) {
-    const wraps = box.querySelectorAll(".ruby-wrap[data-ruby-start]");
+    const wraps = box.querySelectorAll(".ruby-wrap[data-ruby-start], .ruby-mono-group[data-ruby-start]");
     if (wraps.length === 0) continue;
     const basisRect = uiTextBasisRectForBox(box);
     if (!basisRect || basisRect.width <= 0 || basisRect.height <= 0) continue;
@@ -1732,17 +1982,30 @@ function measureRubyOffsetsForOverlay(overlay, canvas, page) {
     const isNew = box.classList.contains("layer-box-new");
     const layerKey = isNew ? box.dataset.tempId : Number(box.dataset.layerId);
     if (!psdPath || layerKey === null || layerKey === undefined || layerKey === "" || (typeof layerKey === "number" && !Number.isFinite(layerKey))) continue;
-    // 同じ data-ruby-start を持つ wrap が複数あれば (モノルビ)、最初の wrap だけ測る。
-    const seenStarts = new Set();
+    // 同じ data-ruby-start を持つ base wrap が複数あれば (モノルビ)、最初の wrap だけ測る。
+    const seenBaseStarts = new Set();
+    const seenOverlays = new Set();
     for (const wrap of wraps) {
-      const startStr = wrap.dataset.rubyStart;
-      if (!startStr) continue;
-      if (seenStarts.has(startStr)) continue;
-      seenStarts.add(startStr);
-      const start = Number(startStr);
-      if (!Number.isInteger(start)) continue;
-      const rt = wrap.querySelector(".ruby-text");
-      if (!rt) continue;
+      const rubyTexts = Array.from(wrap.querySelectorAll(":scope > .ruby-text"));
+      for (const rt of rubyTexts) {
+        const isOverlayRuby = rt.dataset.rubyOverlay === "true";
+        const isParentMarkRuby =
+          rt.classList.contains("ruby-text-nakaguro") ||
+          rt.classList.contains("ruby-text-overlay-same-position");
+        const startStr = rt.dataset.rubyStart || wrap.dataset.rubyStart;
+        if (!startStr) continue;
+        const start = Number(startStr);
+        const end = Number(rt.dataset.rubyEnd || wrap.dataset.rubyEnd);
+        if (!Number.isInteger(start)) continue;
+        if (isParentMarkRuby) continue;
+        if (isOverlayRuby) {
+          const overlayKey = `${startStr}\u0001${rt.dataset.rubyEnd || ""}\u0001${rt.dataset.rubyText || rt.textContent || ""}`;
+          if (seenOverlays.has(overlayKey)) continue;
+          seenOverlays.add(overlayKey);
+        } else {
+          if (seenBaseStarts.has(startStr)) continue;
+          seenBaseStarts.add(startStr);
+        }
       const rtRect = rt.getBoundingClientRect();
       if (rtRect.width <= 0 || rtRect.height <= 0) continue;
       // .ruby-text のスクリーン中心 → UI 上の実テキスト領域からの screen 相対座標 → PSD 座標に換算。
@@ -1760,8 +2023,13 @@ function measureRubyOffsetsForOverlay(overlay, canvas, page) {
       const absY = abs.y;
       if (!Number.isFinite(offsetX) || !Number.isFinite(offsetY) || !Number.isFinite(absX) || !Number.isFinite(absY)) continue;
       try {
-        setCharRubyOffset(psdPath, layerKey, start, offsetX, offsetY, absX, absY);
+        if (isOverlayRuby) {
+          setCharRubyVisualOffset(psdPath, layerKey, start, end, rt.dataset.rubyText ?? rt.textContent ?? "", true, offsetX, offsetY, absX, absY);
+        } else {
+          setCharRubyOffset(psdPath, layerKey, start, offsetX, offsetY, absX, absY);
+        }
       } catch (_) { /* state 未整合の場合は無視 */ }
+      }
     }
   }
 }
@@ -1868,7 +2136,12 @@ function rectsOverlapPlaced(r, placed) {
 function measureInnerContentRect(inner) {
   if (!inner || !inner.textContent) return null;
   let range = null;
+  const rubyTexts = Array.from(inner.querySelectorAll?.(".ruby-text") ?? []);
+  const previousRubyDisplays = rubyTexts.map((rt) => rt.style.display);
   try {
+    // Ruby is positioned outside the parent glyphs and must not expand the
+    // layer box. Measure only the parent text when doing the auto-fit pass.
+    for (const rt of rubyTexts) rt.style.display = "none";
     range = document.createRange();
     range.selectNodeContents(inner);
     const rects = Array.from(range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
@@ -1888,6 +2161,7 @@ function measureInnerContentRect(inner) {
   } catch (_) {
     return null;
   } finally {
+    rubyTexts.forEach((rt, i) => { rt.style.display = previousRubyDisplays[i]; });
     try { range?.detach?.(); } catch (_) {}
   }
 }
@@ -2472,18 +2746,71 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
                             charHorizontalScales = null, charVerticalScales = null,
                             hasCharHorizontalScales = false, hasCharVerticalScales = false) {
   if (!parentText.length || !entry || typeof entry.text !== "string") return;
+  const isNakaguroRubyText = (value) => {
+    const chars = Array.from(String(value ?? ""));
+    return chars.length > 0 && chars.every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x30fb || code === 0xff65;
+    });
+  };
+  const isDakutenRubyText = (value) => {
+    const chars = Array.from(String(value ?? ""));
+    return chars.length > 0 && chars.every((ch) => {
+      const code = ch.charCodeAt(0);
+      return code === 0x309b || code === 0xff9e || code === 0x3099;
+    });
+  };
+  const isSpecialRubyText = (value) => isNakaguroRubyText(value) || isDakutenRubyText(value);
+  const positionRubyTextWithinPair = (rt, overlayStart, overlayEnd, pairStart, pairEnd) => {
+    if (!Number.isFinite(pairStart) || !Number.isFinite(pairEnd) || pairEnd <= pairStart) return;
+    const from = Math.max(pairStart, Math.min(pairEnd, Number(overlayStart)));
+    const to = Math.max(pairStart, Math.min(pairEnd, Number(overlayEnd)));
+    if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) return;
+    const pct = ((from + to) / 2 - pairStart) / (pairEnd - pairStart) * 100;
+    if (!Number.isFinite(pct)) return;
+    const vertical = parentEl?.closest?.(".layer-box")?.dataset.direction === "vertical";
+    if (vertical) rt.style.top = `${pct}%`;
+    else rt.style.left = `${pct}%`;
+  };
   const isMono = entry.type === "mono"
     && /[ 　]/.test(entry.text)
     && entry.text.split(/[ 　]+/).length === parentText.length;
   const scale = (Number.isFinite(entry.scale) && entry.scale > 0) ? entry.scale : 50;
-  // 【v1.29.x UI-coord】絶対 char start = 行頭 + 行内 offset。
-  // wrap に `data-ruby-start` を付与しておくと、後段の measureRubyOffsets が
-  // この wrap がどの charRubies エントリに対応するか特定でき、ルビ実描画位置を
-  // PSD 座標に換算して state に保存できる。
   const absRubyStart = lineStartIdx + parentLocalStart;
+  const entryEnd = Number(entry.end);
+  const absRubyEnd = Number.isFinite(entryEnd) && entryEnd > absRubyStart
+    ? entryEnd
+    : absRubyStart + parentText.length;
+  const entryOverlays = Array.isArray(entry.overlays) ? entry.overlays : [];
+  const overlayOverlaps = (overlay, from, to) => {
+    const overlayStart = Number(overlay?.start);
+    const overlayEnd = Number(overlay?.end);
+    return Number.isFinite(overlayStart)
+      && Number.isFinite(overlayEnd)
+      && overlayStart < to
+      && overlayEnd > from
+      && typeof overlay.text === "string"
+      && overlay.text.length > 0;
+  };
+  const appendOverlayRubyText = (host, overlay, index, from, to) => {
+    const overlayRt = document.createElement("span");
+    overlayRt.className = `ruby-text ruby-text-overlay${isNakaguroRubyText(overlay.text) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(overlay.text) ? " ruby-text-overlay-same-position" : ""}`;
+    if (lineStartIdx === 0 && isNakaguroRubyText(overlay.text)) overlayRt.classList.add("ruby-text-first-line");
+    overlayRt.contentEditable = "false";
+    overlayRt.setAttribute("aria-hidden", "true");
+    overlayRt.dataset.rubyStart = String(overlay.start);
+    overlayRt.dataset.rubyEnd = String(overlay.end);
+    overlayRt.dataset.rubyText = overlay.text;
+    overlayRt.dataset.rubyOverlay = "true";
+    overlayRt.textContent = overlay.text;
+    overlayRt.style.setProperty("--ruby-scale", `${((Number(overlay.scale) || scale) / 100)}em`);
+    overlayRt.style.setProperty("--ruby-stack-index", String(index + 1));
+    positionRubyTextWithinPair(overlayRt, Number(overlay.start), Number(overlay.end), from, to);
+    host.appendChild(overlayRt);
+  };
 
-  // 1 ペア（親 1 セグメント + ルビ 1 個）を ruby-wrap span として生成。
-  const makePair = (segText, segLocalStart, rubyText, absStartForThisPair) => {
+  const makePair = (segText, segLocalStart, rubyText, absStartForThisPair, options = {}) => {
+    const absEndForThisPair = absStartForThisPair + segText.length;
     const wrap = document.createElement("span");
     wrap.className = "ruby-wrap";
     wrap.style.setProperty("--ruby-scale", `${scale / 100}em`);
@@ -2497,17 +2824,45 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
       charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales);
     wrap.appendChild(base);
     const rt = document.createElement("span");
-    rt.className = "ruby-text";
+    rt.className = `ruby-text${isNakaguroRubyText(rubyText) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(rubyText) ? " ruby-text-overlay-same-position" : ""}`;
+    if (lineStartIdx === 0 && isNakaguroRubyText(rubyText)) rt.classList.add("ruby-text-first-line");
+    rt.contentEditable = "false";
+    rt.setAttribute("aria-hidden", "true");
+    rt.dataset.rubyStart = String(absStartForThisPair);
+    rt.dataset.rubyEnd = String(entry.end);
+    rt.dataset.rubyText = entry.text;
+    rt.dataset.rubyOverlay = "false";
     rt.textContent = rubyText;
     wrap.appendChild(rt);
+    entryOverlays
+      .filter((overlay) => overlayOverlaps(overlay, absStartForThisPair, absEndForThisPair))
+      .filter((overlay) => !(options.skipSpecialOverlays && isSpecialRubyText(overlay.text)))
+      .forEach((overlay, index) => {
+        appendOverlayRubyText(wrap, overlay, index, absStartForThisPair, absEndForThisPair);
+      });
     return wrap;
   };
 
   if (isMono) {
-    // モノルビ: 各文字ごとに wrap を分けるが、すべて同じ entry に属するため
-    // data-ruby-start には常に entry の絶対 start を入れる。これにより後段の
-    // measure 処理が「最初の wrap だけ測る」or「全 wrap をまとめて測る」を選べる。
     const parts = entry.text.split(/[ 　]+/);
+    const specialOverlays = entryOverlays
+      .filter((overlay) => isSpecialRubyText(overlay.text))
+      .filter((overlay) => overlayOverlaps(overlay, absRubyStart, absRubyEnd));
+    if (specialOverlays.length > 0) {
+      const group = document.createElement("span");
+      group.className = "ruby-mono-group";
+      group.dataset.rubyStart = String(absRubyStart);
+      group.dataset.rubyEnd = String(absRubyEnd);
+      group.style.setProperty("--ruby-scale", `${scale / 100}em`);
+      for (let i = 0; i < parentText.length; i++) {
+        group.appendChild(makePair(parentText[i], parentLocalStart + i, parts[i], absRubyStart, { skipSpecialOverlays: true }));
+      }
+      specialOverlays.forEach((overlay, index) => {
+        appendOverlayRubyText(group, overlay, index, absRubyStart, absRubyEnd);
+      });
+      parentEl.appendChild(group);
+      return;
+    }
     for (let i = 0; i < parentText.length; i++) {
       parentEl.appendChild(makePair(parentText[i], parentLocalStart + i, parts[i], absRubyStart));
     }

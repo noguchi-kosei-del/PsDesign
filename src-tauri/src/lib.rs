@@ -22,6 +22,24 @@ use tauri::Manager;
 // CSS / JSX の計算式不一致による位置ズレが完全に排除される。Option (未設定なら従来の
 // 計算式 fallback)。
 #[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RubyOverlayEntry {
+    pub start: i64,
+    pub end: i64,
+    pub text: String,
+    #[serde(rename = "type")]
+    pub ruby_type: String,
+    pub scale: f64,
+    #[serde(rename = "offsetX", default)]
+    pub offset_x: Option<f64>,
+    #[serde(rename = "offsetY", default)]
+    pub offset_y: Option<f64>,
+    #[serde(rename = "absX", default)]
+    pub abs_x: Option<f64>,
+    #[serde(rename = "absY", default)]
+    pub abs_y: Option<f64>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RubyEntry {
     pub end: i64,
     pub text: String,
@@ -36,6 +54,8 @@ pub struct RubyEntry {
     pub abs_x: Option<f64>,
     #[serde(rename = "absY", default)]
     pub abs_y: Option<f64>,
+    #[serde(default)]
+    pub overlays: Vec<RubyOverlayEntry>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -337,7 +357,7 @@ async fn create_opus_project_dir(name: String) -> Result<String, String> {
     let desktop = dirs::desktop_dir()
         .or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))
         .ok_or_else(|| "Desktop folder was not found".to_string())?;
-    let root = desktop.join("Script_Output").join("OPUS");
+    let root = desktop.join("Script_Output").join("OPUSプロジェクト");
     fs::create_dir_all(&root).map_err(|e| {
         format!(
             "Script_Output folder create failed ({}): {}",
@@ -346,26 +366,15 @@ async fn create_opus_project_dir(name: String) -> Result<String, String> {
         )
     })?;
 
-    let base = sanitize_project_dir_name(&name);
-    for i in 0..=9999 {
-        let dir_name = if i == 0 {
-            base.clone()
-        } else {
-            format!("{}({})", base, i)
-        };
-        let candidate = root.join(dir_name);
-        if !candidate.exists() {
-            fs::create_dir_all(&candidate).map_err(|e| {
-                format!(
-                    "project folder create failed ({}): {}",
-                    candidate.display(),
-                    e
-                )
-            })?;
-            return Ok(candidate.to_string_lossy().to_string());
-        }
-    }
-    Err("project folder name is exhausted".to_string())
+    let candidate = root.join(sanitize_project_dir_name(&name));
+    fs::create_dir_all(&candidate).map_err(|e| {
+        format!(
+            "project folder create failed ({}): {}",
+            candidate.display(),
+            e
+        )
+    })?;
+    Ok(candidate.to_string_lossy().to_string())
 }
 
 #[tauri::command]
@@ -1004,7 +1013,7 @@ async fn close_splash(window: tauri::Window) -> Result<(), String> {
     update_splash_progress(app, 88);
     std::thread::sleep(std::time::Duration::from_millis(160));
     update_splash_progress(app, 100);
-    std::thread::sleep(std::time::Duration::from_millis(900));
+    std::thread::sleep(std::time::Duration::from_millis(1450));
 
     if let Some(main_window) = app.get_webview_window("main") {
         apply_app_icon(&main_window);
@@ -1038,7 +1047,7 @@ pub fn run() {
             )
             .title("OPUS")
             .inner_size(871.0, 546.0)
-            .background_color(tauri::webview::Color(0x21, 0x21, 0x21, 255))
+            .background_color(tauri::webview::Color(0x02, 0x03, 0x0a, 255))
             .visible(false)
             .resizable(false)
             .decorations(false)

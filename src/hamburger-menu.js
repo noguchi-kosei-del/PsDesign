@@ -24,7 +24,6 @@ import { clearAllGuides, setGuidesLocked } from "./rulers.js";
 import { resetAutoPlaceState } from "./auto-place.js";
 import { resetStylePaletteState } from "./style-palette.js";
 
-const THEME_KEY = "psdesign_theme";
 const FLIPPED_KEY = "psdesign_layout_flipped";
 const HOME_RETURN_ANIMATION_MS = 360;
 
@@ -34,23 +33,6 @@ let menuOpen = false;
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function applyTheme(theme) {
-  document.documentElement.setAttribute("data-theme", theme);
-}
-
-function loadTheme() {
-  const saved = localStorage.getItem(THEME_KEY) || "dark";
-  applyTheme(saved);
-  return saved;
-}
-
-function toggleTheme() {
-  const current = document.documentElement.getAttribute("data-theme") || "dark";
-  const next = current === "dark" ? "light" : "dark";
-  applyTheme(next);
-  localStorage.setItem(THEME_KEY, next);
 }
 
 function applyFlipped(flipped) {
@@ -147,14 +129,12 @@ async function goHome() {
 }
 
 export function initHamburgerMenu() {
-  loadTheme();
   loadFlipped();
 
   const trigger = $("hamburger-btn");
   const closeBtn = $("hamburger-close-btn");
   const overlay = $("hamburger-overlay");
   const flipBtn = $("workspace-flip-btn");
-  const theme = $("theme-toggle-btn");
   const settings = $("settings-btn");
   const home = $("home-btn");
 
@@ -162,7 +142,6 @@ export function initHamburgerMenu() {
   if (closeBtn) closeBtn.addEventListener("click", closeMenu);
   if (overlay) overlay.addEventListener("click", closeMenu);
   if (flipBtn) flipBtn.addEventListener("click", toggleFlipped);
-  if (theme) theme.addEventListener("click", toggleTheme);
   if (settings) settings.addEventListener("click", () => {
     // ハンバーガーは閉じてから設定モーダルを出す（同時表示は両方とも z-index 200 系で重なるため）。
     closeMenu();

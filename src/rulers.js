@@ -111,13 +111,6 @@ function getCurrentPsdPath() {
   return pages[Math.max(0, Math.min(pages.length - 1, idx))]?.path ?? null;
 }
 
-function getCurrentPage() {
-  const pages = getPages();
-  if (pages.length === 0) return null;
-  const idx = getCurrentPageIndex();
-  return pages[Math.max(0, Math.min(pages.length - 1, idx))] ?? null;
-}
-
 function getGuidesObj(psdPath) {
   if (!psdPath) return { h: [], v: [] };
   let g = guidesByPsd.get(psdPath);
@@ -276,13 +269,6 @@ export function initRulers() {
   onPsdRotationChange(requestRulerRedraw);
   onPageIndexChange(requestRulerRedraw);
 
-  // ライト/ダークテーマ切替で目盛り色を再取得。
-  const themeObserver = new MutationObserver(() => {
-    cachedRulerColors = null;
-    requestRulerRedraw();
-  });
-  themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
-
   // ルーラー帯への mousedown でガイド作成開始。
   topCanvas.addEventListener("mousedown", (e) => beginCreateGuide(e, "h"));
   leftCanvas.addEventListener("mousedown", (e) => beginCreateGuide(e, "v"));
@@ -342,50 +328,57 @@ function axisMappingForRotation(rotation) {
   }
 }
 
-// 現在の表示用 geometry を集約。canvas が無い場合 null を返す。
-function computeGeometry() {
-  const page = getCurrentPage();
-  if (!page) return null;
-  const canvas = stageEl?.querySelector(".canvas-wrap > canvas") ?? null;
-  if (!canvas) return null;
+// 現在表示されている PSD ページごとの geometry を集約する。
+function computeGeometries() {
+  const pages = getPages();
+  if (pages.length === 0) return [];
+  const canvases = Array.from(stageEl?.querySelectorAll(".canvas-wrap > canvas[data-page-index]") ?? []);
+  if (canvases.length === 0) return [];
   const paneRect = paneEl.getBoundingClientRect();
-  const canvasRect = canvas.getBoundingClientRect();
   const rotation = getPsdRotation();
   const rotated90 = rotation === 90 || rotation === 270;
+  return canvases.map((canvas) => {
+    const pageIndex = Number(canvas.dataset.pageIndex);
+    const page = Number.isInteger(pageIndex) ? pages[pageIndex] : null;
+    if (!page) return null;
+    const canvasRect = canvas.getBoundingClientRect();
   // canvas は回転前の CSS 寸法。回転後の画面 bbox は wrap の rect で近似（簡易に同じサイズで扱う）。
   // ルーラー上で「画面 X」に対応する PSD 距離は、画面長さ / 表示倍率。
   // 表示倍率の計算：rotation=0/180 のとき X 方向の pxPerPsd = canvasRect.width / page.width。
   // rotation=90/270 のときは canvas の物理 W/H が swap されないため canvasRect.width が PSD height に対応。
-  const screenWPerPsdAxis = rotated90
-    ? canvasRect.width / page.height
-    : canvasRect.width / page.width;
-  const screenHPerPsdAxis = rotated90
-    ? canvasRect.height / page.width
-    : canvasRect.height / page.height;
-  return {
-    page,
-    paneRect,
-    canvasRect,
-    rotation,
-    rotated90,
-    pxPerPsdH: screenWPerPsdAxis, // 画面横方向 1px が PSD 何 px か（の逆数）
-    pxPerPsdV: screenHPerPsdAxis,
+    const screenWPerPsdAxis = rotated90
+      ? canvasRect.width / page.height
+      : canvasRect.width / page.width;
+    const screenHPerPsdAxis = rotated90
+      ? canvasRect.height / page.width
+      : canvasRect.height / page.height;
+    return {
+      page,
+      pageIndex,
+      psdPath: page.path,
+      paneRect,
+      canvasRect,
+      rotation,
+      rotated90,
+      pxPerPsdH: screenWPerPsdAxis, // 画面横方向 1px が PSD 何 px か（の逆数）
+      pxPerPsdV: screenHPerPsdAxis,
     // canvas の左上端 / 右下端を pane 基準の絶対 px に変換
-    canvasLeftInPane: canvasRect.left - paneRect.left,
-    canvasTopInPane: canvasRect.top - paneRect.top,
-    canvasRightInPane: canvasRect.right - paneRect.left,
-    canvasBottomInPane: canvasRect.bottom - paneRect.top,
-  };
+      canvasLeftInPane: canvasRect.left - paneRect.left,
+      canvasTopInPane: canvasRect.top - paneRect.top,
+      canvasRightInPane: canvasRect.right - paneRect.left,
+      canvasBottomInPane: canvasRect.bottom - paneRect.top,
+    };
+  }).filter(Boolean);
 }
 
 function redraw() {
-  const geom = computeGeometry();
-  drawRulerCanvases(geom);
-  renderGuides(geom);
+  const geoms = computeGeometries();
+  drawRulerCanvases(geoms);
+  renderGuides(geoms);
 }
 
 // ルーラー Canvas のサイズと中身を更新。
-function drawRulerCanvases(geom) {
+function drawRulerCanvases(geoms) {
   // ルーラー帯は pane 内の上/左に固定される。CSS は absolute で制御済み。
   // Canvas の内部解像度を CSS 寸法 × DPR に揃え、HiDPI でくっきり描画。
   if (!topCanvas || !leftCanvas) return;
@@ -401,8 +394,8 @@ function drawRulerCanvases(geom) {
   leftCanvas.width = Math.max(1, Math.round(leftW * dpr));
   leftCanvas.height = Math.max(1, Math.round(leftH * dpr));
 
-  drawRulerOnCanvas(topCanvas, topW, topH, dpr, cs, geom, "top");
-  drawRulerOnCanvas(leftCanvas, leftW, leftH, dpr, cs, geom, "left");
+  drawRulerOnCanvas(topCanvas, topW, topH, dpr, cs, geoms, "top");
+  drawRulerOnCanvas(leftCanvas, leftW, leftH, dpr, cs, geoms, "left");
 }
 
 // 主目盛りが 60〜120 CSS px ごとに来る PSD 座標ステップを選ぶ。
@@ -416,7 +409,7 @@ function pickTickStep(pxPerPsd) {
   return TICK_STEPS[TICK_STEPS.length - 1];
 }
 
-function drawRulerOnCanvas(canvas, w, h, dpr, cs, geom, side) {
+function drawRulerOnCanvas(canvas, w, h, dpr, cs, geoms, side) {
   const ctx = canvas.getContext("2d");
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
@@ -431,6 +424,14 @@ function drawRulerOnCanvas(canvas, w, h, dpr, cs, geom, side) {
   else                { ctx.moveTo(w - 0.5, 0); ctx.lineTo(w - 0.5, h); }
   ctx.stroke();
 
+  const list = Array.isArray(geoms) ? geoms : (geoms ? [geoms] : []);
+  if (list.length === 0) return;
+  for (const geom of list) {
+    drawRulerTicksOnCanvas(ctx, w, h, cs, geom, side);
+  }
+}
+
+function drawRulerTicksOnCanvas(ctx, w, h, cs, geom, side) {
   if (!geom) return;
 
   // この ruler が表すペイン内 px 範囲（canvas の bbox）。それ以外の領域には目盛りを描かない。
@@ -517,11 +518,17 @@ function drawRulerOnCanvas(canvas, w, h, dpr, cs, geom, side) {
 }
 
 // ガイド層に div を再配置。簡便のため毎回全消去 → 全再生成。
-function renderGuides(geom) {
+function renderGuides(geoms) {
   if (!guidesLayer) return;
   guidesLayer.innerHTML = "";
-  if (!geom || !rulersVisible) return;
-  const psdPath = getCurrentPsdPath();
+  const list = Array.isArray(geoms) ? geoms : (geoms ? [geoms] : []);
+  if (!rulersVisible || list.length === 0) return;
+  for (const geom of list) renderGuidesForGeometry(geom);
+}
+
+function renderGuidesForGeometry(geom) {
+  if (!geom) return;
+  const psdPath = geom.psdPath;
   if (!psdPath) return;
   const g = getGuidesObj(psdPath);
 
@@ -573,10 +580,11 @@ function renderGuides(geom) {
     div.className = "psd-guide";
     div.dataset.axis = "h";
     div.dataset.index = String(i);
+    div.dataset.psdPath = psdPath;
     div.style.top = `${Math.round(yInPane)}px`;
     div.style.left = `${Math.round(geom.canvasLeftInPane)}px`;
     div.style.width = `${Math.round(geom.canvasRightInPane - geom.canvasLeftInPane)}px`;
-    div.addEventListener("mousedown", (e) => beginMoveGuide(e, "h", i));
+    div.addEventListener("mousedown", (e) => beginMoveGuide(e, psdPath, "h", i));
     guidesLayer.appendChild(div);
   }
 
@@ -592,10 +600,11 @@ function renderGuides(geom) {
     div.className = "psd-guide";
     div.dataset.axis = "v";
     div.dataset.index = String(i);
+    div.dataset.psdPath = psdPath;
     div.style.left = `${Math.round(xInPane)}px`;
     div.style.top = `${Math.round(geom.canvasTopInPane)}px`;
     div.style.height = `${Math.round(geom.canvasBottomInPane - geom.canvasTopInPane)}px`;
-    div.addEventListener("mousedown", (e) => beginMoveGuide(e, "v", i));
+    div.addEventListener("mousedown", (e) => beginMoveGuide(e, psdPath, "v", i));
     guidesLayer.appendChild(div);
   }
 }
@@ -673,8 +682,7 @@ function beginCreateGuide(e, axisFromRuler) {
   //   leftRuler -> axis="v"（mouse down 後 X で値決定）
   const axis = axisFromRuler;
   e.preventDefault();
-  const psdPath = getCurrentPsdPath();
-  if (!psdPath) return;
+  if (computeGeometries().length === 0) return;
 
   const previewDiv = document.createElement("div");
   previewDiv.className = "psd-guide dragging";
@@ -689,9 +697,9 @@ function beginCreateGuide(e, axisFromRuler) {
     window.removeEventListener("mouseup", onUp);
     previewDiv.remove();
     // canvas 内に落ちたか判定 → addGuide。それ以外は破棄。
-    const dropped = computePsdValueFromScreen(axis, ev.clientX, ev.clientY);
+    const dropped = computePsdValueFromScreen(axis, ev.clientX, ev.clientY, { withGeometry: true });
     if (dropped != null && !isOverRulerBand(ev)) {
-      addGuide(psdPath, axis, dropped);
+      addGuide(dropped.geom.psdPath, axis, dropped.value);
     } else {
       requestRulerRedraw();
     }
@@ -702,7 +710,7 @@ function beginCreateGuide(e, axisFromRuler) {
   updatePreviewAt(previewDiv, axis, e.clientX, e.clientY);
 }
 
-function beginMoveGuide(e, axis, index) {
+function beginMoveGuide(e, psdPath, axis, index) {
   if (e.button !== 0) return;
   if (guidesLocked) {
     // ロック中はガイド移動・削除不可。event は消費して下層レイヤーへ伝播させない。
@@ -712,14 +720,13 @@ function beginMoveGuide(e, axis, index) {
   }
   e.preventDefault();
   e.stopPropagation();
-  const psdPath = getCurrentPsdPath();
   if (!psdPath) return;
   const targetDiv = e.currentTarget;
   if (targetDiv) targetDiv.classList.add("dragging");
 
   const onMove = (ev) => {
     // ドラッグ中はその場で位置だけ仮更新（毎回 moveGuide）。
-    const v = computePsdValueFromScreen(axis, ev.clientX, ev.clientY);
+    const v = computePsdValueFromScreen(axis, ev.clientX, ev.clientY, { psdPath });
     if (v == null) return;
     moveGuide(psdPath, axis, index, v);
   };
@@ -737,28 +744,48 @@ function beginMoveGuide(e, axis, index) {
 }
 
 // 画面座標 (clientX, clientY) を PSD 軸の値に変換。axis="h" → leftAxis 値、axis="v" → topAxis 値。
-function computePsdValueFromScreen(axis, clientX, clientY) {
-  const geom = computeGeometry();
+function pickGuideGeometry(clientX, clientY, psdPath = null) {
+  const geoms = computeGeometries();
+  if (geoms.length === 0) return null;
+  if (psdPath) return geoms.find((geom) => geom.psdPath === psdPath) ?? null;
+  const paneRect = geoms[0].paneRect;
+  const xInPane = clientX - paneRect.left;
+  const yInPane = clientY - paneRect.top;
+  return geoms.find((geom) => (
+    xInPane >= geom.canvasLeftInPane - 1
+    && xInPane <= geom.canvasRightInPane + 1
+    && yInPane >= geom.canvasTopInPane - 1
+    && yInPane <= geom.canvasBottomInPane + 1
+  )) ?? null;
+}
+
+function computePsdValueFromScreen(axis, clientX, clientY, options = {}) {
+  const geom = pickGuideGeometry(clientX, clientY, options.psdPath ?? null);
   if (!geom) return null;
   const map = axisMappingForRotation(geom.rotation);
+  let value;
   if (axis === "h") {
     const yInPane = clientY - geom.paneRect.top;
     const along = (yInPane - geom.canvasTopInPane) / geom.pxPerPsdV;
     const length = geom.page[map.leftAxis === "x" ? "width" : "height"];
-    const v = map.leftSign > 0 ? along : (length - along);
-    return v;
+    value = map.leftSign > 0 ? along : (length - along);
   } else {
     const xInPane = clientX - geom.paneRect.left;
     const along = (xInPane - geom.canvasLeftInPane) / geom.pxPerPsdH;
     const length = geom.page[map.topAxis === "x" ? "width" : "height"];
-    const v = map.topSign > 0 ? along : (length - along);
-    return v;
+    value = map.topSign > 0 ? along : (length - along);
   }
+  if (!Number.isFinite(value)) return null;
+  return options.withGeometry ? { geom, value } : value;
 }
 
 function updatePreviewAt(previewDiv, axis, clientX, clientY) {
-  const geom = computeGeometry();
-  if (!geom) return;
+  const geom = pickGuideGeometry(clientX, clientY);
+  if (!geom) {
+    previewDiv.style.display = "none";
+    return;
+  }
+  previewDiv.style.display = "";
   if (axis === "h") {
     const yInPane = Math.round(clientY - geom.paneRect.top);
     previewDiv.style.top = `${yInPane}px`;
