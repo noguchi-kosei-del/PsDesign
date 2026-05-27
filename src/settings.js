@@ -399,10 +399,6 @@ export function getArrowKeyMoveDistance() {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_SETTINGS.arrowKeyMoveDistance;
 }
 
-function homeHeroBg(rgb) {
-  return `radial-gradient(ellipse 76% 125% at center -50%, rgba(${rgb}, 0.78) 0%, rgba(${rgb}, 0.62) 27%, rgba(${rgb}, 0.40) 56%, rgba(17, 17, 17, 0) 84%), linear-gradient(180deg, #151515 0%, #101010 100%)`;
-}
-
 export function getThemeColor() {
   if (!settings) load();
   return THEME_COLOR_OPTIONS[settings.themeColor] ? settings.themeColor : DEFAULT_SETTINGS.themeColor;
@@ -416,9 +412,6 @@ export function applyThemeColor(themeId = null) {
   root.style.setProperty("--accent", theme.accent);
   root.style.setProperty("--accent-hover", theme.accentHover);
   root.style.setProperty("--accent-rgb", theme.accentRgb);
-  root.style.setProperty("--home-blur-rgb", theme.homeBlurRgb);
-  root.style.setProperty("--home-hero-bg", homeHeroBg(theme.homeBlurRgb));
-  root.style.setProperty("--home-button-hover", `rgba(${theme.accentRgb}, 0.10)`);
 }
 
 export function setThemeColor(themeId) {

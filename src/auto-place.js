@@ -836,6 +836,10 @@ function rubyLineLeadingsForText(text, charRubies) {
     const start = Number(key);
     if (!Number.isFinite(start)) continue;
     const parentLineIndex = String(text ?? "").slice(0, start).split(/\r\n|\r|\n/).length - 1;
+    // frontend と Photoshop の両方とも index は「親文字行 - 1」に lineLeadings
+    // を入れる仕様（canvas-tools.js renderInnerText: overrides[i-1] を行 i の
+    // marginBlockStart に適用）。これで親文字行の上に余白が広がりルビ用スペースが
+    // 確保される。0 行目にルビを振った場合は前の行が無いので skip。
     const targetLineIndex = parentLineIndex - 1;
     if (targetLineIndex >= 0) out[targetLineIndex] = rubyLeadingPct;
   }

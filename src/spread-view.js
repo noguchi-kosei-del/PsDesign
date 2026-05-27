@@ -271,8 +271,13 @@ function computePageMetrics(page, root, fitSlots = 1) {
   }
 
   const zoom = getPsdZoom();
-  visualW *= PSD_FIT_BASE_SCALE * zoom;
-  visualH *= PSD_FIT_BASE_SCALE * zoom;
+  // 単ページは PSD_FIT_BASE_SCALE (= 1.1) で初期表示を 110% に拡大して読みやすくする
+  // （オーバースクロール演出も兼ねる）。見開きは横幅を 2 スロットで使い切るため、
+  // 1.1 倍だと box.width × 1.1 がコンテナを超えて見切れる。見開き時のみ 1.0 で
+  // ぴったりフィット表示にする。
+  const baseScale = fitSlots > 1 ? 1.0 : PSD_FIT_BASE_SCALE;
+  visualW *= baseScale * zoom;
+  visualH *= baseScale * zoom;
 
   const cssW = rotated90 ? visualH : visualW;
   const cssH = rotated90 ? visualW : visualH;

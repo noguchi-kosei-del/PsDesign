@@ -1743,7 +1743,10 @@ function bindRubyTool() {
 
   rubyFloatingTabButtons.forEach((btn) => {
     btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => setFloatingTab(btn.dataset.rubyFloatingTab));
+    // タブ切替（ルビ ↔ 文字詳細）でパネル位置が動くとユーザーが追跡しにくいため、
+    // 切替時の再配置はスキップして現在位置を維持する。新規 mount は updateSelection /
+    // placeRubyPanelNearText 側で初期配置されるので問題ない。
+    btn.addEventListener("click", () => setFloatingTab(btn.dataset.rubyFloatingTab, { reposition: false }));
   });
 
   const clampRubyScale = (n) => {
@@ -1899,35 +1902,61 @@ function bindRubyTool() {
     const obstacleOverlap = (rect) => obstacleRects.reduce((sum, obstacle) => sum + overlapArea(rect, obstacle), 0);
     const badge = anchor.querySelector(".layer-size-badge");
     const handle = anchor.querySelector(".layer-rotate-handle");
+    const anchorRect = anchor.getBoundingClientRect();
+    // テキストフレーム本体 (layer-box) + 文字選択 selection の両方を避けるべき領域として扱う。
+    // 旧実装は selection rect のみを avoid にしていたため、selection が短い場合に
+    // パネルがフレーム上の他の文字に被って読めなくなることがあった。
     const avoid = r;
+    const avoidRects = [r, anchorRect];
     const decorationRects = [badge, handle]
       .filter(Boolean)
       .map((el) => (typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : el));
     const decorationOverlap = (rect) => decorationRects.reduce((sum, decoration) => sum + overlapArea(rect, decoration), 0);
+    const avoidOverlapTotal = (rect) => avoidRects.reduce((sum, a) => sum + overlapArea(rect, a), 0);
     const fitLeftMax = viewportW - panelW - margin;
     const fitTopMax = viewportH - panelH - margin;
+    // フレーム全体 (anchorRect) を起点に右側 / 左側 / 下 / 上の 4 方向を最優先候補とし、
+    // どれもダメな場合のフォールバックとして selection 周辺の候補を補完する。
     const candidates = [
+      // 1. フレームの右側（最も自然な押しやすい位置）
+      { left: anchorRect.right + gap, top: anchorRect.top },
+      { left: anchorRect.right + gap, top: anchorRect.top + (anchorRect.height - panelH) / 2 },
+      // 2. フレームの左側
+      { left: anchorRect.left - gap - panelW, top: anchorRect.top },
+      { left: anchorRect.left - gap - panelW, top: anchorRect.top + (anchorRect.height - panelH) / 2 },
+      // 3. フレームの下
+      { left: anchorRect.left + (anchorRect.width - panelW) / 2, top: anchorRect.bottom + gap },
+      // 4. フレームの上
+      { left: anchorRect.left + (anchorRect.width - panelW) / 2, top: anchorRect.top - gap - panelH },
+      // 5. selection 周辺（フォールバック）
       { left: avoid.right + gap, top: avoid.top },
       { left: avoid.left - gap - panelW, top: avoid.top },
       { left: avoid.left, top: avoid.bottom + gap },
       { left: avoid.left, top: avoid.top - gap - panelH },
-      { left: avoid.left + (avoid.right - avoid.left - panelW) / 2, top: avoid.top - gap - panelH },
-      { left: avoid.left + (avoid.right - avoid.left - panelW) / 2, top: avoid.bottom + gap },
-      { left: r.right + gap, top: r.top },
-    ].map((p) => {
+    ].map((p, priority) => {
       const left = clamp(p.left, margin, fitLeftMax);
       const top = clamp(p.top, margin, fitTopMax);
       const rect = { left, top, right: left + panelW, bottom: top + panelH };
       return {
         left,
         top,
-        overlap: overlapArea(rect, avoid),
+        priority,
+        overlap: avoidOverlapTotal(rect),
         decorationOverlap: decorationOverlap(rect),
         obstacleOverlap: obstacleOverlap(rect),
-        distance: Math.abs(left - (r.right + gap)) + Math.abs(top - r.top),
+        distance: Math.abs(left - (anchorRect.right + gap)) + Math.abs(top - anchorRect.top),
       };
     });
-    candidates.sort((a, b) => (a.obstacleOverlap - b.obstacleOverlap) || (a.overlap - b.overlap) || (a.decorationOverlap - b.decorationOverlap) || (a.distance - b.distance));
+    // ソート優先順位: テキスト/フレーム被り → サイドバー被り → 装飾被り → 候補順位 → 距離
+    // 旧: obstacleOverlap が最優先だったため、サイドバー被りが等価ならテキスト被り
+    //   候補が選ばれて文字が読めなくなることがあった。テキスト被り 0 を最優先にする。
+    candidates.sort((a, b) =>
+      (a.overlap - b.overlap)
+      || (a.obstacleOverlap - b.obstacleOverlap)
+      || (a.decorationOverlap - b.decorationOverlap)
+      || (a.priority - b.priority)
+      || (a.distance - b.distance)
+    );
     panelEl.style.left = `${Math.round(candidates[0].left)}px`;
     panelEl.style.top = `${Math.round(candidates[0].top)}px`;
   };
@@ -2085,17 +2114,21 @@ function bindRubyTool() {
       const lines = String(target.contents ?? "").split(/\r\n|\r|\n/);
       const maxChars = Math.max(1, ...lines.map((lineText) => lineText.length));
       const lineCount = Math.max(1, lines.length);
-      let cellSize = 22;
+      let cellSize = 36;
       if (rect && rect.width > 0 && rect.height > 0) {
         const inlineSize = isVertical ? rect.height / maxChars : rect.width / maxChars;
         const blockSize = isVertical ? rect.width / lineCount : rect.height / lineCount;
         const fitted = Math.min(inlineSize, blockSize);
-        if (Number.isFinite(fitted) && fitted > 0) cellSize = Math.max(14, Math.round(fitted));
+        if (Number.isFinite(fitted) && fitted > 0) cellSize = Math.round(fitted);
       } else {
         const fontSize = Number.parseFloat(getComputedStyle(inner ?? document.documentElement).fontSize);
-        if (Number.isFinite(fontSize) && fontSize > 0) cellSize = Math.max(14, Math.round(fontSize));
+        if (Number.isFinite(fontSize) && fontSize > 0) cellSize = Math.round(fontSize);
       }
-      overlay.style.setProperty("--ruby-parent-cell-size", `${Math.round(cellSize * 1.2)}px`);
+      // 親文字指定ダイアログの cell size。実テキストの 0.75 倍を目安に、
+      // タップしやすい最小 22px〜画面圧迫しない最大 38px でクランプする。
+      const scaledSize = Math.round(cellSize * 0.75);
+      const finalCellSize = Math.max(22, Math.min(38, scaledSize));
+      overlay.style.setProperty("--ruby-parent-cell-size", `${finalCellSize}px`);
     };
     applyLayerSizedGrid();
     const selectedCellCount = () => grid?.querySelectorAll(".ruby-parent-cell.selected").length ?? 0;
@@ -2881,7 +2914,12 @@ function resetPaneZoom(pane) {
 }
 function displayZoomPercent(pane) {
   const z = pane === "pdf" ? getPdfZoom() : getPsdZoom();
-  const base = pane === "pdf" ? PDF_FIT_BASE_SCALE : PSD_FIT_BASE_SCALE;
+  // 見開き編集時は spread-view.js 側で baseScale を 1.0 にしているので、
+  // 表示倍率もそれに合わせて 100% を起点にする。
+  const inSpreadEdit = pane !== "pdf" && getParallelViewMode() === "spreadEdit";
+  const base = pane === "pdf"
+    ? PDF_FIT_BASE_SCALE
+    : (inSpreadEdit ? 1.0 : PSD_FIT_BASE_SCALE);
   return Math.round(z * base * 100);
 }
 
@@ -2959,6 +2997,8 @@ function bindZoomTool() {
   onPdfZoomChange(updateLevel);
   onPsdZoomChange(updateLevel);
   onActivePaneChange(updateLevel);
+  // 見開き編集 ↔ 単ページ切替で base scale が変わるため zoom 表示も再計算する。
+  onParallelViewModeChange(updateLevel);
 
   out.addEventListener("click", () => zoomActivePaneBy(1 / 1.15));
   inn.addEventListener("click", () => zoomActivePaneBy(1.15));
@@ -3164,10 +3204,10 @@ function setHomeScanEngineState(available) {
       warning.setAttribute("role", "status");
       warning.innerHTML = `
         <span class="home-scan-engine-warning-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 9v4"/>
-            <path d="M12 17h.01"/>
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="6.25"/>
+            <path d="M12 8.75v3.6"/>
+            <path d="M12 15.3h.01"/>
           </svg>
         </span>
         <span class="home-scan-engine-warning-text">画像スキャンエンジンが未インストールです</span>
@@ -3183,7 +3223,7 @@ function setHomeScanEngineState(available) {
     warning.hidden = true;
   }
 
-  for (const id of ["home-transcribe-start-btn", "home-typeset-start-btn"]) {
+  for (const id of ["home-transcribe-start-btn", "home-typeset-start-btn", "home-project-open-btn"]) {
     const btn = document.getElementById(id);
     const card = btn?.closest(".home-start-card");
     if (!btn || !card) continue;
