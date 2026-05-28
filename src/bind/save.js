@@ -326,6 +326,22 @@ function showFinishReviewDialog() {
   const pages = getPages();
   if (pages.length === 0) return Promise.resolve(false);
 
+  // 仕上がりチェック / メインステージ描画は page.canvas を page.width × page.height へ
+  // drawImage する。canvas のサイズが page.width/height と不整合だと「中央の小さな矩形だけ」
+  // のような壊れた見え方になるため、開く直前にサイズ整合性を診断ログとして出す。
+  // 再現報告時、ユーザーが F12 → Console でこのログを確認し、サイズ不整合があれば
+  // psd-loader 側のフォールバックが効いている (= 異常を吸収済) ことを確認できる。
+  for (const page of pages) {
+    const cw = page?.canvas?.width;
+    const ch = page?.canvas?.height;
+    const mismatch = cw != null && (cw !== page?.width || ch !== page?.height);
+    const tag = mismatch ? "WARN" : "ok";
+    console.info(
+      `[save-review:${tag}] path=${page?.path ?? "?"} width=${page?.width} height=${page?.height} `
+      + `canvas=${cw ?? "null"}x${ch ?? "null"}`,
+    );
+  }
+
   finishReviewPromise = new Promise((resolve) => {
     const modal = createFinishReviewModal();
     const grid = modal.querySelector("#finish-review-grid");

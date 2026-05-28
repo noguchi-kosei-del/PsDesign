@@ -302,6 +302,28 @@ function isRectMostlyWhite(ctx, sx, sy, w, h) {
   }
 }
 
+// 黒い大型背景レイヤーが visibleCanvas に含まれたとき、非表示テキスト位置を
+// 「真っ黒で上書き」して元 psd.canvas の絵柄を潰す事故を防ぐための判定。
+// 全 5 点が RGB <= 20 のときだけ true。
+function isRectMostlyBlack(ctx, sx, sy, w, h) {
+  try {
+    const samples = [
+      [Math.floor(sx + w / 2), Math.floor(sy + h / 2)],
+      [sx, sy],
+      [sx + w - 1, sy],
+      [sx, sy + h - 1],
+      [sx + w - 1, sy + h - 1],
+    ];
+    for (const [x, y] of samples) {
+      const data = ctx.getImageData(x, y, 1, 1).data;
+      if (data[0] > 20 || data[1] > 20 || data[2] > 20) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function rebuildCanvasMaskingHidden(psd) {
   if (!psd || !psd.width || !psd.height) return null;
   const hiddenList = [];
@@ -359,6 +381,8 @@ function rebuildCanvasMaskingHidden(psd) {
     const h = ey - sy;
     if (w <= 0 || h <= 0) continue;
     if (isRectMostlyWhite(vctx, sx, sy, w, h)) continue;
+    // 真っ黒で上書きすると元 psd.canvas の絵柄が黒く塗り潰されるので skip。
+    if (isRectMostlyBlack(vctx, sx, sy, w, h)) continue;
     ctx.drawImage(visibleCanvas, sx, sy, w, h, sx, sy, w, h);
   }
   return canvas;

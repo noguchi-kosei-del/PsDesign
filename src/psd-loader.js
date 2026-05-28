@@ -465,6 +465,31 @@ function isRectMostlyWhite(ctx, sx, sy, w, h) {
   }
 }
 
+// 「ほぼ黒で塗りつぶされている」かを 5 点サンプリングで判定。
+// 黒い大型背景レイヤー (ノドの黒塗り、効果線、暗背景等) が
+// collectVisibleNonTextLayers で visibleCanvas に混入したとき、
+// 上書きすると元 psd.canvas の絵柄が黒で潰される事故を防ぐ。
+// 全 5 点が RGB <= 20 (= ほぼ純黒) のときだけ true。通常の絵柄に
+// 含まれる黒線・黒ベタは局所的なので、5 点全部が黒になることは稀。
+function isRectMostlyBlack(ctx, sx, sy, w, h) {
+  try {
+    const samples = [
+      [Math.floor(sx + w / 2), Math.floor(sy + h / 2)],
+      [sx, sy],
+      [sx + w - 1, sy],
+      [sx, sy + h - 1],
+      [sx + w - 1, sy + h - 1],
+    ];
+    for (const [x, y] of samples) {
+      const data = ctx.getImageData(x, y, 1, 1).data;
+      if (data[0] > 20 || data[1] > 20 || data[2] > 20) return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // 【v1.26.0 移植 (PsDesign-main v1.24.0) 案G】ハイブリッド方式:
 //   1) psd.canvas をベースに描画 (現状の見た目を完全維持)
 //   2) 非表示レイヤーの bbox 範囲だけ、可視非テキストレイヤーで再合成した画像で上書き
@@ -548,6 +573,7 @@ async function rebuildCanvasMaskingHidden(psd) {
     const psdW = psd.width;
     const psdH = psd.height;
     let skippedAll = 0;
+    let skippedBlack = 0;
     let drawnAll = 0;
     yieldStartedAt = nowMs();
     for (let i = 0; i < hiddenList.length; i++) {
@@ -580,14 +606,22 @@ async function rebuildCanvasMaskingHidden(psd) {
         if ((i + 1) % 4 === 0) yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
         continue; // 絵柄が無い → 上書きしない (psd.canvas のまま残す)
       }
+      // visibleCanvas の該当矩形が一様黒かを 5 点サンプリングで判定。
+      // 真っ黒で上書きすると元 psd.canvas の絵柄を黒く塗り潰してしまうので、
+      // この場合も上書きを skip して psd.canvas のままにする。
+      if (isRectMostlyBlack(vctx, sx, sy, w, h)) {
+        skippedBlack++;
+        if ((i + 1) % 4 === 0) yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
+        continue;
+      }
       ctx.drawImage(visibleCanvas, sx, sy, w, h, sx, sy, w, h);
       drawnAll++;
       if ((i + 1) % 4 === 0) {
         yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
       }
     }
-    if (skippedAll > 0) {
-      console.info(`[psd-loader] mask skip: visibleCanvas が空のため ${skippedAll}件 上書き回避 / ${drawnAll}件 上書き`);
+    if (skippedAll > 0 || skippedBlack > 0) {
+      console.info(`[psd-loader] mask skip: 白 ${skippedAll}件 / 黒 ${skippedBlack}件 上書き回避 / ${drawnAll}件 上書き`);
     }
     return canvas;
   } catch (e) {
@@ -601,7 +635,17 @@ export async function loadPsdFromPath(path) {
   if (canUsePsdParseWorker()) {
     try {
       const parsed = await parsePsdWithWorker(bytes);
-      const canvas = imageBitmapToCanvas(parsed.bitmap);
+      let canvas = imageBitmapToCanvas(parsed.bitmap);
+      // canvas のサイズが PSD 寸法と不整合なら異常 (描画が PSD 領域外に出る or 中央に縮小描画されてしまう)。
+      // 仕上がりチェック / メインステージで page.canvas をフル領域に drawImage するため、不整合だと
+      // ページが完全に崩れる。空白 canvas へフォールバックすれば最低限テキスト overlay は読める。
+      if (canvas && (canvas.width !== parsed.width || canvas.height !== parsed.height)) {
+        console.warn(
+          `[psd-loader] worker canvas size mismatch | path=${path} | `
+          + `canvas=${canvas.width}x${canvas.height} expected=${parsed.width}x${parsed.height}`,
+        );
+        canvas = createBlankCanvas(parsed.width, parsed.height);
+      }
       if (canvas) {
         return {
           path,
@@ -649,6 +693,17 @@ export async function loadPsdFromPath(path) {
       canvas = rebuilt;
       console.info(`[psd-loader] canvas 部分再合成 OK | path=${path}`);
     }
+  }
+
+  // canvas のサイズが PSD 寸法と不整合なら異常 → 空白 canvas にフォールバック。
+  // 仕上がりチェック / メインステージで page.canvas をフル領域に drawImage するため、
+  // 不整合だと「縮小描画されて中央の小さな矩形」のような壊れた見え方になる。
+  if (canvas && (canvas.width !== psd.width || canvas.height !== psd.height)) {
+    console.warn(
+      `[psd-loader] main thread canvas size mismatch | path=${path} | `
+      + `canvas=${canvas.width}x${canvas.height} expected=${psd.width}x${psd.height}`,
+    );
+    canvas = createBlankCanvas(psd.width, psd.height);
   }
 
   return {

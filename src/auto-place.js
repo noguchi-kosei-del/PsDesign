@@ -1463,15 +1463,34 @@ function syncPlacedFromTxt() {
       const rubyParsedNext = parseRubyAnnotatedText(rawNext);
       const next = convertHalfToFullForVertical(rubyParsedNext.text, direction);
       const nextCharRubies = rubyParsedNext.charRubies;
-      const nextLineLeadings = rubyLineLeadingsForText(next, nextCharRubies);
-      const rubiesChanged = JSON.stringify(layer.charRubies ?? {}) !== JSON.stringify(nextCharRubies);
+
+      // 【手動ルビ保護: char index 単位のマージ】TXT 注記由来のルビと手動ルビを統合。
+      //   - TXT 注記由来の char index → nextCharRubies の値で上書き (明示的注記の優先順位を維持)
+      //   - 注記が無い char index → layer 既存ルビ (= 手動振り) を保持
+      // これにより以下の事故をすべて解消:
+      //   (1) プロジェクト再オープン時 (TXT 注記が一切無い場合) → 手動ルビが空マップで潰される
+      //   (2) TXT 注記が部分的にあるケース → 注記外の手動ルビも一緒に消える
+      //   (3) TXT 注記由来のルビが新規追加されたケース → 注記の char index だけは正しく更新
+      // 旧フォーク (boolean 判定) は (1) のみ解消、(2) が未解消だった。
+      const mergedRubies = { ...nextCharRubies };
+      for (const [k, v] of Object.entries(layer.charRubies ?? {})) {
+        if (!(k in mergedRubies)) mergedRubies[k] = v;
+      }
+      const nextLineLeadings = rubyLineLeadingsForText(next, mergedRubies);
+      const rubiesChanged = JSON.stringify(layer.charRubies ?? {}) !== JSON.stringify(mergedRubies);
       const leadingsChanged = JSON.stringify(layer.lineLeadings ?? {}) !== JSON.stringify(nextLineLeadings);
+
+      // contents が同じで、ルビ/行間にも変更がなければ continue
       if (next === layer.contents && !rubiesChanged && !leadingsChanged) continue;
 
       // contents 変更で推定 width/height が変わるため、x/y をそのままにすると
       // bbox top-left 固定 → 旧中心からズレて見える（上左に寄ったように見える）。
       // 旧 contents の bbox 中心を求め、新 contents の bbox を中心起点で再配置する。
-      const updates = { contents: next, charRubies: nextCharRubies, lineLeadings: nextLineLeadings };
+      const updates = {
+        contents: next,
+        charRubies: mergedRubies,
+        lineLeadings: nextLineLeadings,
+      };
       if (next !== layer.contents) {
         updates.autoFontSwitched = false;
         updates.autoFontSwitchBucket = -1;

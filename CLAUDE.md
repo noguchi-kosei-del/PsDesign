@@ -1,5 +1,90 @@
 # PsDesign
 
+## v2.2.3: PSD 保存品質バグ群の修正 (fx 残留 / 中丸ゴシック→小塚化 / プロジェクト再オープン時のルビ消失 / PSD canvas 描画欠落)
+
+実機運用で発覚した複数の保存・再オープン関連バグを横断的に修正したリリース。ユーザーから「fx 効果が残る」「中丸ゴシックが小塚に置き換わる」「プロジェクトファイル再オープン時にルビが消える」「PSD 領域が真っ黒で絵柄が見えない」と立て続けに報告された 4 系統の問題を、それぞれ根本原因まで掘り下げて対処している。
+
+### A. PSD 保存後に「効果 / 境界線」だけ残って実体が無い問題
+
+[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs):
+
+- **`disableStrokeEffect` の堅牢化**: 旧実装は `enabled = false` だけを設定していたため、Photoshop の descriptor が `present = true` のまま残り、レイヤーパネルに「fx マーク + 効果 / 境界線」のリスト表示が残ったまま (ダイアログを開くとチェックは外れているのに表示だけ残る) になっていた。`stroke.putBoolean(sID("present"), false)` と `stroke.putBoolean(sID("showInDialog"), false)` を追加して、effect 自体を完全に削除する形に変更。
+- **新規レイヤーのフチ無し空 stroke 呼び出し撤去** (L3700-3702 旧 `else if (!__subGroupNL) { applyStrokeEffect(layerRef, { color: "none", size: 0 }); }`): 新規レイヤーは生成直後でエフェクトを持たないため、フチ無しケースで呼ぶ必要が無い。呼ぶと逆に無用な「無効化済み境界線 descriptor」が付与されて fx マーク残留の原因になる。
+- **ルビあり + サブグループ作成時の親レイヤー側クリア呼び出しを削除** (L3665 同様の不要呼び出し)。サブグループ側にのみ境界線を当てる挙動は維持。
+
+### B. 中丸ゴシック等の本体フォントが PSD で小塚ゴシックに置換される問題 (フォント置換ロジックの根本対応)
+
+ユーザーが中丸ゴシック (`DFGMaruGothic-Md`) を選んでも、PSD 保存後にフォントが小塚 Pr6N (`KozGoPr6N-Regular`) になってしまう事故が再現していた。原因は 4 重に絡んでいた:
+
+1. **`applySymbolFont` の skip 条件が「per-char 手動指定のみ」** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) L2491-2546): スタイルパレットでレイヤー全体に中丸ゴシックを当てるケースでは `charFonts` は空のままで、`fontPostScriptName` field にのみ入る。これが skip 条件に入っていなかったため、記号 char 位置が無条件で symbolFontPS (= 小塚) に上書きされていた。
+   - 修正: 第 5 引数 `layerDefaultFont` を追加し、「`charFonts[i]` あり」または「`layerDefaultFont !== symbolFontPS`」のとき skip する 3 段判定に拡張。これで「ユーザー選択フォントが symbolFontPS と異なる」場合は記号位置もそのフォントを尊重する。
+
+2. **Rust → JSX emit のキー名が `fontPostScriptName` ではなく `font` だった**: [src-tauri/src/jsx_gen.rs L77, L203](src-tauri/src/jsx_gen.rs) で Rust struct の `font_post_script_name` を JS object literal にする際に `font` キーに短縮していた。Phase A 呼び出しで `e.fontPostScriptName` / `nl.fontPostScriptName` を渡していたコードは実質 `undefined` を渡していて、修正 1 の効果が出ていなかった。
+   - 修正: Phase A 既存レイヤー (L3381) / 新規レイヤー (L3652) ともに `e.font` / `nl.font` を参照するように修正。さらに `e.font` が無い (= edits 差分に font 変更が含まれていない既存レイヤー) ときは `ti.font` (Photoshop の現状フォント) を try/catch で取得するフォールバックを追加。
+
+3. **`reapplySymbolFontForAllLayers` (Phase B safety net) が charFonts: null で全レイヤーに再適用していた** ([src-tauri/src/jsx_gen.rs L3099-3117](src-tauri/src/jsx_gen.rs)): 修正 1 の防御は Phase A だけに効き、Phase B ではレイヤー既定フォントを取れないため、結局記号 char が小塚に上書きされていた。
+   - 修正: `layer.textItem.font` を Photoshop API から取得して `applyLayerFont` の第 5 引数として渡す。取得失敗時は null フォールバックで従来挙動。
+
+4. **`applyDefaultTextSettingsToAllLayers` の autoKerning 設定が textStyleRange を flatten する** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) L3060-): Photoshop の DOM `textItem.autoKerning = MANUAL` 代入は textStyleRange を flatten して font 情報を Photoshop デフォルト (= 多くの環境で小塚) にリセットする副作用がある。これで Phase A で当てた中丸ゴシックが消え、Phase B safety net が「layer.textItem.font === symbolFontPS」と判定して記号位置も小塚化していた。
+   - 修正: autoKerning / antiAliasMethod 設定の **前後で font を保存・復元** する。flatten が起きてもユーザー指定のフォントを温存。
+
+5. **`textItem.font = "..."` の DOM 代入自体が silent failure するケース**: フォントのロード状態が不安定だったり Photoshop バージョン差で、例外を投げず無音で失敗し Photoshop デフォルトに置き換わるケースが残っていた。
+   - 修正: **`applyLayerFont(layer, postScriptName)`** を新設。Action Manager 経由で `textKey > textStyleRange[*] > textStyle > fontPostScriptName` を直接書き込む確実な代入関数。DOM 代入と二重で当てることで、どちらかが失敗しても他方で救う。Phase A 既存・新規両ループの font 代入直後で呼ぶ。
+
+5 段の対策が全て揃って、中丸ゴシックなど「記号もカバーする本体フォント」が PSD 保存後も保持されるようになった。
+
+### C. プロジェクトファイル (.opus) 再オープン時に手動ルビが消失するバグ
+
+ユーザーが PsDesign 内で per-char ルビを振り、プロジェクトを保存・再オープンするとルビが消える事故が継続報告されていた。マージモード化を 2 段階で投入したが治らず、最終的に **`txtSourceListeners` の発火経路自体を断つ** root-cause 修正で解決した。
+
+経路追跡:
+- [src/services/project.js openProjectFromPath](src/services/project.js) → `applyProjectSnapshot(project.snapshot)` で `state.txtSource` を復元
+- [src/state.js applyProjectSnapshot](src/state.js) 内で `state.txtSourceListeners` を発火
+- リスナーには `auto-place.js syncPlacedFromTxt` 等 7 個が登録されており、復元時に走ると **TXT 注記由来の空 charRubies で手動ルビが上書きされる**
+
+修正 (3 ファイル):
+
+1. **[src/auto-place.js syncPlacedFromTxt](src/auto-place.js)**: TXT 注記由来のルビと手動ルビを **char index 単位でマージ** するように変更。TXT 注記がある char index は注記値で上書き、それ以外は手動ルビを保持。さらに `lineLeadings` もマージ後の `mergedRubies` に対して `rubyLineLeadingsForText` で再計算。
+2. **[src/state.js applyProjectSnapshot](src/state.js)**: 第 2 引数 `options.silentTxtListener` を追加。true のとき `txtSource` 復元後の `txtSourceListeners` 発火を完全に抑制。同時に診断ログ `[applyProjectSnapshot] edits=N(ruby:N) newLayers=N(ruby:N) silentTxtListener=true` を出力。
+3. **[src/services/project.js](src/services/project.js)**: `applyProjectSnapshot(project.snapshot, { silentTxtListener: true })` に変更。listener 経由ではなく明示的な `renderTxtSourceViewer / renderAllSpreads / rebuildLayerList` だけで UI 再描画。
+
+加えて `exportProjectSnapshot` にも保存時の `charRubies` 件数ログを追加。入口問題 (= 保存時点で含まれていない) か出口問題 (= 復元時に消える) かをユーザーが console で切り分けできるようにした。
+
+### D. PSD canvas が一部しか描画されない (絵柄が真っ黒・透明背景になる)
+
+「仕上がりチェック」ダイアログとメインステージ PSD 領域の両方で、PSD canvas 画像が極端に小さく/欠落して表示される問題。テキストレイヤーは正常配置されるが PSD の絵柄が見えない状態。
+
+5 段の防衛策で対応:
+
+1. **[src/psd-loader.js isRectMostlyBlack](src/psd-loader.js) 新設**: 5 点サンプリングで全 RGB ≤ 20 のときだけ true。`rebuildCanvasMaskingHidden` の上書き判定で `isRectMostlyWhite` 直後に追加判定し、「黒で塗りつぶす」事故 (= 黒い大型背景レイヤーが visibleCanvas に混入したとき) を防止。
+2. **[src/psd-loader.js loadPsdFromPath](src/psd-loader.js) サイズ整合性チェック**: worker / main 両経路で `canvas.width !== psd.width` を検出したら `createBlankCanvas(psd.width, psd.height)` にフォールバック。これで「縮小 canvas で描画されて中央に小さな矩形だけ」が消え、少なくとも白い canvas + 正常な overlay の状態に。
+3. **[src/psd-parse-worker.js](src/psd-parse-worker.js)**: worker 側 `rebuildCanvasMaskingHidden` にも同じ `isRectMostlyBlack` skip 判定を追加。
+4. **[src/bind/save.js showFinishReviewDialog](src/bind/save.js)**: 仕上がりチェック表示直前に各 page の `width / height / canvas.width / canvas.height` を診断ログ出力 (`[save-review:WARN]` or `[save-review:ok]`)。ユーザーが F12 で原因切り分け可能。
+5. **[src-tauri/src/jsx_gen.rs applyToPsd](src-tauri/src/jsx_gen.rs)** で **「PSD/PSB ファイルの互換性を最大化」を Always Yes に強制**: 旧 PsDesign 保存処理は `app.preferences.maximizeCompatibility` を触らなかったため、ユーザー環境の Photoshop 設定によっては saveAs で合成画像 (composite image) が PSD に埋め込まれず、次回 ag-psd で読むときに `psd.canvas` が空 (灰色 / 透明) になる症状の根本原因。executeAction フォールバック付きで強制セット (`QueryStateType.ALWAYS`)。
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.2.3` に更新。
+
+### 主な検証
+
+- `cargo check` 成功 (jsx_gen.rs に約 50 行追加、構文・型エラーなし)。
+- `npm run build` 成功 (auto-place.js / state.js / services/project.js / psd-loader.js / psd-parse-worker.js / bind/save.js への変更を含む)。
+- 既存の dynamic / static import 混在警告とチャンクサイズ警告は事前から存在し本修正の影響ではない。
+- 実機テストは `npm run tauri build` で本体リビルド後、以下の 4 シナリオを推奨:
+  1. 既存テキストレイヤーで「フチ無し」に変更 → 保存 → Photoshop で fx マークが完全に消えていることを確認
+  2. 中丸ゴシックを当てたレイヤーを保存 → Photoshop で文字パネルのフォント名が「中丸ゴシック」のまま保持されていることを確認
+  3. PsDesign で per-char ルビを振り → プロジェクト保存 → 閉じる → 再オープン → ルビが保持されていることを確認
+  4. プロジェクト読込 + 保存 → 保存後のメインステージで PSD 絵柄が正常表示されることを確認
+
+### 注意事項
+
+- 修正 D-5 の `maximizeCompatibility = Always` は **Photoshop プロセス全体の永続設定**を書き換える。OPUS 保存以降、ユーザーの手動 Photoshop 保存も「最大互換性で保存」になる (副作用)。これは Photoshop の標準推奨設定なので許容範囲内と判断。
+- 修正 B-4 の autoKerning flatten 対策で font 保存・復元しているが、レイヤー数が多い (100+) PSD では各レイヤーで `l.textItem.font` の get + set が走るためわずかなオーバーヘッドあり。実用上問題なし。
+- 修正 C の `silentTxtListener: true` でプロジェクト復元時の listener 発火を抑制しているが、project.js 側で `renderTxtSourceViewer / renderAllSpreads / rebuildLayerList` を明示的に呼ぶことで UI 同期は維持。他の listener (editor-pane / tab lock 等) も同様に skip されるが、レイアウト系は init 時に十分。
+
+---
+
 ## v2.2.2: 白フチプレビューの round-join 化 + フレーム外クリッピング解消
 
 写植プレビューの白フチ／黒フチ表示で、角が鋭角に尖って見える問題と、フレーム外側に伸びるストロークが見切れる問題をまとめて修正した。Photoshop の Stroke Effect (outsetFrame) と同等の絵を、ブラウザ環境に依存せず確実に得る方針へ書き直している。

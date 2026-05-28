@@ -705,7 +705,12 @@ export async function openProjectFromPath(path) {
       throw new Error("プロジェクト内の PSD を読み込めませんでした");
     }
     await restoreProjectReferences(project.references);
-    applyProjectSnapshot(project.snapshot);
+    // 【v2.x】silentTxtListener: true で applyProjectSnapshot 内の txtSourceListeners 発火を抑制。
+    // 復元時に listener (例: auto-place.js syncPlacedFromTxt) が走ると、自動配置レイヤーの
+    // 手動 charRubies / lineLeadings が TXT 注記由来の値で意図せず上書きされる事故が再発する。
+    // 必要な UI 再描画はこの下で renderTxtSourceViewer / renderAllSpreads / rebuildLayerList を
+    // 明示的に呼ぶので、listener 経由の自動描画は不要。
+    applyProjectSnapshot(project.snapshot, { silentTxtListener: true });
     restoreProjectView(project.view);
     leaveHomeScreen();
     renderAllSpreads();

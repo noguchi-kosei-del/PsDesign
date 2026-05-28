@@ -2477,13 +2477,18 @@ function estimateCharRangeBounds(parentBounds, contents, fromCh, toCh, parentDir
 // 【v1.22.0】===== 記号フォント自動置換（♡♥★☆♪♫♬♩♯♭→←↑↓〇○●◎△▲▽▼□■◇◆♠♣♦） =====
 // 写植本体フォントが対応していない記号類を別フォント（小塚ゴシック Pr6N R 等）で組む。
 // 既存・新規両方のレイヤーに適用。プレビュー側（canvas-tools.js の SYMBOL_CHAR_CODES）と
-// 同じ char code 集合を使う。ユーザーが per-char で手動指定したフォント (charFonts[i]) が
-// ある char は skip（手動意図を尊重）。
+// 同じ char code 集合を使う。
+//
+// skip 条件（いずれかに当てはまる char は触らない）:
+//   1) per-char で手動指定したフォント (charFonts[i]) がある   ← 手動意図を尊重
+//   2) layerDefaultFont が指定されていて symbolFontPS と異なる ← ユーザーが選んだ
+//      レイヤー既定フォントが symbolFontPS と異なる場合、そのフォントは記号も
+//      カバーしていると見做して尊重する（中丸ゴシック等、記号対応フォントの保護）
 //
 // 実装: applyPerCharSizesAndFonts と同型の clone-and-replace パターン。各 char の
 // 「effective font」を「手動指定 (charFonts[i]) > 記号置換 > レンジ既存スタイル」の優先順で
 // 解決し、置換が必要な char だけ font を上書きする。
-function applySymbolFont(layer, contents, symbolFontPS, charFonts) {
+function applySymbolFont(layer, contents, symbolFontPS, charFonts, layerDefaultFont) {
   if (typeof symbolFontPS !== "string" || symbolFontPS.length === 0) return;
 
   // プレビュー側 SYMBOL_CHAR_CODES と完全一致。char code 直接判定（regex 回避）。
@@ -2510,16 +2515,36 @@ function applySymbolFont(layer, contents, symbolFontPS, charFonts) {
   var fullText = String(contents);
   if (fullText.length === 0) return;
 
+  // レイヤー既定フォントが指定されていて symbolFontPS と異なる場合は、ユーザー意図と
+  // 見做して記号置換を完全に skip する（中丸ゴシック等の記号対応フォントが破壊されない
+  // ようにするため、v1.x.y で導入）。空文字や null のときは null として扱う。
+  var layerFontSafe =
+    (typeof layerDefaultFont === "string" && layerDefaultFont.length > 0) ? layerDefaultFont : null;
+
   // 各 char に当てる置換フォント（null = 触らない、文字列 = 上書き）。
   var fontPerChar = [];
   var anyReplace = false;
   for (var i = 0; i < fullText.length; i++) {
-    if (readManualFont(i) === null && isSymbolChar(fullText.charAt(i))) {
-      fontPerChar[i] = symbolFontPS;
-      anyReplace = true;
-    } else {
+    if (!isSymbolChar(fullText.charAt(i))) {
       fontPerChar[i] = null;
+      continue;
     }
+    if (readManualFont(i) !== null) {
+      // per-char で手動指定あり → 触らない
+      fontPerChar[i] = null;
+      continue;
+    }
+    if (layerFontSafe !== null && layerFontSafe !== symbolFontPS) {
+      // ユーザーが選んだレイヤー既定フォントが symbolFontPS と異なる
+      // → そのフォントが記号もカバーしていると見做して尊重する
+      fontPerChar[i] = null;
+      continue;
+    }
+    // (a) layerDefaultFont が取れない（PSD 直読み等の異常系）
+    // (b) layerDefaultFont 自体が symbolFontPS と同じ
+    // のいずれかなので、自動置換を発動して symbolFontPS に揃える
+    fontPerChar[i] = symbolFontPS;
+    anyReplace = true;
   }
   if (!anyReplace) return;
 
@@ -3008,6 +3033,55 @@ function applyTateChuYoko(layer, contents, enabled, direction, charTateChuYokos)
   }
 }
 
+// 【v2.x】Photoshop の DOM `textItem.font = "..."` 代入は、指定 PostScript 名のフォントが
+// インストールされていなかったり、ロード状態が安定していないと **silent failure** する
+// （例外を投げず、内部のフォントが Photoshop デフォルト = 多くは小塚 Pr6N に置き換わる）。
+// これを回避するため、Action Manager 経由で textStyleRange[*].textStyle.fontPostScriptName
+// を直接書き込む確実な代入関数を提供する。DOM 代入と二重で当てることで、どちらかが
+// 失敗しても他方で救う。
+// 呼び出し側: applyToPsd の各レイヤー処理で nti.font / ti.font 代入の直後にこれを呼ぶ。
+// per-char 手動指定 (charFonts) は後段の applyPerCharSizesAndFonts が clone-and-replace で
+// 上書きするので、ここで全 range に同じ font を当てても無害（base として残る）。
+function applyLayerFont(layer, postScriptName) {
+  if (typeof postScriptName !== "string" || postScriptName.length === 0) return;
+  try {
+    app.activeDocument.activeLayer = layer;
+    var layerRef = new ActionReference();
+    layerRef.putEnumerated(sID("layer"), sID("ordinal"), sID("targetEnum"));
+    var layerDesc = executeActionGet(layerRef);
+    if (!layerDesc.hasKey(sID("textKey"))) return;
+    var textKey = layerDesc.getObjectValue(sID("textKey"));
+    var oldRanges = textKey.getList(sID("textStyleRange"));
+    if (oldRanges.count === 0) return;
+
+    var newRangeList = new ActionList();
+    for (var r = 0; r < oldRanges.count; r++) {
+      var rd = oldRanges.getObjectValue(r);
+      var fromCh = rd.getInteger(sID("from"));
+      var toCh = rd.getInteger(sID("to"));
+      var srcStyle = rd.getObjectValue(sID("textStyle"));
+      var styleClone = cloneActionDescriptor(srcStyle);
+      try { styleClone.putString(sID("fontPostScriptName"), postScriptName); } catch (eFn) {}
+      var newRangeDesc = new ActionDescriptor();
+      newRangeDesc.putInteger(sID("from"), fromCh);
+      newRangeDesc.putInteger(sID("to"), toCh);
+      newRangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
+      newRangeList.putObject(sID("textStyleRange"), newRangeDesc);
+    }
+    var newTextKey = cloneActionDescriptor(textKey);
+    newTextKey.putList(sID("textStyleRange"), newRangeList);
+    var setDesc = new ActionDescriptor();
+    setDesc.putReference(sID("null"), layerRef);
+    // set の class は sID("textLayer") を使う (sID("textKey") だと Photoshop が
+    // 新 textStyleRange を破棄して既存値を保持するケースが既知 — applyRepeatedDashTracking
+    // 等の per-character 系と同じパターン)。
+    setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
+    executeAction(sID("set"), setDesc, DialogModes.NO);
+  } catch (e) {
+    addWarning("レイヤーフォント設定に失敗 (" + postScriptName + "): " + e);
+  }
+}
+
 function disableStrokeEffect(layerRef) {
   app.activeDocument.activeLayer = layerRef;
   var desc = new ActionDescriptor();
@@ -3018,6 +3092,11 @@ function disableStrokeEffect(layerRef) {
   var fx = new ActionDescriptor();
   var stroke = new ActionDescriptor();
   stroke.putBoolean(sID("enabled"), false);
+  // present/showInDialog を false にしないと、Photoshop は descriptor を保持し続け
+  // レイヤーパネルに fx マーク + 「効果 / 境界線」のリスト表示が残る (描画はされない)。
+  // ダイアログを開くとチェックは外れているのに表示だけ残る現象を防ぐため明示削除する。
+  stroke.putBoolean(sID("present"), false);
+  stroke.putBoolean(sID("showInDialog"), false);
   fx.putObject(sID("frameFX"), sID("frameFX"), stroke);
   desc.putObject(sID("to"), sID("layerEffects"), fx);
   try { executeAction(sID("set"), desc, DialogModes.NO); } catch (e) {}
@@ -3027,6 +3106,15 @@ function disableStrokeEffect(layerRef) {
 //   - autoKerning = MANUAL (= UI の「カーニング: 0」、自動カーニング無効)
 //   - antiAliasMethod = SHARP (= 「シャープ」)
 // 既存・新規を問わず、保存される PSD 内のテキストはすべてこの設定で揃える方針。
+//
+// 【v2.x 修正】Photoshop の DOM `textItem.autoKerning = MANUAL` 代入は
+// textStyleRange を flatten して font 等の per-character 属性をリセットすることがある
+// (CLAUDE.md 「Phase B safety net 設計判断」参照)。これでユーザーが選んだ中丸ゴシック
+// 等のレイヤー既定フォントが Photoshop デフォルト (= 多くの場合 KozGoPr6N-Regular) に
+// 戻り、Phase B safety net `reapplySymbolFontForAllLayers` で記号位置を symbolFontPS
+// に置換 → 結果として全テキストが小塚化、というシナリオを再発させていた。
+// 対策: autoKerning / antiAliasMethod 設定の **前後で font を保存・復元** する。
+// flatten が起きてもユーザー指定のフォントを温存する。
 function applyDefaultTextSettingsToAllLayers(doc) {
   function visit(parent) {
     for (var i = 0; i < parent.layers.length; i++) {
@@ -3034,8 +3122,20 @@ function applyDefaultTextSettingsToAllLayers(doc) {
       if (l.typename === "LayerSet") {
         visit(l);
       } else if (l.kind === LayerKind.TEXT) {
+        var savedFont = null;
+        try { savedFont = l.textItem.font; } catch (eFontGet) {}
         try { l.textItem.autoKerning = AutoKernType.MANUAL; } catch (eAk) {}
         try { l.textItem.antiAliasMethod = AntiAlias.SHARP; } catch (eAa) {}
+        // flatten で font 情報がデフォルトに置き換わった場合は元の値で復元。
+        // savedFont が null (取れなかった) or 既に同値の場合は何もしない (副作用なし)。
+        if (typeof savedFont === "string" && savedFont.length > 0) {
+          try {
+            var currentFont = l.textItem.font;
+            if (currentFont !== savedFont) {
+              l.textItem.font = savedFont;
+            }
+          } catch (eFontRestore) {}
+        }
       }
     }
   }
@@ -3089,8 +3189,9 @@ function reapplyRepeatedTrackingForAllLayers(doc, dashMille, tildeMille) {
 }
 
 // 【v1.22.0】記号フォント置換の Phase B safety net。新規・既存・未編集を問わず全テキスト
-// レイヤーに再適用。charFonts は null（未編集レイヤーには manual override 情報が無いため、
-// 全シンボル char を置換対象とする）。
+// レイヤーに再適用。charFonts は null（未編集レイヤーには manual override 情報が無いため）。
+// レイヤー既定フォントは Photoshop の textItem.font （PostScript 名）から取得し、
+// applySymbolFont の skip 判定に活用する（中丸ゴシック等の記号対応フォント保護のため）。
 function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
   if (typeof symbolFontPS !== "string" || symbolFontPS.length === 0) return;
   function visit(parent) {
@@ -3102,7 +3203,12 @@ function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
         try {
           var ct = l.textItem.contents;
           if (typeof ct === "string" && ct.length > 0) {
-            applySymbolFont(l, ct, symbolFontPS, null);
+            var layerFont = null;
+            try {
+              var f = l.textItem.font;
+              if (typeof f === "string" && f.length > 0) layerFont = f;
+            } catch (eFontGet) { /* font 取得失敗時は null のまま (= 従来挙動 = 強制置換) */ }
+            applySymbolFont(l, ct, symbolFontPS, null, layerFont);
           }
         } catch (eR) {}
       }
@@ -3162,6 +3268,32 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
   var prevTypeUnits = app.preferences.typeUnits;
   app.preferences.rulerUnits = Units.PIXELS;
   app.preferences.typeUnits = TypeUnits.POINTS;
+  // 【v2.x】「PSD/PSB ファイルの互換性を最大化」を Always Yes に強制する。
+  // これが Never / Ask の場合、Photoshop が saveAs で「合成画像 (composite image)」
+  // を埋め込まずに保存することがあり、次回 OPUS が ag-psd で読むときに
+  // psd.canvas が空 (灰色 / 透明) → メインステージ / 仕上がりチェックで
+  // PSD 絵柄が表示されない症状になる。Always Yes に強制セットすることで、
+  // saveAs 時に必ず合成画像が含まれる PSD が出力され、次回読込で
+  // psd.canvas が正しい絵柄を持つ。
+  // executeAction 経由で preferences の queryStateChangedAlertCheckbox 等を回避し、
+  // ダイアログを出さずに永続設定として書き込む。Photoshop プロセス全体の設定なので
+  // 他アプリ・他作業にも反映されるが、ユーザー体験的にも「最大化」が標準的なので問題なし。
+  var prevMaxCompat = null;
+  try { prevMaxCompat = app.preferences.maximizeCompatibility; } catch (eMcGet) {}
+  try { app.preferences.maximizeCompatibility = QueryStateType.ALWAYS; } catch (eMcSet) {
+    // フォールバック: executeAction で psdMaxCompatibility を always に。
+    try {
+      var __mcDesc = new ActionDescriptor();
+      var __mcRef = new ActionReference();
+      __mcRef.putProperty(charIDToTypeID("Prpr"), stringIDToTypeID("fileSaveOptions"));
+      __mcRef.putEnumerated(charIDToTypeID("capp"), charIDToTypeID("Ordn"), charIDToTypeID("Trgt"));
+      __mcDesc.putReference(charIDToTypeID("null"), __mcRef);
+      var __mcSet = new ActionDescriptor();
+      __mcSet.putEnumerated(stringIDToTypeID("maximizeCompatibility"), stringIDToTypeID("queryStateType"), stringIDToTypeID("always"));
+      __mcDesc.putObject(charIDToTypeID("T   "), stringIDToTypeID("fileSaveOptions"), __mcSet);
+      executeAction(charIDToTypeID("setd"), __mcDesc, DialogModes.NO);
+    } catch (eMcFallback) {}
+  }
   var doc = app.open(file);
   try {
     var __rubyAbsScaleX = 1;
@@ -3191,7 +3323,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         } catch (eDirEx) {}
       }
       if (typeof e.contents === "string") ti.contents = normalizeLineBreaks(e.contents);
-      if (typeof e.font === "string" && e.font.length > 0) ti.font = e.font;
+      if (typeof e.font === "string" && e.font.length > 0) {
+        ti.font = e.font;
+        // 【v2.x】DOM `ti.font = ...` は silent failure する可能性があるため、
+        // Action Manager 経由で textStyleRange.fontPostScriptName も直接書き込む。
+        // 両方当てることで、フォントロード状態のばらつきや Photoshop バージョン差を吸収。
+        try { applyLayerFont(layer, e.font); } catch (eAlf) {}
+      }
       if (typeof e.size === "number") ti.size = new UnitValue(e.size, "pt");
       if (typeof e.dx === "number" || typeof e.dy === "number") {
         var dx = (typeof e.dx === "number") ? e.dx : 0;
@@ -3332,9 +3470,17 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       // 【v1.22.0】記号フォント置換（♡♥★☆♪♫♬♩♯♭ など → symbolFontPostScriptName）。
       // 既存レイヤーにも適用（保存される PSD 内の全テキストを統一する方針）。
       // ユーザーが per-char で手動指定したフォント (e.charFonts[i]) がある char は skip。
+      // レイヤー既定フォントが symbolFontPS と異なる場合も skip
+      //（ユーザーが選んだ本体フォントが記号もカバーしていると見做して尊重）。
+      // 注: Rust 側 (lib.rs `font_post_script_name`) は serde rename で `fontPostScriptName`
+      // として渡るが、Rust → JSX の emit (jsx_gen.rs:77) で **`font`** キーに変換されている。
+      // そのため JSX 内では `e.font` を参照する（`e.fontPostScriptName` は undefined）。
       if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
         try {
-          applySymbolFont(layer, ti.contents, symbolFontPostScriptName, e.charFonts);
+          var __layerDefaultFontE = (typeof e.font === "string" && e.font.length > 0)
+            ? e.font
+            : (function () { try { return ti.font; } catch (eF) { return null; } })();
+          applySymbolFont(layer, ti.contents, symbolFontPostScriptName, e.charFonts, __layerDefaultFontE);
         } catch (eSymF) {
           addWarning("記号フォント置換に失敗 (layer " + e.id + "): " + eSymF);
         }
@@ -3408,6 +3554,12 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         nti.contents = normalizeLineBreaks(nl.contents);
         if (typeof nl.font === "string" && nl.font.length > 0) {
           try { nti.font = nl.font; } catch (eFont) {}
+          // 【v2.x】DOM `nti.font = ...` は silent failure する可能性があるため、
+          // Action Manager 経由で textStyleRange.fontPostScriptName も直接書き込む。
+          // 中丸ゴシック等のフォントが PsDesign では認識されるが Photoshop の DOM 経由では
+          // silent に小塚に置き換わる事故 (= 「中丸ゴシックが psd で小塚になる」報告) を
+          // 根本対応する。両方当てることで、どちらかが失敗しても他方で救う。
+          try { applyLayerFont(layerRef, nl.font); } catch (eAlfNew) {}
         }
         nti.size = new UnitValue((typeof nl.size === "number") ? nl.size : 24, "pt");
         // autoLeadingAmount は段落全体属性。ここでは元の leadingPct (or 125 default)
@@ -3595,9 +3747,17 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         }
         // 【v1.22.0】記号フォント置換（♡♥★☆♪♫♬♩♯♭ など → symbolFontPostScriptName）。
         // 新規レイヤーにも適用。ユーザーが per-char で手動指定したフォントは尊重。
+        // レイヤー既定フォントが symbolFontPS と異なる場合も skip
+        //（中丸ゴシック等、ユーザーが選んだ記号対応フォントを保護する）。
+        // 注: Rust 側 (lib.rs `font_post_script_name`) は serde rename で `fontPostScriptName`
+        // として渡るが、Rust → JSX の emit (jsx_gen.rs:203) で **`font`** キーに変換されている。
+        // そのため JSX 内では `nl.font` を参照する（`nl.fontPostScriptName` は undefined）。
         if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
           try {
-            applySymbolFont(layerRef, nti.contents, symbolFontPostScriptName, nl.charFonts);
+            var __layerDefaultFontNL = (typeof nl.font === "string" && nl.font.length > 0)
+              ? nl.font
+              : (function () { try { return nti.font; } catch (eFNL) { return null; } })();
+            applySymbolFont(layerRef, nti.contents, symbolFontPostScriptName, nl.charFonts, __layerDefaultFontNL);
           } catch (eSymFNew) {
             addWarning("新規レイヤーの記号フォント置換に失敗: " + eSymFNew);
           }
@@ -3662,7 +3822,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
               try { __rubyLayersNL[__sgI].move(__subGroupNL, ElementPlacement.PLACEATBEGINNING); } catch (eSgR) {}
             }
             try { layerRef.move(__subGroupNL, ElementPlacement.PLACEATEND); } catch (eSgP) {}
-            try { applyStrokeEffect(layerRef, { color: "none", size: 0 }); } catch (eDisParentStroke) {}
+            // 親レイヤーは生成直後で境界線効果を持たないため、ここで disableStrokeEffect を
+            // 呼ぶと無用な「無効化済み境界線 descriptor」が付いて fx マークが残る。
+            // 親側には何もせず、サブグループ側にのみ境界線を当てる。
             try { applyStrokeEffect(__subGroupNL, { color: __strokeColorNL, size: __strokeSizeNL }); } catch (eSgStroke) {
               addWarning("白フチ付きルビグループへの境界線効果適用に失敗: " + eSgStroke);
             }
@@ -3691,14 +3853,16 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           }
         }
         // フチはここだけで確定する。ルビあり + グループ作成成功時はグループ側にだけ境界線を持たせる。
+        // フチ無し (!__hasStrokeNL) の新規レイヤーには何もしない:
+        // 新規レイヤーは doc.artLayers.add() 直後で境界線効果を持たないため、
+        // ここで disableStrokeEffect を呼ぶと無用な「無効化済み境界線 descriptor」が
+        // 付与され、Photoshop 上で fx マーク + 効果リストの「境界線」表示が残ってしまう。
         if (__hasStrokeNL && (!__hasRubiesNL || !__subGroupNL)) {
           try {
             applyStrokeEffect(layerRef, { color: __strokeColorNL, size: __strokeSizeNL });
           } catch (eStrokeNewFinal) {
             addWarning("新規レイヤーの境界線効果適用に失敗: " + eStrokeNewFinal);
           }
-        } else if (!__subGroupNL) {
-          try { applyStrokeEffect(layerRef, { color: "none", size: 0 }); } catch (eStrokeClearNew) {}
         }
         // 念のため可視化（一部 PS で move 後に visible=false になるケースを補正）
         try { layerRef.visible = true; } catch (eVisNL) {}
@@ -3764,6 +3928,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     doc.close(SaveOptions.DONOTSAVECHANGES);
     app.preferences.rulerUnits = prevUnits;
     app.preferences.typeUnits = prevTypeUnits;
+    // maximizeCompatibility は他作業にも影響するが、ユーザー要望が「常に最大化」のため
+    // 保存後も Always のままにしておく。前値復元はしない (副作用を許容)。
+    // どうしても元に戻したい場合は prevMaxCompat で復元する分岐を入れる。
   }
 }
 "##;

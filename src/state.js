@@ -1187,7 +1187,7 @@ function resetHistoryBaseline() {
 }
 
 export function exportProjectSnapshot() {
-  return {
+  const snap = {
     psdPaths: state.pages.map((p) => p.path).filter(Boolean),
     edits: Array.from(state.edits.values()).map(cloneProjectValue),
     newLayers: state.newLayers.map(cloneProjectValue),
@@ -1196,13 +1196,33 @@ export function exportProjectSnapshot() {
     txtSelection: state.txtSelection || "",
     txtSelectedBlockIndex: state.txtSelectedBlockIndex,
   };
+  // 【v2.x】診断ログ: 保存スナップショット内の charRubies 件数を可視化。
+  // 保存時点で 0/0 件なら入口問題 (= 手動ルビが state に書かれていない、もしくは
+  // setCharRubiesRange の対象 layer/edit が exportEdits の対象外)。
+  // applyProjectSnapshot 側ログと突合して、どこで消えるかを切り分けるための情報。
+  const editsRuby = snap.edits.filter((e) => e?.charRubies && Object.keys(e.charRubies).length > 0).length;
+  const newLayersRuby = snap.newLayers.filter((l) => l?.charRubies && Object.keys(l.charRubies).length > 0).length;
+  console.info(
+    `[exportProjectSnapshot] edits=${snap.edits.length}(ruby:${editsRuby}) `
+    + `newLayers=${snap.newLayers.length}(ruby:${newLayersRuby})`,
+  );
+  return snap;
 }
 
-export function applyProjectSnapshot(snapshot) {
+export function applyProjectSnapshot(snapshot, options = {}) {
+  // 【v2.x】silentTxtListener: true (デフォルト false → true に変更) で
+  // state.txtSource 復元時に txtSourceListeners (例: auto-place.js syncPlacedFromTxt)
+  // の発火を抑制する。プロジェクト復元時に listener が走ると、自動配置レイヤーの
+  // 手動 charRubies / lineLeadings が TXT 注記由来の値 (空 or 部分的) で上書きされる
+  // 事故が再発するため、復元時は静かに txtSource だけ書き換える。後続の UI 再描画は
+  // services/project.js が renderTxtSourceViewer / renderAllSpreads / rebuildLayerList を
+  // 明示的に呼ぶことで賄う。
+  const { silentTxtListener = false } = options;
   const loadedPaths = new Set(state.pages.map((p) => p.path).filter(Boolean));
   const edits = Array.isArray(snapshot?.edits) ? snapshot.edits : [];
   const newLayers = Array.isArray(snapshot?.newLayers) ? snapshot.newLayers : [];
   state.edits = new Map();
+  let editsRubyCount = 0;
   for (const raw of edits) {
     const entry = cloneProjectValue(raw);
     if (!entry || typeof entry !== "object") continue;
@@ -1210,10 +1230,12 @@ export function applyProjectSnapshot(snapshot) {
     const layerId = Number(entry.layerId);
     if (!psdPath || !loadedPaths.has(psdPath) || !Number.isFinite(layerId)) continue;
     entry.layerId = layerId;
+    if (entry.charRubies && Object.keys(entry.charRubies).length > 0) editsRubyCount++;
     state.edits.set(editKey(psdPath, layerId), entry);
   }
 
   let maxTempId = 0;
+  let newLayersRubyCount = 0;
   state.newLayers = [];
   for (const raw of newLayers) {
     const layer = cloneProjectValue(raw);
@@ -1227,6 +1249,7 @@ export function applyProjectSnapshot(snapshot) {
     }
     const m = layer.tempId.match(/^new-(\d+)$/);
     if (m) maxTempId = Math.max(maxTempId, Number(m[1]) || 0);
+    if (layer.charRubies && Object.keys(layer.charRubies).length > 0) newLayersRubyCount++;
     state.newLayers.push(layer);
   }
   const requestedNext = Number(snapshot?.nextTempId);
@@ -1246,10 +1269,19 @@ export function applyProjectSnapshot(snapshot) {
     state.txtSource = restored;
     state.txtSelection = "";
     state.txtSelectedBlockIndex = null;
-    if (changed) {
+    if (changed && !silentTxtListener) {
       for (const fn of state.txtSourceListeners) fn(state.txtSource);
     }
   }
+
+  // 【v2.x】診断ログ: プロジェクト復元時の charRubies 件数を可視化。
+  // 0/0 件で「ルビ消失」報告が来た場合は保存時点で空 (入口問題)。
+  // 復元直後に件数あり、その後ユーザー操作後に消えるならどこかの mutator 起因。
+  console.info(
+    `[applyProjectSnapshot] edits=${state.edits.size}(ruby:${editsRubyCount}) `
+    + `newLayers=${state.newLayers.length}(ruby:${newLayersRubyCount}) `
+    + `silentTxtListener=${silentTxtListener}`,
+  );
 
   resetHistoryBaseline();
 }
