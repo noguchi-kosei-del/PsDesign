@@ -1693,81 +1693,60 @@ function applyFillPreview(inner, fillColor) {
   if (color) inner.style.color = color;
 }
 
-// SVG filter による円形ダイレーション。
-// -webkit-text-stroke は miter join 固定で角スパイクが出る。text-shadow を円周に
-// 並べる方式は「グリフ自身の鋭角（明朝の起筆等）」をそのまま温存するためダメ。
-// 真に round-join を得るには、グリフのアルファをガウスブラーで等方的に拡散し、
-// 閾値で再シャープ化する → これがそのまま円形ダイレーションとなり、角は自然に
-// 半径 w の円弧で丸まる。Photoshop の Stroke Effect (outsetFrame) と等価な絵。
-const SVG_NS = "http://www.w3.org/2000/svg";
-function ensureRoundDilateFilter(w) {
-  // 0.5px 単位で量子化してフィルター数を抑制。視覚差は感じない粒度。
+// 白フチ／黒フチを round-join で表示するための text-shadow ダイレーション。
+// -webkit-text-stroke は Chromium 仕様で miter join 固定 → 明朝の起筆や
+// 「ー」「！」等の鋭角端で角スパイクが出る。SVG filter (feGaussianBlur+threshold)
+// 案は色補間 / 閾値の挙動が環境依存で安定しないので採用しない。
+// 円周方向に文字のコピーを並べると union が disk 構造化要素との Minkowski sum
+// （= 数学的に round-join dilation）となり、Photoshop の Stroke Effect
+// (outsetFrame) と同等の絵が確実に得られる。
+//
+// w (screen px) ごとに方向数と stop 数を調整しキャッシュする。
+const strokeShadowCache = new Map();
+function buildRoundStrokeShadows(w, color) {
+  // 0.5px 単位で量子化（視覚差なし）してキャッシュキーを安定化。
   const ww = Math.max(0.5, Math.round(w * 2) / 2);
-  const safe = String(ww).replace(".", "p");
-  const filterId = `mb-round-stroke-${safe}`;
-  if (document.getElementById(filterId)) return filterId;
+  const key = `${ww}|${color}`;
+  const hit = strokeShadowCache.get(key);
+  if (hit) return hit;
 
-  let host = document.getElementById("mb-stroke-filter-host");
-  if (!host) {
-    host = document.createElementNS(SVG_NS, "svg");
-    host.id = "mb-stroke-filter-host";
-    host.setAttribute("width", "0");
-    host.setAttribute("height", "0");
-    host.setAttribute("aria-hidden", "true");
-    host.style.position = "absolute";
-    host.style.left = "0";
-    host.style.top = "0";
-    host.style.width = "0";
-    host.style.height = "0";
-    host.style.overflow = "hidden";
-    host.style.pointerEvents = "none";
-    document.body.appendChild(host);
+  // 方向数 N: w が大きいほど密に。disk 境界のサンプリング密度。
+  const N = ww <= 1.5 ? 12 : ww <= 4 ? 16 : ww <= 10 ? 24 : 32;
+  // 半径 stop: disk 内部を塗りつぶし、stair-step が見えない粒度（0.6px 刻み）。
+  const stopStep = 0.6;
+  const stops = [];
+  for (let r = stopStep; r <= ww + 1e-3; r += stopStep) stops.push(r);
+  if (stops.length === 0 || stops[stops.length - 1] < ww - 1e-3) stops.push(ww);
+
+  const parts = new Array(N * stops.length);
+  let p = 0;
+  for (let i = 0; i < N; i++) {
+    const a = (i / N) * Math.PI * 2;
+    const cx = Math.cos(a);
+    const sy = Math.sin(a);
+    for (let s = 0; s < stops.length; s++) {
+      const r = stops[s];
+      parts[p++] = `${(cx * r).toFixed(2)}px ${(sy * r).toFixed(2)}px 0 ${color}`;
+    }
   }
-
-  const filter = document.createElementNS(SVG_NS, "filter");
-  filter.id = filterId;
-  // ダイレーションが要素境界を超えるので、フィルター領域を広めに確保。
-  filter.setAttribute("x", "-50%");
-  filter.setAttribute("y", "-50%");
-  filter.setAttribute("width", "200%");
-  filter.setAttribute("height", "200%");
-  filter.setAttribute("color-interpolation-filters", "sRGB");
-
-  // ガウスブラー: 2 値アルファに対し σ = w * 0.78 で「α = 0.1 の等高線」が
-  // グリフ外形から距離 w の位置に来る（erfc(0.91) ≈ 0.20 → α ≈ 0.1）。
-  const blur = document.createElementNS(SVG_NS, "feGaussianBlur");
-  blur.setAttribute("in", "SourceGraphic");
-  blur.setAttribute("stdDeviation", (ww * 0.78).toFixed(3));
-  blur.setAttribute("result", "blurred");
-  filter.appendChild(blur);
-
-  // 線形 α 変換で α<0.10 を 0、α>0.15 を 1 に飽和。中間 0.05 幅で AA を残す。
-  // slope=20, intercept=-2 で 20α - 2 を [0,1] にクリップ。
-  const comp = document.createElementNS(SVG_NS, "feComponentTransfer");
-  comp.setAttribute("in", "blurred");
-  const funcA = document.createElementNS(SVG_NS, "feFuncA");
-  funcA.setAttribute("type", "linear");
-  funcA.setAttribute("slope", "20");
-  funcA.setAttribute("intercept", "-2");
-  comp.appendChild(funcA);
-  filter.appendChild(comp);
-
-  host.appendChild(filter);
-  return filterId;
+  const out = parts.join(", ");
+  strokeShadowCache.set(key, out);
+  return out;
 }
 
 function appendStrokePreviewUnderlay(box, inner, strokeColor, strokeWidthPx, pxPerPsd) {
   if (!box || !inner || !strokeColor || strokeColor === "none" || !(strokeWidthPx > 0) || !(pxPerPsd > 0)) return;
   const cssColor = strokeColor === "white" ? "#fff" : "#000";
-  // PSD px → screen px。最低 0.5px で visibility 確保。
+  // PSD px → screen px。最低 0.5px で可視性確保。
   const w = Math.max(0.5, strokeWidthPx * pxPerPsd);
   const underlay = inner.cloneNode(true);
   underlay.classList.add("stroke-preview-underlay");
   underlay.setAttribute("aria-hidden", "true");
   underlay.style.webkitTextStroke = "0";
   underlay.style.color = cssColor;
-  underlay.style.textShadow = "none";
-  underlay.style.filter = `url(#${ensureRoundDilateFilter(w)})`;
+  underlay.style.textShadow = buildRoundStrokeShadows(w, cssColor);
+  // SVG filter 経路で残っていた可能性のある filter を確実に解除。
+  underlay.style.filter = "";
   inner.classList.add("stroke-preview-fill");
   box.appendChild(underlay);
 }

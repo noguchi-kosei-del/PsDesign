@@ -1,5 +1,41 @@
 # PsDesign
 
+## v2.2.2: 白フチプレビューの round-join 化 + フレーム外クリッピング解消
+
+写植プレビューの白フチ／黒フチ表示で、角が鋭角に尖って見える問題と、フレーム外側に伸びるストロークが見切れる問題をまとめて修正した。Photoshop の Stroke Effect (outsetFrame) と同等の絵を、ブラウザ環境に依存せず確実に得る方針へ書き直している。
+
+### round-join ストロークの再実装（[src/canvas-tools.js](src/canvas-tools.js)）
+
+- 旧 upstream の `appendStrokePreviewUnderlay` は `-webkit-text-stroke: Npx <color>` を underlay に当てていたが、Chromium は text-stroke の join を miter 固定で描画するため、明朝の起筆や「ー」「！」など鋭角端で角スパイクが必ず出ていた。`stroke-linejoin: round` / `paint-order` を併用しても HTML の text-stroke 描画には反映されない。
+- 直前リビジョンで導入していた SVG filter (`feGaussianBlur` + `feComponentTransfer` の閾値法) は、`color-interpolation-filters` 指定とブラウザ実装差で iso-α 等高線の挙動が安定せず、実機で角が丸まりきらないケースがあったため撤回。
+- 新実装: `buildRoundStrokeShadows(w, color)` で **N 方向 × 0.6px 刻みの半径 stop** の text-shadow を組み立て、円周に沿った文字コピーのユニオンとして「半径 w の disk による Minkowski sum」を構成する。これは数学的に厳密な round-join dilation で、ブラウザ実装差を受けず確実に円弧で丸まる。
+- 方向数は `w` の screen px に応じて段階的に増やす: w ≤ 1.5 = 12, w ≤ 4 = 16, w ≤ 10 = 24, それ以上 = 32。半径 stop は 0.6px 刻みで stair-step を不可視にする粒度。
+- `strokeShadowCache: Map<"w|color", string>` で `0.5px` 量子化したキーごとに結果を再利用し、`renderOverlay` ループで同じ文字列を再生成しないようにした。
+- `appendStrokePreviewUnderlay` 側では旧経路の `webkitTextStroke` / `filter` を明示的にクリアしてから text-shadow を当て、SVG filter 経路の残骸が混ざらないようにしている。
+- `ensureRoundDilateFilter` / `SVG_NS` / `mb-stroke-filter-host` 関連の SVG 生成コードは全削除。
+
+### フレーム外まで非クリッピング（[src/styles.css](src/styles.css)）
+
+- 上記 round-join 化を入れても「フレーム枠の外側に出るストローク部分が切られる」見え方が残っていた。原因は `.stroke-preview-underlay` が `.new-layer-text` / `.existing-layer-text` のクローンとして DOM 化されており、それらが持つ `overflow: hidden` を継承していたこと。text-shadow は CSS の content overflow 規則に従って親要素境界でクリップされるため、bbox 外側に広がる円形ダイレーション結果が underlay 自身で切られていた。
+- 修正: 複合セレクタ `.new-layer-text.stroke-preview-underlay, .existing-layer-text.stroke-preview-underlay { overflow: visible }` を追加。特異度 (0,2,0) で元の `.new-layer-text` ルール (0,1,0) を確実に上書きする。
+- 副作用評価:
+  - `.layer-box` / `.page-overlay` / `.page` / `.canvas-wrap` のいずれにも `overflow: hidden` は無いので、underlay のストロークはキャンバス全体に自由に広がれる。
+  - 本体テキスト側 `.stroke-preview-fill` の `overflow: hidden` は維持され、本体の clip 挙動は変わらない。
+  - `.new-layer-text.has-ruby` / `.has-tcy` の既存 `overflow: visible` ルールとも独立。
+- 結果として、隣接フレーム間で白フチが視覚的に重なる可能性は生じるが、これは Photoshop 上で意図的に重ねたい運用と整合する（写植慣行的にも自然）。
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.2.2` に更新。`package-lock.json` は上流マージ時に `2.1.5` のまま残っていたため、本リリースで合わせて 2.2.2 に揃えた。
+
+### 主な検証
+
+- `npm run build` 成功（既存の chunk size 警告 / dynamic import 警告は事前から存在し本修正の影響ではない）。
+- バンドル後の `dist/assets/index-*.css` に `.new-layer-text.stroke-preview-underlay,.existing-layer-text.stroke-preview-underlay{overflow:visible}` の出力を確認。
+- バンドル後の `dist/assets/index-*.js` に `buildRoundStrokeShadows` 由来の `Math.cos(...)*r` / `.toFixed(2)+"px 0 #fff"` パターンが含まれていることを確認、旧 `ensureRoundDilateFilter` / `mb-round-stroke` は不在。
+
+---
+
 ## v2.1.5: ルビ行間再修正 / 通常ルビ1行目の横配置 / 親文字指定UI調整
 
 今回の版では、v2.1.4 で残っていた「ルビがあると行間変更が Photoshop 保存結果へ反映されない」「通常ルビの1行目が親文字にかぶる」「親文字選択ボタンをもう少し大きくしたい」という実機フィードバックに対応した。特にルビあり行間は、見た目上の余白と Photoshop の文字パネル上の行間指定が一致するよう、保存時の適用経路を再整理している。

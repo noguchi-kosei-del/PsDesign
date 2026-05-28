@@ -275,6 +275,14 @@ body.home-mode .toolbar .settings-toolbar-btn {
   z-index: 0;
   pointer-events: none;
 }
+/* underlay は .new-layer-text / .existing-layer-text の clone なので、
+   それらの overflow: hidden を継承するとフレーム外側へ伸びる text-shadow
+   ストロークが見切れる。複合セレクタ (0,2,0) で .new-layer-text (0,1,0) を
+   上書きし、ストロークが bbox 外まで自由に広がれるようにする。 */
+.new-layer-text.stroke-preview-underlay,
+.existing-layer-text.stroke-preview-underlay {
+  overflow: visible;
+}
 .stroke-preview-fill {
   position: relative;
   z-index: 1;
