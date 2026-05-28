@@ -1,4 +1,4 @@
-use crate::EditPayload;
+﻿use crate::EditPayload;
 
 pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progress_path: &str) -> String {
     let mut out = String::new();
@@ -1024,7 +1024,9 @@ function applyPerCharSizesAndFonts(layer, contents, charSizes, charFonts) {
         try { styleClone.putUnitDouble(sID("size"), sID("pointsUnit"), curSize); } catch (eSz) {}
       }
       if (curFont !== null) {
-        try { styleClone.putString(sID("fontPostScriptName"), curFont); } catch (eFn) {}
+        // 【v2.x】per-char フォントも Photoshop 認識 PS 名に解決してから書く。
+        // cache 経由なので同じフォント名の連続では実質コスト 0。
+        try { styleClone.putString(sID("fontPostScriptName"), resolvePhotoshopFontPS(curFont)); } catch (eFn) {}
       }
       var newRangeDesc = new ActionDescriptor();
       newRangeDesc.putInteger(sID("from"), curStart);
@@ -2479,16 +2481,18 @@ function estimateCharRangeBounds(parentBounds, contents, fromCh, toCh, parentDir
 // 既存・新規両方のレイヤーに適用。プレビュー側（canvas-tools.js の SYMBOL_CHAR_CODES）と
 // 同じ char code 集合を使う。
 //
-// skip 条件（いずれかに当てはまる char は触らない）:
-//   1) per-char で手動指定したフォント (charFonts[i]) がある   ← 手動意図を尊重
-//   2) layerDefaultFont が指定されていて symbolFontPS と異なる ← ユーザーが選んだ
-//      レイヤー既定フォントが symbolFontPS と異なる場合、そのフォントは記号も
-//      カバーしていると見做して尊重する（中丸ゴシック等、記号対応フォントの保護）
+// skip 条件: per-char で手動指定したフォント (charFonts[i]) がある char のみ触らない。
+// それ以外の記号 char は無条件に symbolFontPS で上書きする。
+//
+// 【v2.x 修正】旧仕様の「レイヤー既定フォント !== symbolFontPS なら skip」は撤去。
+// F910 コミック等の display フォントで ♡ グリフが無いケースで記号が壊れる事故を防ぐため、
+// 「per-char 手動指定が無ければ常に置換」に統一。中丸ゴシック等の記号対応フォントで
+// ♡ をそのフォントのまま残したい場合は per-char 指定で守れる。
 //
 // 実装: applyPerCharSizesAndFonts と同型の clone-and-replace パターン。各 char の
 // 「effective font」を「手動指定 (charFonts[i]) > 記号置換 > レンジ既存スタイル」の優先順で
 // 解決し、置換が必要な char だけ font を上書きする。
-function applySymbolFont(layer, contents, symbolFontPS, charFonts, layerDefaultFont) {
+function applySymbolFont(layer, contents, symbolFontPS, charFonts) {
   if (typeof symbolFontPS !== "string" || symbolFontPS.length === 0) return;
 
   // プレビュー側 SYMBOL_CHAR_CODES と完全一致。char code 直接判定（regex 回避）。
@@ -2515,13 +2519,7 @@ function applySymbolFont(layer, contents, symbolFontPS, charFonts, layerDefaultF
   var fullText = String(contents);
   if (fullText.length === 0) return;
 
-  // レイヤー既定フォントが指定されていて symbolFontPS と異なる場合は、ユーザー意図と
-  // 見做して記号置換を完全に skip する（中丸ゴシック等の記号対応フォントが破壊されない
-  // ようにするため、v1.x.y で導入）。空文字や null のときは null として扱う。
-  var layerFontSafe =
-    (typeof layerDefaultFont === "string" && layerDefaultFont.length > 0) ? layerDefaultFont : null;
-
-  // 各 char に当てる置換フォント（null = 触らない、文字列 = 上書き）。
+  // 記号文字の置換は per-char 手動指定がない限り常に発動する。
   var fontPerChar = [];
   var anyReplace = false;
   for (var i = 0; i < fullText.length; i++) {
@@ -2530,19 +2528,11 @@ function applySymbolFont(layer, contents, symbolFontPS, charFonts, layerDefaultF
       continue;
     }
     if (readManualFont(i) !== null) {
-      // per-char で手動指定あり → 触らない
+      // per-char で手動指定あり → ユーザー意図を尊重して触らない
       fontPerChar[i] = null;
       continue;
     }
-    if (layerFontSafe !== null && layerFontSafe !== symbolFontPS) {
-      // ユーザーが選んだレイヤー既定フォントが symbolFontPS と異なる
-      // → そのフォントが記号もカバーしていると見做して尊重する
-      fontPerChar[i] = null;
-      continue;
-    }
-    // (a) layerDefaultFont が取れない（PSD 直読み等の異常系）
-    // (b) layerDefaultFont 自体が symbolFontPS と同じ
-    // のいずれかなので、自動置換を発動して symbolFontPS に揃える
+    // 記号 char + 手動指定なし → symbolFontPS で上書き
     fontPerChar[i] = symbolFontPS;
     anyReplace = true;
   }
@@ -2590,7 +2580,9 @@ function applySymbolFont(layer, contents, symbolFontPS, charFonts, layerDefaultF
       var srcStyle = srcRange.getObjectValue(sID("textStyle"));
       var styleClone = cloneActionDescriptor(srcStyle);
       if (curFont !== null) {
-        try { styleClone.putString(sID("fontPostScriptName"), curFont); } catch (eFn) {}
+        // 【v2.x】per-char フォントも Photoshop 認識 PS 名に解決してから書く。
+        // cache 経由なので同じフォント名の連続では実質コスト 0。
+        try { styleClone.putString(sID("fontPostScriptName"), resolvePhotoshopFontPS(curFont)); } catch (eFn) {}
       }
       var newRangeDesc = new ActionDescriptor();
       newRangeDesc.putInteger(sID("from"), curStart);
@@ -2901,21 +2893,47 @@ function applyTateChuYoko(layer, contents, enabled, direction, charTateChuYokos)
   var fullText = String(contents);
   if (fullText.length < 1) return;
 
-  // Auto TCY applies only to isolated two-character half-width digit runs.
-  // Manual charTateChuYokos ranges are still honored below.
+  // 【v2.x】TCY enabled かつ縦書きのとき、全角「！！」「！？」を半角「!!」「!?」に変換。
+  // Photoshop の baselineDirection: cross は半角の合成 glyph 化が安定しており、全角だと
+  // cross 属性を当てても縦に並んだまま残るケースが実機で確認されているため (CLAUDE.md 参照)。
+  // 半角化は char index 1:1 (全角 1 文字 → 半角 1 文字) なので、後段の per-char 系
+  // (applyLineLeadings / applyPerCharSizesAndFonts / applyPerCharBolds / applyRubies /
+  // applySymbolFont / applyPunctuationTsume) も影響なし。
+  if (enabled) {
+    var halfText = normalizeFullWidthToHalfTcy(fullText, true);
+    if (halfText !== fullText) {
+      try { layer.textItem.contents = normalizeLineBreaks(halfText); } catch (eHalfSet) {}
+      fullText = halfText;
+    }
+  }
+
+  // 自動 TCY 対象:
+  //   1) 半角数字 2 桁の連続 (例: "12", "85") — 縦書き写植の標準慣行
+  //   2) 半角「!!」「!?」ペア — 上記の半角化変換後にも検出
+  // それ以外 (charTateChuYokos[i] === true で指定された範囲) は手動 TCY として下で処理。
   var pairs = [];
   if (enabled) {
     var i = 0;
     while (i < fullText.length) {
       var ch = fullText.charAt(i);
-      if (ch < "0" || ch > "9") {
-        i += 1;
+      // 数字 2 桁検出
+      if (ch >= "0" && ch <= "9") {
+        var j = i + 1;
+        while (j < fullText.length && fullText.charAt(j) >= "0" && fullText.charAt(j) <= "9") j++;
+        if (j - i === 2) pairs.push({ start: i, end: j });
+        i = j;
         continue;
       }
-      var j = i + 1;
-      while (j < fullText.length && fullText.charAt(j) >= "0" && fullText.charAt(j) <= "9") j++;
-      if (j - i === 2) pairs.push({ start: i, end: j });
-      i = j;
+      // 「!!」「!?」検出 (1 ペア = 2 文字)
+      if (ch === "!" && i + 1 < fullText.length) {
+        var next = fullText.charAt(i + 1);
+        if (next === "!" || next === "?") {
+          pairs.push({ start: i, end: i + 2 });
+          i += 2;
+          continue;
+        }
+      }
+      i += 1;
     }
   }
   if (hasManual) {
@@ -3033,6 +3051,168 @@ function applyTateChuYoko(layer, contents, enabled, direction, charTateChuYokos)
   }
 }
 
+// 【v2.x】フォント名解決インデックス。アプリ側 (Tauri/Rust 経由) が渡してくる PS 名と、
+// Photoshop の app.fonts が持つ PS 名が一致しないケース (CJK の DynaFont 系などで
+// "-WIN-RKSJ-H" サフィックスを Photoshop 側だけが持っている、display 名+Regular で送っている等)
+// に対応するため、applyToPsd 入口で 1 回だけ app.fonts を走査してインデックスを構築し、
+// 以降は O(1) で wanted → Photoshop が認識する PS 名へ解決する。
+// 解決失敗時は wanted をそのまま返す (= 現状挙動と同じ、回帰リスクなし)。
+var __FONT_PS_SET = null;        // { "PS-NAME": true, ... }
+var __FONT_BY_PREFIX = null;     // { "prefixBeforeHyphen": "fullPS" }、複数候補は -WIN-RKSJ-H 優先
+var __FONT_BY_NAME = null;       // { "displayName": "fullPS" }
+var __FONT_RESOLVE_CACHE = null; // { wanted: resolved } メモ
+function buildFontIndex() {
+  __FONT_PS_SET = {};
+  __FONT_BY_PREFIX = {};
+  __FONT_BY_NAME = {};
+  __FONT_RESOLVE_CACHE = {};
+  try {
+    var n = app.fonts.length;
+    for (var i = 0; i < n; i++) {
+      var f = app.fonts[i];
+      var ps = null, nm = null;
+      try { ps = f.postScriptName; } catch (eFps) {}
+      try { nm = f.name; } catch (eFnm) {}
+      if (typeof ps === "string" && ps.length > 0) {
+        __FONT_PS_SET[ps] = true;
+        var hyphenIdx = ps.indexOf("-");
+        if (hyphenIdx > 0) {
+          var prefix = ps.substring(0, hyphenIdx);
+          var existing = __FONT_BY_PREFIX[prefix];
+          // 同じ prefix で複数候補ある場合は -WIN-RKSJ-H を最優先 (Windows 日本語 PS 用)。
+          // 既に -WIN-RKSJ-H が入っている prefix は上書きしない。
+          var isWinSjis = /-WIN-RKSJ-H$/.test(ps);
+          var existingIsWinSjis = existing ? /-WIN-RKSJ-H$/.test(existing) : false;
+          if (!existing || (isWinSjis && !existingIsWinSjis)) {
+            __FONT_BY_PREFIX[prefix] = ps;
+          }
+        }
+        if (typeof nm === "string" && nm.length > 0 && !__FONT_BY_NAME[nm]) {
+          __FONT_BY_NAME[nm] = ps;
+        }
+      }
+    }
+  } catch (eIdx) {
+    addWarning("フォント名解決インデックスの構築に失敗: " + eIdx);
+  }
+}
+// 【v2.x】日本語フォント名 → 英字フォント名の翻訳辞書。
+// DirectWrite (Windows) が「F910コミックW4-IPA Regular」のような日本語ローカライズ名を返すのに対し、
+// Photoshop は英字 PS 名「F910ComicW4-IPA」で持っているケースを橋渡しする。
+// 長いキーから順に置換するため、辞書はキー長降順で適用する (例: 「ゴシック」の前に「丸ゴシック」
+// を試して、「丸ゴシック」が誤って「丸Gothic」になる事故を防ぐ)。
+var __JP_TO_EN_FONT_DICT = {
+  "丸ゴシック": "MaruGothic",
+  "コミック": "Comic",
+  "ヒラギノ": "Hiragino",
+  "教科書体": "Kyokasho",
+  "見出ミン": "MidashiMin",
+  "見出ゴ": "MidashiGo",
+  "リュウミン": "Ryumin",
+  "角ゴシック": "KakuGothic",
+  "明朝": "Mincho",
+  "ゴシック": "Gothic",
+  "新ゴ": "ShinGo",
+  "丸ゴ": "Maru",
+  "角ゴ": "KakuGo",
+  "毛筆": "Mohitsu",
+  "楷書": "Kaisho",
+  "行書": "Gyosho",
+  "じゅん": "Jun"
+};
+var __JP_TO_EN_FONT_KEYS_SORTED = null;
+function transliterateJapaneseFontName(s) {
+  if (typeof s !== "string") return s;
+  if (!__JP_TO_EN_FONT_KEYS_SORTED) {
+    __JP_TO_EN_FONT_KEYS_SORTED = [];
+    for (var k in __JP_TO_EN_FONT_DICT) {
+      if (__JP_TO_EN_FONT_DICT.hasOwnProperty(k)) __JP_TO_EN_FONT_KEYS_SORTED.push(k);
+    }
+    __JP_TO_EN_FONT_KEYS_SORTED.sort(function (a, b) { return b.length - a.length; });
+  }
+  var out = s;
+  for (var i = 0; i < __JP_TO_EN_FONT_KEYS_SORTED.length; i++) {
+    var key = __JP_TO_EN_FONT_KEYS_SORTED[i];
+    out = out.split(key).join(__JP_TO_EN_FONT_DICT[key]);
+  }
+  return out;
+}
+
+function resolvePhotoshopFontPS(wanted) {
+  if (typeof wanted !== "string" || wanted.length === 0) return wanted;
+  if (!__FONT_PS_SET) return wanted; // インデックス未構築なら素通し (フェイルセーフ)
+  if (Object.prototype.hasOwnProperty.call(__FONT_RESOLVE_CACHE, wanted)) {
+    return __FONT_RESOLVE_CACHE[wanted];
+  }
+  // 戦略 1〜5 を一塊にしたヘルパー (transliteration 後にも再利用するため関数化)。
+  function __tryFontStrategies(query) {
+    if (__FONT_PS_SET[query]) return query;
+    var withSuffix = query + "-WIN-RKSJ-H";
+    if (__FONT_PS_SET[withSuffix]) return withSuffix;
+    if (__FONT_BY_PREFIX[query]) return __FONT_BY_PREFIX[query];
+    var trimmed = query.replace(/\s+Regular$/i, "");
+    if (trimmed !== query) {
+      if (__FONT_PS_SET[trimmed]) return trimmed;
+      var trimmedSuffix = trimmed + "-WIN-RKSJ-H";
+      if (__FONT_PS_SET[trimmedSuffix]) return trimmedSuffix;
+      if (__FONT_BY_PREFIX[trimmed]) return __FONT_BY_PREFIX[trimmed];
+    }
+    if (__FONT_BY_NAME[query]) return __FONT_BY_NAME[query];
+    return null;
+  }
+  var result = (function () {
+    // 戦略 1〜5: wanted そのままで完全一致 / -WIN-RKSJ-H 付加 / prefix / Regular 剥がし / display 名一致
+    var r = __tryFontStrategies(wanted);
+    if (r) return r;
+    // 【v2.x】戦略 6: 日本語 → 英字 翻訳して 1〜5 を再試行。DirectWrite が日本語ローカライズ名で
+    // 返してくる ("F910コミックW4-IPA Regular") のを、Photoshop の英字 PS 名 ("F910ComicW4-IPA") に
+    // 橋渡しするための変換。
+    var translit = transliterateJapaneseFontName(wanted);
+    if (translit !== wanted) {
+      r = __tryFontStrategies(translit);
+      if (r) return r;
+    }
+    // 【v2.x】戦略 7: ASCII プレフィックス + ウェイト (W\d+) でフォントを線形探索。
+    // 翻訳辞書に無い日本語フォント名 / 部分日本語混在のときの最後の救済策。
+    // 誤マッチを避けるため、wanted が明示的なウェイト指定 (W4 / W12 等) を持っているときのみ発動。
+    var asciiPrefix = wanted.match(/^[\x21-\x7E]+/);
+    var weightMatch = wanted.match(/W\d+/);
+    if (asciiPrefix && asciiPrefix[0].length >= 3 && weightMatch) {
+      var prefix = asciiPrefix[0];
+      var weight = weightMatch[0];
+      try {
+        for (var i7 = 0; i7 < app.fonts.length; i7++) {
+          var ps7 = null;
+          try { ps7 = app.fonts[i7].postScriptName; } catch (eF7) {}
+          if (typeof ps7 !== "string") continue;
+          if (ps7.indexOf(prefix) !== 0) continue;
+          if (ps7.indexOf(weight) < 0) continue;
+          return ps7;
+        }
+      } catch (eS7) {}
+    }
+    // 【v2.x】戦略 8: Kozuka ファミリーの Pro ↔ Pr6N 自動フォールバック (同ウェイト維持)。
+    // 例: KozGoPro-Heavy が未インストールでも KozGoPr6N-Heavy があれば後者を採用。
+    //     KozMinPro-Bold が無ければ KozMinPr6N-Bold を試す、等。
+    // Pro / Pr6N は文字集合が違うだけでグリフ形状はほぼ同じ (Pr6N は JIS 2004 改定対応で
+    // 漢字が一部変わるが、記号文字 ♡♥★♪→ 等は完全に同形)。記号フォント置換用途では
+    // 区別する必要なし。両方向 (Pro→Pr6N / Pr6N→Pro) で動作する。
+    var kozuMatch = wanted.match(/^(Koz(?:Go|Min))(Pro|Pr6N)-(.+)$/);
+    if (kozuMatch) {
+      var kStem = kozuMatch[1];          // "KozGo" or "KozMin"
+      var kFamily = kozuMatch[2];        // "Pro" or "Pr6N"
+      var kWeight = kozuMatch[3];        // "Heavy", "Bold", "Regular", ...
+      var kOther = (kFamily === "Pro") ? "Pr6N" : "Pro";
+      var kSwapped = kStem + kOther + "-" + kWeight;
+      if (__FONT_PS_SET[kSwapped]) return kSwapped;
+    }
+    // 解決失敗 → wanted のまま (現状挙動)
+    return wanted;
+  })();
+  __FONT_RESOLVE_CACHE[wanted] = result;
+  return result;
+}
+
 // 【v2.x】Photoshop の DOM `textItem.font = "..."` 代入は、指定 PostScript 名のフォントが
 // インストールされていなかったり、ロード状態が安定していないと **silent failure** する
 // （例外を投げず、内部のフォントが Photoshop デフォルト = 多くは小塚 Pr6N に置き換わる）。
@@ -3044,6 +3224,8 @@ function applyTateChuYoko(layer, contents, enabled, direction, charTateChuYokos)
 // 上書きするので、ここで全 range に同じ font を当てても無害（base として残る）。
 function applyLayerFont(layer, postScriptName) {
   if (typeof postScriptName !== "string" || postScriptName.length === 0) return;
+  // 【v2.x】Photoshop が認識できる PS 名に解決してから書く。インデックス未構築なら素通し。
+  postScriptName = resolvePhotoshopFontPS(postScriptName);
   try {
     app.activeDocument.activeLayer = layer;
     var layerRef = new ActionReference();
@@ -3102,10 +3284,35 @@ function disableStrokeEffect(layerRef) {
   try { executeAction(sID("set"), desc, DialogModes.NO); } catch (e) {}
 }
 
-// PsDesign が保存する PSD 内の全テキストレイヤーに、共通設定を適用する。
+// 【v2.x】Phase B 全レイヤー走査ヘルパー。「実効可視」(自レイヤー visible + 全祖先 LayerSet も visible)
+// なテキストレイヤーだけ fn(l) を呼ぶ。
+//
+// **なぜ非表示を除外するか**: PsDesign の運用では、非表示テキストレイヤーは
+// 「同じセリフの小塚版バックアップ」「OCR 直後の原文」「言語切替用の代替テキスト」など、
+// ユーザーが意図的に元のフォント/スタイルで残してあるもの。Phase B が autoKerning や記号
+// フォント置換 / 句読点ツメ等を強制適用すると、ユーザー意図を破壊することになる。
+// 表示中レイヤーだけ統一処理し、隠したものは触らない方針へ変更 (旧仕様は visible/hidden 区別
+// なしで全レイヤー処理)。Phase A (edits / newLayers ループ) はユーザーが触ったレイヤーだけが
+// 対象なので元から影響なし。
+function visitVisibleTextLayers(doc, fn) {
+  function walk(parent, ancestorVisible) {
+    for (var i = 0; i < parent.layers.length; i++) {
+      var l = parent.layers[i];
+      var thisVisible = ancestorVisible && (l.visible !== false);
+      if (l.typename === "LayerSet") {
+        walk(l, thisVisible);
+      } else if (l.kind === LayerKind.TEXT && thisVisible) {
+        fn(l);
+      }
+    }
+  }
+  walk(doc, true);
+}
+
+// PsDesign が保存する PSD 内の **表示中** テキストレイヤーに、共通設定を適用する。
 //   - autoKerning = MANUAL (= UI の「カーニング: 0」、自動カーニング無効)
 //   - antiAliasMethod = SHARP (= 「シャープ」)
-// 既存・新規を問わず、保存される PSD 内のテキストはすべてこの設定で揃える方針。
+// 非表示レイヤーは visitVisibleTextLayers が自動的にスキップする (ユーザー意図保全)。
 //
 // 【v2.x 修正】Photoshop の DOM `textItem.autoKerning = MANUAL` 代入は
 // textStyleRange を flatten して font 等の per-character 属性をリセットすることがある
@@ -3116,105 +3323,91 @@ function disableStrokeEffect(layerRef) {
 // 対策: autoKerning / antiAliasMethod 設定の **前後で font を保存・復元** する。
 // flatten が起きてもユーザー指定のフォントを温存する。
 function applyDefaultTextSettingsToAllLayers(doc) {
-  function visit(parent) {
-    for (var i = 0; i < parent.layers.length; i++) {
-      var l = parent.layers[i];
-      if (l.typename === "LayerSet") {
-        visit(l);
-      } else if (l.kind === LayerKind.TEXT) {
-        var savedFont = null;
-        try { savedFont = l.textItem.font; } catch (eFontGet) {}
-        try { l.textItem.autoKerning = AutoKernType.MANUAL; } catch (eAk) {}
-        try { l.textItem.antiAliasMethod = AntiAlias.SHARP; } catch (eAa) {}
-        // flatten で font 情報がデフォルトに置き換わった場合は元の値で復元。
-        // savedFont が null (取れなかった) or 既に同値の場合は何もしない (副作用なし)。
-        if (typeof savedFont === "string" && savedFont.length > 0) {
-          try {
-            var currentFont = l.textItem.font;
-            if (currentFont !== savedFont) {
-              l.textItem.font = savedFont;
-            }
-          } catch (eFontRestore) {}
-        }
-      }
+  visitVisibleTextLayers(doc, function (l) {
+    // 【v2.x 最適化 B】現状の autoKerning / antiAliasMethod を先に読み、既に望ましい値なら
+    // 何もせずに早期 return。書込みコスト + autoKerning flatten + font 保存・復元の一連を
+    // まるごと回避できる。PsDesign で過去に保存した PSD を再保存する典型ケース (= 既に
+    // MANUAL / SHARP 設定済み) で 1 レイヤーあたり 200〜300ms 削減。
+    var needsKerning = true;
+    var needsAa = true;
+    try {
+      if (l.textItem.autoKerning === AutoKernType.MANUAL) needsKerning = false;
+    } catch (eAkGet) { /* 取得失敗 → 念のため書き込む */ }
+    try {
+      if (l.textItem.antiAliasMethod === AntiAlias.SHARP) needsAa = false;
+    } catch (eAaGet) { /* 同上 */ }
+    if (!needsKerning && !needsAa) return;
+
+    // 書き込みが必要な場合のみ font 保存・復元コストを払う。autoKerning は flatten を
+    // 誘発するので font 退避が必須、antiAlias は flatten しないので退避不要。
+    var savedFont = null;
+    if (needsKerning) {
+      try { savedFont = l.textItem.font; } catch (eFontGet) {}
     }
-  }
-  visit(doc);
+    if (needsKerning) {
+      try { l.textItem.autoKerning = AutoKernType.MANUAL; } catch (eAk) {}
+    }
+    if (needsAa) {
+      try { l.textItem.antiAliasMethod = AntiAlias.SHARP; } catch (eAa) {}
+    }
+    // flatten で font 情報がデフォルトに置き換わった場合は元の値で復元。
+    // savedFont が null or 既に同値の場合は何もしない (副作用なし)。
+    if (needsKerning && typeof savedFont === "string" && savedFont.length > 0) {
+      try {
+        var currentFont = l.textItem.font;
+        if (currentFont !== savedFont) {
+          l.textItem.font = savedFont;
+        }
+      } catch (eFontRestore) {}
+    }
+  });
 }
 
 // 【v1.22.0】applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定後に、句読点ツメを
-// 全テキストレイヤーに再適用する safety net。DOM access が一部の per-char 属性を flatten で
+// 表示中テキストレイヤーに再適用する safety net。DOM access が一部の per-char 属性を flatten で
 // 落とすケースに対応。冪等（既に正しい値が入っていれば動作変化なし）。
 function reapplyPunctuationTsumeForAllLayers(doc, tsumePct) {
   if (!tsumePct || tsumePct <= 0) return;
-  function visit(parent) {
-    for (var i = 0; i < parent.layers.length; i++) {
-      var l = parent.layers[i];
-      if (l.typename === "LayerSet") {
-        visit(l);
-      } else if (l.kind === LayerKind.TEXT) {
-        try {
-          var ct = l.textItem.contents;
-          if (typeof ct === "string" && ct.length > 0) {
-            applyPunctuationTsume(l, ct, tsumePct);
-          }
-        } catch (eR) {}
+  visitVisibleTextLayers(doc, function (l) {
+    try {
+      var ct = l.textItem.contents;
+      if (typeof ct === "string" && ct.length > 0) {
+        applyPunctuationTsume(l, ct, tsumePct);
       }
-    }
-  }
-  visit(doc);
+    } catch (eR) {}
+  });
 }
 
 // 【v1.31.x】applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定後に、
-// 連続記号ツメ (dash / tilde) を全テキストレイヤーへ再適用する safety net。
+// 連続記号ツメ (dash / tilde) を表示中テキストレイヤーへ再適用する safety net。
 function reapplyRepeatedTrackingForAllLayers(doc, dashMille, tildeMille) {
   var dashTrack = (typeof dashMille === "number" && isFinite(dashMille)) ? dashMille : 0;
   var tildeTrack = (typeof tildeMille === "number" && isFinite(tildeMille)) ? tildeMille : 0;
-  function visit(parent) {
-    for (var i = 0; i < parent.layers.length; i++) {
-      var l = parent.layers[i];
-      if (l.typename === "LayerSet") {
-        visit(l);
-      } else if (l.kind === LayerKind.TEXT) {
-        try {
-          var ct = l.textItem.contents;
-          if (typeof ct === "string" && ct.length > 0) {
-            applyRepeatedDashTracking(l, ct, dashTrack, tildeTrack);
-          }
-        } catch (eR) {}
+  visitVisibleTextLayers(doc, function (l) {
+    try {
+      var ct = l.textItem.contents;
+      if (typeof ct === "string" && ct.length > 0) {
+        applyRepeatedDashTracking(l, ct, dashTrack, tildeTrack);
       }
-    }
-  }
-  visit(doc);
+    } catch (eR) {}
+  });
 }
 
-// 【v1.22.0】記号フォント置換の Phase B safety net。新規・既存・未編集を問わず全テキスト
-// レイヤーに再適用。charFonts は null（未編集レイヤーには manual override 情報が無いため）。
-// レイヤー既定フォントは Photoshop の textItem.font （PostScript 名）から取得し、
-// applySymbolFont の skip 判定に活用する（中丸ゴシック等の記号対応フォント保護のため）。
+// 【v1.22.0】記号フォント置換の Phase B safety net。表示中の新規・既存・未編集すべての
+// テキストレイヤーに再適用。charFonts は null（未編集レイヤーには manual override 情報が無いため）。
+// 【v2.x 修正】旧仕様で取得していた layerFont (l.textItem.font) は applySymbolFont 内部の
+// skip 判定撤去に伴い不要になった。コミックフォント等の記号未収録レイヤーで ♡ が壊れる
+// 事故を防ぐため、per-char 手動指定がない記号は **常に symbolFontPS で置換** する方針。
 function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
   if (typeof symbolFontPS !== "string" || symbolFontPS.length === 0) return;
-  function visit(parent) {
-    for (var i = 0; i < parent.layers.length; i++) {
-      var l = parent.layers[i];
-      if (l.typename === "LayerSet") {
-        visit(l);
-      } else if (l.kind === LayerKind.TEXT) {
-        try {
-          var ct = l.textItem.contents;
-          if (typeof ct === "string" && ct.length > 0) {
-            var layerFont = null;
-            try {
-              var f = l.textItem.font;
-              if (typeof f === "string" && f.length > 0) layerFont = f;
-            } catch (eFontGet) { /* font 取得失敗時は null のまま (= 従来挙動 = 強制置換) */ }
-            applySymbolFont(l, ct, symbolFontPS, null, layerFont);
-          }
-        } catch (eR) {}
+  visitVisibleTextLayers(doc, function (l) {
+    try {
+      var ct = l.textItem.contents;
+      if (typeof ct === "string" && ct.length > 0) {
+        applySymbolFont(l, ct, symbolFontPS, null);
       }
-    }
-  }
-  visit(doc);
+    } catch (eR) {}
+  });
 }
 
 function reapplyManualTextSpacingForPayload(doc, edits, newLayers) {
@@ -3296,6 +3489,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
   }
   var doc = app.open(file);
   try {
+    // 【v2.x】フォント名解決インデックスを構築。以降 resolvePhotoshopFontPS が
+    // app.fonts と照合した正しい PS 名に補正する。symbolFontPostScriptName も入口で
+    // 一度だけ resolve しておくと、以降のループ内で繰り返し補正する必要がなくなる。
+    buildFontIndex();
+    if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
+      symbolFontPostScriptName = resolvePhotoshopFontPS(symbolFontPostScriptName);
+    }
     var __rubyAbsScaleX = 1;
     var __rubyAbsScaleY = 1;
     try {
@@ -3324,11 +3524,13 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       }
       if (typeof e.contents === "string") ti.contents = normalizeLineBreaks(e.contents);
       if (typeof e.font === "string" && e.font.length > 0) {
-        ti.font = e.font;
+        // 【v2.x】Photoshop が認識する PS 名 (例: -WIN-RKSJ-H サフィックス付き) に解決してから当てる。
+        var __resolvedFontE = resolvePhotoshopFontPS(e.font);
+        ti.font = __resolvedFontE;
         // 【v2.x】DOM `ti.font = ...` は silent failure する可能性があるため、
         // Action Manager 経由で textStyleRange.fontPostScriptName も直接書き込む。
         // 両方当てることで、フォントロード状態のばらつきや Photoshop バージョン差を吸収。
-        try { applyLayerFont(layer, e.font); } catch (eAlf) {}
+        try { applyLayerFont(layer, __resolvedFontE); } catch (eAlf) {}
       }
       if (typeof e.size === "number") ti.size = new UnitValue(e.size, "pt");
       if (typeof e.dx === "number" || typeof e.dy === "number") {
@@ -3477,10 +3679,10 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       // そのため JSX 内では `e.font` を参照する（`e.fontPostScriptName` は undefined）。
       if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
         try {
-          var __layerDefaultFontE = (typeof e.font === "string" && e.font.length > 0)
-            ? e.font
-            : (function () { try { return ti.font; } catch (eF) { return null; } })();
-          applySymbolFont(layer, ti.contents, symbolFontPostScriptName, e.charFonts, __layerDefaultFontE);
+          // 【v2.x】レイヤー既定フォントによる skip 判定は撤去。記号文字は per-char 手動指定が
+          // ない限り常に symbolFontPS で置換する (コミックフォント等の記号未収録フォントで
+          // ♡♥★ が壊れる事故を防ぐため)。
+          applySymbolFont(layer, ti.contents, symbolFontPostScriptName, e.charFonts);
         } catch (eSymF) {
           addWarning("記号フォント置換に失敗 (layer " + e.id + "): " + eSymF);
         }
@@ -3553,13 +3755,16 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         }
         nti.contents = normalizeLineBreaks(nl.contents);
         if (typeof nl.font === "string" && nl.font.length > 0) {
-          try { nti.font = nl.font; } catch (eFont) {}
+          // 【v2.x】Photoshop が認識する PS 名に解決してから当てる。中丸ゴシック等の
+          // -WIN-RKSJ-H サフィックス付きで Photoshop が登録している CJK フォントに対応。
+          var __resolvedFontNL = resolvePhotoshopFontPS(nl.font);
+          try { nti.font = __resolvedFontNL; } catch (eFont) {}
           // 【v2.x】DOM `nti.font = ...` は silent failure する可能性があるため、
           // Action Manager 経由で textStyleRange.fontPostScriptName も直接書き込む。
           // 中丸ゴシック等のフォントが PsDesign では認識されるが Photoshop の DOM 経由では
           // silent に小塚に置き換わる事故 (= 「中丸ゴシックが psd で小塚になる」報告) を
           // 根本対応する。両方当てることで、どちらかが失敗しても他方で救う。
-          try { applyLayerFont(layerRef, nl.font); } catch (eAlfNew) {}
+          try { applyLayerFont(layerRef, __resolvedFontNL); } catch (eAlfNew) {}
         }
         nti.size = new UnitValue((typeof nl.size === "number") ? nl.size : 24, "pt");
         // autoLeadingAmount は段落全体属性。ここでは元の leadingPct (or 125 default)
@@ -3585,53 +3790,33 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var _actualLeft  = _b[0].as("px");
           var _actualTop   = _b[1].as("px");
           var _actualRight = _b[2].as("px");
-          // _ptInPx と _padInset (CSS .new-layer-text の padding 0.2em ぶん) は両 direction で
-          // 共有するため if/else より前で算出。padding は v1.5.0 で bbox に +0.4em の安全余白を
-          // 入れた際、テキスト本体を bbox 中央に視覚配置するため CSS で 0.2em ずつ仕込まれている。
-          // 旧 JSX 補正は v1.4.0 時点 (padding 無し) の式のままで、この 0.2em 補正が抜けると
-          // 縦書きは Photoshop で 0.2em 左ズレ、横書きは 0.2em 上ズレになる
-          // (24pt/600dpi で約 40px)。
           var _dpi = doc.resolution;
           var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
           var _ptInPx = _sizePt * (_dpi / 72);
-          // CSS .new-layer-text の padding は両方向で 0.2em だが、Photoshop での
-          // 植字位置補正は方向で異なる：
-          //  - 横書き: 0.2em (CSS padding-top と一致、v1.4.0 と整合)
-          //  - 縦書き: 0.3em (v1.26.0 移植/PsDesign-main v1.24.0)
-          //     縦書きは Photoshop の font sidebearing + line-box gutter が CSS の半分よりも
-          //     大きく出る経験値があり、0.2em では約 0.1em ぶん左ズレが残る。0.3em で吸収。
-          //     24pt/600dpi で従来 0.2em (40px) → 0.3em (60px) と +20px 右シフト。
-          var _padInset = 0.2 * _ptInPx;
-          var _padInsetV = 0.3 * _ptInPx;
           var _fixDx, _fixDy;
           if (nl.direction === "vertical") {
-            // autoLeadingAmount を rubyLeadingPct で上書きしないため、bbox の縦書き
-            // thick 計算は元の leadingPct (or 125 default) のままにする。
-            // ルビあり行の個別行間は後段の paragraphStyleRange で処理される。
+            // 【v2.x】縦書き位置補正:
+            // canvas-tools.js layerRectForNew の bbox 幅 (thick) は:
+            //   thick = ptInPx × (leadingFactor × lineCount + thickSafetyEm)
+            //   thickSafetyEm = 0 (単行) / 0.4 (複数行)
+            // CSS .new-layer-text には padding は無く (width/height: 100% + box-sizing: border-box のみ)、
+            // vertical-rl の自然挙動で first column が bbox 右端に揃う。
+            // つまり PsDesign canvas での text 右端 = bbox.right = nl.x + thickCanvas。
+            // PSD でも同じ位置に揃えればプレビューと完全一致する。
             var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
             var _contentsForCount = String(nl.contents || "");
             var _lc = _contentsForCount.split(/\r?\n/).length;
             if (_lc < 1) _lc = 1;
-            var _thick = _ptInPx * _lpFactor * _lc;
-            if (_thick < 24) _thick = 24;
-            // CSS line-box 由来の最右列インセット。理論値は (leadingFactor - 1) * em / 2
-            // (両側均等の half-leading 想定) だが、実機の Browser 側 vertical-rl では
-            // line-height extra (= (L - 1) * em) が左側に寄せて配置される挙動が観測された。
-            // empirical に full extra を採用 (24pt/600dpi/125% で 50px)。
-            // 反復: 1/2 → 12px 右ズレ / 3/4 → 8px 右ズレ / 1 → ≈0px (本値)。
-            var _halfLeading = (_lpFactor - 1) * _ptInPx;
-            if (_halfLeading < 0) _halfLeading = 0;
-            // bbox.right (= nl.x + thick) は v1.5.0 で +0.4em 拡張されたが、
-            // CSS padding-right 0.2em で text 右端は bbox.right から 0.2em 内側に入る。
-            // 【v1.26.0 移植】縦書きは sidebearing 込みで _padInsetV (0.3em) を使う。
-            var _boxRight = nl.x + _thick + _padInsetV - _halfLeading;
+            var _thickSafetyEm = (_lc > 1) ? 0.4 : 0;
+            var _thickCanvas = _ptInPx * (_lpFactor * _lc + _thickSafetyEm);
+            if (_thickCanvas < 24) _thickCanvas = 24;
+            var _boxRight = nl.x + _thickCanvas;
             _fixDx = _boxRight - _actualRight;
             _fixDy = nl.y - _actualTop;
           } else {
-            // 横書きも同様に CSS padding-top 0.2em ぶん bounds.top を下げる必要がある。
-            // 補正なしだと Photoshop でテキストが 0.2em 上にずれる。
+            // 横書きも CSS padding なしなので、bbox.left = text 左端 / bbox.top = text 上端。
             _fixDx = nl.x - _actualLeft;
-            _fixDy = (nl.y + _padInset) - _actualTop;
+            _fixDy = nl.y - _actualTop;
           }
           if (_fixDx !== 0 || _fixDy !== 0) {
             layerRef.translate(new UnitValue(_fixDx, "px"), new UnitValue(_fixDy, "px"));
@@ -3754,10 +3939,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         // そのため JSX 内では `nl.font` を参照する（`nl.fontPostScriptName` は undefined）。
         if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
           try {
-            var __layerDefaultFontNL = (typeof nl.font === "string" && nl.font.length > 0)
-              ? nl.font
-              : (function () { try { return nti.font; } catch (eFNL) { return null; } })();
-            applySymbolFont(layerRef, nti.contents, symbolFontPostScriptName, nl.charFonts, __layerDefaultFontNL);
+            // 【v2.x】レイヤー既定フォントによる skip 判定は撤去 (Phase A 既存レイヤー側と同方針)。
+            applySymbolFont(layerRef, nti.contents, symbolFontPostScriptName, nl.charFonts);
           } catch (eSymFNew) {
             addWarning("新規レイヤーの記号フォント置換に失敗: " + eSymFNew);
           }

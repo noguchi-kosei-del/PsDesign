@@ -2870,9 +2870,12 @@ function findRepeatedTargetRuns(line) {
   return out;
 }
 
-// 半角 !! / !? の出現位置を 2 文字ペアとして列挙する。先頭から貪欲に消費するので
-// "!!!" → [(0,2)]（末尾 ! は単独）、"!!?!" → [(0,2)] (! 単独 + ! 単独)、
-// "!!!!?" → [(0,2), (2,4)]（末尾 ? は単独）。
+// 縦中横 (TCY) の自動検出対象:
+//   1) 半角数字 2 桁の連続 (例: "12", "85") — 縦書き写植の標準慣行
+//   2) 半角「!!」「!?」ペア
+//   3) 全角「！！」「！？」ペア (jsx_gen.rs と同様、Photoshop 側で半角化されるが
+//      プレビュー側でも視覚的に TCY 表示にしないと「アプリで反映されない」と感じるため)
+// 先頭から貪欲に消費するので、"!!!" → [(0,2)]（末尾 ! は単独）など。
 function isHalfWidthDigitForTcy(ch) {
   return ch >= "0" && ch <= "9";
 }
@@ -2881,14 +2884,27 @@ function findTcyPairs(line) {
   const pairs = [];
   let i = 0;
   while (i < line.length) {
-    if (!isHalfWidthDigitForTcy(line[i])) {
-      i += 1;
+    const ch = line[i];
+    // 数字 2 桁検出
+    if (isHalfWidthDigitForTcy(ch)) {
+      let j = i + 1;
+      while (j < line.length && isHalfWidthDigitForTcy(line[j])) j++;
+      if (j - i === 2) pairs.push({ start: i, end: j });
+      i = j;
       continue;
     }
-    let j = i + 1;
-    while (j < line.length && isHalfWidthDigitForTcy(line[j])) j++;
-    if (j - i === 2) pairs.push({ start: i, end: j });
-    i = j;
+    // 半角「!!」「!?」 / 全角「！！」「！？」 検出 (1 ペア = 2 文字)
+    if ((ch === "!" || ch === "！") && i + 1 < line.length) {
+      const next = line[i + 1];
+      const isHalfPair = ch === "!" && (next === "!" || next === "?");
+      const isFullPair = ch === "！" && (next === "！" || next === "？");
+      if (isHalfPair || isFullPair) {
+        pairs.push({ start: i, end: i + 2 });
+        i += 2;
+        continue;
+      }
+    }
+    i += 1;
   }
   return pairs;
 }
@@ -2914,6 +2930,15 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
     // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
     parentEl.appendChild(document.createTextNode("​"));
     return;
+  }
+  // 【v2.x】TCY 有効時、全角「！！」「！？」を半角「!!」「!?」に変換してから描画する。
+  // CSS の text-combine-upright は半角 ASCII ペアでないと Chromium が合成 glyph 化しない
+  // ため、全角のままだと「アプリで縦中横が反映されない」現象になる。
+  // 1:1 char 置換なので lineStartIdx + i の char index も維持され、per-char 属性 (charSizes,
+  // charFonts, charBolds 等) の参照も壊れない。jsx_gen.rs applyTateChuYoko も同じ変換を
+  // するので、プレビューと PSD 保存後の見た目が一致する。
+  if (tcyOn) {
+    line = line.replace(/！！/g, "!!").replace(/！？/g, "!?");
   }
   const dashTrack = Number.isFinite(Number(dashMille)) ? Number(dashMille) : 0;
   const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
