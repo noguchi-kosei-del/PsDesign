@@ -288,7 +288,7 @@ function createFinishReviewModal() {
     <div class="finish-review-card" role="dialog" aria-modal="true" aria-labelledby="finish-review-title">
       <div class="finish-review-header">
         <div class="finish-review-heading">
-          <div class="finish-review-title" id="finish-review-title">仕上げビュー</div>
+          <div class="finish-review-title" id="finish-review-title">仕上がりチェック</div>
           <div class="finish-review-subtitle">Photoshopで保存する前に全ページの状態を確認してください</div>
         </div>
         <div class="finish-review-view-toggle" role="group" aria-label="表示形式">
@@ -563,15 +563,19 @@ async function runSaveWithMode({ saveMode, targetDir }) {
       title: hasWarn ? "保存完了（警告あり）" : "保存完了",
       message: `${result}${suffix}`,
       kind: hasWarn ? "warning" : "success",
+      // keepOpen: true で押下してもダイアログは閉じない (複数アクションを連続実行できる)。
+      // OK / Esc / 背景クリックで通常通り閉じる。
       actions: [
         {
           label: "保存先を開く",
           kind: "folder",
+          keepOpen: true,
           onClick: () => openSavedFolder(savedFolder),
         },
         {
           label: "KENBANで開く",
           kind: "primary",
+          keepOpen: true,
           onClick: () => launchKenbanPsdPdf({
             psdFolder: savedFolder,
             psdPaths: savedPaths,
@@ -581,6 +585,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
         {
           label: "PDF 化に進む",
           kind: "place",
+          keepOpen: true,
           onClick: () => launchTachimiWithPaths(savedPaths),
         },
       ],
@@ -631,12 +636,144 @@ async function pickNextSaveFolderName(parent) {
   return BASE_SAVE_FOLDER_NAME;
 }
 
+// ユーザーが指定したタイトル/巻/校数からフォルダ名を組み立てる。
+// 例: { title: "ワンピース", volume: 5, kousu: "初校" } → "ワンピース_5巻_初校"
+// Windows で使えない文字 (\\ / : * ? " < > |) はサニタイズする。
+function sanitizeFolderSegment(s) {
+  return String(s ?? "").replace(/[\\/:*?"<>|]/g, "").trim();
+}
+function buildSaveFolderNameFromParams({ title, volume, kousu }) {
+  const safeTitle = sanitizeFolderSegment(title);
+  const v = Number(volume);
+  const volPart = Number.isFinite(v) && v > 0 ? `${v}巻` : "";
+  const safeKousu = sanitizeFolderSegment(kousu);
+  const parts = [safeTitle, volPart, safeKousu].filter(Boolean);
+  return parts.length > 0 ? parts.join("_") : BASE_SAVE_FOLDER_NAME;
+}
+
+const SAVE_FOLDER_DIALOG_LS_KEY = "psdesign_save_folder_params";
+
+function loadSaveFolderDefaults() {
+  try {
+    const raw = localStorage.getItem(SAVE_FOLDER_DIALOG_LS_KEY);
+    if (!raw) return null;
+    const v = JSON.parse(raw);
+    if (typeof v !== "object" || !v) return null;
+    return v;
+  } catch (_) {
+    return null;
+  }
+}
+function saveSaveFolderDefaults(params) {
+  try {
+    localStorage.setItem(SAVE_FOLDER_DIALOG_LS_KEY, JSON.stringify(params));
+  } catch (_) {}
+}
+
+// 元 PSD パス（state.folder or 先頭 PSD の親フォルダ名）からタイトルと巻数を推測する。
+function inferTitleAndVolume() {
+  try {
+    const pages = getPages();
+    const first = pages?.[0]?.path;
+    if (!first) return { title: "", volume: "" };
+    const parentName = baseName(parentDir(first));
+    // 「ワンピース 5巻」「ワンピース5巻」「ワンピース_05巻」「ワンピース_05」のパターンを試す
+    let m = parentName.match(/^(.+?)[\s_]*0*(\d+)\s*巻?$/);
+    if (m) return { title: m[1].trim(), volume: String(parseInt(m[2], 10)) };
+    return { title: parentName, volume: "" };
+  } catch (_) {
+    return { title: "", volume: "" };
+  }
+}
+
+// 保存先フォルダ命名ダイアログ。Promise<{title, volume, kousu} | null> を返す。
+// Cancel / Esc / 背景クリックで null を resolve。
+async function openSaveFolderDialog() {
+  const modal = document.getElementById("save-folder-modal");
+  if (!modal) return null;
+  const titleInput = document.getElementById("save-folder-title");
+  const volumeInput = document.getElementById("save-folder-volume");
+  const kousuSelect = document.getElementById("save-folder-kousu");
+  const previewEl = document.getElementById("save-folder-preview");
+  const cancelBtn = document.getElementById("save-folder-cancel");
+  const okBtn = document.getElementById("save-folder-ok");
+  if (!titleInput || !volumeInput || !kousuSelect || !okBtn || !cancelBtn) return null;
+
+  // 初期値: localStorage 直前値 → 元 PSD フォルダから推測 → 既定値
+  const saved = loadSaveFolderDefaults();
+  const inferred = inferTitleAndVolume();
+  titleInput.value = saved?.title ?? inferred.title ?? "";
+  volumeInput.value = (saved?.volume ?? inferred.volume ?? "") + "";
+  kousuSelect.value = saved?.kousu ?? "初校";
+
+  const refreshPreview = () => {
+    const folderName = buildSaveFolderNameFromParams({
+      title: titleInput.value,
+      volume: volumeInput.value,
+      kousu: kousuSelect.value,
+    });
+    if (previewEl) previewEl.textContent = folderName;
+  };
+  refreshPreview();
+  titleInput.addEventListener("input", refreshPreview);
+  volumeInput.addEventListener("input", refreshPreview);
+  kousuSelect.addEventListener("change", refreshPreview);
+
+  return new Promise((resolve) => {
+    let resolved = false;
+    const finish = (value) => {
+      if (resolved) return;
+      resolved = true;
+      titleInput.removeEventListener("input", refreshPreview);
+      volumeInput.removeEventListener("input", refreshPreview);
+      kousuSelect.removeEventListener("change", refreshPreview);
+      cancelBtn.removeEventListener("click", onCancel);
+      okBtn.removeEventListener("click", onOk);
+      modal.removeEventListener("mousedown", onOverlay);
+      document.removeEventListener("keydown", onKey);
+      hideModalAnimated(modal);
+      resolve(value);
+    };
+    const onCancel = () => finish(null);
+    const onOk = () => {
+      const params = {
+        title: titleInput.value.trim(),
+        volume: volumeInput.value.trim(),
+        kousu: kousuSelect.value,
+      };
+      saveSaveFolderDefaults(params);
+      finish(params);
+    };
+    const onOverlay = (e) => { if (e.target === modal) onCancel(); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); onCancel(); }
+      else if (e.key === "Enter" && document.activeElement !== kousuSelect) {
+        e.preventDefault();
+        onOk();
+      }
+    };
+    cancelBtn.addEventListener("click", onCancel);
+    okBtn.addEventListener("click", onOk);
+    modal.addEventListener("mousedown", onOverlay);
+    document.addEventListener("keydown", onKey);
+    showModalAnimated(modal);
+    requestAnimationFrame(() => {
+      titleInput.focus();
+      titleInput.select?.();
+    });
+  });
+}
+
 export async function handleSave() {
   if (getPages().length === 0) return;
 
-  // Tachimi 互換の自動保存先決定: <Desktop>/Script_Output/OPUS写植/<写植完了 [連番]>/。
-  // 親フォルダ選択ダイアログは廃止。既に「写植完了」がある場合は上書きせず、
-  // 「写植完了(1)」「写植完了(2)」… と空き番号を順に取って新規フォルダを作成。
+  // ユーザーが「タイトル / 巻数 / 校数」を選ぶダイアログを表示。Cancel ならアボート。
+  const params = await openSaveFolderDialog();
+  if (!params) return;
+  const folderName = buildSaveFolderNameFromParams(params);
+
+  // <Desktop>/Script_Output/OPUS写植/<folderName>/ で保存。
+  // 既に同名フォルダがあれば (N) 連番を付ける（既存ロジック流用）。
   let scriptOutputDir;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -652,12 +789,29 @@ export async function handleSave() {
   }
 
   const typesetOutputDir = joinPath(scriptOutputDir, "OPUS写植");
-  const folderName = await pickNextSaveFolderName(typesetOutputDir);
-  const targetDir = joinPath(typesetOutputDir, folderName);
+  const finalName = await pickNextSaveFolderNameFor(typesetOutputDir, folderName);
+  const targetDir = joinPath(typesetOutputDir, finalName);
 
-  // 中間フォルダ Script_Output / OPUS写植 / 終端 写植完了(N) は apply_edits_via_photoshop の
+  // 中間フォルダ Script_Output / OPUS写植 / 終端 <folderName> は apply_edits_via_photoshop の
   // create_dir_all で再帰的に作られるので、フロント側での明示作成は不要。
   await runSaveWithMode({ saveMode: "saveAs", targetDir });
+}
+
+// 指定 base 名を起点に空き番号フォルダ名を返す。BASE 自体が未使用なら BASE、
+// 既存なら BASE(1), BASE(2)... 同様の連番化。
+async function pickNextSaveFolderNameFor(parent, baseName) {
+  const entries = await listEntriesIn(parent);
+  const existing = new Set(
+    entries
+      .filter((e) => e && e.isDirectory === true)
+      .map((e) => (e.name ?? "").toLowerCase()),
+  );
+  if (!existing.has(baseName.toLowerCase())) return baseName;
+  for (let i = 1; i <= MAX_FOLDER_INDEX; i++) {
+    const candidate = `${baseName}(${i})`;
+    if (!existing.has(candidate.toLowerCase())) return candidate;
+  }
+  return baseName;
 }
 
 // 旧バージョンの保存ドロップダウン（上書き保存 / 別名で保存 2 項目）は撤去。

@@ -8,7 +8,6 @@
   --accent: #6076e5;
   --accent-hover: #7488f0;
   --accent-rgb: 96, 118, 229;
-  --home-blur-rgb: 24, 32, 104;
   --danger: #e74c3c;
   --canvas-bg: #181818;
   --page-bg: #2a2a2a;
@@ -19,14 +18,15 @@
   --panel-body: #2c2c2d;
   --home-bg: #0a0a14;
   --home-hero-bg:
-    radial-gradient(ellipse 76% 125% at center -50%, rgba(40, 56, 160, 0.85) 0%, rgba(var(--home-blur-rgb), 0.60) 30%, rgba(10, 12, 40, 0.30) 60%, rgba(5, 5, 12, 0) 88%),
+    radial-gradient(ellipse 76% 125% at center -50%, rgba(40, 56, 160, 0.85) 0%, rgba(24, 32, 104, 0.60) 30%, rgba(10, 12, 40, 0.30) 60%, rgba(5, 5, 12, 0) 88%),
     radial-gradient(circle at 15% 80%, rgba(120, 60, 180, 0.22) 0%, transparent 50%),
     radial-gradient(circle at 88% 18%, rgba(80, 130, 220, 0.28) 0%, transparent 50%),
     linear-gradient(180deg, #0a0c20 0%, #050610 50%, #0a0a14 100%);
   --home-text: #ffffff;
   --home-muted: rgba(255, 255, 255, 0.94);
   --home-line: rgba(235, 235, 235, 0.86);
-  --home-version-color: rgba(205, 215, 240, 0.85);
+  /* v2.2.x: Ver 表記は「品のある薄いグレー」で控えめに。青みは抜いてニュートラル寄り。 */
+  --home-version-color: rgba(190, 192, 200, 0.52);
   --home-divider-color: rgba(184, 184, 184, 0.72);
   --home-border: rgba(180, 180, 180, 0.78);
   --home-button-hover: rgba(255, 255, 255, 0.13);
@@ -51,6 +51,24 @@
   --home-logo-glow-far: rgba(80, 130, 220, 0.32);
   --home-title-glow: rgba(180, 200, 255, 0.42);
   --home-title-glow-far: rgba(120, 140, 220, 0.22);
+  /* OPUS Dialog 共通デザイントークン: 写植用ファイル選択 / 位置調整 / 将来追加される
+     ダイアログで「ホーム世界観 (夜空・上品さ)」を共有するための変数。 */
+  --opus-dialog-overlay: rgba(0, 0, 0, 0.9);
+  --opus-dialog-card-bg: linear-gradient(180deg, rgba(28, 28, 28, 0.92) 0%, rgba(14, 14, 14, 0.88) 100%);
+  --opus-dialog-card-border: rgba(255, 255, 255, 0.28);
+  --opus-dialog-card-radius: 20px;
+  --opus-dialog-card-shadow: 0 24px 60px rgba(0, 0, 0, 0.44);
+  --opus-dialog-card-blur: blur(8px);
+  --opus-dialog-pad-x: 28px;
+  --opus-dialog-pad-y: 24px;
+  --opus-dialog-title-size: 24px;
+  --opus-dialog-subtitle-color: rgba(255, 255, 255, 0.54);
+  --opus-dialog-inner-card-bg: var(--home-card-bg);
+  --opus-dialog-inner-card-border: var(--home-card-border);
+  --opus-dialog-inner-card-shadow:
+    var(--home-card-shadow, 0 22px 34px rgba(0, 0, 0, 0.38)),
+    inset 0 1px 0 var(--home-card-highlight, rgba(255, 255, 255, 0.14));
+  --opus-dialog-inner-card-radius: 16px;
   color-scheme: dark;
 }
 * {
@@ -519,16 +537,103 @@ body.home-mode .toolbar .settings-toolbar-btn {
 .sync-seg-btn.active:hover {
   background: var(--accent);
 }
-.side-view-mode-segment {
-  flex-direction: column;
-  margin-top: auto;
-  width: 32px;
-  box-sizing: border-box;
-  padding: 3px;
+/* 表示モード切替は toolbar の中央に絶対配置する。
+   左ボタン群 (logo / hamburger / settings / home) と右ボタン群 (history / actions /
+   window-controls) は flex 順に詰めて並び、view-mode は flex フローから外れて
+   中央に固定される。 */
+.toolbar .view-mode-segment,
+.toolbar .view-mode-dropdown {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  -webkit-app-region: no-drag;
 }
-.side-view-mode-segment .sync-seg-btn {
-  width: 24px;
-  height: 24px;
+/* View ▾ トリガーボタン: 中立的でコンパクトな segment 風デザイン */
+.view-mode-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 72px;
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel-hover);
+  color: var(--text);
+  font: 600 12px var(--ui-font);
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+.view-mode-trigger:hover {
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel-hover));
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.view-mode-trigger[aria-expanded="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+.view-mode-trigger-caret {
+  font-size: 9px;
+  opacity: 0.8;
+  margin-left: 2px;
+}
+/* メニュー本体: trigger の真下に配置 (absolute) */
+.view-mode-dropdown {
+  /* trigger 位置の anchor。.toolbar 内の絶対配置のままで OK */
+}
+.view-mode-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 240px;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.36), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 3;
+}
+.view-mode-menu[hidden] { display: none; }
+.view-mode-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: 500 12px var(--ui-font);
+  text-align: left;
+  cursor: pointer;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+.view-mode-menu-item:hover {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+.view-mode-menu-item.active {
+  background: var(--accent);
+  color: #fff;
+}
+.view-mode-menu-item svg {
+  flex: 0 0 14px;
+  stroke: currentColor;
+}
+.view-mode-menu-label {
+  flex: 1 1 auto;
+  white-space: nowrap;
+}
+.view-mode-menu-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 4px;
 }
 .window-controls {
   display: flex;
@@ -676,6 +781,11 @@ body.home-mode .toolbar .settings-toolbar-btn {
   font-size: 12px;
   cursor: pointer;
 }
+.ruby-parent-select-btn {
+  min-height: 29px;
+  padding: 0 10px;
+  font-size: 14px;
+}
 .ruby-parent-select-btn:hover:not(:disabled),
 .ruby-special-btn:hover:not(:disabled) {
   border-color: var(--accent);
@@ -797,34 +907,50 @@ body.home-mode .toolbar .settings-toolbar-btn {
   position: fixed;
   inset: 0;
   z-index: 5000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(0, 0, 0, 0.36);
+  display: block;
+  background: transparent;
 }
 .ruby-parent-dialog-panel {
-  width: min(620px, calc(100vw - 32px));
-  max-height: min(520px, calc(100vh - 32px));
+  position: fixed;
+  left: var(--ruby-parent-dialog-left, 50%);
+  top: var(--ruby-parent-dialog-top, 50%);
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 12px;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px 10px 8px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--panel);
   color: var(--text);
-  box-shadow: 0 18px 42px rgba(0, 0, 0, 0.32);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.42), 0 0 0 1px rgba(255, 255, 255, 0.04);
 }
 .ruby-parent-dialog-vertical .ruby-parent-dialog-panel {
-  width: min(420px, calc(100vw - 32px));
-  max-height: min(760px, calc(100vh - 32px));
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
 }
-.ruby-parent-dialog-head,
-.ruby-parent-dialog-actions {
+.ruby-parent-dialog-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.2;
+  padding: 0 1px 1px;
+}
+.ruby-parent-dialog-actions {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font-size: 11px;
+  line-height: 1.1;
+  padding-top: 2px;
 }
 .ruby-parent-dialog-close,
 .ruby-parent-dialog-actions button {
@@ -832,121 +958,164 @@ body.home-mode .toolbar .settings-toolbar-btn {
   border-radius: 4px;
   background: var(--panel-2);
   color: var(--text);
-  min-height: 26px;
-  padding: 0 10px;
+  min-height: 22px;
+  padding: 0 8px;
+  font-size: 11px;
+  font-weight: 500;
   cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+.ruby-parent-dialog-actions button:hover {
+  background: color-mix(in srgb, var(--accent) 20%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--accent) 65%, var(--border));
 }
 .ruby-parent-dialog-close {
-  min-width: 28px;
+  min-width: 22px;
   padding: 0;
-  font-size: 16px;
+  font-size: 14px;
+  line-height: 1;
+  background: transparent;
+  border-color: transparent;
+}
+.ruby-parent-dialog-close:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: var(--border);
 }
 .ruby-parent-ok-btn {
   border-color: var(--accent) !important;
   color: var(--accent) !important;
 }
+.ruby-parent-ok-btn:disabled {
+  opacity: 0.42;
+  cursor: not-allowed;
+}
 .ruby-parent-grid {
-  max-height: 360px;
+  width: max-content;
+  max-width: calc(100vw - 36px);
+  max-height: calc(100vh - 110px);
   overflow: auto;
-  padding: 8px;
+  padding: 6px 8px;
+  margin: 0 auto;
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 5px;
   background: var(--bg);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.18);
+  /* 親文字の集合が grid の中央に揃うように、中身を中央配置にする。 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
 }
 .ruby-parent-dialog-vertical .ruby-parent-grid {
-  height: min(560px, calc(100vh - 168px));
-  max-height: calc(100vh - 168px);
-  max-width: 100%;
+  width: max-content;
+  height: max-content;
+  max-width: calc(100vw - 36px);
+  max-height: calc(100vh - 110px);
   display: flex;
   flex-direction: row-reverse;
-  align-items: flex-start;
-  justify-content: flex-start;
-  gap: 4px;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
 }
 .ruby-parent-line {
   display: flex;
   align-items: center;
-  min-height: 32px;
+  justify-content: center;
+  min-height: var(--ruby-parent-cell-size, 28px);
   flex-wrap: nowrap;
+  gap: 0;
 }
 .ruby-parent-dialog-vertical .ruby-parent-line {
   flex-direction: column;
-  min-width: 32px;
+  min-width: var(--ruby-parent-cell-size, 28px);
   min-height: 0;
+  justify-content: center;
 }
 .ruby-parent-cell {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  min-width: 28px;
-  height: 28px;
-  margin: 2px;
-  border: 1px solid transparent;
-  border-radius: 4px;
-  background: transparent;
+  min-width: var(--ruby-parent-cell-size, 28px);
+  width: var(--ruby-parent-cell-size, 28px);
+  height: var(--ruby-parent-cell-size, 28px);
+  margin: 0;
+  border: 1px solid color-mix(in srgb, var(--border) 50%, transparent);
+  border-radius: 3px;
+  background: color-mix(in srgb, var(--panel) 35%, transparent);
   color: var(--text);
+  font-size: calc(var(--ruby-parent-cell-size, 28px) * 0.68);
+  font-weight: 500;
+  line-height: 1;
   cursor: pointer;
   user-select: none;
+  transition: background-color 0.12s ease, border-color 0.12s ease, transform 0.08s ease;
 }
 .ruby-parent-cell:hover {
-  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 55%, var(--border));
+}
+.ruby-parent-cell:active {
+  transform: scale(0.95);
 }
 .ruby-parent-cell.selected {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
+  box-shadow: 0 1px 3px color-mix(in srgb, var(--accent) 45%, transparent);
 }
 .ruby-parent-divider {
-  width: 8px;
-  height: 28px;
+  width: 4px;
+  height: var(--ruby-parent-cell-size, 28px);
   padding: 0;
   border: 0;
   border-radius: 2px;
   background: transparent;
   cursor: pointer;
+  transition: background-color 0.12s ease;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider {
-  width: 28px;
-  height: 8px;
+  width: var(--ruby-parent-cell-size, 28px);
+  height: 4px;
 }
 .ruby-parent-divider::after {
   content: "";
   display: block;
   width: 1px;
-  height: 10px;
-  margin: 9px auto;
+  height: calc(var(--ruby-parent-cell-size, 28px) * 0.55);
+  margin: calc(var(--ruby-parent-cell-size, 28px) * 0.225) auto;
   border-radius: 1px;
   background: transparent;
+  transition: width 0.12s ease, height 0.12s ease, margin 0.12s ease, background-color 0.12s ease;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider::after {
-  width: 10px;
+  width: calc(var(--ruby-parent-cell-size, 28px) * 0.55);
   height: 1px;
-  margin: 3px auto;
+  margin: 1px auto;
 }
 .ruby-parent-divider:hover::after {
   width: 2px;
-  height: 14px;
-  margin-top: 7px;
+  height: calc(var(--ruby-parent-cell-size, 28px) * 0.7);
+  margin-top: calc(var(--ruby-parent-cell-size, 28px) * 0.15);
   background: #ff9f1a;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider:hover::after {
-  width: 14px;
+  width: calc(var(--ruby-parent-cell-size, 28px) * 0.7);
   height: 2px;
-  margin-top: 3px;
+  margin-top: 1px;
 }
 .ruby-parent-divider.active {
-  background: rgba(255, 159, 26, 0.16);
+  background: rgba(255, 159, 26, 0.2);
 }
 .ruby-parent-divider.active::after {
   width: 2px;
-  height: 16px;
-  margin-top: 6px;
+  height: calc(var(--ruby-parent-cell-size, 28px) * 0.82);
+  margin-top: calc(var(--ruby-parent-cell-size, 28px) * 0.09);
   background: #ff9f1a;
 }
 .ruby-parent-dialog-vertical .ruby-parent-divider.active::after {
-  width: 16px;
+  width: calc(var(--ruby-parent-cell-size, 28px) * 0.82);
   height: 2px;
-  margin-top: 3px;
+  margin-top: 1px;
 }
 /* 【v1.26.0】in-app プレビューのルビ表示（編集後 / 非編集状態）。
    <ruby> タグや ::after 疑似要素ではなく本物の <span> 要素を使ってルビを描画する。
@@ -1023,6 +1192,13 @@ body.home-mode .toolbar .settings-toolbar-btn {
     -50%
   );
 }
+.ruby-text.ruby-text-first-line:not(.ruby-text-nakaguro):not(.ruby-text-overlay-same-position) {
+  left: calc(100% + 0.08em);
+  transform: translate(
+    0,
+    -50%
+  );
+}
 /* 縦書き: 親文字 wrap の中心から、行送りの半分だけ右 (= 前の行側) に
    ルビ自身の中心を置く。 */
 .layer-box[data-direction="vertical"] .ruby-text {
@@ -1035,6 +1211,13 @@ body.home-mode .toolbar .settings-toolbar-btn {
   margin-bottom: 0;
   margin-left: 0;
   writing-mode: vertical-rl;
+}
+.layer-box[data-direction="vertical"] .ruby-text.ruby-text-first-line:not(.ruby-text-nakaguro):not(.ruby-text-overlay-same-position) {
+  left: calc(100% + 0.08em);
+  transform: translate(
+    0,
+    -50%
+  );
 }
 .layer-box[data-direction="vertical"] .ruby-text-overlay {
   transform: translate(
@@ -1312,15 +1495,20 @@ body.home-returning .workspace {
   content: none;
 }
 .home-divider {
-  position: relative;
+  /* v2.2.x: .home-version と同じく hero グラデ境界のやや下に絶対配置。
+     Ver の直下に並ぶように top を +24px して align。 */
+  position: absolute;
   z-index: 6;
-  width: 160px;
+  top: calc(clamp(282px, 47vh, 470px) + 26px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: 112px;
   height: 1px;
-  margin: clamp(110px, calc(42vh - 206px), 244px) auto 0;
-  background: linear-gradient(90deg, transparent 0%, rgba(200, 220, 255, 0.95) 50%, transparent 100%);
+  margin: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(180, 200, 255, 0.68) 50%, transparent 100%);
   box-shadow:
-    0 0 10px rgba(180, 210, 255, 0.7),
-    0 0 22px rgba(150, 190, 255, 0.4);
+    0 0 6px rgba(180, 200, 255, 0.48),
+    0 0 14px rgba(150, 190, 255, 0.24);
   pointer-events: none;
 }
 body.home-mode .home-screen {
@@ -1329,20 +1517,88 @@ body.home-mode .home-screen {
   justify-content: center;
 }
 body.home-starting .home-screen {
+  /* v2.2.x: ホーム画面のフェードは廃止し、全画面の黒い暗転 (.scene-fade-black) が
+     swap を覆い隠す方式に切替え。ここでは pointer-events だけ抑止して、
+     遷移中のクリックを無効化する役割だけ残す。 */
   pointer-events: none;
-  animation: home-start-fade-out 360ms cubic-bezier(0.2, 0.8, 0.2, 1) forwards;
 }
-@keyframes home-start-fade-out {
-  0% {
-    opacity: 1;
-    transform: scale(1);
-    filter: blur(0);
-  }
-  100% {
-    opacity: 0;
-    transform: scale(0.985);
-    filter: blur(2px);
-  }
+
+/* v2.2.x: 「設定画面 → アニメーション画面」のジャンプカット風暗転。
+   ボタン押下 → 100ms で fade in to black → 200ms 黒を hold → 100ms で fade out。
+   hold 中に modal の入替え / home の hide を行うことで、ユーザーには
+   「一瞬黒くなって、進捗画面に切り替わった」というシネマ的な場面転換になる。 */
+.scene-fade-black {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  pointer-events: none;
+  background: #000;
+  opacity: 0;
+  will-change: opacity;
+  animation: scene-fade-black-anim 400ms linear both;
+}
+@keyframes scene-fade-black-anim {
+  0%   { opacity: 0; }
+  25%  { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+
+/* v2.2.x: 黒い暗転のあとに「ゆっくり星空がフェードインして消える」幻想的な veil を重ねる。
+   OPUS のホーム背景や splash の星空モチーフと連動し、設定 → 進捗画面の場面転換に
+   詩的な間を生む。z-index 9998 で .scene-fade-black (9999) の直下、progress modal の上。
+   コンテナは深い夜空色の vignette が淡くフェードイン→ホールド→フェードアウトし、
+   その中で 60 個の星 (.scene-starry-star) が個別の delay でちらちらと瞬く。 */
+.scene-starry-veil {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  pointer-events: none;
+  /* v2.2.x: 背景は完全 opaque な夜空グラデにする。
+     旧 (rgba 0.0 → 0.6) は中心が透明で、コンテナ opacity が 1 でも作業画面が透けてしまい、
+     星が灯り始めた時に裏の workspace が見えてしまう問題があった。
+     新: 中心 #0c1228 (深い夜青) → 周縁 #02040a (ほぼ黒) の opaque グラデにし、
+     workspace は完全に hide。透けて見える reveal は container の opacity transition のみが司る。 */
+  background:
+    radial-gradient(ellipse at center, #0c1228 0%, #02040a 100%);
+  opacity: 0;
+  will-change: opacity;
+  /* ゆっくりディゾルブを意識した長尺 (3000ms)。
+     22% (660ms) かけて veil 自体がふわっと夜空色に染まり、
+     53% (1590ms) かけて星空をたっぷり見せ、
+     25% (750ms) かけて静かにフェードアウト → workspace / progress modal が顔を出す。 */
+  animation: scene-starry-veil-fade 3000ms ease both;
+}
+@keyframes scene-starry-veil-fade {
+  /* v2.2.x: 黒い暗転 (400ms) が消える前に veil が完全 opaque に達するよう、fade-in を
+     5% (150ms) に短縮。黒 → 夜空色のクロスフェードが滑らかになり、間で workspace が透ける
+     瞬間が消える。
+     5-75% (150-2250ms) は星空を見せる長い hold、75-100% (2250-3000ms) でゆっくり消える。 */
+  0%   { opacity: 0; }
+  5%   { opacity: 1; }
+  75%  { opacity: 1; }
+  100% { opacity: 0; }
+}
+.scene-starry-star {
+  position: absolute;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 4px 1px rgba(220, 230, 255, 0.65),
+    0 0 12px 3px rgba(180, 200, 255, 0.3);
+  opacity: 0;
+  will-change: opacity, transform;
+  /* 個別の星は 2600ms かけてゆっくり灯る。delay 0-1100ms ばらつきで
+     「一斉に光らず、ちらほら現れて広がっていく」段階的な reveal を演出。 */
+  animation: scene-star-twinkle 2600ms cubic-bezier(0.25, 0.46, 0.45, 0.94) both;
+}
+@keyframes scene-star-twinkle {
+  0%   { opacity: 0; transform: scale(0.2); }
+  25%  { opacity: 1; transform: scale(1.3); }
+  40%  { opacity: 0.85; transform: scale(1); }
+  60%  { opacity: 0.7; transform: scale(1.1); }
+  80%  { opacity: 0.5; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.6); }
 }
 .home-screen-inner {
   position: relative;
@@ -1361,7 +1617,7 @@ body.home-starting .home-screen {
   display: flex;
   flex-direction: column;
   align-items: center;
-  margin: clamp(62px, 9vh, 92px) 0 0;
+  margin: clamp(54px, 8vh, 84px) 0 0;
   color: var(--home-text);
   font-family: "Cinzel", "Times New Roman", serif;
   font-size: 68px;
@@ -1396,11 +1652,18 @@ body.home-starting .home-screen {
     0 0 48px var(--home-title-glow-far);
 }
 .home-version {
+  /* v2.2.x: 背景の hero グラデーション境界 (`.home-screen::before { height: 45vh }`)
+     の「やや下」に Ver + 横線をセットで置く。グラデが薄れる境界線とちょうど重なる
+     位置になり、上下のトーン切替に視覚的なリズム線として馴染む。
+     絶対配置で .home-screen の縦中央付近に固定するため、メディアクエリの clamp は
+     共有しない (これ自身の `top` clamp で全画面サイズに追従する)。 */
   position: absolute;
   z-index: 8;
-  top: 28px;
-  right: 34px;
-  margin-top: 0;
+  top: clamp(282px, 47vh, 470px);
+  left: 50%;
+  transform: translateX(-50%);
+  margin: 0;
+  display: block;
   color: var(--home-version-color);
   font-family: "Cinzel", "Times New Roman", serif;
   font-size: 12px;
@@ -1408,9 +1671,10 @@ body.home-starting .home-screen {
   line-height: 1;
   letter-spacing: 0.18em;
   text-transform: uppercase;
+  text-align: center;
   user-select: none;
   -webkit-user-select: none;
-  text-shadow: 0 0 8px rgba(180, 200, 255, 0.35);
+  text-shadow: 0 0 6px rgba(0, 0, 0, 0.45);
 }
 .home-start-grid {
   display: grid;
@@ -1418,29 +1682,34 @@ body.home-starting .home-screen {
   justify-content: center;
   gap: 28px;
   width: min(900px, calc(100vw - 120px));
-  margin-top: clamp(40px, 6vh, 80px);
+  /* v2.2.x: Ver + 光の横線が hero グラデ境界に絶対配置。カード grid は divider より
+     下に来るよう margin-top を確保しつつ、下げ過ぎないバランス値に。 */
+  margin-top: clamp(120px, 22vh, 240px);
 }
 .home-scan-engine-warning {
   position: absolute;
   z-index: 8;
-  top: calc(clamp(280px, 45vh, 462px) + 18px);
+  top: calc(clamp(280px, 45vh, 462px) + 22px);
   left: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  width: min(560px, calc(100vw - 80px));
-  min-height: 42px;
-  padding: 8px 12px 8px 14px;
-  border: 1px solid rgba(248, 113, 113, 0.58);
-  border-radius: 8px;
-  background: rgba(52, 14, 18, 0.86);
-  color: #ffe1e1;
+  gap: 9px;
+  width: fit-content;
+  max-width: min(520px, calc(100vw - 80px));
+  min-height: 34px;
+  padding: 6px 8px 6px 12px;
+  border: 1px solid rgba(188, 210, 255, 0.26);
+  border-radius: 999px;
+  background: linear-gradient(180deg, rgba(16, 22, 45, 0.54), rgba(9, 12, 30, 0.42));
+  color: rgba(232, 238, 255, 0.80);
   box-shadow:
-    0 18px 34px rgba(0, 0, 0, 0.34),
-    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+    0 10px 24px rgba(0, 0, 0, 0.24),
+    0 0 18px rgba(126, 165, 255, 0.08),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
   transform: translateX(-50%);
-  backdrop-filter: blur(10px);
+  backdrop-filter: blur(12px) saturate(1.08);
+  -webkit-backdrop-filter: blur(12px) saturate(1.08);
 }
 .home-scan-engine-warning[hidden] {
   display: none;
@@ -1449,9 +1718,10 @@ body.home-starting .home-screen {
   display: grid;
   place-items: center;
   flex: 0 0 auto;
-  width: 20px;
-  height: 20px;
-  color: #fb7185;
+  width: 16px;
+  height: 16px;
+  color: rgba(205, 222, 255, 0.70);
+  filter: drop-shadow(0 0 5px rgba(170, 205, 255, 0.18));
 }
 .home-scan-engine-warning-icon svg {
   display: block;
@@ -1460,28 +1730,29 @@ body.home-starting .home-screen {
 }
 .home-scan-engine-warning-text {
   min-width: 0;
-  color: #ffe4e6;
+  color: rgba(240, 244, 255, 0.78);
   font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 12px;
+  font-weight: 600;
   line-height: 1.35;
+  white-space: nowrap;
 }
 .home-scan-engine-install-btn {
   flex: 0 0 auto;
-  min-width: 94px;
-  height: 28px;
-  padding: 0 12px;
-  border: 1px solid rgba(248, 113, 113, 0.72);
-  border-radius: 6px;
-  background: rgba(248, 113, 113, 0.16);
-  color: #ffe4e6;
+  min-width: 86px;
+  height: 24px;
+  padding: 0 11px;
+  border: 1px solid rgba(200, 218, 255, 0.34);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.035);
+  color: rgba(246, 248, 255, 0.84);
   font-size: 12px;
-  font-weight: 800;
+  font-weight: 700;
 }
 .home-scan-engine-install-btn:hover {
-  background: rgba(59, 130, 246, 0.28);
-  border-color: rgba(96, 165, 250, 0.95);
-  color: #93c5fd;
+  background: rgba(170, 200, 255, 0.12);
+  border-color: rgba(218, 230, 255, 0.66);
+  color: #ffffff;
 }
 .home-start-card {
   position: relative;
@@ -1538,10 +1809,10 @@ body.home-starting .home-screen {
 .home-start-card h3 {
   position: relative;
   z-index: 1;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: center;
-  justify-content: center;
-  gap: 12px;
+  width: 100%;
   margin: 0;
   color: var(--home-text);
   font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
@@ -1550,20 +1821,25 @@ body.home-starting .home-screen {
   text-align: center;
   font-weight: 600;
   letter-spacing: 0;
-  min-height: 32px;
 }
 .home-project-card h3 {
-  gap: 10px;
-  font-size: 23px;
-  white-space: nowrap;
+  font-size: 26px;
+}
+.home-start-card h3 > span {
+  grid-column: 2;
+  justify-self: center;
+  min-width: 0;
 }
 .home-card-icon {
   display: none;
 }
 .home-start-card .home-card-icon {
+  grid-column: 1;
+  justify-self: end;
   display: block;
   width: 26px;
   height: 26px;
+  margin-right: 12px;
   color: rgba(224, 234, 255, 0.76);
   filter: drop-shadow(0 0 8px rgba(180, 210, 255, 0.25));
 }
@@ -1587,7 +1863,6 @@ body.home-starting .home-screen {
   line-height: 1.45;
   font-weight: 600;
   text-align: center;
-  min-height: 52px;
 }
 .home-start-btn {
   position: relative;
@@ -1675,72 +1950,152 @@ body.home-starting .home-screen {
   background: transparent;
   pointer-events: none;
 }
-.home-stars::before {
+.home-stars-faint::before {
   width: 1px;
   height: 1px;
   box-shadow:
-    64px 118px 0 0 rgba(255,255,255,0.26), 212px 104px 0 0 rgba(255,255,255,0.22),
-    372px 142px 0 0 rgba(255,255,255,0.25), 612px 70px 0 0 rgba(255,255,255,0.24),
-    766px 30px 0 0 rgba(255,255,255,0.25), 910px 130px 0 0 rgba(255,255,255,0.22),
-    1218px 96px 0 0 rgba(255,255,255,0.26), 1428px 34px 0 0 rgba(255,255,255,0.22),
-    1562px 156px 0 0 rgba(255,255,255,0.24), 1768px 126px 0 0 rgba(255,255,255,0.22);
-  animation: home-twinkle-dust 12s ease-in-out 1.8s infinite alternate;
+    42px 74px 0 0 rgba(255,255,255,0.22), 116px 184px 0 0 rgba(255,255,255,0.18),
+    248px 94px 0 0 rgba(255,255,255,0.24), 384px 106px 0 0 rgba(255,255,255,0.18),
+    548px 64px 0 0 rgba(255,255,255,0.22), 682px 286px 0 0 rgba(255,255,255,0.17),
+    856px 112px 0 0 rgba(255,255,255,0.23), 1038px 172px 0 0 rgba(255,255,255,0.18),
+    1194px 68px 0 0 rgba(255,255,255,0.24), 1398px 134px 0 0 rgba(255,255,255,0.17),
+    1576px 54px 0 0 rgba(255,255,255,0.22), 1822px 146px 0 0 rgba(255,255,255,0.18);
+  animation: home-twinkle-dust 13.6s ease-in-out -2.2s infinite alternate;
 }
-.home-stars::after {
+.home-stars-faint::after {
   width: 2px;
   height: 2px;
   box-shadow:
-    246px 76px 0 0 rgba(245,248,255,0.62), 578px 126px 0 0 rgba(245,248,255,0.56),
-    860px 72px 0 0 rgba(245,248,255,0.62), 1076px 154px 0 0 rgba(245,248,255,0.54),
-    1488px 66px 0 0 rgba(245,248,255,0.58), 1812px 46px 0 0 rgba(245,248,255,0.56);
-  animation: home-twinkle-dust 8.4s ease-in-out 0.4s infinite alternate-reverse;
+    186px 104px 0 0 rgba(245,248,255,0.54), 512px 86px 0 0 rgba(245,248,255,0.50),
+    746px 118px 0 0 rgba(245,248,255,0.48), 948px 72px 0 0 rgba(245,248,255,0.56),
+    1278px 148px 0 0 rgba(245,248,255,0.46), 1516px 82px 0 0 rgba(245,248,255,0.52),
+    1746px 210px 0 0 rgba(245,248,255,0.45);
+  animation: home-twinkle-dust-glint 8.9s ease-in-out -1.6s infinite alternate-reverse;
+}
+.home-stars-mid::before,
+.home-stars-mid::after,
+.home-stars-bright::before,
+.home-stars-bright::after {
+  content: none;
 }
 .home-stars-faint {
   box-shadow:
-    80px 30px 0 0 rgba(255,255,255,0.4), 150px 80px 0 0 rgba(255,255,255,0.5),
-    230px 50px 0 0 rgba(255,255,255,0.3), 300px 120px 0 0 rgba(255,255,255,0.5),
-    400px 40px 0 0 rgba(255,255,255,0.4), 480px 200px 0 0 rgba(255,255,255,0.3),
-    560px 90px 0 0 rgba(255,255,255,0.5), 620px 280px 0 0 rgba(255,255,255,0.4),
-    720px 150px 0 0 rgba(255,255,255,0.3), 800px 60px 0 0 rgba(255,255,255,0.5),
-    890px 340px 0 0 rgba(255,255,255,0.4), 950px 180px 0 0 rgba(255,255,255,0.3),
-    1040px 100px 0 0 rgba(255,255,255,0.5), 1120px 380px 0 0 rgba(255,255,255,0.4),
-    1200px 60px 0 0 rgba(255,255,255,0.3), 1280px 230px 0 0 rgba(255,255,255,0.5),
-    1370px 130px 0 0 rgba(255,255,255,0.4), 1450px 300px 0 0 rgba(255,255,255,0.3),
-    1540px 70px 0 0 rgba(255,255,255,0.5), 1620px 400px 0 0 rgba(255,255,255,0.4),
-    1700px 170px 0 0 rgba(255,255,255,0.3), 1780px 250px 0 0 rgba(255,255,255,0.5),
-    1860px 90px 0 0 rgba(255,255,255,0.4), 1940px 350px 0 0 rgba(255,255,255,0.3);
-  opacity: 0.48;
-  animation: home-twinkle-slow 9.5s ease-in-out infinite alternate;
+    68px 34px 0 0 rgba(255,255,255,0.42), 142px 92px 0 0 rgba(255,255,255,0.30),
+    226px 58px 0 0 rgba(255,255,255,0.36), 318px 108px 0 0 rgba(255,255,255,0.26),
+    392px 48px 0 0 rgba(255,255,255,0.40), 486px 286px 0 0 rgba(255,255,255,0.23),
+    566px 88px 0 0 rgba(255,255,255,0.38), 654px 286px 0 0 rgba(255,255,255,0.28),
+    736px 104px 0 0 rgba(255,255,255,0.25), 812px 64px 0 0 rgba(255,255,255,0.44),
+    884px 334px 0 0 rgba(255,255,255,0.26), 972px 198px 0 0 rgba(255,255,255,0.22),
+    1048px 104px 0 0 rgba(255,255,255,0.36), 1134px 374px 0 0 rgba(255,255,255,0.24),
+    1216px 58px 0 0 rgba(255,255,255,0.30), 1296px 238px 0 0 rgba(255,255,255,0.42),
+    1362px 124px 0 0 rgba(255,255,255,0.34), 1458px 306px 0 0 rgba(255,255,255,0.23),
+    1536px 76px 0 0 rgba(255,255,255,0.40), 1628px 392px 0 0 rgba(255,255,255,0.28),
+    1708px 176px 0 0 rgba(255,255,255,0.24), 1794px 262px 0 0 rgba(255,255,255,0.38),
+    1876px 92px 0 0 rgba(255,255,255,0.32), 1932px 346px 0 0 rgba(255,255,255,0.22),
+    34px 196px 0 0 rgba(255,255,255,0.33), 108px 266px 0 0 rgba(255,255,255,0.27),
+    194px 356px 0 0 rgba(255,255,255,0.21), 286px 402px 0 0 rgba(255,255,255,0.34),
+    354px 286px 0 0 rgba(255,255,255,0.29), 438px 318px 0 0 rgba(255,255,255,0.21),
+    526px 112px 0 0 rgba(255,255,255,0.37), 602px 382px 0 0 rgba(255,255,255,0.25),
+    688px 236px 0 0 rgba(255,255,255,0.21), 768px 362px 0 0 rgba(255,255,255,0.35),
+    846px 218px 0 0 rgba(255,255,255,0.28), 928px 414px 0 0 rgba(255,255,255,0.20),
+    1016px 278px 0 0 rgba(255,255,255,0.34), 1096px 48px 0 0 rgba(255,255,255,0.29),
+    1186px 342px 0 0 rgba(255,255,255,0.22), 1264px 406px 0 0 rgba(255,255,255,0.36),
+    1336px 82px 0 0 rgba(255,255,255,0.28), 1424px 204px 0 0 rgba(255,255,255,0.21),
+    1512px 354px 0 0 rgba(255,255,255,0.34), 1586px 142px 0 0 rgba(255,255,255,0.27),
+    1668px 258px 0 0 rgba(255,255,255,0.20), 1748px 42px 0 0 rgba(255,255,255,0.36),
+    1828px 318px 0 0 rgba(255,255,255,0.26), 1912px 202px 0 0 rgba(255,255,255,0.21),
+    28px 118px 0 0 rgba(255,255,255,0.24), 154px 32px 0 0 rgba(255,255,255,0.27),
+    306px 78px 0 0 rgba(255,255,255,0.23), 458px 118px 0 0 rgba(255,255,255,0.24),
+    538px 32px 0 0 rgba(255,255,255,0.21), 708px 54px 0 0 rgba(255,255,255,0.28),
+    824px 112px 0 0 rgba(255,255,255,0.22), 1032px 42px 0 0 rgba(255,255,255,0.25),
+    1164px 132px 0 0 rgba(255,255,255,0.22), 1304px 36px 0 0 rgba(255,255,255,0.26),
+    1518px 106px 0 0 rgba(255,255,255,0.22), 1686px 54px 0 0 rgba(255,255,255,0.25),
+    1842px 118px 0 0 rgba(255,255,255,0.23), 92px 146px 0 0 rgba(255,255,255,0.21),
+    812px 408px 0 0 rgba(255,255,255,0.20);
+  opacity: 0.46;
+  animation: home-twinkle-slow 11.8s ease-in-out -3.4s infinite alternate;
 }
 .home-stars-mid {
   width: 2px;
   height: 2px;
-  background: var(--home-star-color);
+  background: transparent;
   border-radius: 50%;
   box-shadow:
-    120px 60px 0 0 #fff, 260px 140px 0 0 #fff, 380px 80px 0 0 #fff,
-    500px 220px 0 0 #fff, 640px 130px 0 0 #fff, 780px 320px 0 0 #fff,
-    900px 90px 0 0 #fff, 1040px 260px 0 0 #fff, 1180px 50px 0 0 #fff,
-    1320px 200px 0 0 #fff, 1460px 340px 0 0 #fff, 1600px 110px 0 0 #fff,
-    1740px 280px 0 0 #fff, 1880px 70px 0 0 #fff;
-  opacity: 0.72;
-  animation: home-twinkle-mid 5.8s ease-in-out 0.7s infinite alternate;
+    118px 58px 0 0 rgba(255,255,255,0.92), 274px 96px 0 0 rgba(232,240,255,0.78),
+    382px 84px 0 0 rgba(255,255,255,0.86), 508px 304px 0 0 rgba(232,240,255,0.68),
+    646px 132px 0 0 rgba(255,255,255,0.82), 772px 322px 0 0 rgba(232,240,255,0.64),
+    914px 88px 0 0 rgba(255,255,255,0.90), 1042px 264px 0 0 rgba(232,240,255,0.66),
+    1178px 52px 0 0 rgba(255,255,255,0.76), 1312px 198px 0 0 rgba(232,240,255,0.74),
+    1468px 342px 0 0 rgba(255,255,255,0.68), 1588px 112px 0 0 rgba(232,240,255,0.78),
+    1736px 276px 0 0 rgba(255,255,255,0.70), 1886px 72px 0 0 rgba(232,240,255,0.74),
+    46px 104px 0 0 rgba(255,255,255,0.72), 184px 382px 0 0 rgba(232,240,255,0.56),
+    324px 244px 0 0 rgba(255,255,255,0.62), 462px 412px 0 0 rgba(232,240,255,0.54),
+    604px 302px 0 0 rgba(255,255,255,0.58), 742px 106px 0 0 rgba(232,240,255,0.64),
+    884px 398px 0 0 rgba(255,255,255,0.54), 1018px 158px 0 0 rgba(232,240,255,0.60),
+    1442px 78px 0 0 rgba(255,255,255,0.70), 1724px 362px 0 0 rgba(232,240,255,0.55),
+    74px 52px 0 0 rgba(232,240,255,0.82), 338px 112px 0 0 rgba(232,240,255,0.76),
+    686px 78px 0 0 rgba(232,240,255,0.80), 1116px 82px 0 0 rgba(232,240,255,0.72),
+    1368px 142px 0 0 rgba(232,240,255,0.78), 1648px 96px 0 0 rgba(232,240,255,0.72),
+    230px 30px 0 0 rgba(255,255,255,0.66), 1300px 282px 0 0 rgba(255,255,255,0.58),
+    90px 320px 0 0 rgba(232,240,255,0.58), 1580px 222px 0 0 rgba(255,255,255,0.62),
+    1860px 180px 0 0 rgba(232,240,255,0.60);
+  opacity: 0.66;
+  animation: home-twinkle-mid 6.7s ease-in-out -1.1s infinite alternate;
 }
 .home-stars-bright {
   width: 3px;
   height: 3px;
-  background: var(--home-star-color);
+  background: transparent;
   border-radius: 50%;
   box-shadow:
-    200px 90px 4px 0 #ffffff, 450px 160px 4px 0 #e8f0ff,
-    720px 240px 4px 0 #ffffff, 980px 50px 4px 0 #e8f0ff,
-    1500px 180px 4px 0 #e8f0ff, 1760px 80px 4px 0 #ffffff,
-    150px 380px 4px 0 #e8f0ff, 410px 350px 4px 0 #ffffff,
-    930px 380px 4px 0 #ffffff;
-  opacity: 0.86;
-  animation: home-twinkle-bright 3.6s ease-in-out 1.1s infinite alternate;
+    204px 92px 4px 0 #ffffff, 456px 112px 4px 0 #e8f0ff,
+    724px 238px 4px 0 #ffffff, 982px 54px 4px 0 #e8f0ff,
+    1498px 176px 4px 0 #e8f0ff, 1764px 84px 4px 0 #ffffff,
+    152px 382px 4px 0 #e8f0ff, 414px 352px 4px 0 #ffffff,
+    934px 382px 4px 0 #ffffff;
+  opacity: 0.82;
+  animation: home-twinkle-bright 4.6s ease-in-out -2.3s infinite alternate;
   filter: drop-shadow(0 0 4px rgba(255,255,255,0.8));
 }
+.home-sky-motion {
+  position: absolute;
+  inset: 0 0 auto;
+  height: clamp(280px, 45vh, 462px);
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 3;
+}
+.home-shooting-star {
+  position: absolute;
+  z-index: 1;
+  width: var(--shoot-length, 150px);
+  height: var(--shoot-thickness, 2px);
+  border-radius: 1px;
+  pointer-events: none;
+  opacity: 0;
+  transform-origin: 0 50%;
+  background: linear-gradient(90deg,
+    transparent 0%, rgba(255, 245, 220, 0.18) 25%,
+    rgba(255, 250, 230, 0.78) 62%, rgba(255, 240, 200, 1) 88%, transparent 100%);
+  filter: drop-shadow(0 0 7px rgba(255, 245, 220, 0.82));
+  animation: home-shoot var(--shoot-duration, 28s) linear infinite;
+  animation-delay: var(--shoot-delay, 0s);
+}
+.home-shooting-star.is-inner {
+  background: linear-gradient(90deg,
+    transparent 0%,
+    rgba(214, 232, 255, 0.06) 30%,
+    rgba(225, 236, 255, 0.42) 72%,
+    rgba(255, 246, 224, 0.70) 91%,
+    transparent 100%);
+  filter: drop-shadow(0 0 4px rgba(214, 232, 255, 0.42));
+}
+.home-shooting-star.s1 { top: 14%; left: 72%; --shoot-angle: 158deg; --shoot-length: 150px; --shoot-thickness: 1.9px; --shoot-travel-mid: 180px; --shoot-travel-late: 360px; --shoot-travel: 520px; --shoot-duration: 30s; --shoot-delay: 3.8s; }
+.home-shooting-star.s2 { top: 9%; left: 16%; --shoot-angle: 24deg; --shoot-length: 118px; --shoot-thickness: 1.4px; --shoot-travel-mid: 150px; --shoot-travel-late: 300px; --shoot-travel: 440px; --shoot-duration: 38s; --shoot-delay: 13s; }
+.home-shooting-star.s3 { top: 3%; left: 55%; --shoot-angle: 148deg; --shoot-length: 178px; --shoot-thickness: 2.2px; --shoot-travel-mid: 210px; --shoot-travel-late: 420px; --shoot-travel: 620px; --shoot-duration: 34s; --shoot-delay: 24s; }
+.home-shooting-star.s4 { top: 24%; left: 6%; --shoot-angle: 18deg; --shoot-length: 108px; --shoot-thickness: 1.25px; --shoot-travel-mid: 130px; --shoot-travel-late: 260px; --shoot-travel: 400px; --shoot-duration: 42s; --shoot-delay: 31s; }
+.home-shooting-star.s5 { top: 32%; left: 41%; --shoot-angle: 28deg; --shoot-length: 68px; --shoot-thickness: 1px; --shoot-travel-mid: 72px; --shoot-travel-late: 144px; --shoot-travel: 218px; --shoot-duration: 48s; --shoot-delay: 9s; --shoot-entry: 0.32; --shoot-peak: 0.46; --shoot-tail: 0.24; }
+.home-shooting-star.s6 { top: 19%; left: 63%; --shoot-angle: 204deg; --shoot-length: 62px; --shoot-thickness: 1px; --shoot-travel-mid: 68px; --shoot-travel-late: 132px; --shoot-travel: 198px; --shoot-duration: 56s; --shoot-delay: 27s; --shoot-entry: 0.28; --shoot-peak: 0.40; --shoot-tail: 0.20; }
 @keyframes home-twinkle-slow {
   0% { opacity: 0.32; }
   45% { opacity: 0.58; }
@@ -1761,43 +2116,23 @@ body.home-starting .home-screen {
   40% { opacity: 0.46; }
   100% { opacity: 0.28; }
 }
+@keyframes home-twinkle-dust-glint {
+  0% { opacity: 0.24; }
+  38% { opacity: 0.58; }
+  64% { opacity: 0.34; }
+  100% { opacity: 0.48; }
+}
+@keyframes home-shoot {
+  0% { opacity: 0; transform: rotate(var(--shoot-angle, 30deg)) translateX(0) scaleX(0); }
+  1% { opacity: var(--shoot-entry, 0.85); transform: rotate(var(--shoot-angle, 30deg)) translateX(0) scaleX(0.48); }
+  4.5% { opacity: var(--shoot-peak, 1); transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel-mid, 220px)) scaleX(1); }
+  8% { opacity: var(--shoot-tail, 0.7); transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel-late, 450px)) scaleX(0.8); }
+  10% { opacity: 0; transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel, 620px)) scaleX(0.28); }
+  100% { opacity: 0; transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel, 620px)) scaleX(0.28); }
+}
 @keyframes home-float {
   from { transform: translateY(0); }
   to { transform: translateY(-7px); }
-}
-.home-sky-motion {
-  position: absolute;
-  inset: 0 0 auto;
-  height: clamp(280px, 45vh, 462px);
-  overflow: hidden;
-  pointer-events: none;
-  z-index: 3;
-}
-.home-shooting-star {
-  position: absolute;
-  z-index: 1;
-  width: var(--shoot-length, 150px);
-  height: var(--shoot-thickness, 2px);
-  border-radius: 1px;
-  pointer-events: none;
-  opacity: 0;
-  transform-origin: 0 50%;
-  background: linear-gradient(90deg, transparent 0%, rgba(255, 245, 220, 0.18) 25%, rgba(255, 250, 230, 0.78) 62%, rgba(255, 240, 200, 1) 88%, transparent 100%);
-  filter: drop-shadow(0 0 7px rgba(255, 245, 220, 0.82));
-  animation: home-shoot var(--shoot-duration, 28s) linear infinite;
-  animation-delay: var(--shoot-delay, 0s);
-}
-.home-shooting-star.s1 { top: 14%; left: 72%; --shoot-angle: 158deg; --shoot-length: 150px; --shoot-thickness: 1.9px; --shoot-travel-mid: 180px; --shoot-travel-late: 360px; --shoot-travel: 520px; --shoot-duration: 30s; --shoot-delay: 3.8s; }
-.home-shooting-star.s2 { top: 9%; left: 16%; --shoot-angle: 24deg; --shoot-length: 118px; --shoot-thickness: 1.4px; --shoot-travel-mid: 150px; --shoot-travel-late: 300px; --shoot-travel: 440px; --shoot-duration: 38s; --shoot-delay: 13s; }
-.home-shooting-star.s3 { top: 3%; left: 55%; --shoot-angle: 148deg; --shoot-length: 178px; --shoot-thickness: 2.2px; --shoot-travel-mid: 210px; --shoot-travel-late: 420px; --shoot-travel: 620px; --shoot-duration: 34s; --shoot-delay: 24s; }
-.home-shooting-star.s4 { top: 24%; left: 6%; --shoot-angle: 18deg; --shoot-length: 108px; --shoot-thickness: 1.25px; --shoot-travel-mid: 130px; --shoot-travel-late: 260px; --shoot-travel: 400px; --shoot-duration: 42s; --shoot-delay: 31s; }
-@keyframes home-shoot {
-  0% { opacity: 0; transform: rotate(var(--shoot-angle, 30deg)) translateX(0) scaleX(0); }
-  1% { opacity: 0.85; transform: rotate(var(--shoot-angle, 30deg)) translateX(0) scaleX(0.48); }
-  4.5% { opacity: 1; transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel-mid, 220px)) scaleX(1); }
-  8% { opacity: 0.7; transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel-late, 450px)) scaleX(0.8); }
-  10% { opacity: 0; transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel, 620px)) scaleX(0.28); }
-  100% { opacity: 0; transform: rotate(var(--shoot-angle, 30deg)) translateX(var(--shoot-travel, 620px)) scaleX(0.28); }
 }
 .home-typeset-modal {
   position: fixed;
@@ -2449,6 +2784,105 @@ body.home-starting .home-screen {
   display: flex;
   gap: 8px;
 }
+
+/* ================================================================
+   v2.2.x: 「非表示にする見本を選択」ダイアログを OPUS 世界観に統一。
+   home-typeset-modal / 位置調整 modal と同じ --opus-dialog-* / --home-* トークンを使い、
+   ダーク背景 + 上品な border-radius + 控えめな highlight ハイライトで統一感を出す。
+   ================================================================ */
+.reference-hidden-modal {
+  background: var(--opus-dialog-overlay, rgba(0, 0, 0, 0.9));
+}
+.reference-hidden-card {
+  background: var(--home-bg);
+  color: var(--home-text);
+  border: 1px solid var(--opus-dialog-card-border, rgba(255, 255, 255, 0.28));
+  border-radius: var(--opus-dialog-card-radius, 20px);
+  box-shadow: var(--opus-dialog-card-shadow, 0 24px 60px rgba(0, 0, 0, 0.44));
+  backdrop-filter: var(--opus-dialog-card-blur, blur(8px));
+}
+.reference-hidden-header {
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  padding: 36px 56px 22px;
+  border-bottom: 0;
+  text-align: center;
+}
+.reference-hidden-title {
+  font-size: var(--opus-dialog-title-size, 24px);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--home-text);
+}
+.reference-hidden-subtitle {
+  margin-top: 6px;
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+  font-size: 12px;
+  font-weight: 300;
+  line-height: 1.4;
+}
+.reference-hidden-body {
+  padding: 8px 36px 20px;
+}
+.reference-hidden-loading {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+  font-weight: 500;
+}
+.reference-hidden-grid {
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 14px;
+}
+.reference-hidden-page-card {
+  padding: 10px;
+  background: var(--home-card-bg);
+  border: 1px solid var(--opus-dialog-inner-card-border, var(--home-card-border, rgba(255, 255, 255, 0.28)));
+  border-radius: var(--opus-dialog-inner-card-radius, 16px);
+  color: var(--home-text);
+  box-shadow:
+    var(--home-card-shadow, 0 22px 34px rgba(0, 0, 0, 0.38)),
+    inset 0 1px 0 var(--home-card-highlight, rgba(255, 255, 255, 0.14));
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+.reference-hidden-page-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 50%, rgba(255, 255, 255, 0.28));
+  transform: translateY(-1px);
+}
+.reference-hidden-page-card.hidden-selected {
+  border-color: var(--accent);
+  box-shadow:
+    0 0 0 2px color-mix(in srgb, var(--accent) 36%, transparent),
+    var(--home-card-shadow, 0 22px 34px rgba(0, 0, 0, 0.38));
+}
+.reference-hidden-thumb {
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+.reference-hidden-thumb-empty {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+}
+.reference-hidden-overlay {
+  background: rgba(0, 0, 0, 0.62);
+  backdrop-filter: blur(2px);
+  letter-spacing: 0.04em;
+}
+.reference-hidden-page {
+  color: var(--home-text);
+}
+.reference-hidden-name {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+}
+.reference-hidden-footer {
+  padding: 16px 36px 24px;
+  border-top: 0;
+}
+.reference-hidden-count {
+  color: var(--opus-dialog-subtitle-color, rgba(255, 255, 255, 0.54));
+  font-size: 12px;
+  font-weight: 400;
+}
+
 @media (max-width: 840px) {
   .home-typeset-list {
     grid-template-columns: 1fr;
@@ -2470,19 +2904,22 @@ body.home-starting .home-screen {
     padding: 0 32px 48px;
   }
   .home-title {
-    margin-top: 42px;
+    margin-top: 36px;
     font-size: 46px;
   }
   .home-title-icon { width: 66px; }
   .home-title-word { margin-top: 22px; }
+  .home-version {
+    margin: clamp(28px, 4.5vh, 56px) auto 0;
+  }
   .home-divider {
-    margin-top: clamp(72px, calc(36vh - 174px), 196px);
+    margin-top: 10px;
   }
   .home-start-grid {
     grid-template-columns: 1fr;
     gap: 16px;
     width: min(620px, calc(100vw - 64px));
-    margin-top: 32px;
+    margin-top: clamp(48px, 10vh, 96px);
   }
   .home-start-card { min-height: 150px; }
 }
@@ -2491,7 +2928,7 @@ body.home-starting .home-screen {
     padding-bottom: 36px;
   }
   .home-title {
-    margin-top: 50px;
+    margin-top: 44px;
     font-size: 60px;
   }
   .home-title-icon {
@@ -2500,11 +2937,14 @@ body.home-starting .home-screen {
   .home-title-word {
     margin-top: 24px;
   }
+  .home-version {
+    margin: clamp(24px, 4vh, 48px) auto 0;
+  }
   .home-divider {
-    margin-top: clamp(70px, calc(45vh - 192px), 160px);
+    margin-top: 8px;
   }
   .home-start-grid {
-    margin-top: 36px;
+    margin-top: clamp(40px, 8vh, 80px);
   }
   .home-start-card {
     min-height: 176px;
@@ -3990,6 +4430,10 @@ body.home-starting .home-screen {
   align-items: center;
   justify-content: center;
   gap: 2px;
+  /* 縦書きレイヤー (.layer-box[data-direction="vertical"]) の writing-mode を継承させない。
+     これがないとバッジ全体が縦書きになり、フォント名や数字が縦に描画されてしまう。 */
+  writing-mode: horizontal-tb;
+  text-orientation: mixed;
 }
 .layer-size-badge::before {
   content: "";
@@ -4023,6 +4467,38 @@ body.home-starting .home-screen {
   margin: -1px -3px 0;
 }
 .layer-size-badge-font:hover {
+  background: rgba(255, 255, 255, 0.18);
+}
+.layer-size-badge-font-multi {
+  /* 複数フォント混在: 各フォント名を行ごとに <div> でラップし縦に並べる。
+     1 ファイル全体のフォント数が増えても横幅は単一フォント時と同じく自然な
+     intrinsic width を維持する（縦書きフレーム上で badge が縦長にならない）。 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  cursor: default;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  max-width: 220px;
+}
+.layer-size-badge-font-multi:hover {
+  background: transparent;
+}
+.layer-size-badge-font-row {
+  display: block;
+  white-space: nowrap;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding: 1px 3px;
+  margin: 0;
+  border-radius: 2px;
+  cursor: pointer;
+  pointer-events: auto;
+}
+.layer-size-badge-font-row:hover {
   background: rgba(255, 255, 255, 0.18);
 }
 .layer-size-badge-size {
@@ -7112,7 +7588,14 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   background: rgba(0, 0, 0, 0.55);
   pointer-events: none;
   will-change: transform;
-  transition: transform 0.45s cubic-bezier(0.55, 0.05, 0.4, 1);
+  /* v2.2.x (close 用): 退場は控えめに 0.5s で済ます。
+     open は下の `.visible:not(.closing)` で別途 1.4s のゆっくり立ち上がりに差し替える。 */
+  transition: transform 0.5s cubic-bezier(0.55, 0.05, 0.4, 1);
+}
+/* v2.2.x: 入場専用に長尺アニメ。星空が消えてゆくのに合わせて curtain がふわっと
+   立ち上がり、進捗画面が静かに姿を現す印象に。 */
+.progress-modal.visible:not(.closing) .progress-bg {
+  transition: transform 1.4s cubic-bezier(0.22, 1, 0.36, 1);
 }
 /* 初期状態 (visible なし) は画面外。開く時に translateY(0) へ animate して
    「上下からカーテンが中央に閉じる」入場アニメになる。 */
@@ -7228,6 +7711,81 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   gap: 8px;
   justify-content: flex-end;
   margin-top: 4px;
+}
+/* 保存先フォルダ命名ダイアログ */
+.save-folder-card {
+  min-width: 380px;
+  gap: 14px;
+}
+.save-folder-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+}
+.save-folder-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.save-folder-label {
+  flex: 0 0 56px;
+  font-size: 12px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.save-folder-input {
+  flex: 1 1 auto;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 13px;
+  font-family: inherit;
+}
+.save-folder-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+.save-folder-input-small {
+  flex: 0 0 88px;
+}
+.save-folder-select {
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-muted) 50%),
+                    linear-gradient(135deg, var(--text-muted) 50%, transparent 50%);
+  background-position: calc(100% - 16px) 50%, calc(100% - 11px) 50%;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
+  padding-right: 28px;
+}
+.save-folder-suffix {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.save-folder-preview {
+  margin-top: 2px;
+  padding: 8px 12px;
+  background: var(--panel-body, var(--bg));
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.save-folder-preview-label {
+  font-weight: 600;
+}
+.save-folder-preview-value {
+  color: var(--text);
+  font-family: ui-monospace, "SF Mono", Consolas, monospace;
+  word-break: break-all;
 }
 .page-jump-btn {
   padding: 6px 14px;
@@ -9266,6 +9824,44 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   color: var(--text-muted);
   font-size: 11px;
 }
+/* タブ UI: 検索置換 / 全変換 を切替える segment ボタン */
+.find-change-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 8px 16px 0;
+  border-bottom: 1px solid var(--border);
+}
+.find-change-tab {
+  flex: 0 0 auto;
+  min-width: 96px;
+  padding: 8px 16px 9px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-bottom: none;
+  border-radius: 5px 5px 0 0;
+  color: var(--text-muted);
+  font: 600 12px var(--ui-font);
+  cursor: pointer;
+  transition: background-color 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.find-change-tab:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+}
+.find-change-tab.active {
+  color: var(--text);
+  background: var(--panel);
+  border-color: var(--border);
+  /* tab 下の border を打ち消して body と連結して見せる */
+  margin-bottom: -1px;
+  padding-bottom: 10px;
+}
+.find-change-tab-panel {
+  display: contents;
+}
+.find-change-tab-panel[hidden] {
+  display: none;
+}
 .find-change-btn {
   min-width: 92px;
   min-height: 30px;
@@ -10921,7 +11517,10 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .file-picker-modal {
   position: fixed;
   inset: 0;
-  z-index: 250;
+  /* v2.2.x: home-typeset-modal (260) より上に重ねることで、写植用ファイル選択
+     ダイアログから file-picker を起動した瞬間に typeset 側を隠す必要が無くなり、
+     hide → 一瞬ホーム画面が見える → file-picker 表示 の flash を排除できる。 */
+  z-index: 280;
   background: rgba(0, 0, 0, 0.9);
   display: flex;
   align-items: center;
@@ -11229,12 +11828,8 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
    閲覧モード — PSD をウインドウいっぱいに表示
    MojiQ ver_2.24 viewer-mode を移植。body.viewer-mode で activate。
    ========================================= */
-/* ボタン アクティブ状態 */
-body.viewer-mode #viewer-mode-btn {
-  background: var(--accent);
-  color: #fff;
-}
-body.viewer-mode #viewer-mode-btn svg { stroke: #fff; }
+/* viewer-mode-btn は v2.2.x で削除済み (View ▾ ドロップダウンに統合)。
+   旧 `body.viewer-mode #viewer-mode-btn { ... }` 系の selector は不要のため撤去。 */
 body.viewer-mode .toolbar {
   opacity: 0 !important;
   transform: translateY(-12px);
@@ -11786,4 +12381,305 @@ button.overlay-align-btn-primary:hover:not(:disabled) svg {
 button.home-scan-engine-install-btn:hover,
 button.home-scan-engine-install-btn:hover:not(:disabled) {
   color: #60a5fa;
+}
+
+/* ====================================================================
+   OPUS Dialog 統一スタイル (v2.2.x)
+   写植用ファイル選択 / 位置調整 / 将来追加されるダイアログを共通の
+   「ホーム世界観 (夜空・上品さ)」に揃える。--opus-dialog-* トークンを使用。
+   ==================================================================== */
+
+/* ---- 写植用ファイル選択ダイアログを位置調整ダイアログと同じ世界観に統一 ---- */
+.home-typeset-modal {
+  background: var(--opus-dialog-overlay);
+}
+.home-typeset-modal .home-typeset-card {
+  background: var(--opus-dialog-card-bg) !important;
+  border: 1px solid var(--opus-dialog-card-border) !important;
+  border-radius: var(--opus-dialog-card-radius) !important;
+  box-shadow: var(--opus-dialog-card-shadow) !important;
+  backdrop-filter: var(--opus-dialog-card-blur);
+  -webkit-backdrop-filter: var(--opus-dialog-card-blur);
+  overflow: hidden;
+}
+/* タイトル: 旧 30px → 統一サイズに */
+.home-typeset-modal .home-typeset-header {
+  padding: var(--opus-dialog-pad-y) var(--opus-dialog-pad-x) 14px !important;
+  gap: 4px;
+  border-bottom: 1px solid var(--opus-dialog-card-border) !important;
+}
+.home-typeset-modal .home-typeset-title {
+  font-size: var(--opus-dialog-title-size) !important;
+  letter-spacing: 0;
+}
+.home-typeset-modal .home-typeset-subtitle {
+  color: var(--opus-dialog-subtitle-color);
+}
+/* ファイル選択カード row: 装飾的な dashed border を撤去 (位置調整側に合わせる) */
+.home-typeset-modal .home-typeset-row {
+  border: 1px solid var(--opus-dialog-inner-card-border) !important;
+  border-radius: var(--opus-dialog-inner-card-radius) !important;
+  background: var(--opus-dialog-inner-card-bg) !important;
+  box-shadow: var(--opus-dialog-inner-card-shadow) !important;
+}
+.home-typeset-modal .home-typeset-row::before {
+  display: none !important;
+}
+.home-typeset-modal .home-typeset-row.drag-over {
+  border-color: var(--accent) !important;
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--accent) 60%, transparent),
+    var(--opus-dialog-inner-card-shadow) !important;
+}
+/* list の左右 padding をダイアログ標準に揃える */
+.home-typeset-modal .home-typeset-list {
+  padding: 18px var(--opus-dialog-pad-x) 6px !important;
+}
+/* 「基本サイズ/基本フォント」を独立した設定カードに。
+   コンテンツのみを中央に寄せて、左右に大きな余白が残らないようコンパクトに揃える。 */
+.home-typeset-modal .home-typeset-settings {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px 32px;
+  align-items: center;
+  justify-content: center;
+  margin: 14px var(--opus-dialog-pad-x) 6px !important;
+  padding: 16px 22px !important;
+  border: 1px solid var(--opus-dialog-inner-card-border) !important;
+  border-radius: var(--opus-dialog-inner-card-radius) !important;
+  background: var(--opus-dialog-inner-card-bg) !important;
+  box-shadow: var(--opus-dialog-inner-card-shadow) !important;
+}
+.home-typeset-modal .home-typeset-setting {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  grid-template-columns: none;
+}
+.home-typeset-modal .home-typeset-size-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  grid-template-columns: none;
+}
+.home-typeset-modal .home-typeset-size-input {
+  width: 80px;
+  min-width: 0;
+  flex: 0 0 80px;
+}
+.home-typeset-modal .home-typeset-font-combo {
+  width: clamp(220px, 30vw, 320px);
+  flex: 0 0 auto;
+  display: inline-grid;
+  grid-template-columns: minmax(0, 1fr) 34px;
+}
+.home-typeset-modal .home-typeset-setting-label {
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.home-typeset-modal .home-typeset-size-input,
+.home-typeset-modal .home-typeset-font-input {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+.home-typeset-modal .home-typeset-font-toggle {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: rgba(255, 255, 255, 0.18);
+}
+/* actions の余分な背景を撤去してダイアログ下部に自然に並べる */
+.home-typeset-modal .home-typeset-actions {
+  margin: 8px 0 0 !important;
+  padding: 12px var(--opus-dialog-pad-x) var(--opus-dialog-pad-y) !important;
+  background: transparent !important;
+  justify-content: flex-end;
+  gap: 12px;
+}
+
+/* ---- 位置調整ダイアログも共通トークンに参照を切替（既存値と同じだが将来一元管理） ---- */
+.scan-adjust-choice-modal {
+  background: var(--opus-dialog-overlay);
+}
+.scan-adjust-choice-card {
+  background: var(--opus-dialog-card-bg);
+  border-color: var(--opus-dialog-card-border);
+  border-radius: var(--opus-dialog-card-radius);
+  box-shadow: var(--opus-dialog-card-shadow);
+  backdrop-filter: var(--opus-dialog-card-blur);
+  -webkit-backdrop-filter: var(--opus-dialog-card-blur);
+}
+.scan-adjust-choice-header {
+  padding: 18px var(--opus-dialog-pad-x) 14px;
+  border-bottom-color: var(--opus-dialog-card-border);
+}
+.scan-adjust-choice-title {
+  font-size: var(--opus-dialog-title-size);
+  letter-spacing: 0;
+}
+.scan-adjust-choice-list {
+  padding: 20px var(--opus-dialog-pad-x) 18px;
+}
+.scan-adjust-choice-actions {
+  padding: 0 var(--opus-dialog-pad-x) var(--opus-dialog-pad-y);
+}
+.scan-adjust-choice-option {
+  border-color: var(--opus-dialog-inner-card-border);
+  border-radius: var(--opus-dialog-inner-card-radius);
+  background: var(--opus-dialog-inner-card-bg);
+  box-shadow: var(--opus-dialog-inner-card-shadow);
+}
+
+/* ---- ファイル / フォルダ選択エクスプローラー (file-picker) を OPUS Dialog 世界観へ ---- */
+.file-picker-modal {
+  background: var(--opus-dialog-overlay);
+}
+.file-picker-card {
+  width: min(820px, 100%);
+  height: min(620px, 90vh);
+  background: var(--opus-dialog-card-bg) !important;
+  border: 1px solid var(--opus-dialog-card-border) !important;
+  border-radius: var(--opus-dialog-card-radius) !important;
+  box-shadow: var(--opus-dialog-card-shadow) !important;
+  backdrop-filter: var(--opus-dialog-card-blur);
+  -webkit-backdrop-filter: var(--opus-dialog-card-blur);
+  color: var(--home-text);
+}
+.file-picker-card .file-picker-header,
+.file-picker-card .file-picker-toolbar,
+.file-picker-card .file-picker-savebar,
+.file-picker-card .file-picker-footer {
+  background: transparent !important;
+  border-color: var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-header {
+  padding: 14px 22px !important;
+}
+.file-picker-card .file-picker-title {
+  font-size: 16px !important;
+  color: var(--home-text) !important;
+  letter-spacing: 0.02em;
+}
+.file-picker-card .file-picker-toolbar {
+  padding: 10px 18px !important;
+}
+.file-picker-card .file-picker-drive-btn,
+.file-picker-card .file-picker-nav-btn,
+.file-picker-card .file-picker-desktop-btn {
+  background: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: var(--home-text) !important;
+  border-radius: 6px !important;
+  transition: background-color 0.12s ease, border-color 0.12s ease, color 0.12s ease;
+}
+.file-picker-card .file-picker-drive-btn:hover,
+.file-picker-card .file-picker-nav-btn:hover:not(:disabled),
+.file-picker-card .file-picker-desktop-btn:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent) !important;
+  border-color: color-mix(in srgb, var(--accent) 60%, rgba(255, 255, 255, 0.2)) !important;
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-drive-btn.active {
+  background: var(--accent) !important;
+  border-color: var(--accent) !important;
+  color: #fff !important;
+}
+.file-picker-card .file-picker-nav-btn:disabled {
+  background: rgba(255, 255, 255, 0.025) !important;
+  color: rgba(255, 255, 255, 0.32) !important;
+}
+.file-picker-card .file-picker-path {
+  background: rgba(0, 0, 0, 0.34) !important;
+  border: 1px solid rgba(255, 255, 255, 0.16) !important;
+  color: var(--home-text) !important;
+  border-radius: 6px !important;
+  padding: 5px 12px !important;
+}
+.file-picker-card .file-picker-path::placeholder {
+  color: rgba(255, 255, 255, 0.42) !important;
+}
+.file-picker-card .file-picker-path:focus {
+  background: rgba(0, 0, 0, 0.44) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+.file-picker-card .file-picker-list {
+  background: rgba(0, 0, 0, 0.22) !important;
+  border-top: 1px solid var(--opus-dialog-card-border) !important;
+  border-bottom: 1px solid var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-row {
+  color: var(--home-text) !important;
+  padding: 8px 18px !important;
+}
+.file-picker-card .file-picker-row:hover {
+  background: color-mix(in srgb, var(--accent) 14%, transparent) !important;
+}
+.file-picker-card .file-picker-row.selected {
+  background: var(--accent) !important;
+  color: #fff !important;
+}
+.file-picker-card .file-picker-row-icon {
+  color: rgba(255, 255, 255, 0.62) !important;
+}
+.file-picker-card .file-picker-row.folder .file-picker-row-icon {
+  color: color-mix(in srgb, var(--accent) 92%, white) !important;
+}
+.file-picker-card .file-picker-row.selected .file-picker-row-icon {
+  color: #fff !important;
+}
+.file-picker-card .file-picker-loading,
+.file-picker-card .file-picker-empty {
+  color: rgba(255, 255, 255, 0.5) !important;
+}
+.file-picker-card .file-picker-savebar {
+  padding: 10px 18px !important;
+  border-top: 1px solid var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-savebar-label {
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-name-input {
+  background: rgba(0, 0, 0, 0.34) !important;
+  border: 1px solid rgba(255, 255, 255, 0.18) !important;
+  color: var(--home-text) !important;
+  border-radius: 6px !important;
+}
+.file-picker-card .file-picker-name-input:focus {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent) !important;
+}
+.file-picker-card .file-picker-footer {
+  padding: 14px 22px !important;
+  border-top: 1px solid var(--opus-dialog-card-border) !important;
+}
+.file-picker-card .file-picker-counter {
+  color: rgba(255, 255, 255, 0.52) !important;
+}
+.file-picker-card .file-picker-cancel-btn,
+.file-picker-card .file-picker-confirm-btn {
+  border-radius: 6px !important;
+  font-weight: 700;
+}
+.file-picker-card .file-picker-cancel-btn {
+  background: transparent !important;
+  border: 1px solid rgba(255, 255, 255, 0.24) !important;
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-cancel-btn:hover {
+  background: var(--home-button-hover, rgba(255, 255, 255, 0.12)) !important;
+  border-color: rgba(255, 255, 255, 0.42) !important;
+  color: var(--home-text) !important;
+}
+.file-picker-card .file-picker-confirm-btn {
+  background: var(--accent) !important;
+  border: 1px solid var(--accent) !important;
+  color: #fff !important;
+}
+.file-picker-card .file-picker-confirm-btn:hover:not(:disabled) {
+  background: var(--accent-hover, var(--accent)) !important;
+  border-color: var(--accent-hover, var(--accent)) !important;
+}
+.file-picker-card .file-picker-list:focus-visible {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 60%, transparent) !important;
 }

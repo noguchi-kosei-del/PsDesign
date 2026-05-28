@@ -1,10 +1,9 @@
 @echo off
-chcp 65001 >nul
-cd /d "%~dp0"
+setlocal
 echo ============================================
 echo  OPUS - Dev mode start
 echo ============================================
-call npm run tauri dev
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0start-dev.ps1"
 if errorlevel 1 (
   echo.
   echo [ERROR] Failed to start. Check message above.

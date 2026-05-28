@@ -1,10 +1,9 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "OPUS",
-  "version": "2.1.5",
+  "version": "2.2.1",
   "identifier": "com.psdesign.app",
   "build": {
-    "beforeDevCommand": "npm run dev",
     "beforeBuildCommand": "npm run build",
     "devUrl": "http://localhost:1430",
     "frontendDist": "../dist"

@@ -37,8 +37,10 @@ import {
   commitItalicToSelections,
   commitLeadingToSelections,
   commitSizeToSelections,
+  getLayerCenter,
   hasSelection,
   rebuildLayerList,
+  recenterLayerToCenter,
   unifySelectedTextSize,
 } from "./text-editor.js";
 import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
@@ -49,6 +51,7 @@ import {
   bindScanPlaceButton,
   bindPositionAdjustButton,
   choosePositionAdjustMode,
+  closePositionAdjustModalExternal,
   runAutoPlace,
   runSelectedPositionAdjust,
 } from "./auto-place.js";
@@ -64,6 +67,8 @@ import {
   hideModalAnimated,
   hideProgress,
   notifyDialog,
+  showOpusProgressComplete,
+  OPUS_SUCCESS_HOLD_DURATION,
   showProgress,
   showModalAnimated,
   toast,
@@ -1309,10 +1314,10 @@ function bindParallelViewMode() {
     proofreadBtn.classList.toggle("active", mode === "proofread");
     spreadEditBtn.classList.toggle("active", mode === "spreadEdit");
     editorBtn.classList.toggle("active", mode === "editor");
-    parallelBtn.setAttribute("aria-pressed", mode === "parallel" ? "true" : "false");
-    proofreadBtn.setAttribute("aria-pressed", mode === "proofread" ? "true" : "false");
-    spreadEditBtn.setAttribute("aria-pressed", mode === "spreadEdit" ? "true" : "false");
-    editorBtn.setAttribute("aria-pressed", mode === "editor" ? "true" : "false");
+    parallelBtn.setAttribute("aria-checked", mode === "parallel" ? "true" : "false");
+    proofreadBtn.setAttribute("aria-checked", mode === "proofread" ? "true" : "false");
+    spreadEditBtn.setAttribute("aria-checked", mode === "spreadEdit" ? "true" : "false");
+    editorBtn.setAttribute("aria-checked", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
     applyEditorLeftPaneClass();
 
@@ -1328,6 +1333,50 @@ function bindParallelViewMode() {
     schedulePdfStageLayoutRefresh({ recenter: !pdfViewportCenter, viewportCenter: pdfViewportCenter });
   };
   onParallelViewModeChange(sync);
+
+  // 【v2.2.x】View ▾ ドロップダウン: trigger 開閉 + メニュー項目クリックで閉じる。
+  // 既存の view-parallel-btn / view-proofread-btn / view-spread-edit-btn / view-editor-btn
+  // の addEventListener (上記の switchViewMode) は維持。メニュー項目はこれらの ID を
+  // そのまま使うので、click イベントは既存リスナーに届く。
+  const dropdownTrigger = document.getElementById("view-mode-trigger");
+  const dropdownMenu = document.getElementById("view-mode-menu");
+  const fullscreenItem = document.getElementById("view-fullscreen-psd-btn");
+  if (dropdownTrigger && dropdownMenu) {
+    const closeDropdown = () => {
+      dropdownMenu.hidden = true;
+      dropdownTrigger.setAttribute("aria-expanded", "false");
+    };
+    const openDropdown = () => {
+      dropdownMenu.hidden = false;
+      dropdownTrigger.setAttribute("aria-expanded", "true");
+    };
+    dropdownTrigger.addEventListener("click", (e) => {
+      e.stopPropagation();
+      if (dropdownMenu.hidden) openDropdown();
+      else closeDropdown();
+    });
+    document.addEventListener("mousedown", (e) => {
+      if (dropdownMenu.hidden) return;
+      if (dropdownTrigger.contains(e.target)) return;
+      if (dropdownMenu.contains(e.target)) return;
+      closeDropdown();
+    });
+    document.addEventListener("keydown", (e) => {
+      if (!dropdownMenu.hidden && e.key === "Escape") {
+        e.preventDefault();
+        closeDropdown();
+      }
+    });
+    // メニュー項目クリック後はドロップダウンを閉じる。
+    dropdownMenu.querySelectorAll(".view-mode-menu-item").forEach((item) => {
+      item.addEventListener("click", () => closeDropdown());
+    });
+    // 「PSD全画面モード」項目: viewer-mode を起動 (toggleViewerMode は起動のみ、終了は Esc / ×)。
+    // PSD 未読込時は toggleViewerMode 内の getPages().length === 0 ガードで何もしない。
+    if (fullscreenItem) {
+      fullscreenItem.addEventListener("click", () => toggleViewerMode());
+    }
+  }
 
   const PANEL_PADDING = 32;
   const HEADER_OFFSET = 34; // proofread-panel-header height
@@ -1733,17 +1782,44 @@ function bindRubyTool() {
     });
   };
 
+  // panel が viewport の下端 / 上端からはみ出ていたら top を補正する。
+  // 位置 (基準点) は変えず、min/max でクランプするだけの軽量フィッティング。
+  // タブ切替などで panel のコンテンツが増えて下に伸びた場合の見切れを防ぐ。
+  const fitRubyPanelToViewport = () => {
+    if (!panelEl || panelEl.hidden) return;
+    const margin = 8;
+    const viewportH = window.innerHeight;
+    const rect = panelEl.getBoundingClientRect();
+    if (rect.height <= 0) return;
+    let nextTop = rect.top;
+    if (rect.bottom > viewportH - margin) {
+      nextTop = Math.max(margin, viewportH - margin - rect.height);
+    }
+    if (nextTop < margin) nextTop = margin;
+    if (Math.round(nextTop) !== Math.round(rect.top)) {
+      panelEl.style.top = `${Math.round(nextTop)}px`;
+    }
+  };
   const setFloatingTab = (tab, options = {}) => {
     currentFloatingTab = tab === "detail" ? "detail" : "ruby";
     if (currentFloatingTab === "detail") mountDetailControls();
     else restoreDetailControls();
     syncFloatingTabs();
-    if (options.reposition !== false) requestAnimationFrame(placeRubyPanelNearText);
+    if (options.reposition !== false) {
+      requestAnimationFrame(placeRubyPanelNearText);
+    } else {
+      // 位置は維持するが、コンテンツ高さが変わって下端からはみ出る場合は補正する。
+      // rAF を 2 段噛ませて mount 後のレイアウト確定値で計測する。
+      requestAnimationFrame(() => requestAnimationFrame(fitRubyPanelToViewport));
+    }
   };
 
   rubyFloatingTabButtons.forEach((btn) => {
     btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => setFloatingTab(btn.dataset.rubyFloatingTab));
+    // タブ切替（ルビ ↔ 文字詳細）でパネル位置が動くとユーザーが追跡しにくいため、
+    // 切替時の再配置はスキップして現在位置を維持する。新規 mount は updateSelection /
+    // placeRubyPanelNearText 側で初期配置されるので問題ない。
+    btn.addEventListener("click", () => setFloatingTab(btn.dataset.rubyFloatingTab, { reposition: false }));
   });
 
   const clampRubyScale = (n) => {
@@ -1899,37 +1975,66 @@ function bindRubyTool() {
     const obstacleOverlap = (rect) => obstacleRects.reduce((sum, obstacle) => sum + overlapArea(rect, obstacle), 0);
     const badge = anchor.querySelector(".layer-size-badge");
     const handle = anchor.querySelector(".layer-rotate-handle");
+    const anchorRect = anchor.getBoundingClientRect();
+    // テキストフレーム本体 (layer-box) + 文字選択 selection の両方を避けるべき領域として扱う。
+    // 旧実装は selection rect のみを avoid にしていたため、selection が短い場合に
+    // パネルがフレーム上の他の文字に被って読めなくなることがあった。
     const avoid = r;
+    const avoidRects = [r, anchorRect];
     const decorationRects = [badge, handle]
       .filter(Boolean)
       .map((el) => (typeof el.getBoundingClientRect === "function" ? el.getBoundingClientRect() : el));
     const decorationOverlap = (rect) => decorationRects.reduce((sum, decoration) => sum + overlapArea(rect, decoration), 0);
+    const avoidOverlapTotal = (rect) => avoidRects.reduce((sum, a) => sum + overlapArea(rect, a), 0);
     const fitLeftMax = viewportW - panelW - margin;
     const fitTopMax = viewportH - panelH - margin;
+    // フレーム全体 (anchorRect) を起点に右側 / 左側 / 下 / 上の 4 方向を最優先候補とし、
+    // どれもダメな場合のフォールバックとして selection 周辺の候補を補完する。
     const candidates = [
+      // 1. フレームの右側（最も自然な押しやすい位置）
+      { left: anchorRect.right + gap, top: anchorRect.top },
+      { left: anchorRect.right + gap, top: anchorRect.top + (anchorRect.height - panelH) / 2 },
+      // 2. フレームの左側
+      { left: anchorRect.left - gap - panelW, top: anchorRect.top },
+      { left: anchorRect.left - gap - panelW, top: anchorRect.top + (anchorRect.height - panelH) / 2 },
+      // 3. フレームの下
+      { left: anchorRect.left + (anchorRect.width - panelW) / 2, top: anchorRect.bottom + gap },
+      // 4. フレームの上
+      { left: anchorRect.left + (anchorRect.width - panelW) / 2, top: anchorRect.top - gap - panelH },
+      // 5. selection 周辺（フォールバック）
       { left: avoid.right + gap, top: avoid.top },
       { left: avoid.left - gap - panelW, top: avoid.top },
       { left: avoid.left, top: avoid.bottom + gap },
       { left: avoid.left, top: avoid.top - gap - panelH },
-      { left: avoid.left + (avoid.right - avoid.left - panelW) / 2, top: avoid.top - gap - panelH },
-      { left: avoid.left + (avoid.right - avoid.left - panelW) / 2, top: avoid.bottom + gap },
-      { left: r.right + gap, top: r.top },
-    ].map((p) => {
+    ].map((p, priority) => {
       const left = clamp(p.left, margin, fitLeftMax);
       const top = clamp(p.top, margin, fitTopMax);
       const rect = { left, top, right: left + panelW, bottom: top + panelH };
       return {
         left,
         top,
-        overlap: overlapArea(rect, avoid),
+        priority,
+        overlap: avoidOverlapTotal(rect),
         decorationOverlap: decorationOverlap(rect),
         obstacleOverlap: obstacleOverlap(rect),
-        distance: Math.abs(left - (r.right + gap)) + Math.abs(top - r.top),
+        distance: Math.abs(left - (anchorRect.right + gap)) + Math.abs(top - anchorRect.top),
       };
     });
-    candidates.sort((a, b) => (a.obstacleOverlap - b.obstacleOverlap) || (a.overlap - b.overlap) || (a.decorationOverlap - b.decorationOverlap) || (a.distance - b.distance));
+    // ソート優先順位: テキスト/フレーム被り → サイドバー被り → 装飾被り → 候補順位 → 距離
+    // 旧: obstacleOverlap が最優先だったため、サイドバー被りが等価ならテキスト被り
+    //   候補が選ばれて文字が読めなくなることがあった。テキスト被り 0 を最優先にする。
+    candidates.sort((a, b) =>
+      (a.overlap - b.overlap)
+      || (a.obstacleOverlap - b.obstacleOverlap)
+      || (a.decorationOverlap - b.decorationOverlap)
+      || (a.priority - b.priority)
+      || (a.distance - b.distance)
+    );
     panelEl.style.left = `${Math.round(candidates[0].left)}px`;
     panelEl.style.top = `${Math.round(candidates[0].top)}px`;
+    // panel コンテンツが大きく初期配置直後の clamp で下端をはみ出すケースに備えて、
+    // rAF を 2 段噛ませてレイアウト確定値で再度フィット補正する。
+    requestAnimationFrame(() => requestAnimationFrame(fitRubyPanelToViewport));
   };
 
   const textForRanges = (contents, ranges) => ranges
@@ -2040,12 +2145,19 @@ function bindRubyTool() {
     return ranges;
   };
 
-  const openParentSelectDialog = () => {
+  const focusRubyInput = () => {
+    requestAnimationFrame(() => {
+      if (inputEl.disabled) return;
+      inputEl.focus({ preventScroll: true });
+      const caret = inputEl.value.length;
+      inputEl.setSelectionRange?.(caret, caret);
+    });
+  };
+
+  const openParentSelectDialog = (triggerEvent = null) => {
     const target = activeEditTarget();
     if (!target || !target.contents) return;
-    const existing = manualParentRanges.length > 0
-      ? normalizeManualRanges(manualParentRanges, target.contents)
-      : (target.end > target.start ? [{ start: target.start, end: target.end }] : []);
+    const existing = [];
     const selected = new Set();
     const dividers = new Set();
     for (let i = 0; i < existing.length; i++) {
@@ -2071,6 +2183,58 @@ function bindRubyTool() {
         </div>
       </div>`;
     const grid = overlay.querySelector(".ruby-parent-grid");
+    const okBtn = overlay.querySelector(".ruby-parent-ok-btn");
+    const applyLayerSizedGrid = () => {
+      const inner = document.querySelector(".layer-box.editing .existing-layer-text:not(.stroke-preview-underlay), .layer-box.editing .new-layer-text:not(.stroke-preview-underlay)");
+      const rect = inner?.getBoundingClientRect?.();
+      const lines = String(target.contents ?? "").split(/\r\n|\r|\n/);
+      const maxChars = Math.max(1, ...lines.map((lineText) => lineText.length));
+      const lineCount = Math.max(1, lines.length);
+      let cellSize = 36;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        const inlineSize = isVertical ? rect.height / maxChars : rect.width / maxChars;
+        const blockSize = isVertical ? rect.width / lineCount : rect.height / lineCount;
+        const fitted = Math.min(inlineSize, blockSize);
+        if (Number.isFinite(fitted) && fitted > 0) cellSize = Math.round(fitted);
+      } else {
+        const fontSize = Number.parseFloat(getComputedStyle(inner ?? document.documentElement).fontSize);
+        if (Number.isFinite(fontSize) && fontSize > 0) cellSize = Math.round(fontSize);
+      }
+      // 親文字指定ダイアログの cell size。実テキストの 0.75 倍を目安に、
+      // タップしやすい最小 22px〜画面圧迫しない最大 38px でクランプする。
+      const scaledSize = Math.round(cellSize * 0.75);
+      const finalCellSize = Math.max(22, Math.min(38, scaledSize));
+      overlay.style.setProperty("--ruby-parent-cell-size", `${finalCellSize}px`);
+    };
+    applyLayerSizedGrid();
+    const selectedCellCount = () => grid?.querySelectorAll(".ruby-parent-cell.selected").length ?? 0;
+    const updateOkState = () => {
+      if (okBtn) okBtn.disabled = selectedCellCount() === 0;
+    };
+    const dialogPoint = () => {
+      let x = Number(triggerEvent?.clientX);
+      let y = Number(triggerEvent?.clientY);
+      if (!Number.isFinite(x) || !Number.isFinite(y)) {
+        const rect = parentSelectBtn?.getBoundingClientRect?.();
+        x = rect ? rect.left + rect.width / 2 : window.innerWidth / 2;
+        y = rect ? rect.top + rect.height / 2 : window.innerHeight / 2;
+      }
+      return { x, y };
+    };
+    const positionDialog = () => {
+      const panel = overlay.querySelector(".ruby-parent-dialog-panel");
+      if (!panel) return;
+      const rect = panel.getBoundingClientRect();
+      const margin = 8;
+      const maxLeft = window.innerWidth - rect.width - margin;
+      const maxTop = window.innerHeight - rect.height - margin;
+      const clamp = (value, min, max) => Math.max(min, Math.min(Math.max(min, max), value));
+      const point = dialogPoint();
+      const left = clamp(point.x - rect.width / 2, margin, maxLeft);
+      const top = clamp(point.y - rect.height / 2, margin, maxTop);
+      overlay.style.setProperty("--ruby-parent-dialog-left", `${Math.round(left)}px`);
+      overlay.style.setProperty("--ruby-parent-dialog-top", `${Math.round(top)}px`);
+    };
     let line = document.createElement("div");
     line.className = "ruby-parent-line";
     let lastCharIndex = -1;
@@ -2081,7 +2245,10 @@ function bindRubyTool() {
       divider.dataset.after = String(lastCharIndex);
       divider.title = "ここで親文字を分割";
       if (dividers.has(lastCharIndex)) divider.classList.add("active");
-      divider.addEventListener("click", () => divider.classList.toggle("active"));
+      divider.addEventListener("click", () => {
+        divider.classList.toggle("active");
+        updateOkState();
+      });
       line.appendChild(divider);
     };
     const textIndices = Array.from({ length: target.contents.length }, (_, i) => i);
@@ -2102,7 +2269,10 @@ function bindRubyTool() {
       cell.dataset.index = String(i);
       cell.textContent = ch;
       if (selected.has(i)) cell.classList.add("selected");
-      cell.addEventListener("click", () => cell.classList.toggle("selected"));
+      cell.addEventListener("click", () => {
+        cell.classList.toggle("selected");
+        updateOkState();
+      });
       line.appendChild(cell);
       lastCharIndex = i;
     }
@@ -2117,13 +2287,32 @@ function bindRubyTool() {
       close();
       updateSelection();
     });
-    overlay.querySelector(".ruby-parent-ok-btn")?.addEventListener("click", () => {
+    okBtn?.addEventListener("click", () => {
       manualParentRanges = normalizeManualRanges(rangesFromSelectedCells(grid), target.contents);
       close();
       updateSelection();
+      focusRubyInput();
     });
+    overlay.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        close();
+        return;
+      }
+      // Enter で OK 確定。1 文字以上のセルが選択されていれば確定し、
+      // 何も選択されていない (OK が disabled の) ときは無視。
+      if (e.key === "Enter" && !okBtn?.disabled) {
+        e.preventDefault();
+        okBtn?.click();
+      }
+    });
+    updateOkState();
+    overlay.style.visibility = "hidden";
     document.body.appendChild(overlay);
-    grid.focus();
+    positionDialog();
+    overlay.style.visibility = "";
+    requestAnimationFrame(positionDialog);
+    grid.focus({ preventScroll: true });
   };
 
   const updateSelection = () => {
@@ -2246,6 +2435,24 @@ function bindRubyTool() {
       const head = contents.slice(0, Math.max(0, index));
       return head.split(/\r\n|\r|\n/).length - 1;
     };
+    // 【v2.2.x】ルビ適用で行間が広がる前の bbox 中心を取得しておく。withHistoryTransient
+    // 完了後に recenterLayerToCenter で同じ中心に揃え直すと、フキダシ中央に置いた
+    // テキストがルビ適用瞬間にズレる問題を解消できる。
+    let layerRef = null;
+    let oldCenter = null;
+    try {
+      const refPage = getPages().find((p) => p.path === sel.psdPath);
+      if (refPage) {
+        if (sel.layerId != null) {
+          const layer = refPage.textLayers?.find((l) => Number(l.id) === Number(sel.layerId));
+          if (layer) layerRef = { kind: "existing", page: refPage, layer };
+        } else if (sel.tempId != null) {
+          const nl = getNewLayersForPsd(refPage.path).find((l) => l.tempId === sel.tempId);
+          if (nl) layerRef = { kind: "new", page: refPage, newLayer: nl };
+        }
+      }
+      if (layerRef) oldCenter = getLayerCenter(layerRef);
+    } catch (_) { /* recenter は best-effort */ }
     let didAdjustLeading = false;
     withHistoryTransient(() => {
       for (const app of applications) {
@@ -2259,6 +2466,11 @@ function bindRubyTool() {
           setLineLeading(sel.psdPath, targetId, targetLine, rubyLeadingPct);
           didAdjustLeading = true;
         }
+      }
+      // 行間を広げた直後は bbox の縦/横が変わって top-left 固定だと中心がズレる。
+      // 同 transient 内で recenter まで実行することで Ctrl+Z 1 回ですべて巻き戻る。
+      if (didAdjustLeading && layerRef && oldCenter) {
+        try { recenterLayerToCenter(layerRef, oldCenter); } catch (_) { /* best-effort */ }
       }
     });
     if (!sel.objectSelection) {
@@ -2811,7 +3023,12 @@ function resetPaneZoom(pane) {
 }
 function displayZoomPercent(pane) {
   const z = pane === "pdf" ? getPdfZoom() : getPsdZoom();
-  const base = pane === "pdf" ? PDF_FIT_BASE_SCALE : PSD_FIT_BASE_SCALE;
+  // 見開き編集時は spread-view.js 側で baseScale を 1.0 にしているので、
+  // 表示倍率もそれに合わせて 100% を起点にする。
+  const inSpreadEdit = pane !== "pdf" && getParallelViewMode() === "spreadEdit";
+  const base = pane === "pdf"
+    ? PDF_FIT_BASE_SCALE
+    : (inSpreadEdit ? 1.0 : PSD_FIT_BASE_SCALE);
   return Math.round(z * base * 100);
 }
 
@@ -2889,6 +3106,8 @@ function bindZoomTool() {
   onPdfZoomChange(updateLevel);
   onPsdZoomChange(updateLevel);
   onActivePaneChange(updateLevel);
+  // 見開き編集 ↔ 単ページ切替で base scale が変わるため zoom 表示も再計算する。
+  onParallelViewModeChange(updateLevel);
 
   out.addEventListener("click", () => zoomActivePaneBy(1 / 1.15));
   inn.addEventListener("click", () => zoomActivePaneBy(1.15));
@@ -3062,8 +3281,17 @@ function bindWindowControls() {
   };
   min.addEventListener("click", async () => { (await getWin()).minimize(); });
   max.addEventListener("click", async () => { (await getWin()).toggleMaximize(); });
-  close.addEventListener("click", async () => { await confirmAndCloseWindow(await getWin()); });
+  close.addEventListener("click", async () => {
+    console.log("[close-btn] clicked, hasEdits=", hasEdits(), "closeConfirmOpen=", closeConfirmOpen);
+    try {
+      const result = await confirmAndCloseWindow(await getWin());
+      console.log("[close-btn] confirmAndCloseWindow result=", result);
+    } catch (err) {
+      console.error("[close-btn] error:", err);
+    }
+  });
   void getWin().then((win) => win.onCloseRequested(async (event) => {
+    console.log("[close-req] received, allow=", allowWindowClose, "hasEdits=", hasEdits());
     if (allowWindowClose) return;
     if (!hasEdits()) return;
     event.preventDefault();
@@ -3094,10 +3322,10 @@ function setHomeScanEngineState(available) {
       warning.setAttribute("role", "status");
       warning.innerHTML = `
         <span class="home-scan-engine-warning-icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-            <path d="M12 9v4"/>
-            <path d="M12 17h.01"/>
-            <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="12" cy="12" r="6.25"/>
+            <path d="M12 8.75v3.6"/>
+            <path d="M12 15.3h.01"/>
           </svg>
         </span>
         <span class="home-scan-engine-warning-text">画像スキャンエンジンが未インストールです</span>
@@ -3113,7 +3341,7 @@ function setHomeScanEngineState(available) {
     warning.hidden = true;
   }
 
-  for (const id of ["home-transcribe-start-btn", "home-typeset-start-btn"]) {
+  for (const id of ["home-transcribe-start-btn", "home-typeset-start-btn", "home-project-open-btn"]) {
     const btn = document.getElementById(id);
     const card = btn?.closest(".home-start-card");
     if (!btn || !card) continue;
@@ -3457,7 +3685,7 @@ function openHomeTypesetDialog() {
           <div class="home-typeset-setting home-typeset-size-setting">
             <span class="home-typeset-setting-label">基本ポイント数</span>
             <span class="home-typeset-size-field">
-              <input id="home-typeset-size" class="home-typeset-size-input" type="number" min="6" max="999" step="0.1" inputmode="decimal" aria-label="基本ポイント数" />
+              <input id="home-typeset-size" class="home-typeset-size-input" type="number" min="6" max="999" step="0.5" inputmode="decimal" aria-label="基本ポイント数" />
               <span class="home-typeset-size-unit">pt</span>
             </span>
           </div>
@@ -3843,14 +4071,14 @@ function openHomeTypesetDialog() {
       if (e.key === "Escape") cleanup(null);
     };
     const pickWithHomeDialogHidden = async (pickFn) => {
+      // v2.2.x: file-picker-modal を home-typeset-modal より高い z-index (280) で
+      // 重ねるようにしたため、typeset modal を hide する必要は無くなった。
+      // (旧仕様: hide → show のあいだに一瞬ホーム画面が透ける flash が出ていた)
       pickingFile = true;
-      modal.classList.remove("visible");
-      modal.hidden = true;
       try {
         return await pickFn();
       } finally {
         pickingFile = false;
-        if (!settled) showModalAnimated(modal);
       }
     };
 
@@ -3943,32 +4171,134 @@ function openHomeTypesetDialog() {
   });
 }
 
-async function transitionFromHome() {
-  const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-  await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+// v2.2.x: 全画面の黒で覆う一瞬の暗転を発火するヘルパー。CSS の keyframe アニメで
+// 100ms fade-in → 200ms 黒 hold → 100ms fade-out を進行させる。アニメ終了で要素を自動削除。
+function playSceneFadeBlack() {
+  const existing = document.querySelector(".scene-fade-black");
+  if (existing) existing.remove();
+  const el = document.createElement("div");
+  el.className = "scene-fade-black";
+  document.body.appendChild(el);
+  el.addEventListener("animationend", () => el.remove(), { once: true });
+}
+
+// v2.2.x: 暗転の直後に「ゆっくり星空がディゾルブして現れ、そして消える」幻想的な veil を発火。
+// 70 個の星を 0-1100ms の delay でばらつかせ、ちらほらと段階的に灯っていく演出に。
+// 「なんだろうと思ったら星空が広がる」という印象的な reveal を作る。
+function playSceneStarryVeil() {
+  const existing = document.querySelector(".scene-starry-veil");
+  if (existing) existing.remove();
+  const veil = document.createElement("div");
+  veil.className = "scene-starry-veil";
+  const STAR_COUNT = 70;
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const star = document.createElement("span");
+    star.className = "scene-starry-star";
+    star.style.left = `${Math.random() * 100}%`;
+    star.style.top = `${Math.random() * 100}%`;
+    const size = 0.9 + Math.random() * 2.4;
+    star.style.width = `${size}px`;
+    star.style.height = `${size}px`;
+    // 0〜1100ms の delay で段階的に星が灯る。早い星はうっすら見え始め、
+    // 遅い星は最後にきらめいて、夜空が完成していく印象。
+    star.style.animationDelay = `${Math.floor(Math.random() * 1100)}ms`;
+    // 個別の duration もばらつかせて自然な瞬き
+    star.style.animationDuration = `${2300 + Math.floor(Math.random() * 600)}ms`;
+    veil.appendChild(star);
+  }
+  document.body.appendChild(veil);
+  veil.addEventListener("animationend", (e) => {
+    // 子の star アニメ完了は無視。container 自身の fade 完了でだけ remove。
+    if (e.target === veil) veil.remove();
+  });
+}
+
+// v2.2.x: 進捗完了 → 完了した作業画面への「逆向き」シーン転換。
+// 設定 → 進捗画面が黒 → 星空 → 進捗画面 だったのに対し、
+// 完了 → 作業画面は 進捗 → 星空 → 作業画面 で対称化する (黒は無しで、進捗 modal 自体が
+// 暗いので始点として機能する)。
+// 星空 veil を被せて、その下で進捗 modal を silently close し、veil の fade-out で
+// 完成した作業画面を reveal する。
+async function transitionToWorkspaceWithStars() {
+  // ① OPUS の 100% 完了演出を発火 (sparkle + 「完了」テキスト)。
+  //    auto-place 内の hideProgress({success: true}) は skipFinalHide で省いているため、
+  //    ここで明示的に success 演出だけを再現する (modal はまだ閉じない)。
+  const opusCompleteShown = showOpusProgressComplete();
+  // ② 完了演出の hold 時間 (OPUS_SUCCESS_HOLD_DURATION = 1500ms) を待つ。
+  //    OPUS モードでない時は短めに 600ms だけ間を取る。
+  await new Promise((resolve) => setTimeout(resolve, opusCompleteShown ? OPUS_SUCCESS_HOLD_DURATION : 600));
+  // ③ 星空 veil を起動 (3000ms anim: 150ms fade-in / 2100ms hold / 750ms fade-out)
+  playSceneStarryVeil();
+  // ④ veil が完全 opaque (~200ms) になるまで待つ
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  // ⑤ 進捗 modal を veil の裏側で close (curtain slide-out は不可視)
+  await hideProgress();
+  // ⑥ veil が完全に消えるまで待つ (合計 3000ms - 200ms = 2800ms)
+  //    hideProgress (~500ms) は veil の hold 期間内で終わるので並行的に消化される
+  await new Promise((resolve) => setTimeout(resolve, 2800));
+}
+
+async function transitionFromHome({ duringBlack, afterStarsPeak } = {}) {
+  // v2.2.x: 「設定 → アニメーション画面」の 3 段シーン切替。
+  // フェーズ 1 (0-400ms): 黒い暗転で modal swap を invisibly に済ませる。
+  // フェーズ 2 (130-3130ms): 星空 veil 3000ms — ゆっくりディゾルブして印象的に reveal、
+  //                          ホールド、そしてゆっくり消える。
+  // フェーズ 3 (afterStarsPeak): 星空が peak のあと、progress modal の curtain が
+  //                              1.4s かけて静かに立ち上がり、星と入れ替わるように姿を現す。
+  // 体験: ボタン押下 → 一瞬黒 → なんだろう…と思った瞬間に星空が広がる → ゆっくり消えていき、
+  //       その間に進捗画面が幻想的に立ち上がる。
   document.body.classList.add("home-starting");
-  await wait(360);
+  playSceneFadeBlack();
+  // 黒が完全に画面を覆う peak (約 130ms 後) を待ってから swap を実行
+  await new Promise((resolve) => setTimeout(resolve, 130));
+  if (typeof duringBlack === "function") {
+    try { duringBlack(); } catch (e) { console.error(e); }
+  }
   hideHomeScreen();
   document.body.classList.remove("home-starting");
-  await new Promise((resolve) => requestAnimationFrame(resolve));
+  // 星空 veil を起動。黒の fade-out (130→400ms) と重なってクロスディゾルブする。
+  playSceneStarryVeil();
+  // 星空 veil が完全 opaque な期間 (peak hold = veil 開始 + 150ms 〜 + 2250ms) 中に
+  // curtain entrance を完全に終わらせたい (curtain が partial だと workspace が透けるため)。
+  // curtain は 1.4s、veil peak 終了は t=130+2250=2380。
+  // ⇒ afterStarsPeak を t=130+850=980 で発火 → curtain 980-2380 完成 → veil fade-out 開始時点で
+  //    curtain は既に 100%、workspace は curtain (進捗 modal) の下に完全に隠れる。
+  await new Promise((resolve) => setTimeout(resolve, 850));
+  if (typeof afterStarsPeak === "function") {
+    try { afterStarsPeak(); } catch (e) { console.error(e); }
+  }
+  // 残り 2150ms 待って星空 veil が完全に消える (合計 130 + 850 + 2150 = 3130ms = 3000ms veil + 開始遅延)
+  await new Promise((resolve) => setTimeout(resolve, 2150));
 }
 
 async function startHomeTypesetFlow() {
   if (!(await ensureHomeScanEngineReady())) return;
   const picked = await openHomeTypesetDialog();
   if (!picked) return;
-  const positionAdjustMode = await choosePositionAdjustMode();
+  // keepOpen: true で位置調整 modal を「OK 後も閉じない」状態にする。
+  // その後 progress modal がフェードイン完了 → 位置調整 modal を閉じる、
+  // という順序にすることで「位置調整 modal の閉じアニメ中にホーム画面が
+  // 透けて見える」問題を解消する。
+  const positionAdjustMode = await choosePositionAdjustMode({ keepOpen: true });
   if (positionAdjustMode == null) return;
   const progressFlowId = `home-typeset-${Date.now()}`;
-  startProgressFlow({
-    id: progressFlowId,
-    title: "自動配置中…",
-    variant: "place",
-    icon: PLACE_ICON_SVG,
-    steps: createHomeTypesetSteps({ positionAdjustMode }),
-    detail: "自動配置を準備中…",
+  // v2.2.x: 暗転 → 星空ディゾルブ → 進捗画面立ち上がり の 3 段演出。
+  // duringBlack: 黒の peak で位置調整 modal を invisibly に閉じる。
+  // afterStarsPeak: 星空が peak のあと、progress modal の curtain (1.4s) を発火。
+  //                 星が薄れていくのと重なり、画面が幻想的に立ち上がる。
+  await transitionFromHome({
+    duringBlack: () => closePositionAdjustModalExternal(),
+    afterStarsPeak: () => {
+      startProgressFlow({
+        id: progressFlowId,
+        title: "自動配置中…",
+        variant: "place",
+        icon: PLACE_ICON_SVG,
+        steps: createHomeTypesetSteps({ positionAdjustMode }),
+        detail: "自動配置を準備中…",
+      });
+    },
   });
-  await transitionFromHome();
   try {
     clearScanExtractDoc();
     if (!referenceSelectionMatchesLoaded(picked.referencePaths, picked.hiddenReferencePages)) {
@@ -3991,19 +4321,29 @@ async function startHomeTypesetFlow() {
       return;
     }
     if (picked.txtPath) await loadTxtFromPath(picked.txtPath);
+    // v2.2.x: 内部の hideProgress({success: true}) を skip して、startHomeTypesetFlow 側で
+    // 「進捗 → 星空 → 作業画面」のディゾルブ転換 (transitionToWorkspaceWithStars) を担当する。
+    // これにより workspace が一瞬チラ見えするタイミングを完全に消せる。
     const placed = await runAutoPlace({
       allowExtractText: true,
       preserveTxtDuringExtract: !!picked.txtPath,
       positionAdjustMode,
       progressFlowId,
+      skipFinalHide: true,
     });
     if (!placed) {
       await hideProgress();
       return;
     }
     if (placed?.positionAdjusted !== true) {
-      await runSelectedPositionAdjust(positionAdjustMode, { automatic: true, progressFlowId });
+      await runSelectedPositionAdjust(positionAdjustMode, {
+        automatic: true,
+        progressFlowId,
+        skipFinalHide: true,  // mode3 の runOverlayAlign にも propagate
+      });
     }
+    // 全操作完了 → 星空ディゾルブで進捗 modal → 作業画面に転換
+    await transitionToWorkspaceWithStars();
   } catch (e) {
     console.error(e);
     await hideProgress();
@@ -4028,23 +4368,31 @@ async function startHomeTranscribeFlow() {
   }
   if (!files.length) return;
 
-  showProgress({
-    title: "書き起こし中…",
-    detail: "読み込み準備中…",
-    current: 0,
-    total: 1,
-    showCount: false,
-    variant: "scan",
+  // v2.2.x: 書き起こしフローも同じ 3 段演出 (暗転 → 星空 → 進捗立ち上がり) を使う。
+  // showProgress は afterStarsPeak で発火し、星空 fade-out と curtain emerge を重ねる。
+  await transitionFromHome({
+    afterStarsPeak: () => {
+      showProgress({
+        title: "書き起こし中…",
+        detail: "読み込み準備中…",
+        current: 0,
+        total: 1,
+        showCount: false,
+        variant: "scan",
+      });
+    },
   });
-  await transitionFromHome();
   try {
     clearScanExtractDoc();
     await loadReferenceFiles(files, { keepProgressOpen: true, variant: "scan" });
-    await runScanExtractForTranscription(files);
+    // v2.2.x: scan-extract の内部 hideProgress を skip し、完了後に星空ディゾルブで close する
+    await runScanExtractForTranscription(files, { keepProgressOpen: true });
     setParallelViewMode("editor");
     setEditorLeftPaneMode("pdf");
     setActivePane("pdf");
     requestAnimationFrame(() => focusEditor());
+    // 全操作完了 → 星空ディゾルブで進捗 modal → エディタ画面に転換
+    await transitionToWorkspaceWithStars();
   } catch (e) {
     console.error(e);
     await hideProgress();

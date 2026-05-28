@@ -2354,7 +2354,7 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
 // 変更前の中心を保持して変更後に再配置するための ヘルパー。
 // existing は addEditOffset で蓄積された dx/dy も含めた現在位置を返す。
 // new は nl.x/nl.y が top-left なので width/2, height/2 を加算。
-function getLayerCenter(ref) {
+export function getLayerCenter(ref) {
   if (ref.kind === "existing") {
     const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
     const rect = layerRectForExisting(ref.page, ref.layer, edit);
@@ -2368,7 +2368,7 @@ function getLayerCenter(ref) {
 // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
 // レイヤーを oldCenter (= 変更前の中心) に来るように left/top (or dx/dy) を再計算。
 // commitFontToSelections / commitSingleFieldToSelections から呼ばれる。
-function recenterLayerToCenter(ref, oldCenter) {
+export function recenterLayerToCenter(ref, oldCenter) {
   if (!oldCenter) return;
   if (ref.kind === "existing") {
     // 既存: 新 rect の中心と oldCenter の差分を addEditOffset で加算する。
