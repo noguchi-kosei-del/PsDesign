@@ -146,6 +146,23 @@ function makeCompositeDoc(sources) {
   };
 }
 
+// テストモード用: ディスク I/O 無しで白紙 count ページの見本（合成 doc）を作る。
+// 既存の makeCompositeDoc / makeImagePage をそのまま再利用するので pdf-view.js と互換。
+export async function buildBlankReferenceDoc(count, width, height) {
+  const sources = [];
+  for (let i = 0; i < count; i++) {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, width, height);
+    const bitmap = await createImageBitmap(canvas);
+    sources.push({ type: "image", bitmap, path: `テストページ ${i + 1}` });
+  }
+  return makeCompositeDoc(sources);
+}
+
 // 単一画像ファイルを読み込み、ImageBitmap を返す。
 async function readImageBitmap(path) {
   const bytes = await readFileBytes(path);

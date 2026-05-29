@@ -364,31 +364,6 @@
               <div class="stage-label-bar" id="psd-stage-label-bar">
                 <span class="stage-label-text" id="psd-stage-label"></span>
                 <div class="stage-label-actions">
-                  <button id="toggle-rulers-btn" class="psd-rulers-toggle-btn icon-btn" type="button" title="定規 (Ctrl+R)" aria-label="定規" aria-pressed="false">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <rect x="2" y="9" width="20" height="6" rx="1"/>
-                      <line x1="6" y1="9" x2="6" y2="13"/>
-                      <line x1="10" y1="9" x2="10" y2="12"/>
-                      <line x1="14" y1="9" x2="14" y2="13"/>
-                      <line x1="18" y1="9" x2="18" y2="12"/>
-                    </svg>
-                  </button>
-                  <button id="psd-guides-apply-btn" class="psd-guides-apply-btn icon-btn" type="button" title="ガイドを複数ページに反映" aria-label="ガイドを複数ページに反映" disabled>
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <rect x="9" y="9" width="13" height="13" rx="2" ry="2"/>
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>
-                    </svg>
-                  </button>
-                  <button id="psd-guides-lock-btn" class="psd-guides-lock-btn icon-btn" type="button" title="ガイドをロック" aria-label="ガイドをロック" aria-pressed="false" disabled>
-                    <svg class="lock-icon-unlocked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                      <path d="M7 11V7a5 5 0 0 1 9.9-1"/>
-                    </svg>
-                    <svg class="lock-icon-locked" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <rect x="3" y="11" width="18" height="11" rx="2" ry="2"/>
-                      <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
-                    </svg>
-                  </button>
                   <button id="psd-rotate-btn" class="psd-rotate-btn icon-btn" type="button" title="PSD を 90° 回転（クリックごと）" aria-label="PSD を回転" disabled>
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
                       <polyline points="21 2 21 8 15 8"/>
@@ -521,7 +496,7 @@
               <line x1="12" y1="2" x2="12" y2="22"/>
             </svg>
           </button>
-          <button id="unify-text-size-btn" class="icon-btn side-tool-btn" type="button" title="選択中のテキストサイズを統一" aria-label="選択中のテキストサイズを統一">
+          <button id="unify-text-size-btn" class="icon-btn side-tool-btn" type="button" title="選択中のテキストサイズを統一 (Shift+S)" aria-label="選択中のテキストサイズを統一 (Shift+S)">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
               <path d="M5 5h14"/>
               <path d="M12 5v14"/>
@@ -588,6 +563,15 @@
               </div>
             </aside>
           </div>
+          <button id="toggle-rulers-btn" class="icon-btn side-tool-btn" type="button" title="定規 (Ctrl+R)" aria-label="定規" aria-pressed="false">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <rect x="2" y="9" width="20" height="6" rx="1"/>
+              <line x1="6" y1="9" x2="6" y2="13"/>
+              <line x1="10" y1="9" x2="10" y2="12"/>
+              <line x1="14" y1="9" x2="14" y2="13"/>
+              <line x1="18" y1="9" x2="18" y2="12"/>
+            </svg>
+          </button>
           <div class="side-page-zoom" role="group" aria-label="ズーム">
             <button id="zoom-in-btn" class="icon-btn page-zoom-btn" type="button" title="ズームイン (Alt+スクロール)" aria-label="ズームイン">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -721,10 +705,6 @@
                     </div>
                   </div>
                 </div>
-                <div class="font-style-toggle-row size-font-style-row" role="group" aria-label="文字スタイル">
-                  <button id="bold-toggle-detail-btn" class="font-style-toggle-btn bold-toggle-btn" type="button" title="太字（合成太字）" aria-label="太字" aria-pressed="false" disabled>太字</button>
-                  <button id="italic-toggle-detail-btn" class="font-style-toggle-btn italic-toggle-btn" type="button" title="イタリック体（合成斜体）" aria-label="イタリック体" aria-pressed="false" disabled>斜体</button>
-                </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="leading">
                 <div class="editor-panel-label"><svg class="char-panel-icon" aria-hidden="true"><use href="#char-icon-leading"></use></svg>行間</div>
@@ -762,6 +742,13 @@
                     <span class="size-unit">px</span>
                     <button id="stroke-width-dec-btn" class="size-btn" type="button" title="細く" aria-label="細く">−</button>
                   </div>
+                </div>
+              </div>
+              <div class="editor-tab-panel" data-tab-panel="emphasis">
+                <div class="editor-panel-label">強調</div>
+                <div class="font-style-toggle-row" role="group" aria-label="強調">
+                  <button id="bold-toggle-detail-btn" class="font-style-toggle-btn bold-toggle-btn" type="button" title="太字（合成太字）" aria-label="太字" aria-pressed="false" disabled></button>
+                  <button id="italic-toggle-detail-btn" class="font-style-toggle-btn italic-toggle-btn" type="button" title="イタリック体（合成斜体）" aria-label="イタリック体" aria-pressed="false" disabled></button>
                 </div>
               </div>
               <div class="editor-tab-panel" data-tab-panel="ruby">
@@ -823,10 +810,6 @@
                   <ul id="edit-font-list" class="font-combobox-list" hidden role="listbox"></ul>
                 </div>
                 <div id="font-weight-selector" class="font-weight-selector" role="group" aria-label="フォントの太さ"></div>
-                <div class="font-style-toggle-row" role="group" aria-label="文字スタイル">
-                  <button id="bold-toggle-btn" class="font-style-toggle-btn bold-toggle-btn" type="button" title="太字（合成太字）" aria-label="太字" aria-pressed="false" disabled>太字</button>
-                  <button id="italic-toggle-btn" class="font-style-toggle-btn italic-toggle-btn" type="button" title="イタリック体（合成斜体）" aria-label="イタリック体" aria-pressed="false" disabled>斜体</button>
-                </div>
               </label>
               <div class="favorite-style-panel" id="favorite-style-panel">
                 <div class="favorite-style-header">
@@ -1016,6 +999,13 @@
           </svg>
           <span class="scan-install-menu-badge" id="scan-install-menu-badge" hidden></span>
         </button>
+        <button id="test-mode-btn" class="menu-icon-btn" type="button" title="テストモード（白紙3ページで動作確認）" aria-label="テストモード">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M14 2v6a2 2 0 0 0 .245.96l5.51 10.08A2 2 0 0 1 18 22H6a2 2 0 0 1-1.755-2.96l5.51-10.08A2 2 0 0 0 10 8V2"/>
+            <path d="M6.453 15h11.094"/>
+            <path d="M8.5 2h7"/>
+          </svg>
+        </button>
       </div>
     </aside>
     <div class="progress-modal" id="confirm-modal" hidden>
@@ -1072,22 +1062,6 @@
         <div class="page-jump-actions">
           <button type="button" id="save-folder-cancel" class="page-jump-btn">キャンセル</button>
           <button type="button" id="save-folder-ok" class="page-jump-btn page-jump-btn-primary">保存</button>
-        </div>
-      </div>
-    </div>
-    <div class="progress-modal" id="guides-apply-modal" hidden>
-      <div class="progress-card guides-apply-card" role="dialog" aria-modal="true" aria-label="ガイドを複数ページに反映">
-        <div class="progress-title">ガイドを複数ページに反映 / 解除</div>
-        <div class="confirm-modal-message">「反映」は現在のページのガイドを選択したページへ上書きします。「解除」は選択したページのガイドを削除します。</div>
-        <div class="guides-apply-controls">
-          <button type="button" id="guides-apply-select-all" class="page-jump-btn">全選択</button>
-          <button type="button" id="guides-apply-select-none" class="page-jump-btn">全解除</button>
-        </div>
-        <div class="guides-apply-list" id="guides-apply-list"></div>
-        <div class="page-jump-actions">
-          <button type="button" id="guides-apply-cancel" class="page-jump-btn">キャンセル</button>
-          <button type="button" id="guides-apply-unapply" class="page-jump-btn page-jump-btn-danger">解除</button>
-          <button type="button" id="guides-apply-ok" class="page-jump-btn page-jump-btn-primary">反映</button>
         </div>
       </div>
     </div>

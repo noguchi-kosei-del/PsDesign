@@ -59,6 +59,13 @@ pub fn apply_edits(payload: &EditPayload, app: &tauri::AppHandle) -> Result<Stri
         .map_err(|e| PhotoshopError::LaunchFailed(e.to_string()))?;
     emit_progress(app, 0, payload.edits.len(), "Photoshop に処理を渡しています...");
 
+    // 【v2.x】Photoshop 起動時の「仮想記憶ディスクの容量不足」警告ダイアログを自動 OK する。
+    // このダイアログは Photoshop プロセスが起動するタイミング (= JSX 実行前) に出るため
+    // JSX 内の app.displayDialogs = NO では抑制できない。Windows API で別途検出して
+    // OK ボタン (IDOK = 1) に WM_COMMAND を送ることでバックグラウンドで自動クローズする。
+    // バックグラウンドスレッドで動かし、メイン処理 (sentinel ポーリング) をブロックしない。
+    start_scratch_dialog_auto_dismiss();
+
     let mut hidden_windows = HiddenPhotoshopWindows::default();
     hidden_windows.hide_visible_photoshop_windows();
 
@@ -170,6 +177,221 @@ fn cleanup_adobe_crash_processors() {
 
 #[cfg(not(windows))]
 fn cleanup_adobe_crash_processors() {}
+
+// 【v2.x】Photoshop 起動時に出る「仮想記憶ディスクの容量不足」警告ダイアログを
+// バックグラウンドで監視し、見つけたら自動的に OK を押す。
+//
+// このダイアログは Photoshop プロセス起動時に表示されるため、JSX (app.displayDialogs)
+// では抑制できない。Windows API (EnumWindows + EnumChildWindows + PostMessage)
+// で別途検出して OK ボタンに BM_CLICK を送信することでバックグラウンドクローズする。
+//
+// 検出対象タイトル (日本語 / 英語 Photoshop):
+//   - "仮想記憶ディスクの容量不足"
+//   - "Scratch Disks are almost full"
+//   - "Scratch disks are full"
+//
+// ポーリング期間: Photoshop 起動から最大 90 秒間、500ms 間隔。複数の警告ダイアログ
+// (容量不足の後にフォント置換警告など) が連鎖して出るケースにも対応する。
+//
+// dismiss 戦略は 2 段:
+//   戦略 1: ダイアログ HWND の子ウィンドウから「OK」テキストを持つ Button クラスを
+//           EnumChildWindows で探して BM_CLICK (= 0x00F5) を PostMessage で送る。
+//           Adobe ダイアログでは独自の WndProc で IDOK が無視されるケースが多いので、
+//           実際の OK ボタンを叩く方が確実。
+//   戦略 2: 並行して WM_COMMAND IDOK もダイアログ本体に送る (補助)。
+#[cfg(windows)]
+fn start_scratch_dialog_auto_dismiss() {
+    std::thread::spawn(|| {
+        use std::time::{Duration, Instant};
+        let deadline = Instant::now() + Duration::from_secs(90);
+        while Instant::now() < deadline {
+            let _ = dismiss_known_photoshop_dialogs();
+            std::thread::sleep(Duration::from_millis(500));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+fn start_scratch_dialog_auto_dismiss() {}
+
+// 【v2.x】常時バックグラウンド監視。アプリ起動時に一度だけ呼ぶ。Photoshop が
+// いつ起動されても (OPUS の保存処理経由以外も含む) 警告ダイアログを自動 OK する。
+// 2 秒間隔で polling、CPU 負荷は無視できるレベル。
+#[cfg(windows)]
+pub fn start_background_dialog_watcher() {
+    std::thread::spawn(|| {
+        use std::time::Duration;
+        loop {
+            let _ = dismiss_known_photoshop_dialogs();
+            std::thread::sleep(Duration::from_millis(2000));
+        }
+    });
+}
+
+#[cfg(not(windows))]
+pub fn start_background_dialog_watcher() {}
+
+#[cfg(windows)]
+fn dismiss_known_photoshop_dialogs() -> usize {
+    use winapi::shared::minwindef::{BOOL, LPARAM};
+    use winapi::shared::windef::HWND;
+    use winapi::um::winuser::{
+        EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextLengthW,
+        GetWindowTextW, IsWindowVisible, PostMessageW, SendInput, SetForegroundWindow, BM_CLICK,
+        INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VK_RETURN, WM_CHAR, WM_CLOSE,
+        WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
+    };
+
+    // 検出対象のダイアログタイトル (小文字で部分一致判定)。複数のロケール / バージョン
+    // 表記揺れを 1 リストに集約する。
+    const TARGET_KEYWORDS: &[&str] = &[
+        "仮想記憶ディスクの容量不足",
+        "仮想記憶ディスク",
+        "scratch disk",
+        "scratch disks",
+    ];
+
+    // OK ボタンのラベル候補 (Photoshop 言語別 + 半角全角)。
+    const OK_LABELS: &[&str] = &["ok", "ｏｋ", "ＯＫ", "&ok"];
+
+    unsafe extern "system" fn find_ok_button_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let out = &mut *(lparam as *mut HWND);
+        if !out.is_null() {
+            return 0;
+        }
+        let class = window_class_name(hwnd).to_lowercase();
+        if !class.contains("button") {
+            return 1;
+        }
+        let title = window_title(hwnd);
+        let title_lower = title.trim().to_lowercase().replace('&', "");
+        if OK_LABELS.iter().any(|l| title_lower == *l) {
+            *out = hwnd;
+            return 0;
+        }
+        1
+    }
+
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let count = &mut *(lparam as *mut usize);
+        if IsWindowVisible(hwnd) == 0 {
+            return 1;
+        }
+        let title = window_title(hwnd);
+        let title_lower = title.to_lowercase();
+        if title_lower.is_empty() {
+            return 1;
+        }
+        let matched = TARGET_KEYWORDS
+            .iter()
+            .any(|kw| title_lower.contains(&kw.to_lowercase()));
+        if !matched {
+            return 1;
+        }
+
+        eprintln!("[ps-dismiss] detected dialog hwnd={:?} title={:?}", hwnd, title);
+
+        // 戦略 1: 子ウィンドウから OK ボタンを探して BM_CLICK。
+        // 標準 Win32 Button が存在すれば確実。Adobe Skia UI ではボタンが
+        // EnumChildWindows で見えないので null になる。
+        let mut ok_btn: HWND = std::ptr::null_mut();
+        EnumChildWindows(
+            hwnd,
+            Some(find_ok_button_proc),
+            &mut ok_btn as *mut _ as LPARAM,
+        );
+        if !ok_btn.is_null() {
+            eprintln!("[ps-dismiss] strategy 1: BM_CLICK to ok_btn={:?}", ok_btn);
+            let _ = PostMessageW(ok_btn, BM_CLICK, 0, 0);
+        } else {
+            eprintln!("[ps-dismiss] strategy 1: no standard OK button found (Skia UI?)");
+        }
+
+        // 戦略 2: ダイアログ本体に WM_COMMAND IDOK。
+        eprintln!("[ps-dismiss] strategy 2: WM_COMMAND IDOK to dialog");
+        let _ = PostMessageW(hwnd, WM_COMMAND, 1, 0);
+
+        // 戦略 3: VK_RETURN を WM_KEYDOWN/UP で送る (Skia UI 向け)。
+        // 多くの Adobe ダイアログは Enter キーで OK を確定する。
+        eprintln!("[ps-dismiss] strategy 3: WM_KEYDOWN/UP VK_RETURN to dialog");
+        let _ = PostMessageW(hwnd, WM_KEYDOWN, VK_RETURN as usize, 0);
+        let _ = PostMessageW(hwnd, WM_KEYUP, VK_RETURN as usize, 0);
+
+        // 戦略 4: WM_CHAR '\r' (一部の UI Framework はキー入力を WM_CHAR で受ける)。
+        eprintln!("[ps-dismiss] strategy 4: WM_CHAR \\r to dialog");
+        let _ = PostMessageW(hwnd, WM_CHAR, '\r' as usize, 0);
+
+        // 戦略 5: SetForegroundWindow + SendInput VK_RETURN (最後の手段)。
+        // フォーカスを一時的にダイアログへ移して、グローバルキー入力として Enter を送る。
+        // 確実だが、ユーザーが他のアプリで作業中だとフォーカスが奪われる副作用あり。
+        // 起動時警告中はユーザーは保存処理を待っているので実用上 OK と判断。
+        eprintln!("[ps-dismiss] strategy 5: SetForegroundWindow + SendInput Enter");
+        let orig_fg = GetForegroundWindow();
+        let _ = SetForegroundWindow(hwnd);
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        // Enter キーを KEYDOWN + KEYUP で送る。
+        let mut inputs: [INPUT; 2] = std::mem::zeroed();
+        inputs[0].type_ = INPUT_KEYBOARD;
+        {
+            let ki = inputs[0].u.ki_mut();
+            ki.wVk = VK_RETURN as u16;
+            ki.wScan = 0;
+            ki.dwFlags = 0;
+            ki.time = 0;
+            ki.dwExtraInfo = 0;
+        }
+        inputs[1].type_ = INPUT_KEYBOARD;
+        {
+            let ki = inputs[1].u.ki_mut();
+            ki.wVk = VK_RETURN as u16;
+            ki.wScan = 0;
+            ki.dwFlags = KEYEVENTF_KEYUP;
+            ki.time = 0;
+            ki.dwExtraInfo = 0;
+        }
+        SendInput(
+            inputs.len() as u32,
+            inputs.as_mut_ptr(),
+            std::mem::size_of::<INPUT>() as i32,
+        );
+        // 元のフォアグラウンドウィンドウへ復帰 (奪ったフォーカスをユーザーに返す)。
+        if !orig_fg.is_null() && orig_fg != hwnd {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            let _ = SetForegroundWindow(orig_fg);
+        }
+
+        // 戦略 6: WM_CLOSE (× ボタン相当、最終手段)。Skia UI でも効きやすい。
+        // OK と等価ではないかもしれないが、Photoshop の起動警告ではダイアログを閉じる
+        // ことで処理続行になるケースが多い。
+        eprintln!("[ps-dismiss] strategy 6: WM_CLOSE to dialog");
+        let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
+
+        *count += 1;
+        1
+    }
+
+    unsafe fn window_class_name(hwnd: HWND) -> String {
+        let mut buf = [0u16; 256];
+        let len = GetClassNameW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        String::from_utf16_lossy(&buf[..len.max(0) as usize])
+    }
+
+    unsafe fn window_title(hwnd: HWND) -> String {
+        let len = GetWindowTextLengthW(hwnd);
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let got = GetWindowTextW(hwnd, buf.as_mut_ptr(), buf.len() as i32);
+        String::from_utf16_lossy(&buf[..got.max(0) as usize])
+    }
+
+    let mut count: usize = 0;
+    unsafe {
+        EnumWindows(Some(enum_proc), &mut count as *mut _ as LPARAM);
+    }
+    count
+}
 
 #[cfg(windows)]
 fn find_visible_photoshop_windows() -> Vec<winapi::shared::windef::HWND> {

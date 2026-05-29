@@ -1,5 +1,270 @@
 # PsDesign
 
+## ⚑ GitHub プッシュ前チェック方針（必読・最優先）
+
+このリポジトリでは、**GitHub に push する前に必ず以下を実施する**こと（テキスト情報の
+反映ロジックの破損・欠落を防ぐための恒久ルール）。
+
+1. **`npm run check` を実行して成功させる**（= `check:encoding` + `lint` + `build`）。
+   失敗したら解消するまで push しない。
+2. **テキスト反映ロジックに触れた変更がある場合は、[RDD.md](RDD.md) の要件 (REQ-Gx.x) と
+   末尾「プッシュ前チェックリスト」を確認**する。特に高リスク不変条件
+   （per-char マップの `shiftCharMap` 追加漏れ / `appendLineWithTracking` への `charRubies`
+   渡し漏れ / 保存前の `measureAllRubyOffsetsSync` / 復元時の `silentTxtListener` /
+   per-char 系の `textLayer` クラス / JS payload と Rust struct のパリティ）を点検する。
+3. **バグを修正した場合は [DEBUG.md](DEBUG.md) に事例・原因・対策を 1 エントリ追記**してから push する。
+
+> RDD.md = テキスト反映ロジックの要件定義（回帰チェックリスト）。
+> DEBUG.md = バグ事例・原因・対策のログ。
+> 両者はコードを正として随時更新する。
+
+---
+
+## v2.2.5: PORT_NOTES 移植 / 要件・バグ文書整備 / ロード 86% 完了バグ修正 + v2.2.4 後 UX 改修の同梱リリース
+
+v2.2.4 以降に作業ブランチへ溜まっていた変更を 2.2.5 として正式リリースした版。大きく分けて
+(A) 本セッションで実施した移植・文書整備・バグ修正、(B) すでに「未リリース」として下記
+「変更メモ②」「変更メモ」に詳述済みの v2.2.4 後 UX 改修、の 2 群を同梱する。
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` /
+`src-tauri/tauri.conf.json` を **2.2.5** に更新（`scripts/bump-version.mjs set 2.2.5`）。
+
+### A-1. PORT_NOTES_2026-05-29 の移植（別フォーク PsDesign からの 7 機能 A〜G）
+
+`npm run check`（encoding + lint + build）と `cargo check` 緑を確認済み。
+
+- **A: ルビ「親文字指定」ボタン長押し → 連続適用(sticky)モード** ([src/main.js](src/main.js) `bindRubyTool`)
+  500ms 長押しで sticky ON、`doApply` 後に親文字ダイアログを自動再オープン、短押しで解除。
+  pointerdown/up/leave/cancel + keydown 配線（旧 click ハンドラ撤去）。[src/styles.css](src/styles.css) に
+  `.ruby-parent-select-btn.sticky-mode`。
+- **B: 親文字選択ダイアログのセル長押しドラッグで複数選択** ([src/main.js](src/main.js)
+  `openParentSelectDialog`) 250ms 長押し→ドラッグで通過セルを選択、短クリックは個別 toggle 維持、
+  `swallowClick` で後続 click を 1 回握りつぶす。
+- **C: Photoshop スクラッチディスク容量の事前チェック（5 段階警告）** ([src/bind/save.js](src/bind/save.js)
+  `ensurePhotoshopScratchOk` + [src-tauri/src/lib.rs](src-tauri/src/lib.rs) `get_photoshop_scratch_free_space`)
+  保存前に空き容量を取得し danger/warning でダイアログ、セッション中 1 回承認で再表示しない。
+- **D: Photoshop 起動時警告ダイアログの自動 OK（6 段戦略 + 常時バックグラウンド監視）**
+  ([src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs) `start_background_dialog_watcher` /
+  `start_scratch_dialog_auto_dismiss` / `dismiss_known_photoshop_dialogs`、[src-tauri/src/lib.rs](src-tauri/src/lib.rs)
+  setup で watcher 起動)。BM_CLICK→WM_COMMAND→VK_RETURN→WM_CHAR→SetForegroundWindow+SendInput→WM_CLOSE。
+- **E: JSX 内ダイアログ全般抑制** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) HEADER に
+  `app.displayDialogs = DialogModes.NO` / `app.userInteractionLevel = UserInteractionLevel.SUPPRESSALERTS`)。
+- **F: Vite host を `true` に** ([vite.config.js](vite.config.js)) localhost の IPv4/IPv6 解決差で
+  dev 接続が失敗するのを回避。
+- **G: main.js TDZ 回避** sticky 宣言群を `updateSelection` の前に配置（起動直後の ReferenceError で
+  スプラッシュ停止する事故を防ぐ）。
+- 依存追加なし（`winapi` の `fileapi` + `winuser` は既存）。
+
+### A-2. テキスト反映ロジックの要件定義 / バグログ / プッシュ前方針の整備
+
+- 新規 [RDD.md](RDD.md): テキスト反映ロジックの要件定義（G1〜G11）+ 移植機能の要件（P1〜P7）+
+  プッシュ前チェックリスト。
+- 新規 [DEBUG.md](DEBUG.md): バグ事例ログ（テンプレート + シード事例）。
+- [CLAUDE.md](CLAUDE.md) 冒頭に「⚑ GitHub プッシュ前チェック方針」を追加し、push 前に
+  `npm run check` 実行 / RDD 確認 / DEBUG 追記を厳守する運用を明文化。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) 先頭の UTF-8 BOM を除去（先頭 3 バイトのみ。
+  Rust コンパイル結果・JSX 出力は不変）。これで `npm run check:encoding` が完全グリーンになり、
+  上記方針が運用可能に。
+
+### A-3. ロード画面が 86% で完了するバグ修正
+
+- **症状**: `.opus` プロジェクトを開くとロード画面のタスクパネルが 100% に達せず 86% のまま閉じる。
+- **原因**: OPUS 進捗 "place" variant はフェーズ窓でキャップ（72+14=86）し、`completeOpusProgress()` は
+  `finishing` でバー(`--opus-progress-pct`)と上部カウンタを 100% にするが、**タスクパネル**
+  (`opus-task-total-percent` + タスク一覧 = `updateOpusTasks`) を 100% 化する分岐が flow/save/load
+  のみで place/scan に欠落していた。
+- **対策** ([src/ui-feedback.js](src/ui-feedback.js) `completeOpusProgress`): "load" 分岐と同形の
+  末尾 `else`（place/scan）分岐を追加し `updateOpusTasks({ pct:100, ... })` でタスクパネルを最終化。
+  自動配置("place") / 画像スキャン("scan") 完了時のフェーズキャップ止まりも同時に解消。詳細は
+  [DEBUG.md](DEBUG.md) `[BUG-20260529-01]`。
+
+### B. v2.2.4 後 UX 改修の同梱（既存「変更メモ」群に詳述）
+
+下記の 2 つの「変更メモ」に記載済みの未リリース作業を本リリースに同梱する:
+- 「変更メモ②」: PSD Ctrl+0 中央寄せ / Shift+S サイズ統一 / テストモード / 編集タブのロック撤去 /
+  太字斜体「強調」化 / ガイド自動ロック・定規ボタン移動。
+- 「変更メモ」: PSD 保存フローから「仕上がりチェック」除去 / PDF 表示のリサイズ・Ctrl+0 中央寄せ修正。
+
+### 検証
+
+- `npm run check`（`check:encoding` 58 files passed → `lint` → `build`）成功。`cargo check` 成功。
+  ビルド警告は既存の dynamic import / chunk size のみ。
+- 実機確認推奨: `.opus` を開いてロードが 100% 到達で閉じること、自動配置 / 画像スキャンの 100% 到達、
+  ルビ親文字指定の長押し sticky・セルドラッグ複数選択、保存時の容量警告、Photoshop 起動時警告の自動 OK。
+
+---
+
+## 2026-05-29 変更メモ②: PSD Ctrl+0 中央寄せ / Shift+S サイズ統一 / テストモード / 編集タブのロック撤去 / 太字斜体「強調」化 / ガイド自動ロック・定規ボタン移動 (v2.2.4 後・未リリース)
+
+同じ v2.2.4 後の作業ブランチでの一連の UX 改修。バージョン番号は据え置き（`2.2.4` のまま）。
+6 系統の変更を含む。各変更は `npm run lint` / `npm run build` 通過済み。`npm run check:encoding` は
+[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) の**既存 BOM**（本作業で未変更）のみを報告し、本作業で
+編集したファイル（JS / HTML / CSS）はすべてパス。
+
+### A. PSD の Ctrl+0（ズームリセット）を中央寄せに統一
+
+**背景**: PSD でズームインした後 Ctrl+0 すると、画像が viewport の左上に貼り付いてしまう（PDF ペインは
+中央寄せなのに PSD だけ挙動が違った）。
+
+- **原因** ([src/spread-view.js](src/spread-view.js)): Ctrl+0 リセット経路だけが `alignCanvasStartInViewport`
+  （キャンバス左上を viewport 左上へ）を使っていた。`PSD_FIT_BASE_SCALE = 1.1` でフィット表示が約 10%
+  はみ出すため、左上揃えだと右下が見切れて左上に寄る。
+- **修正**: リセット経路 3 箇所すべてを `centerCanvasInViewport`（中央寄せ）に変更（PDF ペインと統一）。
+  - `resetPsdViewportToStart()` の `run()`（ズーム値が変わらない＝閲覧モード後などの経路）
+  - `buildBlankPage` の redraw（見開き編集の白紙ページ）
+  - `buildPage` の redraw（`onPsdZoomChange` 経由でズーム値が変わる経路）
+  未使用になった `alignCanvasStartInViewport` の import を削除（関数自体は [src/overscroll.js](src/overscroll.js) に残置）。
+
+### B. 「テキストサイズ統一」に Shift+S ショートカットを追加
+
+サイドツールバーの「統一」ボタン（`#unify-text-size-btn`、選択テキストを既定サイズに揃える）に
+ショートカットを割当て。
+
+- [src/settings.js](src/settings.js): カスタマイズ可能ショートカットに `unifyTextSize: { key: "s",
+  modifiers: ["shift"] }` を追加。migrate のホワイトリスト方式で既存ユーザーにも自動追加。環境設定の
+  ショートカット一覧にも自動表示。
+- [src/main.js](src/main.js): ボタンのクリック処理を `runUnifyTextSize()` に切り出し、ボタンと
+  `runShortcut` の `case "unifyTextSize"` の両方から呼ぶ。
+- **入力中の誤発火防止**: `isShortcutBlockedInInput` を拡張し、**Shift 単独修飾**のショートカットは
+  入力欄・テキスト直接編集中（contenteditable）では発火させない（大文字「S」のタイピングと衝突しないように）。
+- 競合なし: `保存`=Ctrl+S / `PSD保存`=Ctrl+Shift+S はマッチャーが修飾キー厳密判定のため Shift 単独と衝突しない。
+- [index.html](index.html): ボタンの title/aria-label に「(Shift+S)」を併記。
+
+### C. テストモード（白紙3ページで動作確認）
+
+実ファイル（PSD / 見本 / テキスト）を用意せずにエディタ挙動を即確認するための機能。ハンバーガー
+メニュー下部（footer）に「テストモード」ボタン（フラスコアイコン、既存 `.menu-icon-btn` 流用）を追加。
+
+- **新規 [src/test-mode.js](src/test-mode.js)** `runTestMode()`: 未保存編集があれば破棄確認 → 白紙3ページ
+  （1200×1700 @ 72dpi）を PSD・見本の両方に生成し、各 PSD ページ中央にサンプルテキスト
+  （「あいうえお」「かきくけこ」「さしすせそ」）を新規レイヤー配置。既存ローダーと同じ流れ
+  （clearPages → addPage ループ → renderAllSpreads/rebuildLayerList → `psdesign:psd-loaded` dispatch）を踏襲。
+  ツール状態（既定フォント・サイズ・縦横・フチ等）と `centerTopLeft` を流用して手動配置とパリティ。
+- **新規 export**:
+  - [src/psd-loader.js](src/psd-loader.js) `buildBlankPsdPage(path, w, h, dpi)` — 既存 private `createBlankCanvas`
+    を再利用し `loadPsdFromPath` と同形のページオブジェクトを返す。
+  - [src/pdf-loader.js](src/pdf-loader.js) `buildBlankReferenceDoc(count, w, h)` — 既存 private
+    `makeImagePage` / `makeCompositeDoc` を再利用し白紙合成 doc を返す。
+- [src/hamburger-menu.js](src/hamburger-menu.js): ボタン配線。`runTestMode()` 実行後に `home-mode` 系クラスを
+  解除してエディタを表示（`project.js leaveHomeScreen` と同じ一行）+ `closeMenu()`。
+- [index.html](index.html): footer に `#test-mode-btn` を追加（CSS は既存 `.menu-icon-btn` でカバー、追加なし）。
+
+### D. 「基本スタイル」「文字詳細」タブのロックロジック撤去
+
+**背景**: テストモードや手動配置など PSD・テキストレイヤーはあるが `state.txtSource` が空のとき、
+サイドパネルの「基本スタイル」「文字詳細」タブがロック（グレーアウト＆無効化）されたままになる
+事故があった。
+
+- [src/main.js](src/main.js): `state.txtSource` の有無でロックしていた仕組みを全削除。
+  - `syncTextEditorTabLock()` 関数（タブ＋全選択ボタン＋レイヤーボタンを disabled / `.locked` 化）を削除。
+  - `hasTextForEditorTab()` 削除。`setSidePanelTab` の「テキスト無しなら txt へ強制リダイレクト」削除。
+  - `bindSidePanelTabs` の `onTxtSourceChange(syncTextEditorTabLock)` 購読・初期呼び出し・クリックハンドラの
+    `if (btn.disabled) return;` ガード削除。未使用になった `getTxtSource` import 削除。
+- 対象ボタン（`#side-panel-tab-editor` / `#side-panel-tab-style` / `#select-all-btn` / `#layers-toggle-btn`）は
+  HTML で初期 `disabled` を持たないため、ロック処理を消すと自然に常時有効になる。スキャンエンジン未インストール時の
+  `ai-actions-row` ロック（別機構）には影響しない。
+
+### E. 太字・斜体を「強調」カテゴリに集約（アイコンのみ・フチの下へ）
+
+- [index.html](index.html):
+  - 旧 2 箇所（サイズパネル内 `size-font-style-row` と フォント検索パネル内）にあった太字・斜体ボタンのうち、
+    **フォント検索側を削除**。
+  - フチ（stroke）パネルの直下に新パネル `data-tab-panel="emphasis"`（ラベル「強調」）を追加し、太字・斜体
+    ボタンをそこへ移動。テキストラベル（太字／斜体）を外して**アイコンのみ**化（title/aria-label は保持）。
+- [src/styles.css](src/styles.css): `::before` のグリフを **太字＝「B」/ 斜体＝「I」** に変更（従来は両方「T」で
+  ラベル併記により区別していた）。不要になった `.size-font-style-row` ルール削除。
+- ボタンの挙動はすべてクラス（`.bold-toggle-btn` / `.italic-toggle-btn`）でバインド・同期（`bindBoldToggle` /
+  `bindItalicToggle` / `commitBoldToSelections` / `find-change.js` の先頭 `.bold-toggle-btn` 参照）しており
+  親要素非依存のため、移動・削除しても全経路が従来通り動作。
+
+### F. ガイド自動ロック（4本でトリミング枠完成→外側暗転＋全ページ反映）+ 定規ボタン移動
+
+トリミング枠（トンボ相当）のガイド設定を自動化。従来は手動の「ガイドをロック」＋「複数ページに反映」
+（ページ選択ダイアログ）の 2 段操作だった。
+
+- **自動ロック** ([src/rulers.js](src/rulers.js)):
+  - `addGuide`: 水平2＋垂直2 が揃ってトリミング枠が完成した瞬間に `setGuidesLocked(true)` を自動発火。
+    完成判定は **push 前に `wasComplete` を読む**（後だと常に true で発火しない）のがエッジ検知の要。
+    `applyGuidesToPaths` はコピー先を `guidesByPsd.set` で直接書き `addGuide` を経由しないため、
+    `psdPath === getCurrentPsdPath()` ガードでコピー先ページの再発火を防止。
+  - `setGuidesLocked`: ロック確定（false→true）時に現在ページのガイドを `applyGuidesToPaths(全ページ)` で
+    自動コピー反映。自動ロック・フチ手動ロックの両経路がここを通る。再入安全（applyGuidesToPaths は
+    set+emit+redraw のみ、guidesChange listener は本変更で全廃）。
+- **フチ（トリミング枠）クリックでロックトグル** ([src/rulers.js](src/rulers.js) `renderTrimFrame`):
+  - 矩形 min/max 計算を `renderLockedDimMask` から `computeRectExtent` に抽出して dim と共有。
+  - トリミング枠完成時（ロック有無に関わらず）に矩形 4 辺へ「**2px 外側オフセット・厚さ 6px のクリック帯**」を
+    描画。`click` → `toggleGuidesLocked()`。外側オフセットによりガイド線（フルキャンバス長・ドラッグ可）と
+    重ならず、非ロック時のガイド移動を奪わない。矩形内側は要素なしでテキストへのクリックを透過。ロック時は
+    ガイド線が CSS（`.guides-locked .psd-guide{display:none}`）で非表示＝フチ帯だけがクリック対象。
+  - [src/styles.css](src/styles.css): `.psd-trim-frame` / `.psd-trim-frame-edge`（layer が `pointer-events:none`
+    なので帯側で auto に戻す、hover で薄シアン）を追加。
+- **手動の「ガイドをロック」「複数ページに反映」ボタン＋反映モーダルを全削除**（自動化により不要）:
+  - [index.html](index.html): `#psd-guides-lock-btn` / `#psd-guides-apply-btn` / `#guides-apply-modal` を削除。
+  - [src/main.js](src/main.js): `bindPsdGuidesLock` / `updatePsdGuidesLockVisibility` / `bindPsdGuidesApply` /
+    `updatePsdGuidesApplyVisibility` / `openGuidesApplyModal` の 5 関数、3 箇所の呼び出し、未使用になった
+    rulers.js import を削除（残すのは `initRulers, toggleRulersVisible, getRulersVisible, onRulersVisibleChange`）。
+  - [src/rulers.js](src/rulers.js): 未使用になった `clearGuidesForPaths` / `guidesMatchCurrent` / `arraysEqualSet` を削除。
+    `applyGuidesToPaths` は内部利用で存続。
+  - [src/styles.css](src/styles.css): ロック/反映ボタン・lock-icon・反映モーダルの死んだ CSS、共通 hover group の
+    `#guides-apply-cancel` トークンを除去。
+- **定規ツールボタンを side-toolbar へ移動**: PSD 上部バー（`.stage-label-bar`）から side-toolbar の
+  レイヤーボタン（`.layers-toggle-wrap`）直下・ズーム群の直前へ移動。id（`#toggle-rulers-btn`）据え置きで
+  `bindRulerToggle` は無改修、クラスを `psd-rulers-toggle-btn icon-btn` → `icon-btn side-tool-btn` に変更。
+  [src/styles.css](src/styles.css) に `.side-tool-btn[aria-pressed="true"]` のアクセント表示＋hover 維持を追加。
+
+### 検証
+
+- `npm run lint` / `npm run build` 成功（残る警告は既存の dynamic import / chunk size 警告で本作業とは無関係）。
+- grep で削除対象（lock/apply ボタン・反映モーダル・5 関数・dead export）がゼロ件、`toggle-rulers-btn` は
+  side-toolbar に 1 件のみ。
+- 実機（`npm run tauri build` 後）推奨確認:
+  1. PSD ズームイン → Ctrl+0 で画像が中央に収まる（Ctrl+0 は最後にクリックしたペインが対象）。
+  2. テキスト 2 つ以上選択 → Shift+S で既定サイズに統一。テキスト編集中の大文字「S」入力で統一が走らない。
+  3. ハンバーガー →「テストモード」→ 両ペインに白紙3ページ＋サンプルテキスト、レイヤー編集可。
+  4. テキスト未読込でも「基本スタイル」「文字詳細」タブがロックされない。
+  5. 太字・斜体が「強調」パネル（フチの下）にアイコンのみ（B / I）で表示、フォント検索から消えている。
+  6. 定規を side-toolbar から ON → 水平2＋垂直2 を引いて 4 本目で自動暗転＋ロック＋全ページ反映 → 別ページで
+     反映確認 → フチクリックで「調整 ↔ ロック」をトグル。
+
+---
+
+## 2026-05-29 変更メモ: 仕上がりチェック除去 / PDF表示のリサイズ・Ctrl+0 中央寄せ修正 (v2.2.4 後・未リリース)
+
+v2.2.4 リリース後の作業ブランチでの修正。バージョン番号は据え置き (`package.json` / `Cargo.toml` / `tauri.conf.json` ともに `2.2.4` のまま)。
+
+### A. PSD 保存フローから「仕上がりチェック」ダイアログを除去
+
+**背景**: `.opus` プロジェクトを再オープンしてから PSD 保存しようとすると、「仕上がりチェック」画面と保存後のメインステージで PSD の絵柄（合成画像）が表示されずテキストだけになるバグが報告された。
+
+- 調査の結果: `page.canvas` オブジェクトは健在（`[save-review:ok] ... canvas=数値（ページサイズと一致）`）だが**中身（ピクセル）だけが消えている**。プロジェクトを開いた直後は絵柄が出るが**保存（仕上がりチェックが全28枚を一度に drawImage する瞬間）で消える**ことをユーザー確認で特定。
+- 根本原因の見立て: `page.canvas` は `document.createElement("canvas")` で生成される **DOM 非接続（detached）の大型 GPU キャンバス**で `state.pages` からのみ参照される。Chromium はメモリ/GPU 圧迫時にこうしたアイドルな GPU キャンバスの**バッキングストア（ピクセル）を黙って破棄**する（オブジェクトは残るので width/height は正常、描画すると透明＝黒、仕上がりチェックの `#111` 塗りが透けて黒く見える）。通常フロー（画像スキャン→自動配置→保存）は仕上がりチェック到達時にキャンバスが新鮮／メモリ圧が低いため顕在化しにくいフローの順序差。
+- **試行して撤回した修正**: `page.canvas` をソフトウェア（CPU）バック化する `willReadFrequently: true` と `ensureSoftwareCanvas`（[src/psd-loader.js](src/psd-loader.js)）、保存前にブランク検出して PSD を再読込する `healBlankPageCanvases` / `isCanvasContentLost`（[src/bind/save.js](src/bind/save.js)）を入れたが**実機では解決しなかったため完全に revert**。
+- **最終対応（ユーザー要望）**: [src/bind/save.js](src/bind/save.js) `runSaveWithMode` から `showFinishReviewDialog()` の呼び出しと結果による中断（`if (!shouldSave) return;`）を削除。**保存ボタン / Ctrl+S は確認ダイアログを挟まず直接 Photoshop へ反映**する。
+- 実際の保存は ExtendScript(JSX) 経由で Photoshop がレンダリングするため `page.canvas`（アプリ内プレビュー）に依存せず、**出力 PSD の品質は不変**。
+- `showFinishReviewDialog` とその補助関数群（`createFinishReviewModal` / `renderFinishReviewPageView` / `buildFinishReviewItems` 等）は**呼び出しを外しただけで実装は save.js に残置**（dormant・再有効化可能）。`measureAllRubyOffsetsSync()`（ルビ位置同期）は保存に必要なので保持。
+- ※ 保存後のメインステージで絵柄が黒くなる症状（元バグのもう片方）は保存フロー除去のみでは残る可能性あり。根治には `page.canvas` のバッキング破棄対策（ImageBitmap 保持や detached canvas を避ける描画構成）が別途必要。
+
+### B. PDF（見本）表示のリサイズ / Ctrl+0 中央寄せ修正
+
+**背景**: ウインドウサイズを変更すると PDF 表示の位置がずれる。Ctrl+0 でフィットに戻しても画像が中央に寄らない。
+
+- **原因**: `PDF_FIT_BASE_SCALE = 1.1` のためフィット表示（ズーム 1）でも約 10% はみ出し、`hasOverflowAfter` が常に true。リサイズ時 redraw が `restoreViewportCenter(中心比率)` を呼ぶが、その中心比率を **ResizeObserver 内で「ステージは新サイズ・キャンバスは旧サイズ」という中途半端なレイアウトから取得していたため値がずれ**、PDF が中央からずれていた。さらにこの stale な中心比率が Ctrl+0 の中央寄せを上書きして干渉していた。
+- **修正** ([src/pdf-view.js](src/pdf-view.js)): PSD 側（[src/spread-view.js](src/spread-view.js)）と同方針に統一。
+  - ResizeObserver 内の中心比率キャプチャ（`pendingResizeViewportCenter`）と redraw 側の `resizeCenterForThisRedraw` 経路を撤去。
+  - redraw 冒頭で `lastStageW` / `lastStageH` と比較して **`stageSizeChanged`（ペインサイズ変化）を検知 → `centerCanvasInViewport` でキャンバスを viewport 中央へ寄せ直す**。
+  - これでリサイズ時の位置ずれが解消し、Ctrl+0 の `resetZoomForThisRedraw → centerCanvasInViewport` 経路を上書きする干渉も無くなる。
+- ズーム操作時の「カーソル位置を中心に保つ」挙動（`zoomFracForThisRedraw`）、エディタモードの見本フィット表示（`isEditorPdfSampleMode`）、ビューモード遷移の中心保持（`schedulePdfStageLayoutRefresh`）には影響しない（別経路・分岐の優先順位が上）。`capturePdfViewportCenter` / `restoreViewportCenter` はビューモード遷移用に引き続き使用。
+
+### 検証
+
+- `npm run build` 成功。
+- 実機（`npm run tauri build` 後）での確認推奨:
+  1. `.opus` 再オープン → 保存で確認ダイアログ（仕上がりチェック）を挟まず直接 Photoshop 保存に進むこと。
+  2. ウインドウサイズ変更で PDF（見本）表示が中央に保たれること。
+  3. Ctrl+0 で PDF 表示が中央に寄ること（Ctrl+0 は最後にクリックしたペインが対象）。
+
+---
+
 ## v2.2.3: PSD 保存品質バグ群の修正 (fx 残留 / 中丸ゴシック→小塚化 / プロジェクト再オープン時のルビ消失 / PSD canvas 描画欠落)
 
 実機運用で発覚した複数の保存・再オープン関連バグを横断的に修正したリリース。ユーザーから「fx 効果が残る」「中丸ゴシックが小塚に置き換わる」「プロジェクトファイル再オープン時にルビが消える」「PSD 領域が真っ黒で絵柄が見えない」と立て続けに報告された 4 系統の問題を、それぞれ根本原因まで掘り下げて対処している。

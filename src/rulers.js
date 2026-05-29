@@ -89,6 +89,14 @@ export function setGuidesLocked(on) {
   applyLockedToDom();
   // ロック ON/OFF でガイド外側のディムマスク描画が変わるので再描画。
   requestRulerRedraw();
+  // ロック確定（false→true）時に、現在ページのトリミング枠ガイドを全ページへコピー反映。
+  // 自動ロック（addGuide）・フチ手動ロック（renderTrimFrame のトグル）の両経路がここを通る。
+  if (v) {
+    const cur = getGuidesObj(getCurrentPsdPath());
+    if (cur.h.length >= 2 && cur.v.length >= 2) {
+      applyGuidesToPaths(getPages().map((p) => p.path));
+    }
+  }
   for (const fn of lockedListeners) fn(v);
 }
 
@@ -123,10 +131,20 @@ export function getGuides(psdPath) { return getGuidesObj(psdPath); }
 export function addGuide(psdPath, axis, psdValue) {
   if (!psdPath || !Number.isFinite(psdValue)) return;
   const g = getGuidesObj(psdPath);
+  // トリミング枠の完成判定は push の前に取る（後だと常に true で発火しない）。
+  const wasComplete = g.h.length >= 2 && g.v.length >= 2;
   const list = axis === "h" ? g.h : g.v;
   list.push(Math.round(psdValue * 100) / 100);
   requestRulerRedraw();
   emitGuidesChange(psdPath);
+  // 水平2＋垂直2 が揃ってトリミング枠が完成した瞬間に自動ロック
+  // → setGuidesLocked(true) 経由で外側暗転 + 全ページ反映。
+  // applyGuidesToPaths はコピー先を guidesByPsd.set で直接書き addGuide を経由しないため、
+  // getCurrentPsdPath ガードでコピー先ページが再発火することはない。
+  const nowComplete = g.h.length >= 2 && g.v.length >= 2;
+  if (!wasComplete && nowComplete && psdPath === getCurrentPsdPath() && !guidesLocked) {
+    setGuidesLocked(true);
+  }
 }
 
 export function moveGuide(psdPath, axis, index, psdValue) {
@@ -160,35 +178,6 @@ export function clearAllGuides() {
   requestRulerRedraw();
 }
 
-// 指定 PSD パスのガイドが、現在ページのガイドと完全一致しているか。
-// 一致 = h / v 両方の配列が同じ長さで全要素が同値（順不同マッチ）。
-// 反映ボタンのモーダルで「既に反映済みのページ」をグレーアウトするのに使う。
-export function guidesMatchCurrent(psdPath) {
-  const srcPath = getCurrentPsdPath();
-  if (!srcPath || !psdPath || psdPath === srcPath) return false;
-  const src = guidesByPsd.get(srcPath);
-  const dst = guidesByPsd.get(psdPath);
-  if (!src || !dst) return false;
-  return arraysEqualSet(src.h, dst.h) && arraysEqualSet(src.v, dst.v);
-}
-
-// 順不同で配列を比較（ガイドは座標の集合扱い）。要素は数値の前提で 1e-3 PSD px 以内なら同値。
-function arraysEqualSet(a, b) {
-  if (!Array.isArray(a) || !Array.isArray(b)) return false;
-  if (a.length !== b.length) return false;
-  if (a.length === 0) return true;
-  const used = new Array(b.length).fill(false);
-  for (const va of a) {
-    let found = -1;
-    for (let i = 0; i < b.length; i++) {
-      if (!used[i] && Math.abs(b[i] - va) <= 1e-3) { found = i; break; }
-    }
-    if (found < 0) return false;
-    used[found] = true;
-  }
-  return true;
-}
-
 // 現在ページのガイド配列（h/v の両方）を、指定 PSD パス群にコピーして上書き反映する。
 // マージではなく完全置き換え。自分自身（現ページ）を targetPaths に含めても無視。
 // 戻り値は実際に書き込んだページ数。
@@ -204,26 +193,6 @@ export function applyGuidesToPaths(targetPaths) {
       h: [...src.h],
       v: [...src.v],
     });
-    emitGuidesChange(path);
-    count++;
-  }
-  if (count > 0) requestRulerRedraw();
-  return count;
-}
-
-// 指定 PSD パス群のガイドを削除する（反映の解除）。
-// applyGuidesToPaths と対になる API。実際に何らかのガイドを持っていたページのみカウント。
-// 自分自身（現ページ）を targetPaths に含めても無視（誤って現ページを消さないため）。
-export function clearGuidesForPaths(targetPaths) {
-  const srcPath = getCurrentPsdPath();
-  let count = 0;
-  for (const path of targetPaths) {
-    if (!path || path === srcPath) continue;
-    const g = guidesByPsd.get(path);
-    if (!g) continue;
-    const had = (g.h?.length ?? 0) + (g.v?.length ?? 0) > 0;
-    if (!had) continue;
-    guidesByPsd.delete(path);
     emitGuidesChange(path);
     count++;
   }
@@ -546,11 +515,14 @@ function renderGuidesForGeometry(geom) {
   const horizLength = geom.page[horizAxisInfo.axis === "x" ? "width" : "height"];
   const vertLength  = geom.page[vertAxisInfo.axis  === "x" ? "width" : "height"];
 
-  // ガイドロック中かつ縦横 2 本以上のガイドが揃ったら、min/max で囲まれる矩形の
-  // 外側 4 領域を薄暗くマスクする。トリミング枠の確認用途。
-  // ガイド線本体より先に追加することで DOM 順 = 描画順で線が dim の上に来る。
-  if (guidesLocked && g.h.length >= 2 && g.v.length >= 2) {
-    renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength);
+  // トリミング枠（縦横 2 本以上）が完成していたら：
+  //   - ロック中は min/max で囲まれた矩形の外側を薄暗くマスク（renderLockedDimMask）。
+  //   - ロック有無に関わらずフチ枠（クリックでロックトグル）を描画（renderTrimFrame）。
+  // ガイド線本体より先に追加することで DOM 順 = 描画順で線が上に来る。
+  const rectComplete = g.h.length >= 2 && g.v.length >= 2;
+  if (rectComplete) {
+    if (guidesLocked) renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength);
+    renderTrimFrame(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength);
   }
 
   // 水平ガイド：上ルーラーから引いた → 画面上で「縦位置」が固定の水平線。
@@ -615,7 +587,10 @@ function renderGuidesForGeometry(geom) {
 // 実装: 単一 div の box-shadow（spread 大）で外周を一気に塗る。
 // 4 分割 div では継ぎ目に 1px 未満の隙間が出る（subpixel rounding が原因）ため、
 // 1 つの shadow で塗って隙間を物理的に作らない方式にする。clipper で canvas 範囲外を切り落とす。
-function renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength) {
+// 縦横ガイドの min/max から、canvas 範囲にクリップしたトリミング矩形を画面 px で返す。
+// 不成立（縦横 2 本未満 / 範囲が潰れている）なら null。dim マスクとフチ枠で共有する。
+function computeRectExtent(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength) {
+  if (g.h.length < 2 || g.v.length < 2) return null;
   // 各ガイドの画面 px 位置に変換（renderGuides の個別ループと同じ式）。
   const yPositions = g.h.map((v) => {
     const along = vertAxisInfo.sign > 0 ? v : (vertLength - v);
@@ -625,18 +600,23 @@ function renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, 
     const along = horizAxisInfo.sign > 0 ? v : (horizLength - v);
     return geom.canvasLeftInPane + along * geom.pxPerPsdH;
   });
-
-  const cTop = geom.canvasTopInPane;
-  const cBot = geom.canvasBottomInPane;
   const cLeft = geom.canvasLeftInPane;
+  const cTop = geom.canvasTopInPane;
   const cRight = geom.canvasRightInPane;
-
+  const cBot = geom.canvasBottomInPane;
   // 矩形を canvas 範囲にクリップ。
   const minY = Math.max(Math.min(...yPositions), cTop);
   const maxY = Math.min(Math.max(...yPositions), cBot);
   const minX = Math.max(Math.min(...xPositions), cLeft);
   const maxX = Math.min(Math.max(...xPositions), cRight);
-  if (maxY <= minY || maxX <= minX) return;
+  if (maxY <= minY || maxX <= minX) return null;
+  return { minX, maxX, minY, maxY, cLeft, cTop, cRight, cBot };
+}
+
+function renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength) {
+  const ext = computeRectExtent(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength);
+  if (!ext) return;
+  const { minX, maxX, minY, maxY, cLeft, cTop, cRight, cBot } = ext;
 
   // 1) clipper: canvas 範囲ぴったりを覆う。overflow: hidden で内側の box-shadow を切り落とす。
   //    丸めは外側に倒す（floor for left/top, ceil for right/bottom）ことで端 1px の漏れも防ぐ。
@@ -662,6 +642,40 @@ function renderLockedDimMask(geom, g, horizAxisInfo, vertAxisInfo, horizLength, 
 
   clipper.appendChild(dim);
   guidesLayer.appendChild(clipper);
+}
+
+// トリミング枠の「フチ」をクリック可能にする 4 辺の帯。クリックでロックをトグル。
+// 矩形の外側へ少しオフセット（GAP）した薄い帯（HIT 厚）にすることで、ガイド線
+// （フルキャンバス長・pointer-events:auto・ドラッグ可）と重ならず、非ロック時のガイド
+// 移動を奪わない。矩形内側には要素を置かないのでテキストへのクリックは透過する。
+function renderTrimFrame(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength) {
+  const ext = computeRectExtent(geom, g, horizAxisInfo, vertAxisInfo, horizLength, vertLength);
+  if (!ext) return;
+  const { minX, maxX, minY, maxY } = ext;
+  const HIT = 6;  // 帯の厚さ（クリック判定）
+  const GAP = 2;  // ガイド線と重ならないための外側オフセット
+  const frame = document.createElement("div");
+  frame.className = "psd-trim-frame";
+  const mk = (cls, left, top, w, h) => {
+    const s = document.createElement("div");
+    s.className = `psd-trim-frame-edge ${cls}`;
+    s.style.left = `${Math.round(left)}px`;
+    s.style.top = `${Math.round(top)}px`;
+    s.style.width = `${Math.round(w)}px`;
+    s.style.height = `${Math.round(h)}px`;
+    s.addEventListener("mousedown", (e) => { e.preventDefault(); e.stopPropagation(); });
+    s.addEventListener("click", (e) => { e.preventDefault(); e.stopPropagation(); toggleGuidesLocked(); });
+    frame.appendChild(s);
+  };
+  const x0 = minX - HIT;
+  const fullW = (maxX - minX) + HIT * 2;
+  const y0 = minY - HIT;
+  const fullH = (maxY - minY) + HIT * 2;
+  mk("psd-trim-frame-top",    x0, minY - GAP - HIT, fullW, HIT);
+  mk("psd-trim-frame-bottom", x0, maxY + GAP,        fullW, HIT);
+  mk("psd-trim-frame-left",   minX - GAP - HIT, y0,  HIT, fullH);
+  mk("psd-trim-frame-right",  maxX + GAP,        y0,  HIT, fullH);
+  guidesLayer.appendChild(frame);
 }
 
 // ===== 入力 =====

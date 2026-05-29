@@ -23,6 +23,7 @@ import { openSettingsModal } from "./settings-ui.js";
 import { clearAllGuides, setGuidesLocked } from "./rulers.js";
 import { resetAutoPlaceState } from "./auto-place.js";
 import { resetStylePaletteState } from "./style-palette.js";
+import { runTestMode } from "./test-mode.js";
 
 const FLIPPED_KEY = "psdesign_layout_flipped";
 const HOME_RETURN_ANIMATION_MS = 360;
@@ -137,6 +138,7 @@ export function initHamburgerMenu() {
   const flipBtn = $("workspace-flip-btn");
   const settings = $("settings-btn");
   const home = $("home-btn");
+  const testMode = $("test-mode-btn");
 
   if (trigger) trigger.addEventListener("click", toggleMenu);
   if (closeBtn) closeBtn.addEventListener("click", closeMenu);
@@ -148,6 +150,14 @@ export function initHamburgerMenu() {
     openSettingsModal();
   });
   if (home) home.addEventListener("click", goHome);
+  if (testMode) testMode.addEventListener("click", async () => {
+    const started = await runTestMode();
+    if (started === false) return; // 破棄キャンセル時は現状維持
+    // ホーム画面で開かれていることが多いので home 系クラスを外してエディタを表示
+    // （project.js leaveHomeScreen と同じ一行）。
+    document.body.classList.remove("home-mode", "home-starting", "home-returning");
+    closeMenu();
+  });
 
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && menuOpen) {

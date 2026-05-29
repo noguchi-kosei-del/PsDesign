@@ -161,6 +161,7 @@ export const DEFAULT_SETTINGS = {
     zoomReset:  { key: "0",          modifiers: ["ctrl"],          description: "ズームを画面フィットに戻す（アクティブペイン）" },
     sizeUp:     { key: "]",          modifiers: [],                description: "文字サイズを大きく（選択/既定）" },
     sizeDown:   { key: "[",          modifiers: [],                description: "文字サイズを小さく（選択/既定）" },
+    unifyTextSize: { key: "s",       modifiers: ["shift"],         description: "選択テキストのサイズを統一" },
     toggleRulers: { key: "r",        modifiers: ["ctrl"],          description: "定規の表示切替" },
   },
 };

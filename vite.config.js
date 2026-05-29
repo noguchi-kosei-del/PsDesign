@@ -7,7 +7,10 @@ export default defineConfig({
   server: {
     port: 1430,
     strictPort: true,
-    host: host || false,
+    // host: true で全インターフェース (0.0.0.0 + ::) に listen し、Windows の
+    // localhost 解決が IPv4 か IPv6 のどちらに振れても確実に繋がるようにする。
+    // ※TAURI_DEV_HOST が指定されている場合はそちらを優先（LAN 越し開発時用）。
+    host: host || true,
     hmr: host
       ? { protocol: "ws", host, port: 1431 }
       : undefined,

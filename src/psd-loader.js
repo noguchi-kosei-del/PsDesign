@@ -32,6 +32,19 @@ function createBlankCanvas(width, height) {
   return canvas;
 }
 
+// テストモード用: 実 PSD を読まずに白紙ページオブジェクトを生成する。
+// 戻り値は loadPsdFromPath と同じ形 ({path,width,height,canvas,textLayers,dpi})。
+export function buildBlankPsdPage(path, width, height, dpi = 72) {
+  return {
+    path,
+    width,
+    height,
+    canvas: createBlankCanvas(width, height),
+    textLayers: [],
+    dpi,
+  };
+}
+
 function canUsePsdParseWorker() {
   return typeof Worker === "function" && typeof OffscreenCanvas === "function";
 }

@@ -11,7 +11,6 @@ import {
 import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 import { requestRulerRedraw } from "./rulers.js";
 import {
-  alignCanvasStartInViewport,
   applyOverscrollMargin,
   captureViewportCenterFraction,
   captureViewportPointFraction,
@@ -97,7 +96,9 @@ export function resetPsdViewportToStart() {
     // 閲覧モード後の Ctrl+0 のように倍率は 100% のままでもステージ幅だけが
     // 通常表示へ戻っている場合があるため、リセット時は必ず redraw して寸法を再計算する。
     for (const fn of pageRedraws) fn();
-    alignCanvasStartInViewport(root, viewportTarget(root) || target);
+    // Ctrl+0 はキャンバスを viewport 中央へ寄せる（PDF ペインと同方針）。
+    // 旧 alignCanvasStartInViewport は左上に貼り付くため中央に寄らない不具合があった。
+    centerCanvasInViewport(root, viewportTarget(root) || target);
     resetZoomToStart = false;
   };
   requestAnimationFrame(run);
@@ -340,7 +341,7 @@ function buildBlankPage(templatePage, root, options = {}) {
     applyPageGeometry(el, null, metrics);
     const target = viewportTarget || el;
     if (resetZoomDuringRedraw) {
-      alignCanvasStartInViewport(root, target);
+      centerCanvasInViewport(root, target);
     } else if (zoomTransitionCenter) {
       restoreViewportCenter(root, target, zoomTransitionCenter);
     } else if (stageSizeChanged || isFirstRedraw) {
@@ -444,7 +445,8 @@ function buildPage(page, pageIndex, root, options = {}) {
     // が保証される。
     const hasOverflowAfter = visualW > availW || visualH > availH;
     if (resetZoomDuringRedraw) {
-      alignCanvasStartInViewport(root, target);
+      // Ctrl+0 リセットはキャンバスを viewport 中央へ（左上貼り付きを解消、PDF と統一）。
+      centerCanvasInViewport(root, target);
     } else if (zoomTransitionCenter) {
       if (hasOverflowAfter) {
         if (Number.isFinite(zoomTransitionCenter.offsetX) && Number.isFinite(zoomTransitionCenter.offsetY)) {

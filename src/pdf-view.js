@@ -55,7 +55,9 @@ let currentRenderTask = null;
 let pdfZoomDirty = false;
 let resetZoomToStart = false;
 let pendingZoomAnchor = null;
-let pendingResizeViewportCenter = null;
+// 前回 redraw 時のステージ（ペイン）サイズ。リサイズ検知に使う。
+let lastStageW = null;
+let lastStageH = null;
 
 function isEditorPdfSampleMode() {
   return getParallelViewMode() === "editor" && getEditorLeftPaneMode() === "pdf";
@@ -148,8 +150,11 @@ export function mountPdfView() {
   updatePdfCursor();
 
   if (typeof ResizeObserver !== "undefined") {
+    // リサイズは redraw 内で stageSizeChanged を検知してキャンバスを中央へ寄せ直す
+    // （PSD 側 spread-view.js と同方針）。ResizeObserver 内で中心 fraction を捕捉すると、
+    // ステージは新サイズ・キャンバスは旧サイズの中途半端なレイアウトから誤った値を取り、
+    // restoreViewportCenter が位置をずらす原因になっていた。
     const ro = new ResizeObserver(() => {
-      pendingResizeViewportCenter = capturePdfViewportCenter() ?? pendingResizeViewportCenter;
       schedule();
     });
     ro.observe(rootEl);
@@ -353,6 +358,12 @@ async function redraw() {
   const pageNum = vp.pageNum;
 
   const box = rootEl.getBoundingClientRect();
+  // ステージ（ペイン）サイズが前回 redraw から変化したか。リサイズ時にキャンバスを
+  // viewport 中央へ寄せ直すために使う（PSD 側 spread-view.js と同方針）。
+  const stageSizeChanged = lastStageW != null && lastStageH != null
+    && (Math.abs(box.width - lastStageW) > 0.5 || Math.abs(box.height - lastStageH) > 0.5);
+  lastStageW = box.width;
+  lastStageH = box.height;
   const availW = Math.max(0, box.width - 32);
   const availH = Math.max(0, box.height - 32);
   if (availW <= 0 || availH <= 0) return;
@@ -420,8 +431,6 @@ async function redraw() {
   // ズーム経由の redraw のときだけ、サイズ変更前の現在レイアウトから
   // viewport 中心のキャンバス相対座標をキャプチャ。フラグはここで消費。
   let zoomFracForThisRedraw = null;
-  const resizeCenterForThisRedraw = pendingResizeViewportCenter;
-  pendingResizeViewportCenter = null;
   let resetZoomForThisRedraw = false;
   if (pdfZoomDirty) {
     pdfZoomDirty = false;
@@ -474,13 +483,11 @@ async function redraw() {
       stageEl.scrollLeft = 0;
       stageEl.scrollTop = 0;
     }
-  } else if (resizeCenterForThisRedraw) {
-    if (hasOverflowAfter) {
-      restoreViewportCenter(stageEl, pageWrap, resizeCenterForThisRedraw);
-    } else {
-      stageEl.scrollLeft = 0;
-      stageEl.scrollTop = 0;
-    }
+  } else if (stageSizeChanged) {
+    // ウインドウ/ペインのリサイズで availW/H が変わったときはキャンバスを viewport
+    // 中央へ寄せ直す。fit ズーム（PDF_FIT_BASE_SCALE=1.1 で約 10% overflow）でも
+    // 中央に保たれる。stale な中心 fraction を復元していた旧経路の「位置ずれ」を解消。
+    centerCanvasInViewport(stageEl, pageWrap);
   } else if (wasHidden || marginNewlyApplied) {
     // 初回読込・空表示/OOB から復帰したケース、または margin が新たに付いたケースは
     // スクロールが (0,0) のまま padding に乗っているので、キャンバス中央を viewport

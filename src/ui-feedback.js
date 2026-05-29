@@ -1868,6 +1868,15 @@ function completeOpusProgress() {
       ? opusProgress.lastCountTotal
       : 1;
     updateOpusTasks({ detail: "完了", current: total, total, pct: 100, taskIndex: opusProgress.taskNames.length - 1, taskProgress: 100 });
+  } else {
+    // place / scan: タスクパネル（opus-task-total-percent + タスク一覧）も 100% / 全完了へ。
+    // これを欠くと "place"（プロジェクト開き / 自動配置）でタスクパネルがフェーズキャップ
+    // （例: initialOpusPhaseEnd 72 + advanceOpusProgressPhase 14 = 86）で固まり「86% で完了」
+    // になる。finishing ループは updateOpusTasks を呼ばないため、ここで明示的に最終化する。
+    const total = Number.isFinite(opusProgress.lastCountTotal) && opusProgress.lastCountTotal > 0
+      ? opusProgress.lastCountTotal
+      : 1;
+    updateOpusTasks({ detail: "完了", current: total, total, pct: 100, taskIndex: opusProgress.taskNames.length - 1, taskProgress: 100 });
   }
   if (!opusProgress.flowSnapshot) updateOpusCopy({ detail: "完了" });
   requestOpusCompleteClass(stage);

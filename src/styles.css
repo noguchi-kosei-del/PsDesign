@@ -804,6 +804,18 @@ body.home-mode .toolbar .settings-toolbar-btn {
   opacity: 0.4;
   cursor: not-allowed;
 }
+.ruby-parent-select-btn.sticky-mode {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  box-shadow: 0 0 0 2px rgba(120, 180, 255, 0.35);
+}
+.ruby-parent-select-btn.sticky-mode:hover:not(:disabled) {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  filter: brightness(1.08);
+}
 .ruby-parent-display {
   flex: 1 1 auto;
   min-width: 0;
@@ -1349,6 +1361,7 @@ button:hover:not(:disabled) svg { color: var(--accent); stroke: currentColor; }
 button.sync-seg-btn.active:hover:not(:disabled),
 button.tool-btn.active:hover:not(:disabled),
 button.side-tool-btn.active:hover:not(:disabled),
+button.side-tool-btn[aria-pressed="true"]:hover:not(:disabled),
 button.layer-dir-btn.active:hover:not(:disabled),
 button.bold-toggle-btn[aria-pressed="true"]:hover:not(:disabled),
 button.italic-toggle-btn[aria-pressed="true"]:hover:not(:disabled),
@@ -1365,6 +1378,7 @@ button.overlay-align-btn-primary:hover:not(:disabled) {
 button.sync-seg-btn.active:hover:not(:disabled) svg,
 button.tool-btn.active:hover:not(:disabled) svg,
 button.side-tool-btn.active:hover:not(:disabled) svg,
+button.side-tool-btn[aria-pressed="true"]:hover:not(:disabled) svg,
 button.layer-dir-btn.active:hover:not(:disabled) svg,
 button.bold-toggle-btn[aria-pressed="true"]:hover:not(:disabled) svg,
 button.italic-toggle-btn[aria-pressed="true"]:hover:not(:disabled) svg,
@@ -1382,7 +1396,6 @@ button.overlay-align-btn-primary:hover:not(:disabled) svg {
 
 button#confirm-modal-cancel:hover:not(:disabled),
 button#page-jump-cancel:hover:not(:disabled),
-button#guides-apply-cancel:hover:not(:disabled),
 button#key-capture-cancel:hover:not(:disabled),
 button#scan-place-review-cancel:hover:not(:disabled),
 button#overlay-align-cancel:hover:not(:disabled),
@@ -1404,7 +1417,6 @@ button.page-jump-btn-danger:hover:not(:disabled) {
 
 button#confirm-modal-cancel:hover:not(:disabled) svg,
 button#page-jump-cancel:hover:not(:disabled) svg,
-button#guides-apply-cancel:hover:not(:disabled) svg,
 button#key-capture-cancel:hover:not(:disabled) svg,
 button#scan-place-review-cancel:hover:not(:disabled) svg,
 button#overlay-align-cancel:hover:not(:disabled) svg,
@@ -3165,7 +3177,8 @@ body.home-starting .home-screen {
   cursor: not-allowed;
   filter: grayscale(1);
 }
-.side-tool-btn.active {
+.side-tool-btn.active,
+.side-tool-btn[aria-pressed="true"] {
   background: var(--accent);
   border: none;
   color: #fff;
@@ -3948,6 +3961,12 @@ body.home-starting .home-screen {
   /* 透明 div の周囲を 9999px の spread で一気に塗る。clipper の overflow:hidden で切り落とされる。 */
   box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
 }
+/* トリミング枠の「フチ」をクリックしてロック⇄位置調整をトグルするための 4 辺の帯。
+   .psd-guides-layer は pointer-events:none なので帯側で auto に戻す。矩形内側には
+   要素を置かないためテキストへのクリックは透過する。 */
+.psd-trim-frame { position: absolute; inset: 0; pointer-events: none; }
+.psd-trim-frame-edge { position: absolute; pointer-events: auto; cursor: pointer; }
+.psd-trim-frame-edge:hover { background: rgba(0, 210, 255, 0.18); }
 /* 非同期モード時のアクティブペイン強調（キーボード/ホイールの操作対象側） */
 .spreads-pdf-area.active-pane,
 .spreads-psd-area.active-pane {
@@ -3959,10 +3978,7 @@ body.home-starting .home-screen {
    方式に変更。バー高さ 24px に収めるため 22px 角・SVG 15px に揃える。 */
 .pdf-font-book-btn,
 .pdf-rotate-btn,
-.psd-rotate-btn,
-.psd-guides-lock-btn,
-.psd-guides-apply-btn,
-.psd-rulers-toggle-btn {
+.psd-rotate-btn {
   width: 22px;
   height: 22px;
   padding: 0;
@@ -3978,32 +3994,16 @@ body.home-starting .home-screen {
 }
 .pdf-font-book-btn svg,
 .pdf-rotate-btn svg,
-.psd-rotate-btn svg,
-.psd-guides-lock-btn svg,
-.psd-guides-apply-btn svg,
-.psd-rulers-toggle-btn svg {
+.psd-rotate-btn svg {
   width: 15px;
   height: 15px;
 }
 .pdf-font-book-btn:hover:not(:disabled),
 .pdf-rotate-btn:hover:not(:disabled),
-.psd-rotate-btn:hover:not(:disabled),
-.psd-guides-lock-btn:hover:not(:disabled),
-.psd-guides-apply-btn:hover:not(:disabled),
-.psd-rulers-toggle-btn:hover:not(:disabled) {
+.psd-rotate-btn:hover:not(:disabled) {
   background: transparent;
   border-color: var(--border);
   color: var(--accent);
-}
-/* ロックボタンの状態に応じたアイコン切替（押下＝ロック中） */
-.psd-guides-lock-btn .lock-icon-locked { display: none; }
-.psd-guides-lock-btn .lock-icon-unlocked { display: block; }
-.psd-guides-lock-btn[aria-pressed="true"] .lock-icon-locked { display: block; }
-.psd-guides-lock-btn[aria-pressed="true"] .lock-icon-unlocked { display: none; }
-.psd-guides-lock-btn[aria-pressed="true"] {
-  background: var(--accent, #3b82f6);
-  color: #fff;
-  border-color: var(--accent, #3b82f6);
 }
 /* ガイドロック中：
    - ガイド線そのものは非表示（dim マスクで囲んだ枠を確認する用途を優先）。
@@ -4011,54 +4011,6 @@ body.home-starting .home-screen {
 .spreads-psd-area.guides-locked .psd-guide { display: none; }
 .spreads-psd-area.guides-locked .psd-ruler-top { cursor: default; }
 .spreads-psd-area.guides-locked .psd-ruler-left { cursor: default; }
-/* ガイドを複数反映モーダル */
-.guides-apply-card {
-  min-width: 380px;
-  max-width: 520px;
-}
-.guides-apply-controls {
-  display: flex;
-  gap: 8px;
-  justify-content: flex-end;
-}
-.guides-apply-list {
-  max-height: 50vh;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  border-radius: 4px;
-  padding: 4px 0;
-  background: var(--bg);
-}
-.guides-apply-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 12px;
-  cursor: pointer;
-  user-select: none;
-  font-size: 13px;
-  color: var(--text);
-}
-.guides-apply-item:hover {
-  background: var(--panel-hover);
-}
-.guides-apply-item input[type="checkbox"] {
-  cursor: pointer;
-  flex-shrink: 0;
-}
-/* 現ページ / 反映済み: 操作対象としては rulers.js 側で安全に skip されるが、
-   全選択でチェックは入る。視覚的にはラベルを muted 色にして区別する。 */
-.guides-apply-item-current .guides-apply-item-name,
-.guides-apply-item-applied .guides-apply-item-name {
-  color: var(--text-muted);
-}
-.guides-apply-item-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
 .pdf-stage {
   flex: 1;
   min-width: 0;
@@ -6742,11 +6694,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   letter-spacing: 0;
   line-height: 1;
 }
-.size-font-style-row {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
-}
 .editor-tab-panel.ruby-panel-floating + .editor-tab-panel {
   margin-top: 0;
 }
@@ -6855,10 +6802,12 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   line-height: 1;
 }
 .bold-toggle-btn::before {
+  content: "B";
   font-weight: 900;
   font-style: normal;
 }
 .italic-toggle-btn::before {
+  content: "I";
   font-weight: 700;
   font-style: italic;
   transform: skewX(-8deg);

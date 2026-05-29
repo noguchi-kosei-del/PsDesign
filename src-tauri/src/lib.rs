@@ -900,6 +900,77 @@ async fn desktop_dir() -> Result<String, String> {
     }
 }
 
+// Photoshop のスクラッチディスク容量を取得する。
+// Photoshop は起動時にスクラッチディスク (デフォルト = システムドライブ、通常 C:)
+// の空き容量が一定値を下回るとモーダル警告を出して停止する。OPUS 側で事前に
+// 空き容量をユーザーに知らせるための情報源。
+//
+// 戻り値: { path, free_bytes, total_bytes, low (free < 100GB) }
+// `low` は最も浅い段階 (< 100 GB) の即時判定用。フロント側 (bind/save.js
+// ensurePhotoshopScratchOk) では `free_bytes` を直接見て 5 段階 (< 100/50/20/10/5 GB) に
+// 分類してメッセージを変えるため、`low` は実質的に使われない。後方互換のため残す。
+// Windows: %SystemDrive%（通常 "C:"）の root に対して GetDiskFreeSpaceExW で取得。
+// Unix: 対象 OS は Windows なので「未サポート」を返す。
+#[derive(Debug, Serialize)]
+struct DriveFreeSpace {
+    path: String,
+    free_bytes: u64,
+    total_bytes: u64,
+    low: bool,
+}
+
+const PHOTOSHOP_SCRATCH_LOW_THRESHOLD_BYTES: u64 = 100u64 * 1024 * 1024 * 1024; // 100 GB
+
+#[tauri::command]
+async fn get_photoshop_scratch_free_space() -> Result<DriveFreeSpace, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::ffi::OsStr;
+        use std::os::windows::ffi::OsStrExt;
+        use winapi::um::fileapi::GetDiskFreeSpaceExW;
+
+        // システムドライブを取得（環境変数 SystemDrive、通常 "C:"）。
+        // 末尾に "\\" を付けて root path として渡す。
+        let system_drive =
+            std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+        let root = format!("{}\\", system_drive);
+
+        let wide: Vec<u16> = OsStr::new(&root)
+            .encode_wide()
+            .chain(std::iter::once(0))
+            .collect();
+
+        // ULARGE_INTEGER は winapi で u64 と互換のため、直接 u64 を渡せる。
+        let mut free_for_caller: u64 = 0;
+        let mut total: u64 = 0;
+        let mut total_free: u64 = 0;
+        let ok = unsafe {
+            GetDiskFreeSpaceExW(
+                wide.as_ptr(),
+                &mut free_for_caller as *mut u64 as *mut _,
+                &mut total as *mut u64 as *mut _,
+                &mut total_free as *mut u64 as *mut _,
+            )
+        };
+        if ok == 0 {
+            return Err(format!(
+                "GetDiskFreeSpaceExW failed for system drive: {}",
+                root
+            ));
+        }
+        Ok(DriveFreeSpace {
+            path: root,
+            free_bytes: free_for_caller,
+            total_bytes: total,
+            low: free_for_caller < PHOTOSHOP_SCRATCH_LOW_THRESHOLD_BYTES,
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Err("get_photoshop_scratch_free_space is only supported on Windows".to_string())
+    }
+}
+
 // 校正パネルのカスタムフォルダブラウザ用に、ディレクトリの中身（フォルダ + ファイル）を返す。
 // 隠しファイル / シンボリックリンクの type 解決失敗は無視。サブツリー走査はしない（1 階層のみ）。
 #[tauri::command]
@@ -1049,6 +1120,12 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
+            // 【v2.x】Photoshop 警告ダイアログ (仮想記憶ディスクの容量不足など) を
+            // アプリ起動時から常時バックグラウンドで監視し、見つけたら自動 OK する。
+            // 2 秒間隔で polling、CPU 負荷は無視できるレベル。OPUS の保存処理経由
+            // 以外 (例: ユーザーが直接 Photoshop を操作中) で警告が出ても拾える。
+            photoshop::start_background_dialog_watcher();
+
             if let Some(main_window) = app.get_webview_window("main") {
                 apply_app_icon(&main_window);
             }
@@ -1101,6 +1178,7 @@ pub fn run() {
             list_drives,
             home_dir,
             desktop_dir,
+            get_photoshop_scratch_free_space,
             ocr::check_ai_models,
             ocr::install_ai_models,
             ocr::cancel_ai_install,

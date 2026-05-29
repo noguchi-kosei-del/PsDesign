@@ -103,14 +103,6 @@ import {
   toggleRulersVisible,
   getRulersVisible,
   onRulersVisibleChange,
-  getGuidesLocked,
-  toggleGuidesLocked,
-  onGuidesLockedChange,
-  hasAnyGuide,
-  onGuidesChange,
-  applyGuidesToPaths,
-  clearGuidesForPaths,
-  guidesMatchCurrent,
 } from "./rulers.js";
 import {
   canRedo,
@@ -134,7 +126,6 @@ import {
   getPsdZoom,
   getTextSize,
   getTool,
-  getTxtSource,
   hasEdits,
   getEditorLeftPaneMode,
   getCurrentFont,
@@ -240,163 +231,6 @@ function updatePsdRotateVisibility() {
   btn.disabled = getPages().length === 0;
 }
 
-function bindPsdGuidesLock() {
-  const btn = document.getElementById("psd-guides-lock-btn");
-  if (!btn) return;
-  const syncPressed = () => {
-    const locked = getGuidesLocked();
-    btn.setAttribute("aria-pressed", locked ? "true" : "false");
-    btn.title = locked ? "ガイドのロック解除" : "ガイドをロック";
-    btn.setAttribute("aria-label", btn.title);
-  };
-  const syncDisabled = () => {
-    btn.disabled = getPages().length === 0 || !hasAnyGuide();
-  };
-  btn.addEventListener("click", () => toggleGuidesLocked());
-  onGuidesLockedChange(syncPressed);
-  onGuidesChange(syncDisabled);
-  onPageIndexChange(syncDisabled);
-  syncPressed();
-  syncDisabled();
-  const updateVis = () => {
-    btn.hidden = !getRulersVisible();
-  };
-  onRulersVisibleChange(updateVis);
-  updateVis();
-}
-
-function updatePsdGuidesLockVisibility() {
-  const btn = document.getElementById("psd-guides-lock-btn");
-  if (!btn) return;
-  btn.hidden = !getRulersVisible();
-  btn.disabled = getPages().length === 0 || !hasAnyGuide();
-}
-
-function bindPsdGuidesApply() {
-  const btn = document.getElementById("psd-guides-apply-btn");
-  if (!btn) return;
-  btn.addEventListener("click", openGuidesApplyModal);
-  const sync = () => updatePsdGuidesApplyVisibility();
-  onRulersVisibleChange(sync);
-  onGuidesChange(sync);
-  onPageIndexChange(sync);
-  onGuidesLockedChange(sync);
-  sync();
-}
-function updatePsdGuidesApplyVisibility() {
-  const btn = document.getElementById("psd-guides-apply-btn");
-  if (!btn) return;
-  btn.hidden = !getRulersVisible();
-  const pageCount = getPages().length;
-  const tooFewPages = pageCount < 2;
-  const noGuides = !hasAnyGuide();
-  const notLocked = !getGuidesLocked();
-  btn.disabled = tooFewPages || noGuides || notLocked;
-  btn.title = pageCount === 0
-    ? "PSD を読み込んでください"
-    : (tooFewPages
-      ? "反映先のページがありません"
-      : (noGuides
-        ? "現在のページにガイドがありません"
-        : (notLocked
-          ? "ガイドをロックすると反映できます"
-          : "ガイドを複数ページに反映")));
-  btn.setAttribute("aria-label", btn.title);
-}
-
-function openGuidesApplyModal() {
-  const modal = document.getElementById("guides-apply-modal");
-  const list = document.getElementById("guides-apply-list");
-  const okBtn = document.getElementById("guides-apply-ok");
-  const unapplyBtn = document.getElementById("guides-apply-unapply");
-  const cancelBtn = document.getElementById("guides-apply-cancel");
-  const selAllBtn = document.getElementById("guides-apply-select-all");
-  const selNoneBtn = document.getElementById("guides-apply-select-none");
-  if (!modal || !list || !okBtn || !cancelBtn) return;
-
-  const pages = getPages();
-  const currentIdx = getCurrentPageIndex();
-  list.innerHTML = "";
-  for (let i = 0; i < pages.length; i++) {
-    const page = pages[i];
-    const isCurrent = i === currentIdx;
-    const alreadyApplied = !isCurrent && guidesMatchCurrent(page?.path);
-    const otherHasGuides = !isCurrent && !alreadyApplied && hasAnyGuide(page?.path);
-    const label = document.createElement("label");
-    label.className = "guides-apply-item"
-      + (isCurrent ? " guides-apply-item-current" : "")
-      + (alreadyApplied ? " guides-apply-item-applied" : "");
-    const cb = document.createElement("input");
-    cb.type = "checkbox";
-    cb.dataset.index = String(i);
-    cb.dataset.hasGuides = (alreadyApplied || otherHasGuides) ? "1" : "0";
-    const span = document.createElement("span");
-    span.className = "guides-apply-item-name";
-    const m = (page?.path ?? "").match(/[\\/]([^\\/]+)$/);
-    const name = m ? m[1] : (page?.path ?? `ページ ${i + 1}`);
-    let suffix = "";
-    if (isCurrent) suffix = "（現在のページ）";
-    else if (alreadyApplied) suffix = "（反映済み）";
-    else if (otherHasGuides) suffix = "（ガイドあり）";
-    span.textContent = `${i + 1}: ${name}${suffix}`;
-    label.appendChild(cb);
-    label.appendChild(span);
-    list.appendChild(label);
-  }
-
-  showModalAnimated(modal);
-
-  const cleanup = () => {
-    hideModalAnimated(modal);
-    okBtn.removeEventListener("click", onOk);
-    unapplyBtn?.removeEventListener("click", onUnapply);
-    cancelBtn.removeEventListener("click", onCancel);
-    selAllBtn?.removeEventListener("click", onSelAll);
-    selNoneBtn?.removeEventListener("click", onSelNone);
-    modal.removeEventListener("mousedown", onOverlay);
-    document.removeEventListener("keydown", onKey);
-  };
-  const collectSelectedPaths = (filterFn) => {
-    const out = [];
-    list.querySelectorAll("input[type=checkbox]:not(:disabled):checked").forEach((cb) => {
-      if (filterFn && !filterFn(cb)) return;
-      const idx = Number(cb.dataset.index);
-      if (Number.isFinite(idx) && pages[idx]?.path) out.push(pages[idx].path);
-    });
-    return out;
-  };
-  const onOk = () => {
-    const targetPaths = collectSelectedPaths();
-    cleanup();
-    if (targetPaths.length === 0) return;
-    const count = applyGuidesToPaths(targetPaths);
-    if (count > 0) toast(`${count} ページにガイドを反映しました`, { kind: "success" });
-  };
-  const onUnapply = () => {
-    const targetPaths = collectSelectedPaths((cb) => cb.dataset.hasGuides === "1");
-    cleanup();
-    if (targetPaths.length === 0) return;
-    const count = clearGuidesForPaths(targetPaths);
-    if (count > 0) toast(`${count} ページのガイドを解除しました`, { kind: "success" });
-  };
-  const onCancel = () => cleanup();
-  const onOverlay = (e) => { if (e.target === modal) cleanup(); };
-  const onSelAll = () => list.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = true; });
-  const onSelNone = () => list.querySelectorAll("input[type=checkbox]").forEach((cb) => { cb.checked = false; });
-  const onKey = (e) => {
-    if (e.key === "Escape") { e.preventDefault(); cleanup(); }
-    else if (e.key === "Enter") { e.preventDefault(); onOk(); }
-  };
-
-  okBtn.addEventListener("click", onOk);
-  unapplyBtn?.addEventListener("click", onUnapply);
-  cancelBtn.addEventListener("click", onCancel);
-  selAllBtn?.addEventListener("click", onSelAll);
-  selNoneBtn?.addEventListener("click", onSelNone);
-  modal.addEventListener("mousedown", onOverlay);
-  document.addEventListener("keydown", onKey);
-}
-
 async function loadFontsFromBackend() {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -433,6 +267,20 @@ function restoreSelectedLayerBadgesNow() {
   restoreSelectedLayerBadges();
 }
 
+// 選択中テキストのサイズを既定の文字サイズに統一する。
+// サイドツールバーの「統一」ボタンと Shift+S ショートカットの共通処理。
+function runUnifyTextSize() {
+  if (!hasSelection()) {
+    toast("サイズを統一するテキストを選択してください", { kind: "info", duration: 2400 });
+    return;
+  }
+  const defaultSize = Number(getDefault("textSize"));
+  const changed = unifySelectedTextSize(defaultSize);
+  if (!changed && !hasSelection()) {
+    toast("サイズを統一するテキストを2つ以上選択してください", { kind: "info", duration: 2400 });
+  }
+}
+
 function runShortcut(id) {
   const inv = getPageDirectionInverted();
   switch (id) {
@@ -449,6 +297,7 @@ function runShortcut(id) {
     case "zoomReset":  resetActivePaneZoom(); break;
     case "sizeUp":     stepTextSize(+1, Math.max(1, Math.round(2 / getSizeStep()))); break;
     case "sizeDown":   stepTextSize(-1, Math.max(1, Math.round(2 / getSizeStep()))); break;
+    case "unifyTextSize": runUnifyTextSize(); break;
     case "toggleRulers": toggleRulersVisible(); break;
     case "viewerMode":   toggleViewerMode(); break;
   }
@@ -507,8 +356,12 @@ function isShortcutBlockedInInput(id, target) {
   const isArrow =
     sc.key === "ArrowLeft" || sc.key === "ArrowRight" ||
     sc.key === "ArrowUp"   || sc.key === "ArrowDown";
-  const noMods = !sc.modifiers || sc.modifiers.length === 0;
-  return isArrow || noMods;
+  const mods = sc.modifiers || [];
+  const noMods = mods.length === 0;
+  // Shift だけの修飾（例: Shift+S = 大文字 S 入力）は通常のタイピングや
+  // Shift+矢印の範囲選択と衝突するため、入力欄・テキスト編集中は発火させない。
+  const shiftOnly = mods.length === 1 && mods[0] === "shift";
+  return isArrow || noMods || shiftOnly;
 }
 
 function isPageNavShortcut(id) {
@@ -613,15 +466,7 @@ function bindTools() {
   if (unifyTextSizeBtn) {
     unifyTextSizeBtn.addEventListener("click", (e) => {
       e.preventDefault();
-      if (!hasSelection()) {
-        toast("サイズを統一するテキストを選択してください", { kind: "info", duration: 2400 });
-        return;
-      }
-      const defaultSize = Number(getDefault("textSize"));
-      const changed = unifySelectedTextSize(defaultSize);
-      if (!changed && !hasSelection()) {
-        toast("サイズを統一するテキストを2つ以上選択してください", { kind: "info", duration: 2400 });
-      }
+      runUnifyTextSize();
     });
   }
 
@@ -832,8 +677,6 @@ function schedulePageRender() {
     renderAllSpreads();
     rebuildLayerList();
     updatePsdRotateVisibility();
-    updatePsdGuidesLockVisibility();
-    updatePsdGuidesApplyVisibility();
   });
 }
 
@@ -926,40 +769,8 @@ function loadSidePanelTab() {
   } catch (_) {}
   return "txt";
 }
-function hasTextForEditorTab() {
-  const source = getTxtSource();
-  return !!String(source?.content ?? "").trim();
-}
-function syncTextEditorTabLock() {
-  const locked = !hasTextForEditorTab();
-  const tabs = [
-    document.getElementById("side-panel-tab-editor"),
-    document.getElementById("side-panel-tab-style"),
-  ];
-  for (const tab of tabs) {
-    if (!tab) continue;
-    tab.disabled = locked;
-    tab.classList.toggle("locked", locked);
-    tab.setAttribute("aria-disabled", locked ? "true" : "false");
-    tab.title = locked ? "テキスト生成後に編集できます" : "";
-    if (locked && tab.classList.contains("active")) setSidePanelTab("txt");
-  }
-  for (const btn of [
-    document.getElementById("select-all-btn"),
-    document.getElementById("layers-toggle-btn"),
-  ]) {
-    if (!btn) continue;
-    if (!btn.dataset.unlockedTitle) btn.dataset.unlockedTitle = btn.title || "";
-    btn.disabled = locked;
-    btn.classList.toggle("locked", locked);
-    btn.setAttribute("aria-disabled", locked ? "true" : "false");
-    btn.title = locked ? "テキスト生成後に使用できます" : btn.dataset.unlockedTitle;
-  }
-  if (locked) closeLayersDrawer();
-}
 function setSidePanelTab(tab) {
   if (tab !== "txt" && tab !== "editor" && tab !== "style") tab = "txt";
-  if ((tab === "editor" || tab === "style") && !hasTextForEditorTab()) tab = "txt";
   const inplaceSelection = pendingSidePanelInplaceSelection ?? getLastInplaceSelection();
   pendingSidePanelInplaceSelection = null;
   for (const btn of document.querySelectorAll(".side-panel-tab")) {
@@ -985,12 +796,9 @@ function bindSidePanelTabs() {
       e.preventDefault();
     });
     btn.addEventListener("click", () => {
-      if (btn.disabled) return;
       setSidePanelTab(btn.dataset.tab);
     });
   }
-  onTxtSourceChange(syncTextEditorTabLock);
-  syncTextEditorTabLock();
   setSidePanelTab(loadSidePanelTab());
 }
 
@@ -2278,6 +2086,95 @@ function bindRubyTool() {
     }
     grid.appendChild(line);
 
+    // 親文字セルを長押し → ドラッグで連続選択。
+    // - 短いクリック (250ms 未満で同セル内で release): 個別 toggle (既存挙動)
+    // - 長押し (250ms 以上 hold) からのドラッグ: カーソルが通過したセルを順次 selected に追加。
+    //   既に selected のセルはそのまま (toggle ではなく add のみ)。取り消したい場合は
+    //   単発クリックで個別 toggle する。
+    // - 長押し成立前でも、押下したまま別のセルへ大きく動いたら即時ドラッグモードへ移行。
+    const PARENT_CELL_LONG_PRESS_MS = 250;
+    let dragSelectActive = false;
+    let dragSelectTimer = null;
+    let dragSelectAnchorCell = null;
+    const dragSelectVisited = new Set();
+    const cellAtPoint = (clientX, clientY) => {
+      const el = document.elementFromPoint(clientX, clientY);
+      return el?.closest?.(".ruby-parent-cell") ?? null;
+    };
+    const enterDragSelectMode = (initialCell) => {
+      if (dragSelectActive) return;
+      dragSelectActive = true;
+      dragSelectVisited.clear();
+      if (initialCell) {
+        initialCell.classList.add("selected");
+        dragSelectVisited.add(initialCell);
+        updateOkState();
+      }
+    };
+    const cancelLongPressTimer = () => {
+      if (dragSelectTimer) {
+        clearTimeout(dragSelectTimer);
+        dragSelectTimer = null;
+      }
+    };
+    const handleDragSelectMove = (clientX, clientY) => {
+      if (!dragSelectActive) return;
+      const cell = cellAtPoint(clientX, clientY);
+      if (!cell || dragSelectVisited.has(cell)) return;
+      cell.classList.add("selected");
+      dragSelectVisited.add(cell);
+      updateOkState();
+    };
+    const endDragSelect = () => {
+      cancelLongPressTimer();
+      const wasActive = dragSelectActive;
+      dragSelectActive = false;
+      dragSelectAnchorCell = null;
+      dragSelectVisited.clear();
+      if (wasActive) {
+        // ドラッグ選択モードを使ったときは、後続の click が発火して
+        // 同セルを toggle で外してしまわないよう、一度だけ捕捉して握りつぶす。
+        const swallowClick = (clickEvent) => {
+          clickEvent.preventDefault();
+          clickEvent.stopPropagation();
+          grid.removeEventListener("click", swallowClick, true);
+        };
+        grid.addEventListener("click", swallowClick, true);
+        setTimeout(() => grid.removeEventListener("click", swallowClick, true), 80);
+      }
+    };
+    grid.addEventListener("pointerdown", (e) => {
+      if (e.button !== undefined && e.button !== 0) return;
+      const cell = e.target?.closest?.(".ruby-parent-cell");
+      if (!cell) return;
+      dragSelectAnchorCell = cell;
+      cancelLongPressTimer();
+      dragSelectTimer = setTimeout(() => {
+        dragSelectTimer = null;
+        enterDragSelectMode(dragSelectAnchorCell);
+      }, PARENT_CELL_LONG_PRESS_MS);
+    });
+    grid.addEventListener("pointermove", (e) => {
+      // マウスの場合はボタンが押されているときだけ反応。タッチ/ペンは常時。
+      if (e.pointerType === "mouse" && (e.buttons ?? 0) === 0) return;
+      if (!dragSelectActive && dragSelectAnchorCell && dragSelectTimer) {
+        // 長押し成立前でも、別セルへ移動したら即ドラッグモードに突入
+        const cellNow = cellAtPoint(e.clientX, e.clientY);
+        if (cellNow && cellNow !== dragSelectAnchorCell) {
+          cancelLongPressTimer();
+          enterDragSelectMode(dragSelectAnchorCell);
+        }
+      }
+      handleDragSelectMove(e.clientX, e.clientY);
+    });
+    grid.addEventListener("pointerup", endDragSelect);
+    grid.addEventListener("pointercancel", endDragSelect);
+    grid.addEventListener("pointerleave", () => {
+      // grid 外にカーソルが出たらタイマーだけクリア (ドラッグモード自体は継続)
+      if (!dragSelectActive) cancelLongPressTimer();
+    });
+    window.addEventListener("blur", endDragSelect);
+
     const close = () => overlay.remove();
     overlay.querySelector(".ruby-parent-dialog-close")?.addEventListener("click", close);
     overlay.querySelector(".ruby-parent-cancel-btn")?.addEventListener("click", close);
@@ -2313,6 +2210,57 @@ function bindRubyTool() {
     overlay.style.visibility = "";
     requestAnimationFrame(positionDialog);
     grid.focus({ preventScroll: true });
+  };
+
+  // 親文字指定ボタンの長押し → 連続適用モード ("sticky" モード)。
+  // - 通常クリック (500ms 未満で release): 1 回だけ親文字指定ダイアログを開く (従来挙動)
+  // - 長押し (500ms 以上 hold): sticky モード ON。ダイアログを開きつつ、以降の
+  //   doApply 完了時に再度ダイアログを自動的に開き続ける (連続適用)
+  // - sticky モード中にもう一度クリック (短押し): sticky モード OFF
+  // - パネル外クリック / Esc / 別レイヤー選択でも sticky モード OFF
+  //
+  // ※ TDZ 回避のため、updateSelection の前に宣言する必要がある
+  //   (updateSelection 内で setStickyMode を参照しており、updateSelection は
+  //    起動直後に直接呼ばれる)。
+  const STICKY_LONG_PRESS_MS = 500;
+  let stickyParentSelect = false;
+  let longPressTimer = null;
+  let longPressTriggered = false;
+  let lastTriggerEvent = null;
+  const setStickyMode = (on) => {
+    stickyParentSelect = !!on;
+    if (parentSelectBtn) {
+      parentSelectBtn.classList.toggle("sticky-mode", stickyParentSelect);
+      parentSelectBtn.setAttribute(
+        "aria-pressed",
+        stickyParentSelect ? "true" : "false"
+      );
+      parentSelectBtn.title = stickyParentSelect
+        ? "親文字指定 (連続適用モード中 — クリックで解除)"
+        : "親文字指定 (長押しで連続適用モード)";
+    }
+  };
+  setStickyMode(false);
+  const isStickyParentSelectActive = () => stickyParentSelect;
+  const reopenParentSelectIfSticky = () => {
+    if (!stickyParentSelect) return;
+    // 連続適用: 適用直後は selection が解除されているケースもあるため、
+    // 次フレームで activeEditTarget の有無を見て再開する。
+    requestAnimationFrame(() => {
+      if (!stickyParentSelect) return;
+      if (!activeEditTarget()) {
+        // 編集対象がなくなった (フォーカス外れ等) → sticky 解除
+        setStickyMode(false);
+        return;
+      }
+      openParentSelectDialog(lastTriggerEvent);
+    });
+  };
+  const cancelLongPress = () => {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
   };
 
   const updateSelection = () => {
@@ -2355,6 +2303,10 @@ function bindRubyTool() {
       inputEl.value = "";
       scaleEl.value = "50";
       setMode("auto");
+      // 編集対象自体が外れたら連続適用モードも解除する
+      if (!activeEditTarget() && typeof setStickyMode === "function") {
+        setStickyMode(false);
+      }
     }
     placeRubyPanelNearText();
   };
@@ -2364,7 +2316,51 @@ function bindRubyTool() {
   window.addEventListener("scroll", placeRubyPanelNearText, true);
   updateSelection();
 
-  parentSelectBtn?.addEventListener("click", openParentSelectDialog);
+  parentSelectBtn?.addEventListener("pointerdown", (e) => {
+    if (parentSelectBtn.disabled) return;
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    longPressTriggered = false;
+    lastTriggerEvent = e;
+    cancelLongPress();
+    longPressTimer = setTimeout(() => {
+      longPressTimer = null;
+      longPressTriggered = true;
+      // 長押し成立: sticky モード ON + そのままダイアログを開く
+      setStickyMode(true);
+      openParentSelectDialog(e);
+    }, STICKY_LONG_PRESS_MS);
+  });
+  parentSelectBtn?.addEventListener("pointerup", (e) => {
+    cancelLongPress();
+    if (longPressTriggered) {
+      // 長押し成立済み: pointerup の後続 click は無視 (重複オープン防止)
+      longPressTriggered = false;
+      return;
+    }
+    if (parentSelectBtn.disabled) return;
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    lastTriggerEvent = e;
+    if (stickyParentSelect) {
+      // sticky モード中の短押し: モード解除のみ (ダイアログは開かない)
+      setStickyMode(false);
+      return;
+    }
+    openParentSelectDialog(e);
+  });
+  parentSelectBtn?.addEventListener("pointerleave", cancelLongPress);
+  parentSelectBtn?.addEventListener("pointercancel", cancelLongPress);
+  // 既存の click ハンドラは pointerup でカバーするので登録しない。
+  // ただしキーボード操作 (Tab + Space/Enter) も拾えるように keydown を追加。
+  parentSelectBtn?.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter" && e.key !== " ") return;
+    if (parentSelectBtn.disabled) return;
+    e.preventDefault();
+    if (stickyParentSelect) {
+      setStickyMode(false);
+      return;
+    }
+    openParentSelectDialog(e);
+  });
 
   const buildRubyApplications = (sel, text, scale) => {
     const ranges = sel.manualRanges ?? [{ start: sel.start, end: sel.end }];
@@ -2490,6 +2486,8 @@ function bindRubyTool() {
     requestAnimationFrame(() => {
       updateSelection();
       if (typeof options.preserveInputValue === "string") inputEl.value = options.preserveInputValue;
+      // 連続適用 (sticky) モード中なら次の親文字選択ダイアログを自動で開き直す
+      if (isStickyParentSelectActive()) reopenParentSelectIfSticky();
     });
   };
 
@@ -4474,10 +4472,6 @@ function init() {
   bindPdfRotate();
   bindPsdRotate();
   updatePsdRotateVisibility();
-  bindPsdGuidesLock();
-  updatePsdGuidesLockVisibility();
-  bindPsdGuidesApply();
-  updatePsdGuidesApplyVisibility();
   mountPdfView();
   setupTauriDragDrop();
   bindParallelSync();
@@ -4511,8 +4505,6 @@ function init() {
   window.addEventListener("psdesign:psd-loaded", () => {
     updatePageNav();
     updatePsdRotateVisibility();
-    updatePsdGuidesLockVisibility();
-    updatePsdGuidesApplyVisibility();
   });
   maybeShowFirstRunSetup();
   void openStartupProjectFromArgs();

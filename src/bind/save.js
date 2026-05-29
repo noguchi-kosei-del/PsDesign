@@ -6,6 +6,7 @@
 
 import { exportEdits, getEdit, getNewLayersForPsd, getPages, getPdfPaths, getPsdRotation, hasEdits } from "../state.js";
 import {
+  confirmDialog,
   hideModalAnimated,
   hideProgress,
   notifyDialog,
@@ -509,6 +510,97 @@ async function openSavedFolder(folderPath) {
   await invoke("open_folder_in_explorer", { path: folderPath });
 }
 
+// Photoshop スクラッチディスク (システムドライブ、通常 C:) の空き容量を 5 段階で評価し、
+// 段階ごとにトーンと色の異なる警告ダイアログを出す。ユーザーが「続行」を選んだら true。
+// 取得失敗 (Tauri 非接続環境 / Unix / その他) は警告スキップで true 扱い。
+//
+// 段階の設計:
+//   - critical-5GB   < 5 GB  : 危機的 (danger)  保存中に失敗する可能性が極めて高い
+//   - severe-10GB    < 10 GB : 深刻 (danger)    保存に失敗するリスクが高い
+//   - warn-20GB      < 20 GB : 警告 (warning)   メモリ不足エラーの可能性
+//   - caution-50GB   < 50 GB : 注意 (warning)   処理が遅くなる可能性
+//   - info-100GB     < 100 GB: 案内 (warning)   起動時に Photoshop の警告ダイアログが出る可能性
+//   - >= 100 GB                : 何もしない
+//
+// セッション中に一度「続行」が選ばれたら以降は再表示しない（毎保存ごとの煩わしさ回避）。
+// 容量が悪化したケースもあえて再表示せず、起動直後の最初の保存時の確認だけで終わらせる方針。
+const GB = 1024 * 1024 * 1024;
+const SCRATCH_LEVELS = [
+  { id: "critical-5GB",  threshold: 5  * GB, kind: "danger" },
+  { id: "severe-10GB",   threshold: 10 * GB, kind: "danger" },
+  { id: "warn-20GB",     threshold: 20 * GB, kind: "warning" },
+  { id: "caution-50GB",  threshold: 50 * GB, kind: "warning" },
+  { id: "info-100GB",    threshold: 100 * GB, kind: "warning" },
+];
+let scratchWarningAcknowledgedThisSession = false;
+function classifyScratchLevel(freeBytes) {
+  for (const lvl of SCRATCH_LEVELS) {
+    if (freeBytes < lvl.threshold) return lvl;
+  }
+  return null;
+}
+function buildScratchWarningMessage(level, drivePath, freeBytes) {
+  const gbStr = (freeBytes / GB).toFixed(1);
+  const head = `スクラッチディスク (${drivePath}) の空き容量は約 ${gbStr} GB です。\n\n`;
+  switch (level.id) {
+    case "critical-5GB":
+      return head +
+        "【危機的】空き容量が 5 GB を切っています。\n" +
+        "Photoshop は保存中にスクラッチディスクへ作業ファイルを書き出すため、\n" +
+        "この状態ではファイル破損 / 保存失敗のリスクが極めて高くなります。\n\n" +
+        "今すぐ不要なファイルを削除してから保存することを強くおすすめします。\n" +
+        "それでもこのまま保存処理を続行しますか？";
+    case "severe-10GB":
+      return head +
+        "【深刻】空き容量が 10 GB を切っています。\n" +
+        "Photoshop が保存処理中にスクラッチディスクを使い切る可能性があり、\n" +
+        "保存に失敗するリスクが高くなっています。\n\n" +
+        "可能なら容量を確保してから実行することを強くおすすめします。\n" +
+        "このまま保存処理を続行しますか？";
+    case "warn-20GB":
+      return head +
+        "【警告】空き容量が 20 GB を切っています。\n" +
+        "大きな PSD を編集している場合、保存中にメモリ不足エラーが発生する\n" +
+        "可能性があります。\n\n" +
+        "このまま保存処理を続行しますか？";
+    case "caution-50GB":
+      return head +
+        "【注意】空き容量が 50 GB を切っています。\n" +
+        "Photoshop の処理がやや遅くなる可能性があります。\n\n" +
+        "このまま保存処理を続行しますか？";
+    case "info-100GB":
+    default:
+      return head +
+        "Photoshop は空き容量が 100 GB 未満のとき、\n" +
+        "起動時に容量不足の警告ダイアログを表示する場合があります。\n\n" +
+        "このまま保存処理を続行しますか？";
+  }
+}
+async function ensurePhotoshopScratchOk() {
+  if (scratchWarningAcknowledgedThisSession) return true;
+  let info = null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    info = await invoke("get_photoshop_scratch_free_space");
+  } catch (e) {
+    // 取得失敗時はスキップして従来通り保存処理に進む
+    return true;
+  }
+  if (!info) return true;
+  const free = Number(info.free_bytes ?? 0);
+  const level = classifyScratchLevel(free);
+  if (!level) return true; // 100GB 以上 → 警告不要
+  const proceed = await confirmDialog({
+    title: "Photoshop スクラッチディスク容量警告",
+    message: buildScratchWarningMessage(level, info.path, free),
+    confirmLabel: "続行",
+    cancelLabel: "キャンセル",
+    kind: level.kind,
+  });
+  if (proceed) scratchWarningAcknowledgedThisSession = true;
+  return proceed;
+}
+
 async function runSaveWithMode({ saveMode, targetDir }) {
   if (saveInflight) {
     toast("保存処理中です。完了までお待ちください", { kind: "info", duration: 2200 });
@@ -519,12 +611,17 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     toast("編集内容がありません", { kind: "info" });
     return;
   }
+  // Photoshop 起動時のスクラッチディスク容量警告を事前にチェック。
+  // 100GB 未満なら confirmDialog でユーザーに伝え、続行可否を確認する。
+  const scratchOk = await ensurePhotoshopScratchOk();
+  if (!scratchOk) return;
   // 【v1.29.x UI-coord】payload 構築前に、全 page のルビ wrap 実描画位置を同期測定して
   // state に書き戻す。これがないと rAF 遅延で「新規に適用したばかりのルビの offsetX/Y が
   // payload に含まれない」事故が起き、JSX 側で計算式 fallback が使われて位置がズレる。
   try { measureAllRubyOffsetsSync(); } catch (e) { console.warn("[save] ruby offset measure failed:", e); }
-  const shouldSave = await showFinishReviewDialog();
-  if (!shouldSave) return;
+  // 仕上がりチェック（showFinishReviewDialog）は保存フローから除去。確認ダイアログを挟まず
+  // 直接 Photoshop へ反映する。実際の保存は JSX 経由で行われ page.canvas（アプリ内プレビュー）に
+  // 依存しないため、出力 PSD の品質には影響しない。
   if (saveInflight) return;
   const base = exportEdits();
   const payload = {
