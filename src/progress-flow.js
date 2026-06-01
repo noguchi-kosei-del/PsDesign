@@ -199,3 +199,22 @@ export function createHomeTypesetSteps({ positionAdjustMode = null } = {}) {
   }
   return steps;
 }
+
+export function createHomeTranscribeSteps() {
+  return [
+    { id: "reference-load", label: "見本読み込み", labelEn: "reference", weight: 22 },
+    { id: "scan", label: "画像スキャン", labelEn: "scan", weight: 43 },
+    { id: "transcribe", label: "書き起こし", labelEn: "transcription", weight: 30 },
+    { id: "editor-ready", label: "表示準備", labelEn: "preparing view", weight: 5 },
+  ];
+}
+
+export function createProjectLoadSteps() {
+  return [
+    { id: "project-read", label: "プロジェクト読込", labelEn: "project file", weight: 10 },
+    { id: "psd-load", label: "PSD読み込み", labelEn: "psd parsing", weight: 45 },
+    { id: "reference-load", label: "見本読み込み", labelEn: "reference", weight: 25 },
+    { id: "snapshot-restore", label: "編集復元", labelEn: "restoring edits", weight: 15 },
+    { id: "view-ready", label: "表示準備", labelEn: "preparing view", weight: 5 },
+  ];
+}

@@ -1,4 +1,4 @@
-import { buildReferencePageCards, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
+import { buildReferencePageCards, rejectLargeReferencePdfFiles, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { getVersion } from "@tauri-apps/api/app";
 import packageInfo from "../package.json";
 import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh, setNextPdfZoomAnchorFromClientPoint } from "./pdf-view.js";
@@ -70,19 +70,22 @@ import {
   notifyDialog,
   showOpusProgressComplete,
   OPUS_SUCCESS_HOLD_DURATION,
-  showProgress,
   showModalAnimated,
   toast,
 } from "./ui-feedback.js";
 import {
   clearProgressFlow,
+  completeProgressFlowStep,
+  createHomeTranscribeSteps,
   createHomeTypesetSteps,
   startProgressFlow,
 } from "./progress-flow.js";
 import { bindEditorPane, focusEditor, refreshEditorPaneViewer } from "./bind/editor-pane.js";
 import {
+  findUnsupportedBitmapPsdFiles,
   listPsdFilesInFolder,
   loadPsdFilesByPaths,
+  notifyUnsupportedBitmapPsdFiles,
   pickPsdFiles,
 } from "./services/psd-load.js";
 import { bindSaveMenu, handleSave } from "./bind/save.js";
@@ -3214,18 +3217,22 @@ function normalizeStartupProjectPath(value) {
   }
 }
 
-async function openStartupProjectFromArgs() {
+function isStartupLoadablePath(path) {
+  return typeof path === "string" && /\.(opus|psd|txt|pdf|jpe?g|png)$/i.test(path);
+}
+
+async function openStartupFilesFromArgs() {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const args = await invoke("startup_args");
     if (!Array.isArray(args)) return;
-    const projectPath = args
+    const paths = args
       .map(normalizeStartupProjectPath)
-      .find((path) => typeof path === "string" && /\.opus$/i.test(path));
-    if (!projectPath) return;
-    await openProjectFromPath(projectPath);
+      .filter(isStartupLoadablePath);
+    if (paths.length === 0) return;
+    await handleDroppedPaths(paths);
   } catch (e) {
-    console.warn("startup project open skipped:", e);
+    console.warn("startup file open skipped:", e);
   }
 }
 
@@ -3940,6 +3947,9 @@ function openHomeTypesetDialog() {
     let referencePageCount = null;
     let hiddenReferencePages = new Set();
     let referenceLoading = false;
+    let unsupportedBitmapPsdPaths = [];
+    let psdPreflightChecking = false;
+    let psdPreflightSerial = 0;
     let baseTextSize = clampSize(getDefault("textSize") ?? getTextSize());
     let baseFontPs = String(getDefault("fontPostScriptName") || getCurrentFont() || "");
     let fontComboOpen = false;
@@ -4193,17 +4203,29 @@ function openHomeTypesetDialog() {
         update();
         return getReferenceDisplayCount();
       }
+      const sizeCheck = await rejectLargeReferencePdfFiles(paths);
+      if (sizeCheck.rejectedPaths.size > 0) {
+        referencePaths = sizeCheck.acceptedPaths;
+        referencePageCount = null;
+        update();
+        if (referencePaths.length === 0) return 0;
+      }
       referenceLoading = true;
       update();
       try {
-        await loadReferenceFiles(paths, {
+        const result = await loadReferenceFiles(referencePaths, {
           skipFirstBlankPage: false,
           excludedPages: hiddenReferencePages,
           showProgress: false,
+          notifyLargePdf: false,
         });
-        referencePageCount = referenceSelectionMatchesLoaded(paths, hiddenReferencePages)
+        const loadedPaths = Array.isArray(result?.paths) && result.paths.length > 0 ? result.paths : referencePaths;
+        if (loadedPaths !== referencePaths) {
+          referencePaths = loadedPaths;
+        }
+        referencePageCount = referenceSelectionMatchesLoaded(loadedPaths, hiddenReferencePages)
           ? Math.max(0, getPdfVirtualPageCount())
-          : paths.length;
+          : loadedPaths.length;
       } catch (e) {
         console.error("loadReferenceFiles failed:", e);
         referencePageCount = paths.length;
@@ -4251,7 +4273,36 @@ function openHomeTypesetDialog() {
           hideBtn.textContent = "非表示選択";
         }
       }
-      if (startBtn) startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading;
+      if (startBtn) {
+        const lockedByUnsupportedPsd = unsupportedBitmapPsdPaths.length > 0 || psdPreflightChecking;
+        startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading || lockedByUnsupportedPsd;
+        startBtn.title = unsupportedBitmapPsdPaths.length > 0
+          ? "モノクロ2階調のPSDが含まれているため開始できません"
+          : psdPreflightChecking
+            ? "PSDを確認中です"
+            : "";
+      }
+    };
+
+    const validatePsdSelection = async ({ showDialog = true } = {}) => {
+      const serial = ++psdPreflightSerial;
+      const paths = [...psdPaths];
+      unsupportedBitmapPsdPaths = [];
+      if (paths.length === 0) {
+        psdPreflightChecking = false;
+        update();
+        return;
+      }
+      psdPreflightChecking = true;
+      update();
+      const unsupported = await findUnsupportedBitmapPsdFiles(paths);
+      if (serial !== psdPreflightSerial || settled) return;
+      unsupportedBitmapPsdPaths = unsupported;
+      psdPreflightChecking = false;
+      update();
+      if (showDialog && unsupported.length > 0) {
+        await notifyUnsupportedBitmapPsdFiles(unsupported);
+      }
     };
 
     const applyDroppedPaths = async (paths, slot = null) => {
@@ -4266,7 +4317,10 @@ function openHomeTypesetDialog() {
           referencePageCount = null;
           await loadSelectedReference();
         }
-        else if (kind === "psd") psdPaths = filtered;
+        else if (kind === "psd") {
+          psdPaths = filtered;
+          await validatePsdSelection();
+        }
         else if (kind === "txt") txtPath = filtered[0] ?? null;
         // D&D でもドロップ元フォルダを共有 rememberKey へ記憶し、次の「選択」が同じ場所から開くように。
         rememberTypesetFolderFromPath(filtered[0]);
@@ -4416,7 +4470,10 @@ function openHomeTypesetDialog() {
           }
         } else if (kind === "psd") {
           const picked = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickPsdFiles({ rememberKey: TYPESET_FOLDER_REMEMBER_KEY })));
-          if (picked.length > 0) psdPaths = picked;
+          if (picked.length > 0) {
+            psdPaths = picked;
+            await validatePsdSelection();
+          }
         } else if (kind === "txt") {
           const picked = await pickWithHomeDialogHidden(() => pickTxtPath({ rememberKey: TYPESET_FOLDER_REMEMBER_KEY }));
           if (picked) txtPath = picked;
@@ -4449,7 +4506,7 @@ function openHomeTypesetDialog() {
       });
     }
     startBtn?.addEventListener("click", async () => {
-      if (referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading) return;
+      if (referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading || psdPreflightChecking || unsupportedBitmapPsdPaths.length > 0) return;
       const referenceCount = getReferenceDisplayCount();
       if (referenceCount < psdPaths.length) {
         await notifyDialog({
@@ -4669,29 +4726,43 @@ async function startHomeTranscribeFlow() {
   }
   if (!files.length) return;
 
+  const progressFlowId = `home-transcribe-${Date.now()}`;
   // v2.2.x: 書き起こしフローも同じ 3 段演出 (暗転 → 星空 → 進捗立ち上がり) を使う。
-  // showProgress は afterStarsPeak で発火し、星空 fade-out と curtain emerge を重ねる。
+  // progress-flow は afterStarsPeak で発火し、星空 fade-out と curtain emerge を重ねる。
   await transitionFromHome({
     afterStarsPeak: () => {
-      showProgress({
+      startProgressFlow({
+        id: progressFlowId,
         title: "書き起こし中…",
-        detail: "読み込み準備中…",
-        current: 0,
-        total: 1,
-        showCount: false,
         variant: "scan",
+        steps: createHomeTranscribeSteps(),
+        detail: "読み込み準備中…",
       });
     },
   });
   try {
     clearScanExtractDoc();
-    await loadReferenceFiles(files, { keepProgressOpen: true, variant: "scan" });
+    await loadReferenceFiles(files, {
+      keepProgressOpen: true,
+      variant: "scan",
+      progressFlow: { id: progressFlowId, stepId: "reference-load" },
+    });
     // v2.2.x: scan-extract の内部 hideProgress を skip し、完了後に星空ディゾルブで close する
-    await runScanExtractForTranscription(files, { keepProgressOpen: true });
+    await runScanExtractForTranscription(files, {
+      keepProgressOpen: true,
+      progressFlow: { id: progressFlowId },
+      progressFlowSteps: {
+        start: "scan",
+        pdf: "scan",
+        scan: "scan",
+        extract: "transcribe",
+      },
+    });
     setParallelViewMode("editor");
     setEditorLeftPaneMode("pdf");
     setActivePane("pdf");
     requestAnimationFrame(() => focusEditor());
+    completeProgressFlowStep({ id: progressFlowId, stepId: "editor-ready" }, { detail: "表示準備 完了" });
     // 全操作完了 → 星空ディゾルブで進捗 modal → エディタ画面に転換
     await transitionToWorkspaceWithStars();
   } catch (e) {
@@ -4701,6 +4772,8 @@ async function startHomeTranscribeFlow() {
       title: "書き起こしを開始できません",
       message: String(e?.message ?? e ?? "不明なエラー"),
     });
+  } finally {
+    clearProgressFlow(progressFlowId);
   }
 }
 
@@ -4811,7 +4884,7 @@ function init() {
     updatePsdRotateVisibility();
   });
   maybeShowFirstRunSetup();
-  void openStartupProjectFromArgs();
+  void openStartupFilesFromArgs();
   void closeStartupSplash();
 }
 

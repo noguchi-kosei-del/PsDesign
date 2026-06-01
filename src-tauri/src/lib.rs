@@ -876,6 +876,8 @@ struct PathInfo {
     is_directory: bool,
     #[serde(rename = "isFile")]
     is_file: bool,
+    #[serde(rename = "sizeBytes")]
+    size_bytes: u64,
 }
 
 #[derive(serde::Serialize)]
@@ -1164,7 +1166,18 @@ async fn open_folder_in_explorer(path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn startup_args() -> Vec<String> {
-    std::env::args().skip(1).collect()
+    std::env::args()
+        .skip(1)
+        .map(|arg| {
+            let path = PathBuf::from(&arg);
+            let resolved = resolve_shortcut_path(&path);
+            if resolved != path {
+                resolved.to_string_lossy().to_string()
+            } else {
+                arg
+            }
+        })
+        .collect()
 }
 
 #[tauri::command]
@@ -1183,6 +1196,7 @@ async fn path_info(path: String) -> Result<PathInfo, String> {
         path: p.to_string_lossy().to_string(),
         is_directory: meta.is_dir(),
         is_file: meta.is_file(),
+        size_bytes: meta.len(),
     })
 }
 

@@ -45,6 +45,10 @@ function buildExtRegex(filters) {
   return new RegExp(`\\.(?:${escaped.join("|")})$`, "i");
 }
 
+function isWindowsShortcutPath(path) {
+  return /\.lnk$/i.test(String(path ?? ""));
+}
+
 function readLastPath(rememberKey) {
   if (!rememberKey) return null;
   try {
@@ -423,6 +427,7 @@ async function loadFolder(dirPath) {
       if (e.isDirectory) return true;
       if (currentOpts.mode === "openFolder") return false; // フォルダ選択モードはファイル隠す
       if (!extRe) return true;
+      if (currentOpts.mode === "open" && isWindowsShortcutPath(e.path || e.name)) return true;
       return extRe.test(e.name) || extRe.test(e.path);
     });
     currentPath = dirPath;
@@ -543,14 +548,24 @@ function joinPathForSave(dir, name) {
   return `${dir}${useBack ? "\\" : "/"}${name}`;
 }
 
-function confirm() {
+async function resolveOpenPath(path) {
+  if (!isWindowsShortcutPath(path)) return path;
+  try {
+    const info = await fetchPathInfo(path);
+    return info?.path || path;
+  } catch (_) {
+    return path;
+  }
+}
+
+async function confirm() {
   if (!resolveCurrent || !currentOpts) return;
   const mode = currentOpts.mode;
   let result = null;
 
   if (mode === "open") {
     if (selectedPaths.size === 0) return;
-    const arr = [...selectedPaths];
+    const arr = await Promise.all([...selectedPaths].map(resolveOpenPath));
     result = currentOpts.multiple ? arr : arr[0];
     // 親ディレクトリを記憶
     const parent = parentDir(arr[0]);

@@ -34,6 +34,31 @@
 
 ## エントリ（新しい順）
 
+### [BUG-20260601-01] 100MB 超の見本 PDF 圧縮進捗が読込フェーズで停止して見える
+
+- **日付**: 2026-06-01
+- **関連バージョン**: v2.2.9
+- **症状**: ホームの写植用ファイル選択で 100MB 超の見本 PDF を選ぶと、警告後の圧縮進捗ダイアログが出ない、または `PDF読込` が 0% / 19% のまま止まって見える。
+- **再現手順**: 1. 写植用ファイル選択で 100MB 以上の PDF を見本に指定 2. 警告ダイアログで OK 3. 圧縮処理に入ると進捗が読込フェーズで停滞する。
+- **根本原因**: フロント側で巨大 PDF 全体を `read_binary_file` してから PDF.js / canvas / PDF 再生成による圧縮に入る設計だったため、ファイル読込中に実進捗を取れず UI が固まって見えた。さらに圧縮処理はメモリ・処理時間のばらつきが大きく、ホームモーダルとの重なり順やフェーズ表示の調整だけでは安定した UX にできなかった。
+- **対策**: 100MB 以上の見本 PDF は圧縮せず、警告ダイアログを出して読み込み対象から除外する仕様に変更した。`rejectLargeReferencePdfFiles` でサイズを事前判定し、サムネイル生成・ページ数確認・本読み込みの各入口で同じガードを通す。圧縮用 JS モジュール、圧縮 PDF 保存 Tauri コマンド、`pdf-lib` 依存、圧縮進捗前面化の残骸を削除した。
+- **影響ファイル**: `src/pdf-loader.js`, `src/main.js`, `src-tauri/src/lib.rs`, `package.json`, `package-lock.json`, `src/ui-feedback.js`, `src/styles.css`
+- **関連 RDD 要件**: 該当なし
+- **検証方法**: `npm run check`、`cargo check`、`npm run tauri -- --version`。また `rg` で `pdf-lib` / `pdf-compress` / `save_compressed_reference_pdf` / 圧縮進捗関連の参照が残っていないことを確認。
+- **備考 / 再発防止**: 巨大ファイルを WebView 側で丸ごと読んでから処理する設計では、読込フェーズの実進捗を返せない。100MB 以上の PDF の扱いを再導入する場合は、Rust 側でストリーミング処理するか、最初から受け付けない方針を維持する。
+
+### [BUG-20260601-02] npm 操作後に Tauri npm package と Rust crate の minor が不一致になる
+
+- **日付**: 2026-06-01
+- **関連バージョン**: v2.2.9
+- **症状**: `Found version mismatched Tauri packages` エラーが出て Tauri 起動/ビルドが止まる。
+- **再現手順**: 1. 依存整理で `npm uninstall` などを実行 2. `@tauri-apps/api` が `2.11.0` に解決される 3. Rust 側 `tauri v2.10.x` と minor がずれて mismatch エラーになる。
+- **根本原因**: `package.json` の `@tauri-apps/api` が `^2` だったため、npm の再解決で Rust 側より新しい minor が入った。
+- **対策**: `@tauri-apps/api` を `2.10.1` に固定し、`package-lock.json` も同じ版へ揃えた。
+- **影響ファイル**: `package.json`, `package-lock.json`
+- **関連 RDD 要件**: 該当なし
+- **検証方法**: `npm ls @tauri-apps/api @tauri-apps/cli @tauri-apps/plugin-dialog @tauri-apps/plugin-process @tauri-apps/plugin-updater` で npm 側 API が `2.10.1` に揃うこと、`cargo tree -i tauri` で Rust 側が `tauri v2.10.3` であること、`npm run tauri -- --version` が成功することを確認。
+
 ### [BUG-20260530-02] 複数選択でフォントサイズを一括変換すると自動配置の色が一部消えない
 
 - **日付**: 2026-05-30

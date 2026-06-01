@@ -345,6 +345,7 @@ async function runScanExtract(files, {
   excludedPages = null,
   keepProgressOpen = false,
   progressFlow = null,
+  progressFlowSteps = null,
   // 進捗ダイアログのアイコン直下ラベル。直接呼ばれる「画像スキャン」と
   // 自動配置から呼ばれる経路で文言を切替えるため引数化。
   label = "画像スキャン中…",
@@ -374,8 +375,18 @@ async function runScanExtract(files, {
   // ユーザーに完了までの目安を伝えるために表示する。CPU/GPU・ページ数で大きくぶれるため
   // 「約 N 分」の vague 表記。
   const approxLabel = formatApproxDuration(estimateRemainingSeconds(files.length));
+  const progressFlowForStep = (stepId) => {
+    if (!progressFlow || !progressFlowSteps || !stepId) return progressFlow;
+    const base = typeof progressFlow === "string" ? { id: progressFlow } : progressFlow;
+    if (!base?.id) return progressFlow;
+    return { ...base, stepId };
+  };
+  const progressFlowForPhase = (phaseName) => {
+    const steps = progressFlowSteps || {};
+    return progressFlowForStep(steps[phaseName] || steps.scan || steps.start || null);
+  };
 
-  showProgress(withProgressFlow(progressFlow, {
+  showProgress(withProgressFlow(progressFlowForPhase("start"), {
     title: label,
     detail: `${baseName(files[0])} ほか ${files.length} 件 (完了まで${approxLabel})`,
     current: 0,
@@ -394,7 +405,7 @@ async function runScanExtract(files, {
   const unsubStart = await listen(`${TEXT_SCAN_EVENT_PREFIX}:start`, () => {
     // PDF 展開完了 → referenceScan 起動。画像スキャン の最初の tqdm 進捗が来るまで indeterminate。
     phase = "starting";
-    updateProgress(withProgressFlow(progressFlow, {
+    updateProgress(withProgressFlow(progressFlowForPhase("scan"), {
       detail: `画像スキャン エンジンを起動中… (完了まで${approxLabel})`,
       current: null,
       total: null,
@@ -406,7 +417,7 @@ async function runScanExtract(files, {
     const p = e.payload || {};
     if (p.phase === "pdf") {
       phase = "pdf";
-      updateProgress(withProgressFlow(progressFlow, {
+      updateProgress(withProgressFlow(progressFlowForPhase("pdf"), {
         detail: `PDF 展開中… (${p.current}/${p.total}) (完了まで${approxLabel})`,
         current: p.current,
         total: p.total,
@@ -419,14 +430,14 @@ async function runScanExtract(files, {
       const formattedEta = formatEta(p.eta);
       const hasValidEta = !!formattedEta;
       if (!hasValidEta) {
-        updateProgress(withProgressFlow(progressFlow, {
+        updateProgress(withProgressFlow(progressFlowForPhase("extract"), {
           detail: `画像スキャン 実行中… (完了まで${approxLabel})`,
           current: null,
           total: null,
           showCount: false,
         }));
       } else {
-        updateProgress(withProgressFlow(progressFlow, {
+        updateProgress(withProgressFlow(progressFlowForPhase("extract"), {
           detail: `画像スキャン 実行中… ${p.current}/${p.total} (残り ${formattedEta})`,
           current: p.current,
           total: p.total,
@@ -447,7 +458,7 @@ async function runScanExtract(files, {
     if (phase === TEXT_SCAN_TOKEN) return;
     const marker = detectStartupPhase(line);
     if (marker) {
-      updateProgress(withProgressFlow(progressFlow, {
+      updateProgress(withProgressFlow(progressFlowForPhase("scan"), {
         detail: `${marker} (完了まで${approxLabel})`,
         current: null,
         total: null,
@@ -631,7 +642,7 @@ export async function runScanExtractForFiles(files, { loadText = true, maxPages 
   await runScanExtract(files, { icon: PLACE_ICON_SVG, label: "自動配置中…", variant: "place", loadText, maxPages, excludedPages, keepProgressOpen, progressFlow });
 }
 
-export async function runScanExtractForTranscription(files, { keepProgressOpen = false } = {}) {
+export async function runScanExtractForTranscription(files, { keepProgressOpen = false, progressFlow = null, progressFlowSteps = null } = {}) {
   // v2.2.x: keepProgressOpen を pass-through。startHomeTranscribeFlow が完了時に
   // 自前の transitionToWorkspaceWithStars (星空ディゾルブ) を流したい場合は true を渡す。
   await runScanExtract(files, {
@@ -642,6 +653,8 @@ export async function runScanExtractForTranscription(files, { keepProgressOpen =
     loadText: true,
     consumeText: false,
     keepProgressOpen,
+    progressFlow,
+    progressFlowSteps,
   });
 }
 

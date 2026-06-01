@@ -1,12 +1,14 @@
 import * as pdfjsLib from "pdfjs-dist";
 import { setPdf, setPdfExcludedReferencePages, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
-import { showProgress, hideProgress, toast, updateProgress } from "./ui-feedback.js";
+import { showProgress, hideProgress, notifyDialog, toast, updateProgress } from "./ui-feedback.js";
 import { withProgressFlow } from "./progress-flow.js";
 
 // 「見本」として読み込める拡張子。PDF（複数ページ）と、JPEG / PNG（単一画像）。
 export const REFERENCE_EXTENSIONS = ["pdf", "jpg", "jpeg", "png"];
 export const REFERENCE_EXT_REGEX = /\.(pdf|jpe?g|png)$/i;
 const IMAGE_EXT_REGEX = /\.(jpe?g|png)$/i;
+const PDF_EXT_REGEX = /\.pdf$/i;
+const REFERENCE_PDF_MAX_SIZE_BYTES = 100_000_000;
 
 let workerConfigured = false;
 function ensureWorker() {
@@ -34,6 +36,49 @@ async function readFileBytes(path) {
   const { invoke } = await import("@tauri-apps/api/core");
   const bytes = await invoke("read_binary_file", { path });
   return new Uint8Array(bytes);
+}
+
+async function getFileSizeBytes(path) {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const info = await invoke("path_info", { path });
+    const size = Number(info?.sizeBytes);
+    return Number.isFinite(size) ? size : null;
+  } catch (e) {
+    console.warn("[pdf-loader] file size preflight failed:", path, e);
+    return null;
+  }
+}
+
+function formatSizeMb(bytes) {
+  return (bytes / 1_000_000).toFixed(1);
+}
+
+async function notifyLargeReferencePdf(path, sizeBytes) {
+  await notifyDialog({
+    title: "見本PDFを読み込めません",
+    message: `「${basename(path)}」は ${formatSizeMb(sizeBytes)}MB あります。\n100MB以上の見本PDFは読み込めません。\n別のPDFを選択してください。`,
+    okLabel: "OK",
+    kind: "warning",
+  });
+}
+
+export async function rejectLargeReferencePdfFiles(paths, { notify = true } = {}) {
+  const sizeBytesByPath = new Map();
+  const rejectedPaths = new Set();
+  const list = Array.isArray(paths) ? paths : [];
+  for (const p of list) {
+    if (typeof p !== "string" || !PDF_EXT_REGEX.test(p)) continue;
+    const sizeBytes = await getFileSizeBytes(p);
+    if (!Number.isFinite(sizeBytes)) continue;
+    sizeBytesByPath.set(p, sizeBytes);
+    if (sizeBytes >= REFERENCE_PDF_MAX_SIZE_BYTES) {
+      if (notify) await notifyLargeReferencePdf(p, sizeBytes);
+      rejectedPaths.add(p);
+    }
+  }
+  const acceptedPaths = list.filter((p) => !rejectedPaths.has(p));
+  return { acceptedPaths, rejectedPaths, sizeBytesByPath };
 }
 
 // 自然順ソート (page1 → page2 → page10、numeric collation)。
@@ -170,10 +215,16 @@ async function readImageBitmap(path) {
 }
 
 // 単一 PDF ファイルを読み込み、pdfjs ドキュメントを返す。
-async function readPdfDocument(path) {
+async function readPdfDocumentSource(path) {
   ensureWorker();
   const bytes = await readFileBytes(path);
-  return await pdfjsLib.getDocument({ data: bytes }).promise;
+  const doc = await pdfjsLib.getDocument({ data: bytes }).promise;
+  return { path, bytes, doc };
+}
+
+async function readPdfDocument(path) {
+  const source = await readPdfDocumentSource(path);
+  return source.doc;
 }
 
 // 見本ファイル（PDF / JPEG / PNG）を選択。複数選択可。
@@ -181,7 +232,8 @@ export async function countReferencePages(paths, options = {}) {
   if (!Array.isArray(paths) || paths.length === 0) return 0;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
   const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
-  const filtered = sortPathsNaturally(paths.filter((p) => REFERENCE_EXT_REGEX.test(p)));
+  const sizeCheck = await rejectLargeReferencePdfFiles(paths, { notify: false });
+  const filtered = sortPathsNaturally(sizeCheck.acceptedPaths.filter((p) => REFERENCE_EXT_REGEX.test(p)));
   let count = 0;
   let hasPdf = false;
   let sourceIndex = 0;
@@ -217,7 +269,8 @@ export async function countReferencePages(paths, options = {}) {
 }
 
 export async function buildReferencePageCards(paths) {
-  const filtered = Array.isArray(paths) ? paths.filter((p) => REFERENCE_EXT_REGEX.test(p)) : [];
+  const sizeCheck = await rejectLargeReferencePdfFiles(paths, { notify: true });
+  const filtered = sizeCheck.acceptedPaths.filter((p) => REFERENCE_EXT_REGEX.test(p));
   const sorted = sortPathsNaturally(filtered);
   const cards = [];
   let sourceIndex = 0;
@@ -242,8 +295,11 @@ export async function buildReferencePageCards(paths) {
       continue;
     }
     let doc = null;
+    let sourcePath = p;
     try {
-      doc = await readPdfDocument(p);
+      const source = await readPdfDocumentSource(p);
+      doc = source.doc;
+      sourcePath = source.path || p;
       const total = Math.max(0, Number(doc?.numPages) || 0);
       for (let pageNum = 1; pageNum <= total; pageNum += 1) {
         sourceIndex += 1;
@@ -255,7 +311,7 @@ export async function buildReferencePageCards(paths) {
         }
         cards.push({
           index: sourceIndex,
-          path: p,
+          path: sourcePath,
           fileName: name,
           pageNum,
           pageLabel: `${cards.length + 1}P`,
@@ -331,10 +387,11 @@ export async function loadReferenceFiles(paths, options = {}) {
   const progressFlow = options.progressFlow || null;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
   const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
-  const filtered = paths.filter((p) => REFERENCE_EXT_REGEX.test(p));
+  const sizeCheck = await rejectLargeReferencePdfFiles(paths, { notify: options.notifyLargePdf !== false });
+  const filtered = sizeCheck.acceptedPaths.filter((p) => REFERENCE_EXT_REGEX.test(p));
   const hasPdf = filtered.some((p) => !IMAGE_EXT_REGEX.test(p));
   if (filtered.length === 0) {
-    toast("PDF / JPEG / PNG ファイルを指定してください", { kind: "error", duration: 4000 });
+    toast(sizeCheck.rejectedPaths.size > 0 ? "100MB以上の見本PDFは読み込めません" : "PDF / JPEG / PNG ファイルを指定してください", { kind: "error", duration: 4000 });
     return;
   }
   const sorted = sortPathsNaturally(filtered);
@@ -359,6 +416,7 @@ export async function loadReferenceFiles(paths, options = {}) {
 
   const sources = [];
   const failures = [];
+  const effectivePaths = [];
   let sourceIndex = 0;
   try {
     for (let i = 0; i < total; i++) {
@@ -375,17 +433,21 @@ export async function loadReferenceFiles(paths, options = {}) {
       await waitForNextFrame();
       try {
         if (IMAGE_EXT_REGEX.test(p)) {
+          effectivePaths.push(p);
           sourceIndex += 1;
           if (excludedPages.has(sourceIndex)) continue;
           const bitmap = await readImageBitmap(p);
           sources.push({ type: "image", bitmap, path: p });
         } else {
-          const doc = await readPdfDocument(p);
+          const source = await readPdfDocumentSource(p);
+          const doc = source.doc;
+          const sourcePath = source.path || p;
+          effectivePaths.push(sourcePath);
           let addedFromDoc = false;
           for (let pn = 1; pn <= doc.numPages; pn++) {
             sourceIndex += 1;
             if (excludedPages.has(sourceIndex)) continue;
-            sources.push({ type: "pdf", doc, pageNum: pn, path: p });
+            sources.push({ type: "pdf", doc, pageNum: pn, path: sourcePath });
             addedFromDoc = true;
           }
           if (!addedFromDoc) {
@@ -416,7 +478,8 @@ export async function loadReferenceFiles(paths, options = {}) {
     setPdfSkipFirstBlank(skipFirstBlankPage && hasPdf);
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
     // 画像スキャンや自動配置が複数ファイルを 画像スキャン 対象にできるようにする。
-    setPdf(compositeDoc, sorted[0], sorted);
+    const loadedPaths = effectivePaths.length > 0 ? effectivePaths : sorted;
+    setPdf(compositeDoc, loadedPaths[0] ?? sorted[0], loadedPaths);
     setPdfExcludedReferencePages(excludedPages);
     if (shouldShowProgress) {
       updateProgress(withProgressFlow(progressFlow, { detail: headLabel, current: progressTotal, total: progressTotal, taskIndex: 2, taskProgress: 100 }));
@@ -428,6 +491,7 @@ export async function loadReferenceFiles(paths, options = {}) {
         { kind: "info", duration: 5000 },
       );
     }
+    return { paths: loadedPaths };
   } finally {
     if (shouldShowProgress && !keepProgressOpen) hideProgress();
   }

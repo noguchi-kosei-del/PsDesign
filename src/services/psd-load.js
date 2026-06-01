@@ -36,8 +36,9 @@ function isBitmapPsdHeader(bytes) {
     String.fromCharCode(bytes[2]) +
     String.fromCharCode(bytes[3]);
   if (sig !== "8BPS") return false;
+  const depth = (bytes[22] << 8) | bytes[23];
   const colorMode = (bytes[24] << 8) | bytes[25];
-  return colorMode === 0;
+  return colorMode === 0 || (colorMode === 1 && depth === 1);
 }
 
 async function isUnsupportedBitmapPsdPath(path) {
@@ -122,6 +123,13 @@ export async function loadPsdFilesByPaths(files, {
       confirmLabel: "破棄して開く",
     });
     if (!ok) return;
+  }
+  const preflightUnsupportedBitmapFiles = await findUnsupportedBitmapPsdFiles(files);
+  if (preflightUnsupportedBitmapFiles.length) {
+    await notifyUnsupportedBitmapPsdFiles(preflightUnsupportedBitmapFiles);
+    const unsupportedSet = new Set(preflightUnsupportedBitmapFiles);
+    files = files.filter((path) => !unsupportedSet.has(path));
+    if (!files.length) return;
   }
   // 最初に選んだファイルの親ディレクトリを「別名で保存」の既定フォルダ名算出に使う。
   setFolder(parentDir(files[0]) ?? null);

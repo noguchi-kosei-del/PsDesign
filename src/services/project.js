@@ -11,6 +11,12 @@ import {
   showModalAnimated,
   toast,
 } from "../ui-feedback.js";
+import {
+  clearProgressFlow,
+  completeProgressFlowStep,
+  createProjectLoadSteps,
+  startProgressFlow,
+} from "../progress-flow.js";
 import { openFileDialog } from "../file-picker.js";
 import {
   applyProjectSnapshot,
@@ -662,7 +668,7 @@ function leaveHomeScreen() {
   document.body.classList.remove("home-mode", "home-starting", "home-returning");
 }
 
-async function restoreProjectReferences(refs) {
+async function restoreProjectReferences(refs, options = {}) {
   const paths = Array.isArray(refs?.paths) ? refs.paths.filter((p) => typeof p === "string") : [];
   if (paths.length === 0) return;
   try {
@@ -670,6 +676,7 @@ async function restoreProjectReferences(refs) {
       title: "プロジェクトを読み込み中",
       variant: "place",
       keepProgressOpen: true,
+      progressFlow: options.progressFlow || null,
       excludedPages: refs.excludedPages,
       skipFirstBlankPage: refs.skipFirstBlank,
     });
@@ -691,10 +698,22 @@ export async function openProjectFromPath(path) {
     });
     if (!ok) return;
   }
+  const progressFlowId = `project-load-${Date.now()}`;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
+    startProgressFlow({
+      id: progressFlowId,
+      title: "プロジェクトを読み込み中",
+      variant: "place",
+      steps: createProjectLoadSteps(),
+      detail: "プロジェクトファイルを読み込み中…",
+    });
     const text = await invoke("read_text_file", { path });
     const project = normalizeProjectDocument(JSON.parse(text));
+    completeProgressFlowStep(
+      { id: progressFlowId, stepId: "project-read" },
+      { detail: "プロジェクト読込 完了" },
+    );
     projectLoadInProgress = true;
     await loadPsdFilesByPaths(project.psdPaths, {
       label: "プロジェクトを読み込み中",
@@ -702,23 +721,40 @@ export async function openProjectFromPath(path) {
       keepProgressOpen: true,
       confirmUnsaved: false,
       preserveOrder: true,
+      progressFlow: { id: progressFlowId, stepId: "psd-load" },
     });
     projectLoadInProgress = false;
     if (getPages().length === 0) {
       throw new Error("プロジェクト内の PSD を読み込めませんでした");
     }
-    await restoreProjectReferences(project.references);
+    await restoreProjectReferences(project.references, {
+      progressFlow: { id: progressFlowId, stepId: "reference-load" },
+    });
+    if (!Array.isArray(project.references?.paths) || project.references.paths.length === 0) {
+      completeProgressFlowStep(
+        { id: progressFlowId, stepId: "reference-load" },
+        { detail: "見本なし" },
+      );
+    }
     // 【v2.x】silentTxtListener: true で applyProjectSnapshot 内の txtSourceListeners 発火を抑制。
     // 復元時に listener (例: auto-place.js syncPlacedFromTxt) が走ると、自動配置レイヤーの
     // 手動 charRubies / lineLeadings が TXT 注記由来の値で意図せず上書きされる事故が再発する。
     // 必要な UI 再描画はこの下で renderTxtSourceViewer / renderAllSpreads / rebuildLayerList を
     // 明示的に呼ぶので、listener 経由の自動描画は不要。
     applyProjectSnapshot(project.snapshot, { silentTxtListener: true });
+    completeProgressFlowStep(
+      { id: progressFlowId, stepId: "snapshot-restore" },
+      { detail: "編集復元 完了" },
+    );
     restoreProjectView(project.view);
     leaveHomeScreen();
     renderAllSpreads();
     rebuildLayerList();
     renderTxtSourceViewer();
+    completeProgressFlowStep(
+      { id: progressFlowId, stepId: "view-ready" },
+      { detail: "表示準備 完了" },
+    );
     setCurrentProject(path, {
       projectDir: project.projectDir || parentDir(path),
       projectName: project.projectName || safeFileName(baseName(path).replace(/\.opus$/i, ""), "project"),
@@ -734,6 +770,8 @@ export async function openProjectFromPath(path) {
     console.error(e);
     await hideProgress();
     toast(`プロジェクトを開けませんでした: ${e?.message ?? e}`, { kind: "error", duration: 6000 });
+  } finally {
+    clearProgressFlow(progressFlowId);
   }
 }
 
