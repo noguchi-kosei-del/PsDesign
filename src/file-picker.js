@@ -61,6 +61,13 @@ function writeLastPath(rememberKey, dirPath) {
   } catch {}
 }
 
+// ダイアログを開かない経路（D&D 等）からも前回フォルダ記憶を更新するための公開ヘルパー。
+// 写植フローでファイルをドロップしたとき、その親フォルダを共有 rememberKey に書き込み、
+// 次に「選択」を押したときダイアログが同じフォルダから開くようにする。
+export function rememberPickerDir(rememberKey, dirPath) {
+  writeLastPath(rememberKey, dirPath);
+}
+
 async function getInitialPath(opts) {
   if (opts.defaultPath) return opts.defaultPath;
   const remembered = readLastPath(opts.rememberKey);

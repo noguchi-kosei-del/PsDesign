@@ -44,6 +44,9 @@ let emptyEl = null;
 let outOfRangeEl = null;
 let renderToken = 0;
 let pendingRaf = 0;
+// ResizeObserver 経由 redraw の trailing debounce タイマー。連続リサイズ（CSS width
+// トランジション / ウインドウドラッグ）中は最後の 1 回だけ pdfjs を再レンダする。
+let resizeRedrawTimer = 0;
 // 進行中の pdfjs RenderTask。連打で新しい redraw が走るときに .cancel() を呼んで
 // 古いレンダ計算を即停止する（呼ばないと CPU を食い続け、連打中に 30 件以上の
 // レンダタスクが裏で並行進行してラグの原因になる）。
@@ -155,7 +158,9 @@ export function mountPdfView() {
     // ステージは新サイズ・キャンバスは旧サイズの中途半端なレイアウトから誤った値を取り、
     // restoreViewportCenter が位置をずらす原因になっていた。
     const ro = new ResizeObserver(() => {
-      schedule();
+      // 直接 schedule() せず debounce 版を使う。校正↔見本切替の width トランジション中に
+      // 毎フレーム pdfjs 再レンダが走って重くなるのを防ぐ（収束後 1 回だけ描画）。
+      scheduleResizeRedraw();
     });
     ro.observe(rootEl);
   }
@@ -271,6 +276,22 @@ function schedule() {
     pendingRaf = 0;
     redraw().catch((e) => console.error("pdf redraw:", e));
   });
+}
+
+// ResizeObserver 用の trailing debounce 版 schedule。
+// 【重要】テキストエディタの「校正 ↔ 見本」切替で .spreads-pdf-area の width が共有
+// transition rule (width 0.3s) でアニメすると、ResizeObserver が毎フレーム発火して
+// schedule()→redraw()→pdfjs page.render() が ~18 回連続で走り、見本切替が重くなる。
+// 連続リサイズが収まってから 1 回だけ再レンダすることで storm を解消する。
+// （ウインドウリサイズのドラッグ中も同様に間引かれ、副次的に軽くなる。）
+const RESIZE_REDRAW_DEBOUNCE_MS = 130;
+function scheduleResizeRedraw() {
+  if (!mounted) return;
+  if (resizeRedrawTimer) clearTimeout(resizeRedrawTimer);
+  resizeRedrawTimer = window.setTimeout(() => {
+    resizeRedrawTimer = 0;
+    schedule();
+  }, RESIZE_REDRAW_DEBOUNCE_MS);
 }
 
 /* ステージ上部バーのラベル文字数上限。30 文字を超えたら末尾を `…` に置換する。

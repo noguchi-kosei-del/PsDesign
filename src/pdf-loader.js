@@ -297,14 +297,15 @@ async function makePdfPageThumbnail(doc, pageNum) {
   return canvas.toDataURL("image/jpeg", 0.82);
 }
 
-export async function pickReferenceFiles() {
+export async function pickReferenceFiles(opts = {}) {
   const { openFileDialog } = await import("./file-picker.js");
   const picked = await openFileDialog({
     mode: "open",
     multiple: true,
     title: "見本を読み込み",
     filters: [{ name: "見本 (PDF / JPEG / PNG)", extensions: REFERENCE_EXTENSIONS }],
-    rememberKey: "reference-open",
+    // 呼び出し側が rememberKey を上書き可能（写植フローの 3 カードで共有フォルダ記憶に使う）。
+    rememberKey: opts.rememberKey ?? "reference-open",
   });
   if (!picked) return [];
   const arr = Array.isArray(picked) ? picked : [picked];

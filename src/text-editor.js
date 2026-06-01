@@ -2418,7 +2418,15 @@ export function commitFontToSelections(ps) {
       } else {
         cur = ref.newLayer.fontPostScriptName ?? null;
       }
-      if (cur === ps) continue;
+      if (cur === ps) {
+        // フォント未変更（既に同じフォント）でも、新規レイヤーの自動配置色マーカーは解除する。
+        // 複数選択でのフォント一括適用でも「一部だけ色が残る」のを防ぐ（size 経路と同方針）。
+        if (ref.kind === "new" && ref.newLayer.autoFontSwitched === true) {
+          updateNewLayer(ref.newLayer.tempId, { autoFontSwitched: false, autoFontSwitchBucket: -1 });
+          any = true;
+        }
+        continue;
+      }
       // 中心固定: 変更前の rect 中心を取得 → フィールド更新 → 新 rect 取得 → x/y 補正。
       const oldCenter = getLayerCenter(ref);
       if (ref.kind === "existing") {
@@ -2464,7 +2472,17 @@ function commitSingleFieldToSelections(field, value) {
       } else {
         cur = ref.newLayer[field];
       }
-      if (cur === value) continue;
+      if (cur === value) {
+        // 自動配置の色マーカー (autoFontSwitched) は「サイズを揃える一括変更」でも必ず解除する。
+        // 既に目標サイズと同値の新規レイヤーは下の continue で skip され、wheel 経路
+        // (canvas-tools.js resizeSelectedLayers) と違ってマーカーが残り「一部だけ色が消えない」
+        // バグになる。サイズ未変更でもマーカーだけ先に解除する（位置再計算は不要）。
+        if (field === "sizePt" && ref.kind === "new" && ref.newLayer.autoFontSwitched === true) {
+          updateNewLayer(ref.newLayer.tempId, { autoFontSwitched: false, autoFontSwitchBucket: -1 });
+          any = true;
+        }
+        continue;
+      }
       const oldCenter = getLayerCenter(ref);
       if (ref.kind === "existing") {
         setEdit(ref.page.path, ref.layer.id, { [field]: value });

@@ -20,6 +20,211 @@
 
 ---
 
+## 2026-05-31 変更メモ: テキストエディタのルビ入力ドロップダウン / 見本・エディタ 50/50 / 空行で段落分割＋中央配置 / 原稿テキスト選択でレイヤー選択＋↑↓ナビ (v2.2.6 後・未リリース)
+
+v2.2.6 リリース後の作業ブランチでの UX 改修 5 件。バージョン番号は据え置き（`2.2.6` のまま）。各変更は
+`npm run check`（`check:encoding` 58 files + `lint` + `build`）緑を確認済み。テキスト反映ロジック
+（`sourceTxtRef` linkage / `syncPlacedFromTxt` / TXT ルビ注記）に触れる項目があるが、`charRubies` per-char
+マップ計測 / `measureAllRubyOffsetsSync` / JS-Rust パリティなどの高リスク不変条件には非干渉。
+
+### A. テキストエディタモードで文字選択 → ドロップダウン式ルビ入力パネル
+
+**背景**: テキストエディタモード（`.spreads-editor-area` / `#editor-pages-viewer` の段落 contenteditable
+`.editor-page-paragraph-text`）でルビを付けるには、旧来はツールバーの「ルビ」ボタン → モーダル
+`promptDialog` で入力する 2 手間方式だった。文字を選択した瞬間に選択範囲直下へパネルが出る方式に変更。
+
+- **DOM** ([index.html](index.html)): `#editor-pages-viewer-wrap` 内（= `position: relative` の anchor の
+  子）に `#editor-ruby-popover`（親文字表示 + `.ruby-text-input` 入力 + `.ruby-apply-btn` 適用 +
+  `.ruby-remove-btn` 削除、既存クラス流用）を追加。
+- **CSS** ([src/styles.css](src/styles.css) `.editor-ruby-popover`): **`position: absolute`**（祖先
+  `.spreads-editor-area` がスライド用 `transform` を持つため `position: fixed` は transform 祖先が
+  containing block になり座標がずれる → wrap 基準の absolute にした）。適用ボタンは横長
+  （`min-width: 72px; padding: 4px 18px; white-space: nowrap`）。
+- **ロジック** ([src/bind/editor-pane.js](src/bind/editor-pane.js)): 既存の選択追跡
+  `updateEditorBlockSelectionFromDom`（戻り値＋ `blockEl` を返すよう改修）と書き戻し `replaceSourceRange`
+  を再利用。`selectionchange` → `handleEditorSelectionChange` で選択中段落の直下にパネル表示
+  （`positionRubyPopover` が `.editor-page-paragraph-text` の矩形を wrap 相対へ変換、下に収まらなければ上へ反転、
+  スクロール追従）。`detectRubyAnnotationAtSelection`（全角 `｛｝（）`/半角 `{}()`/`[]()` 対応）で既存ルビを
+  検出 → 入力欄プリフィル＆削除ボタン表示。「適用」は `replaceSourceRange` で TXT 本文に `｛親｝（ふりがな）`
+  注記を書き戻し（既存ルビは全体置換）、「削除」は注記を親文字だけに戻す。外クリック・Esc・選択解除・
+  ビュー再構築で閉じる（入力欄フォーカス中は閉じない）。`#editor-ruby-btn` は手動トリガーとして残し、
+  旧 `promptDialog` import は撤去。
+- 注記は既存 `parseRubyAnnotatedText`（auto-place.js）→ `syncPlacedFromTxt` 経由で charRubies に展開される
+  既存フローに乗るだけ。PSD 保存経路は不変。
+
+### B. 見本とテキストエディタを「ウインドウ半分ずつ」固定レイアウト
+
+**背景**: テキストエディタモードの「見本」サブ状態（`.left-pdf`）は、見本パネル幅を見本画像のアスペクト比から
+動的計算する `--left-pdf-width`（main.js `recomputeLeftPdfWidth`）駆動で、エディタ側が残余を `width: auto` で
+埋める設計だった。固定幅を当てると合算 100% にならず**エディタ右側に空きスペース**が出る問題があり、
+最終的に「常に 50/50」に統一した。
+
+- **CSS** ([src/styles.css](src/styles.css)): `.workspace.editor-mode.left-pdf` 配下の `.spreads-pdf-area`
+  （見本）/ `.spreads-proofread-area`（土台）の `width: var(--left-pdf-width)` を **`width: 50%`** に、
+  `.spreads-editor-area` の `left: var(--left-pdf-width); width: auto` を **`left: 50%; width: auto`**（= 右
+  50%）に、反転（flipped）エディタの `right: var(--left-pdf-width)` を **`right: 50%`** に固定。画像スキャン
+  ソース併用時の反転 calc も `--left-pdf-width` → `50%` に揃えた。アスペクト比駆動の JS（`recomputeLeftPdfWidth`）
+  は `--left-pdf-width` を算出し続けるが本レイアウトでは未使用（実害なし）。
+- **付随**: 校正サブ状態（非 left-pdf）の `.spreads-editor-area` は `left: 55%; width: 45%`（エディタを
+  少し狭く）、`.workspace.editor-mode .spreads-proofread-area` を `width: 55%` にして隙間なく隣接させた。
+  proofread モード単体のオーバーレイ（50%）には非干渉。
+
+### C. テキストエディタ: 段落途中の空行で分割＋分割後を画像中央へ新規配置
+
+**背景**: エディタ段落（`.editor-page-paragraph-text`）の途中に空行を入れて選択解除（blur）したとき、空行で
+段落を分割し、**空行より後ろ（新しく分かれた側）**を PSD ページ中央に新規テキストレイヤーとして配置したい
+（「配置」ボタン `commitNewTxtInput` と同じ振る舞いを段落分割から起こす）。前半は元の段落のまま。
+
+- **`splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageNumber)` を新設・export**
+  ([src/txt-source.js](src/txt-source.js)): `commitNewTxtInput` の配置機構（`centerTopLeft` / `addNewLayer` /
+  `convertHalfToFullForVertical` / `withHistoryTransient`）を再利用（新規 import なし）。`withHistoryTransient`
+  内で **①** 同ページ・`paragraphIndex > splitIndex` の既存レイヤーの `sourceTxtRef.paragraphIndex` を
+  `+shift`（削除カスケード `deleteTxtBlockByIndex` / `cascadeRemoveTxtForLayers` の `-1` の逆）→ **②** 空行
+  より後ろの各パートを `centerTopLeft` で画像中央に `addNewLayer`（`sourceTxtRef` 付き）→ **③**
+  `setTxtSource` で content 確定。レイヤー調整を `setTxtSource` の前に行うので、同期発火する
+  `syncPlacedFromTxt` が正しい index で前半レイヤーを part0 へ追従させる。Ctrl+Z 一発で巻き戻る。
+- **blur ハンドラ** ([src/bind/editor-pane.js](src/bind/editor-pane.js) `bindParagraphEdit`): `replaceBlockAtOffset`
+  の前に空行分割（`splitBlocksWithOffsets` と同じ `/\n[ \t　]*\n/` で 2 段落以上）を検出して
+  `splitTxtBlockAndPlace` に委譲。前半が既配置なら位置維持＋内容追従、未配置なら未配置のまま（確認済み
+  仕様）。markerless / PSD 未読込は graceful（テキスト分割のみ）。
+
+### D. 原稿テキスト選択 → 対応 PSD レイヤー選択（プロパティ表示）＋ ↑/↓ で原稿選択移動
+
+**背景**: サイドバー「原稿テキスト」（`#txt-source-viewer` の `.txt-block`、parallel / proofread モードで表示）
+で段落を選択しても、対応する配置レイヤーは選択されずテキストプロパティ（選択レイヤーに出る float バッジ＝
+フォント名 / サイズ / フチ）が表示されなかった。選択時にレイヤーも選択し、その状態で ↑/↓ で原稿選択を
+前後移動できるようにした。
+
+- **`selectBlock(idx, text)` を拡張** ([src/txt-source.js](src/txt-source.js)): 既存処理の後に
+  `selectLayerForBlock(idx)` を呼び、`findPlacedLayerForBlock(idx)`（`syncTxtSelectionToLayer` の逆向き＝
+  block→layer の `sourceTxtRef` 照合）で対応レイヤーを `setSelectedLayer`（未配置なら `setSelectedLayers([])`）
+  → `refreshAllOverlays` + `rebuildLayerList` でバッジ表示。クリック・`cycleTxtBlockSelection` の両経路で同期。
+- **`isTxtBlockSelectionActive()` を新設・export**: 「選択中ブロックの対応レイヤー === 現在の選択レイヤー」
+  というヒューリスティック（未配置ブロックはレイヤー未選択なら true、editor モードは対象外ガード）。
+  別レイヤーをキャンバスで選び直すと自動で false になり、新規 state を持たずに「原稿ナビ ⇄ レイヤー操作」を
+  切替える。
+- **矢印キー dispatch** ([src/main.js](src/main.js)): プレーン矢印 Block C の nudge **より前**に「`↑/↓` かつ
+  `isTxtBlockSelectionActive()` なら `cycleTxtBlockSelection(delta)`」を挿入。`←/→` は従来どおり、Alt+↑/↓
+  （Block B）も従来どおり（こちらも今回レイヤー選択＋プロパティ表示されるようになり整合）。
+
+### 検証
+
+- `npm run check`（`check:encoding` 58 files → `lint` → `build`）成功。ビルド警告は既存の dynamic import /
+  chunk size のみ。
+- 実機確認推奨: (A) エディタで段落内の文字選択 → 直下にルビパネル → 適用で `｛親｝（ふりがな）` 反映。
+  (B) 見本モードで見本とエディタがウインドウ半分ずつ。(C) 段落途中で空行＋別段落クリックで blur → 後半が
+  PSD 中央に新規配置、後続レイヤーの内容がズレない、Ctrl+Z で一括取消。(D) 原稿段落クリックで対応レイヤー
+  選択＋プロパティバッジ表示、↑/↓ で原稿選択が前後移動、別レイヤークリックで ↑/↓ が nudge に戻る。
+
+---
+
+## v2.2.6: 反転時エディタ見本ミラー / 縦書き左余白修正 / 写植カードのフォルダ記憶 / 閉じる確認の未保存条件分岐 / 見本切替の重さ修正 / 一括サイズで自動配置色の解除漏れ修正
+
+v2.2.5 後の実機フィードバックに対する 6 件の修正をまとめたリリース。`package.json` /
+`package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を
+**2.2.6** に更新（`scripts/bump-version.mjs set 2.2.6`）。`npm run check`（encoding + lint + build）緑、
+`cargo check` 緑を確認済み。バグ修正 2 件は [DEBUG.md](DEBUG.md) に `[BUG-20260530-01]` /
+`[BUG-20260530-02]`、縦書き bbox の不変条件は [RDD.md](RDD.md) `REQ-G4.5` / `REQ-G10.7` に記録した。
+
+### A. ワークスペース反転時の editor モード「見本」レイアウトをミラー
+
+**背景**: ワークスペース反転（サイドバーが左）でテキストエディタモードの「見本」に切り替えると、見本画像
+（`.spreads-pdf-area`）は右へ移るのに、校正/見本トグルを持つ土台パネル（`.spreads-proofread-area`）が
+左に取り残され、エディタの左端を覆ってレイアウトが崩れていた。
+
+- **原因** ([src/styles.css](src/styles.css)): `.left-pdf.flipped` の既存ルールは `spreads-pdf-area`
+  （見本）/ `spreads-editor-area`（エディタ）を右/左へ振り分けていたが、`spreads-proofread-area` には
+  反転ルールが無く `left: 0` のままだった。
+- **修正**: `.workspace.editor-mode.flipped .spreads-proofread-area` を `left: auto; right: 0` にミラーし、
+  反転時の visible スライドは右からに（`.proofread-visible` / `.editor-visible` で `transform: translateX(0)`
+  を高特異度で上書き）。校正サブ状態の `spreads-editor-area` も `left: 0` で左半分にミラー。横書き/非反転は
+  不変。
+
+### B. 自動配置された縦書きテキストの「左側の余分な余白」を解消（+ RDD 記載）
+
+**背景**: 自動配置した縦書き複数行テキストのフレーム左に余分な余白が出る（v2.0.2 リグレッション）。
+
+- **原因**: `writing-mode: vertical-rl` は content が box の**右端（block-start）**に寄り、box 左端 = `nl.x`
+  は固定（`scheduleBoxAutoFit` も left/top は触らず右/下端だけ content にハグ）。複数行用の thick 安全余白
+  0.4em を足すと、余白が**必ず box の左側**に溜まる。v2.0.2 で中央寄せ用 padding を撤去したのに 0.4em
+  safety を残したのが原因。横書きは余白が下側に出て autofit が消すため無害＝縦書き固有。
+- **修正**: 縦書きのとき thick safety を 0 にして content を `nl.x` までぴったり詰める。
+  [src/canvas-tools.js](src/canvas-tools.js) `layerRectForNew` / `layerRectForExisting`、
+  [src/auto-place.js](src/auto-place.js) `estimateLayerSize`（配置中心の算出）、
+  [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) 新規縦書き位置補正の `_thickSafetyEm`（= UI と PSD の
+  右端を一致させるミラー値）を**4 か所すべて 0 に揃えた**。横書きは従来の安全余白を維持。
+- **破綻チェック + RDD**: ルビ位置測定（`basisRect.right` = 親文字基準で不変）/ JSX ルビ配置 /
+  `centerTopLeft` / `syncPlacedFromTxt` 中心固定 / `scheduleBoxAutoFit` / 白フチ（`.layer-box` は
+  `overflow:hidden` 無し）/ 既存レイヤー overlay を全経路確認。**JSX `_thickSafetyEm` のミラー漏れだけが
+  実害（保存縦書きが 0.4em 右ズレ）で、同時に修正**。不変条件を [RDD.md](RDD.md) `REQ-G4.5`（縦書き bbox
+  thickSafety = 0、JS 3 関数を同式に揃える）と `REQ-G10.7`（JSX `_thickSafetyEm` を JS bbox と必ず一致）に
+  追記、プッシュ前チェックリストにも 1 項目追加。
+
+### C. 写植用ファイル選択カードの「前回フォルダ」を 3 カードで共有記憶
+
+**背景**: 写植は見本・PSD・テキストが同じ作業フォルダにある運用が多いが、3 カードがそれぞれ別の
+`rememberKey`（`reference-open` / `psd-open` / `txt-open`）で前回フォルダを記憶していたため、1 つ選んでも
+他カードのダイアログが同じ場所から開かなかった。
+
+- **修正**: [src/pdf-loader.js](src/pdf-loader.js) `pickReferenceFiles` / [src/services/psd-load.js](src/services/psd-load.js)
+  `pickPsdFiles` / [src/txt-source.js](src/txt-source.js) `pickTxtPath` に任意 `{ rememberKey }` 上書きを追加
+  （既定値は据え置き＝ツールバー「見本を読み込み/PSDを開く/テキストを開く」や書き起こしフローは無変更）。
+  [src/main.js](src/main.js) 写植カードの 3 つの pick 呼び出しに共有キー `TYPESET_FOLDER_REMEMBER_KEY =
+  "typeset-folder"` を渡す。D&D 経路は [src/file-picker.js](src/file-picker.js) の新公開ヘルパー
+  `rememberPickerDir` で `rememberTypesetFolderFromPath` がドロップ元親フォルダを共有キーへ書く。
+  localStorage 永続化により再起動後・次ジョブでも前回フォルダから開く。
+
+### D. ウインドウを閉じる時、プロジェクト / PSD の未保存を条件分岐してダイアログ表示
+
+**背景**: 旧実装は `hasEdits()` だけで一律「未保存の編集があります」を出していた。何が未保存かを出し分けたい。
+
+- **保存ダーティ追跡** ([src/state.js](src/state.js)): プロジェクト(.opus)と PSD(Photoshop 反映)は別保存なので
+  独立フラグ `psdSaveDirty` / `projectSaveDirty` を追加。中央の履歴フックで駆動 — 編集
+  （`pushHistorySnapshot`）/ undo・redo で両方 dirty、`resetHistoryBaseline`（読込/クリア/プロジェクト
+  再オープン）で両方 clean。`getPsdSaveDirty` / `getProjectSaveDirty` / `markPsdSaveClean` /
+  `markProjectSaveClean` を export。`hasSavedThisSession`（一度でも保存したか）と違い**保存後の再編集も
+  正しく未保存判定**できる。
+- **clean に戻す**: PSD 保存成功で [src/bind/save.js](src/bind/save.js) `markPsdSaveClean()`、プロジェクト
+  保存成功で [src/services/project.js](src/services/project.js) `markProjectSaveClean()`。
+- **条件分岐** ([src/main.js](src/main.js) `unsavedCloseSubject`): 編集ありで両方 dirty →「プロジェクトとPSD」、
+  プロジェクトのみ →「プロジェクト」、PSD のみ →「PSD」、両方 clean → ダイアログ無しで終了。タイトルは
+  「〇〇が保存されていません」。×ボタンと OS の `onCloseRequested` の両経路に適用。
+
+### E. テキストエディタ「校正 ↔ 見本」切替の重さを解消（DEBUG: [BUG-20260530-01]）
+
+- **原因** ([src/pdf-view.js](src/pdf-view.js)): `ResizeObserver` が `.spreads-pdf-area` を observe し、
+  コールバックで `schedule()` → pdfjs `page.render()` を直接呼ぶ。「見本」切替で共有 transition rule の
+  `width 0.3s` により pdf-area 幅が 0.3 秒アニメ → ResizeObserver が**毎フレーム発火** → 重い pdfjs 再レンダが
+  ~18 回連続。`schedule()` の rAF debounce は同一フレーム内しか合流しないため間引けていなかった。
+- **対策**: ResizeObserver 専用の **trailing debounce** (`scheduleResizeRedraw` / 130ms) を追加し、RO
+  コールバックを `scheduleResizeRedraw()` に変更。連続リサイズ（width トランジション / ウインドウドラッグ）が
+  収束してから 1 回だけ再レンダ（切替直後 1 回 + 収束後 1 回の計 2 回）。
+
+### F. 複数選択でサイズ一括変換すると自動配置の色が一部消えないバグ修正（DEBUG: [BUG-20260530-02]）
+
+- **原因** ([src/text-editor.js](src/text-editor.js) `commitSingleFieldToSelections`): サイズ一括変更の本体に
+  `if (cur === value) continue;` があり、**色マーカー解除コードがこの continue の後ろ**にあるため、
+  「サイズを揃える」変更で**既に目標サイズと同値だった新規（自動配置）レイヤーが skip され、
+  `autoFontSwitched` が残る**＝色が消えない。正しく動く wheel 経路（[src/canvas-tools.js](src/canvas-tools.js)
+  `resizeSelectedLayers`、v2.0.6 修正済み）はサイズ未変更でもマーカーを無条件で先に解除している差。
+  `commitFontToSelections` も同型の `if (cur === ps) continue;` を持っていた。
+- **対策**: wheel 経路と同じパターンを `commitSingleFieldToSelections`（size）/ `commitFontToSelections`
+  （font）に導入。新規レイヤー + `autoFontSwitched === true` のとき値未変更でもマーカーを先に
+  `updateNewLayer` で解除し `any = true`。末尾の `refreshAllOverlays` / `rebuildLayerList` /
+  `refreshTextStyleMarkerViews`（= `renderTxtSourceViewer` 経由）でフレーム・レイヤー一覧・原稿テキストの
+  3 か所すべての色が更新される。size は `field === "sizePt"` のみ解除（行間変更では解除しない既存挙動と一致）。
+
+### 検証
+
+- `npm run check`（`check:encoding` 58 files → `lint` → `build`）成功、`cargo check` 成功。
+- 実機確認推奨: (A) 反転 + エディタで「校正↔見本」が右パネル/左エディタに正しく並ぶ。(B) 縦書き複数行を
+  自動配置 → フレーム左の余白が消え、保存後の PSD 位置も UI と一致。(C) 写植カードでフォルダ選択/ D&D 後に
+  別カードが同フォルダから開く・再起動後も保持。(D) 未保存状態に応じた「〇〇が保存されていません」。
+  (E) 「校正↔見本」往復でカクつかない。(F) 自動配置色付き複数選択をサイズ一括変換 → 同値だったものも
+  含め色が全消え。
+
+---
+
 ## v2.2.5: PORT_NOTES 移植 / 要件・バグ文書整備 / ロード 86% 完了バグ修正 + v2.2.4 後 UX 改修の同梱リリース
 
 v2.2.4 以降に作業ブランチへ溜まっていた変更を 2.2.5 として正式リリースした版。大きく分けて

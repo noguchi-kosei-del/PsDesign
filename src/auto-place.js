@@ -149,14 +149,19 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const ptInPsdPx = sizePt * (dpi / 72);
   const lineCount = Math.max(1, countLines(contents));
   const leadingFactor = (leadingPct ?? 125) / 100;
-  const thickSafety = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM_SCAN : TEXT_BBOX_THICK_SAFETY_EM_SCAN;
+  const isVertical = direction !== "horizontal";
+  // 縦書きは content が右端 (block-start) に寄り box 左端 = nl.x は固定のため、thick safety を
+  // 足すと box 左側に余白が溜まる（layerRectForNew / scheduleBoxAutoFit と整合）。縦書きは 0 に
+  // して content を nl.x まで詰める。横書きは余白が下側に出る（= 除去される）ので従来どおり。
+  const thickSafety = isVertical
+    ? 0
+    : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM_SCAN : TEXT_BBOX_THICK_SAFETY_EM_SCAN);
   const longSafety = TEXT_BBOX_LONG_SAFETY_EM_SCAN;
   const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE_SCAN;
   const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + thickSafety));
   // 句読点ツメぶんを差し引いた最大行幅（em 単位）を計算
   const tsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
   const tsumeMag = tsumePct > 0 ? tsumePct / 100 : 0;
-  const isVertical = direction !== "horizontal";
   // 縦中横は縦書きレイヤー + 設定 ON のときのみ bbox 計算に反映
   const tcyEnabled = isVertical && (getDefault("tateChuYokoEnabled") !== false);
   let maxEffectiveChars = 1;

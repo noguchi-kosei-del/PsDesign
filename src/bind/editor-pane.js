@@ -24,9 +24,10 @@ import {
   deleteTxtBlockByIndex,
   getActivePageNumber,
   getTxtPageCount,
+  splitTxtBlockAndPlace,
   syncNewInputAvailabilityFor,
 } from "../txt-source.js";
-import { notifyDialog, promptDialog, toast } from "../ui-feedback.js";
+import { notifyDialog, toast } from "../ui-feedback.js";
 import {
   appendTextWithStyleMarkers,
   getStyleOverrideRangesForTxtRef,
@@ -49,6 +50,11 @@ function getEls() {
     newInputBtn: $("editor-new-input-btn"),
     save: $("editor-save-btn"),
     ruby: $("editor-ruby-btn"),
+    rubyPopover: $("editor-ruby-popover"),
+    rubyPopoverParent: $("editor-ruby-popover-parent"),
+    rubyPopoverInput: $("editor-ruby-popover-input"),
+    rubyPopoverApply: $("editor-ruby-popover-apply"),
+    rubyPopoverRemove: $("editor-ruby-popover-remove"),
     filename: $("editor-filename"),
     dirtyDot: $("editor-dirty-dot"),
     pagePrev: $("editor-page-prev-btn"),
@@ -256,15 +262,15 @@ function displayRubySource(raw) {
 
 function updateEditorBlockSelectionFromDom() {
   const sel = window.getSelection?.();
-  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return;
+  if (!sel || sel.rangeCount === 0 || sel.isCollapsed) return null;
   const range = sel.getRangeAt(0);
   let startEl = range.startContainer;
   if (startEl && startEl.nodeType !== Node.ELEMENT_NODE) startEl = startEl.parentElement;
   const block = startEl?.closest?.(".editor-page-paragraph-text");
-  if (!block) return;
+  if (!block) return null;
   let endEl = range.endContainer;
   if (endEl && endEl.nodeType !== Node.ELEMENT_NODE) endEl = endEl.parentElement;
-  if (!endEl?.closest || endEl.closest(".editor-page-paragraph-text") !== block) return;
+  if (!endEl?.closest || endEl.closest(".editor-page-paragraph-text") !== block) return null;
 
   const beforeStart = document.createRange();
   beforeStart.selectNodeContents(block);
@@ -274,22 +280,191 @@ function updateEditorBlockSelectionFromDom() {
   beforeEnd.selectNodeContents(block);
   beforeEnd.setEnd(range.endContainer, range.endOffset);
   const endInBlock = beforeEnd.toString().length;
-  if (startInBlock === endInBlock) return;
+  if (startInBlock === endInBlock) return null;
 
   const blockText = block.textContent ?? "";
   const selectedText = blockText.slice(startInBlock, endInBlock);
-  if (!selectedText || selectedText.includes("\n")) return;
+  if (!selectedText || selectedText.includes("\n")) return null;
   const blockOffset = Number(block.dataset.offset);
-  if (!Number.isInteger(blockOffset)) return;
+  if (!Number.isInteger(blockOffset)) return null;
   const displayToRaw = editorTextMappings.get(block);
   const rawStartInBlock = displayToRaw?.[startInBlock] ?? startInBlock;
   const rawEndAnchor = displayToRaw?.[endInBlock - 1];
   const rawEndInBlock = rawEndAnchor == null ? endInBlock : rawEndAnchor + 1;
+
   lastEditorBlockSelection = {
     absStart: blockOffset + rawStartInBlock,
     absEnd: blockOffset + rawEndInBlock,
     text: selectedText,
+    blockEl: block,
   };
+  return lastEditorBlockSelection;
+}
+
+// TXT 注記の括弧 3 種。displayRubySource の正規表現と対応させる。
+const RUBY_BRACKETS = [
+  { open: "｛", close: "｝", rOpen: "（", rClose: "）" },
+  { open: "{", close: "}", rOpen: "(", rClose: ")" },
+  { open: "[", close: "]", rOpen: "(", rClose: ")" },
+];
+// ルビ注記の区切り文字。選択文字列にこれらが含まれる場合は新規付与を弾く。
+const RUBY_DELIMITER_RE = /[｛｝（）{}()[\]]/;
+
+// 選択範囲 [absStart, absEnd) が、ちょうど既存注記の親文字に一致するか調べる。
+// 一致すれば { parent, ruby, fullStart, fullEnd } を返す（注記全体の範囲）。
+function detectRubyAnnotationAtSelection(content, absStart, absEnd) {
+  if (!Number.isInteger(absStart) || !Number.isInteger(absEnd) || absEnd <= absStart) return null;
+  const before = content[absStart - 1];
+  const after = content[absEnd];
+  for (const b of RUBY_BRACKETS) {
+    if (before !== b.open || after !== b.close) continue;
+    if (content[absEnd + 1] !== b.rOpen) continue;
+    const close = content.indexOf(b.rClose, absEnd + 2);
+    if (close === -1) continue;
+    const ruby = content.slice(absEnd + 2, close);
+    if (!ruby || ruby.includes("\n")) continue;
+    return {
+      parent: content.slice(absStart, absEnd),
+      ruby,
+      fullStart: absStart - 1,
+      fullEnd: close + 1,
+    };
+  }
+  return null;
+}
+
+function rubyPopoverHasFocus() {
+  const pop = $("editor-ruby-popover");
+  return !!pop && !pop.hidden && pop.contains(document.activeElement);
+}
+
+function hideRubyPopover() {
+  const pop = $("editor-ruby-popover");
+  if (!pop || pop.hidden) return;
+  pop.hidden = true;
+  delete pop.dataset.absStart;
+  delete pop.dataset.absEnd;
+}
+
+// 選択中の段落（.editor-page-paragraph-text）の直下に、wrap 相対の absolute 座標で配置する。
+function positionRubyPopover(sel) {
+  const pop = $("editor-ruby-popover");
+  const wrap = $("editor-pages-viewer-wrap");
+  const blockEl = sel?.blockEl;
+  if (!pop || !wrap || !blockEl || !blockEl.isConnected) return;
+  const b = blockEl.getBoundingClientRect();
+  const w = wrap.getBoundingClientRect();
+  const pad = 4;
+  const gap = 4;
+  const pw = pop.offsetWidth;
+  const ph = pop.offsetHeight;
+  // wrap の padding box 基準（getBoundingClientRect 差分なので transform 祖先の影響を受けない）。
+  let left = b.left - w.left;
+  if (left + pw > w.width - pad) left = w.width - pw - pad;
+  if (left < pad) left = pad;
+  let top = b.bottom - w.top + gap;
+  // 下に収まらなければ段落の上へ反転。
+  if (top + ph > w.height - pad) {
+    const above = b.top - w.top - ph - gap;
+    top = above >= pad ? above : Math.max(pad, w.height - ph - pad);
+  }
+  pop.style.left = `${Math.round(left)}px`;
+  pop.style.top = `${Math.round(top)}px`;
+}
+
+function showRubyPopover(sel) {
+  const els = getEls();
+  const pop = els.rubyPopover;
+  const input = els.rubyPopoverInput;
+  const parentEl = els.rubyPopoverParent;
+  const removeBtn = els.rubyPopoverRemove;
+  if (!pop || !input || !parentEl || !sel) return;
+
+  const sameTarget = !pop.hidden
+    && pop.dataset.absStart === String(sel.absStart)
+    && pop.dataset.absEnd === String(sel.absEnd);
+
+  if (!sameTarget) {
+    pop.dataset.absStart = String(sel.absStart);
+    pop.dataset.absEnd = String(sel.absEnd);
+    parentEl.textContent = sel.text;
+    parentEl.title = sel.text;
+    const source = getTxtSource();
+    const content = (source?.content ?? "").replace(/\r\n?/g, "\n");
+    const existing = detectRubyAnnotationAtSelection(content, sel.absStart, sel.absEnd);
+    input.value = existing ? existing.ruby : "";
+    if (removeBtn) removeBtn.hidden = !existing;
+  }
+
+  pop.hidden = false;
+  positionRubyPopover(sel);
+}
+
+function handleEditorSelectionChange() {
+  const sel = updateEditorBlockSelectionFromDom();
+  if (sel) {
+    showRubyPopover(sel);
+  } else if (!rubyPopoverHasFocus()) {
+    hideRubyPopover();
+  }
+}
+
+function applyRubyFromPopover() {
+  const els = getEls();
+  const ruby = (els.rubyPopoverInput?.value ?? "").trim();
+  const sel = lastEditorBlockSelection;
+  if (!sel) {
+    hideRubyPopover();
+    return;
+  }
+  if (ruby === "") return;
+  const source = getTxtSource();
+  const content = (source?.content ?? "").replace(/\r\n?/g, "\n");
+  const existing = detectRubyAnnotationAtSelection(content, sel.absStart, sel.absEnd);
+
+  let ok = false;
+  if (existing) {
+    const original = content.slice(existing.fullStart, existing.fullEnd);
+    const replacement = `｛${existing.parent}｝（${ruby}）`;
+    ok = replaceSourceRange(existing.fullStart, existing.fullEnd, original, replacement);
+  } else {
+    if (RUBY_DELIMITER_RE.test(sel.text)) {
+      toast("既存のルビを含む範囲には付けられません。親文字だけを選択してください", { kind: "warning", duration: 2600 });
+      return;
+    }
+    const replacement = `｛${sel.text}｝（${ruby}）`;
+    ok = replaceSourceRange(sel.absStart, sel.absEnd, sel.text, replacement);
+  }
+
+  if (!ok) {
+    toast("ルビを適用できませんでした。もう一度選択してください", { kind: "warning", duration: 2400 });
+    return;
+  }
+  lastEditorBlockSelection = null;
+  hideRubyPopover();
+}
+
+function removeRubyFromPopover() {
+  const sel = lastEditorBlockSelection;
+  if (!sel) {
+    hideRubyPopover();
+    return;
+  }
+  const source = getTxtSource();
+  const content = (source?.content ?? "").replace(/\r\n?/g, "\n");
+  const existing = detectRubyAnnotationAtSelection(content, sel.absStart, sel.absEnd);
+  if (!existing) {
+    hideRubyPopover();
+    return;
+  }
+  const original = content.slice(existing.fullStart, existing.fullEnd);
+  const ok = replaceSourceRange(existing.fullStart, existing.fullEnd, original, existing.parent);
+  if (!ok) {
+    toast("ルビを削除できませんでした。もう一度選択してください", { kind: "warning", duration: 2400 });
+    return;
+  }
+  lastEditorBlockSelection = null;
+  hideRubyPopover();
 }
 
 function getCurrentActivePageNumber() {
@@ -372,6 +547,7 @@ function buildSection(pageNumber, blocks, activeNum, options = {}) {
 function renderViewer({ scrollToActive = false } = {}) {
   const els = getEls();
   if (!els.viewer) return;
+  hideRubyPopover();
   if (editingBlock) return;
 
   const source = getTxtSource();
@@ -453,6 +629,24 @@ function bindParagraphEdit(el) {
     }
     const newText = (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n");
     if (newText === originalDisplay) return;
+    // 空行（連続改行）で分割されていれば、空行より後ろのパートを画像中央へ新規配置する。
+    // 分割正規表現は再描画 splitBlocksWithOffsets と同じ（全角スペースも含む空行を許容）。
+    const parts = newText
+      .split(/\n[ \t　]*\n/)
+      .map((s) => s.replace(/^\n+|\n+$/g, ""))
+      .filter((s) => s.length > 0);
+    if (parts.length > 1) {
+      const pn = Number(el.dataset.pageNumber);
+      const ok = splitTxtBlockAndPlace(
+        Number(el.dataset.offset),
+        original,
+        parts,
+        Number(el.dataset.paragraphIndex),
+        (Number.isInteger(pn) && pn > 0) ? pn : null,
+      );
+      if (!ok) renderViewer();
+      return;
+    }
     const changed = replaceBlockAtOffset(Number(el.dataset.offset), original, newText);
     if (!changed) renderViewer();
   });
@@ -530,27 +724,15 @@ async function handleSaveAuto() {
   });
 }
 
-async function handleAddRuby() {
-  updateEditorBlockSelectionFromDom();
-  const picked = lastEditorBlockSelection;
-  if (!picked || !picked.text || picked.text.includes("\n")) {
+function handleAddRuby() {
+  const sel = updateEditorBlockSelectionFromDom();
+  if (!sel || !sel.text || sel.text.includes("\n")) {
     toast("ルビを付けたい文字を1行内で選択してください", { kind: "info", duration: 2000 });
     return;
   }
-  const parentText = picked.text;
-  const ruby = await promptDialog({
-    title: "ルビ付け",
-    message: `「${parentText}」のルビを入力`,
-    placeholder: "ふりがな",
-  });
-  if (ruby == null || ruby === "") return;
-  const replacement = `｛${parentText}｝（${ruby}）`;
-  const changed = replaceSourceRange(picked.absStart, picked.absEnd, parentText, replacement);
-  if (!changed) {
-    toast("選択範囲を更新できませんでした。もう一度選択してください", { kind: "warning", duration: 2400 });
-    return;
-  }
-  lastEditorBlockSelection = null;
+  showRubyPopover(sel);
+  const els = getEls();
+  els.rubyPopoverInput?.focus();
 }
 
 function handleCommitNewInput() {
@@ -652,10 +834,34 @@ export function bindEditorPane() {
   els.pageModeSingle?.addEventListener("click", () => setEditorPageMode("single"));
   els.viewer.tabIndex = 0;
   els.viewer.addEventListener("keydown", onViewerKeydown);
+  els.viewer.addEventListener("scroll", handleEditorSelectionChange, { passive: true });
+
+  // mousedown の preventDefault で、ボタンが contenteditable からフォーカスを奪わない
+  // ようにする（選択崩れ→ selectionchange でポップオーバーが消える競合を防ぐ）。
+  els.rubyPopoverApply?.addEventListener("mousedown", (e) => e.preventDefault());
+  els.rubyPopoverRemove?.addEventListener("mousedown", (e) => e.preventDefault());
+  els.rubyPopoverApply?.addEventListener("click", applyRubyFromPopover);
+  els.rubyPopoverRemove?.addEventListener("click", removeRubyFromPopover);
+  els.rubyPopoverInput?.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      applyRubyFromPopover();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      hideRubyPopover();
+    }
+  });
 
   bindNewInput();
-  document.addEventListener("selectionchange", updateEditorBlockSelectionFromDom);
+  document.addEventListener("selectionchange", handleEditorSelectionChange);
   document.addEventListener("keydown", onEditorPageNavShortcut, true);
+  // ポップオーバー外をクリックしたら閉じる（エディタ内クリックは selectionchange でも閉じる）。
+  document.addEventListener("mousedown", (e) => {
+    const pop = $("editor-ruby-popover");
+    if (!pop || pop.hidden) return;
+    if (pop.contains(e.target)) return;
+    hideRubyPopover();
+  }, true);
 
   onTxtSourceChange(() => {
     renderViewer();

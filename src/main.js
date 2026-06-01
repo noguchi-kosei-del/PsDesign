@@ -43,7 +43,7 @@ import {
   recenterLayerToCenter,
   unifySelectedTextSize,
 } from "./text-editor.js";
-import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
+import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, isTxtBlockSelectionActive, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
 import { bindScanInstallMenu, checkScanModelsStatus } from "./scan-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
 import { bindScanExtractButton, PLACE_ICON_SVG, runScanExtractForTranscription } from "./scan-extract.js";
@@ -127,6 +127,8 @@ import {
   getTextSize,
   getTool,
   hasEdits,
+  getPsdSaveDirty,
+  getProjectSaveDirty,
   getEditorLeftPaneMode,
   getCurrentFont,
   getFontDisplayName,
@@ -199,6 +201,10 @@ let homeTypesetDropHandler = null;
 let homeTypesetDragOverHandler = null;
 let homeTypesetDragLeaveHandler = null;
 let homeScanEngineAvailable = null;
+// 写植用ファイル選択の 3 カード（見本 / PSD / テキスト）が共有する前回フォルダ記憶キー。
+// 1 つの作業フォルダに 3 種が揃っている運用に合わせ、どれか 1 つを選ぶ（または D&D する）と
+// 他カードの「選択」ダイアログも同じフォルダから開く。file-picker.js が localStorage に永続化。
+const TYPESET_FOLDER_REMEMBER_KEY = "typeset-folder";
 
 function bindPdfWorkspaceToggle() {
   const rotateBtn = document.getElementById("pdf-rotate-btn");
@@ -562,6 +568,15 @@ function bindTools() {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
       if (!isInput) {
+        // 原稿テキスト選択がアクティブなら、↑/↓ で原稿ブロックの選択を前後へ移動する
+        // （選択に追従して対応レイヤー＝テキストプロパティ表示も切替わる）。nudge より優先。
+        if ((e.key === "ArrowUp" || e.key === "ArrowDown") && isTxtBlockSelectionActive()) {
+          const delta = e.key === "ArrowDown" ? +1 : -1;
+          if (cycleTxtBlockSelection(delta)) {
+            e.preventDefault();
+            return;
+          }
+        }
         const hasSel = getSelectedLayers().length > 0;
         if (hasSel) {
           const baseMove = getArrowKeyMoveDistance();
@@ -3255,17 +3270,31 @@ function bindWindowControls() {
       window.clearTimeout(fallbackTimer);
     }
   };
+  // 編集がある状態で、PSD / プロジェクトのどちらが未保存かを判定する。
+  // psdSaveDirty: PSD（Photoshop 反映）へ未保存の編集あり。
+  // projectSaveDirty: プロジェクト（.opus）へ未保存の状態あり。
+  // 両方 clean（保存済み）なら確認不要でそのまま閉じる。
+  const unsavedCloseSubject = () => {
+    if (!hasEdits()) return null;
+    const psdUnsaved = getPsdSaveDirty();
+    const projectUnsaved = getProjectSaveDirty();
+    if (psdUnsaved && projectUnsaved) return "プロジェクトとPSD";
+    if (projectUnsaved) return "プロジェクト";
+    if (psdUnsaved) return "PSD";
+    return null;
+  };
   const confirmAndCloseWindow = async (win) => {
     if (closeConfirmOpen) return false;
-    if (!hasEdits()) {
+    const subject = unsavedCloseSubject();
+    if (!subject) {
       await win.close();
       return true;
     }
     closeConfirmOpen = true;
     try {
       const ok = await confirmDialog({
-        title: "未保存の編集があります",
-        message: "保存していない編集内容があります。保存せずに終了しますか？",
+        title: `${subject}が保存されていません`,
+        message: `${subject}の保存が完了していません。保存せずに終了しますか？`,
         confirmLabel: "保存せずに終了",
         cancelLabel: "キャンセル",
         kind: "warning",
@@ -3280,18 +3309,15 @@ function bindWindowControls() {
   min.addEventListener("click", async () => { (await getWin()).minimize(); });
   max.addEventListener("click", async () => { (await getWin()).toggleMaximize(); });
   close.addEventListener("click", async () => {
-    console.log("[close-btn] clicked, hasEdits=", hasEdits(), "closeConfirmOpen=", closeConfirmOpen);
     try {
-      const result = await confirmAndCloseWindow(await getWin());
-      console.log("[close-btn] confirmAndCloseWindow result=", result);
+      await confirmAndCloseWindow(await getWin());
     } catch (err) {
       console.error("[close-btn] error:", err);
     }
   });
   void getWin().then((win) => win.onCloseRequested(async (event) => {
-    console.log("[close-req] received, allow=", allowWindowClose, "hasEdits=", hasEdits());
     if (allowWindowClose) return;
-    if (!hasEdits()) return;
+    if (!unsavedCloseSubject()) return;
     event.preventDefault();
     await confirmAndCloseWindow(win);
   })).catch((e) => console.warn("close-request listener failed:", e));
@@ -3401,6 +3427,18 @@ function normalizeHomeFlowPaths(value) {
   return (Array.isArray(value) ? value : value ? [value] : [])
     .map((p) => (typeof p === "string" ? p : p?.path ?? null))
     .filter(Boolean);
+}
+
+// 写植フローで選択/ドロップしたファイルの親フォルダを共有 rememberKey へ書き込む。
+// file-picker.js は常に動的 import される想定なので、ここでも動的 import で取り回す。
+function rememberTypesetFolderFromPath(filePath) {
+  if (!filePath) return;
+  const m = String(filePath).match(/^(.+)[\\/][^\\/]+$/);
+  const dir = m ? m[1] : null;
+  if (!dir) return;
+  import("./file-picker.js")
+    .then((mod) => mod.rememberPickerDir?.(TYPESET_FOLDER_REMEMBER_KEY, dir))
+    .catch(() => {});
 }
 
 function samePathList(a, b) {
@@ -3967,6 +4005,8 @@ function openHomeTypesetDialog() {
         }
         else if (kind === "psd") psdPaths = filtered;
         else if (kind === "txt") txtPath = filtered[0] ?? null;
+        // D&D でもドロップ元フォルダを共有 rememberKey へ記憶し、次の「選択」が同じ場所から開くように。
+        rememberTypesetFolderFromPath(filtered[0]);
         handled = true;
       };
       if (slot) {
@@ -4101,7 +4141,7 @@ function openHomeTypesetDialog() {
       btn.disabled = true;
       try {
         if (kind === "reference") {
-          const picked = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickReferenceFiles()));
+          const picked = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickReferenceFiles({ rememberKey: TYPESET_FOLDER_REMEMBER_KEY })));
           if (picked.length > 0) {
             const changed = !samePathList(referencePaths, picked);
             referencePaths = picked;
@@ -4112,10 +4152,10 @@ function openHomeTypesetDialog() {
             }
           }
         } else if (kind === "psd") {
-          const picked = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickPsdFiles()));
+          const picked = normalizeHomeFlowPaths(await pickWithHomeDialogHidden(() => pickPsdFiles({ rememberKey: TYPESET_FOLDER_REMEMBER_KEY })));
           if (picked.length > 0) psdPaths = picked;
         } else if (kind === "txt") {
-          const picked = await pickWithHomeDialogHidden(() => pickTxtPath());
+          const picked = await pickWithHomeDialogHidden(() => pickTxtPath({ rememberKey: TYPESET_FOLDER_REMEMBER_KEY }));
           if (picked) txtPath = picked;
         }
         update();

@@ -31,6 +31,7 @@ import {
   getPsdRotation,
   getPsdZoom,
   hasEdits,
+  markProjectSaveClean,
   setActivePane,
   setCurrentPageIndex,
   setEditorLeftPaneMode,
@@ -619,6 +620,8 @@ export async function saveProject() {
         referencePathMapEntries: result.referencePathMapEntries,
       });
     }
+    // .opus への保存が完了 → プロジェクト側の保存ダーティを解消（ウインドウ閉じる確認の条件分岐用）。
+    markProjectSaveClean();
     await notifyDialog({
       title: overwrote ? "プロジェクト上書き保存完了" : "プロジェクト保存完了",
       message: `${result.projectName} を保存しました。`,

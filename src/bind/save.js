@@ -4,7 +4,7 @@
 // に書き出す。フロント側で空きフォルダ名を確定してから Rust に渡す。
 // 外向き API: bindSaveMenu / handleSave / 保存可能フラグの get/set。
 
-import { exportEdits, getEdit, getNewLayersForPsd, getPages, getPdfPaths, getPsdRotation, hasEdits } from "../state.js";
+import { exportEdits, getEdit, getNewLayersForPsd, getPages, getPdfPaths, getPsdRotation, hasEdits, markPsdSaveClean } from "../state.js";
 import {
   confirmDialog,
   hideModalAnimated,
@@ -657,6 +657,8 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     const suffix = saveMode === "saveAs" && targetDir ? `（保存先: ${targetDir}）` : "";
     const hasWarn = typeof result === "string" && result.includes("警告:");
     hasSavedThisSession = true;
+    // PSD への反映が完了 → PSD 側の保存ダーティを解消（ウインドウ閉じる確認の条件分岐用）。
+    markPsdSaveClean();
     // 警告ありなら success アニメをスキップして即閉じ（ユーザーには警告通知を優先表示）。
     // 純粋な成功時のみ緑チェックマークを再生してから閉じる。
     await hideProgress({ success: !hasWarn });

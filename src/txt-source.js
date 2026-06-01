@@ -11,6 +11,8 @@ import {
   getParallelViewMode,
   getPages,
   getPdfPageIndex,
+  getSelectedLayer,
+  getSelectedLayers,
   getStrokeColor,
   getStrokeWidthPx,
   getTextSize,
@@ -26,6 +28,8 @@ import {
   onParallelViewModeChange,
   onTxtSourceChange,
   removeNewLayer,
+  setSelectedLayer,
+  setSelectedLayers,
   setTxtDirty,
   setTxtFilePath,
   setTxtSelectedBlockIndex,
@@ -988,6 +992,112 @@ export function commitNewTxtInput({ inputEl } = {}) {
   inputEl.focus();
 }
 
+// エディタ段落を空行で分割し、空行より後ろのパートを PSD ページ中央へ新規配置する。
+// editor-pane.js の blur ハンドラから呼ばれる（commitNewTxtInput と同じ配置機構を再利用）。
+// 前半（parts[0]）は元の段落のまま。元段落に配置済みレイヤーがあれば syncPlacedFromTxt が
+// 前半テキストへ自動追従する。後続段落の paragraphIndex は挿入分だけ +shift して linkage を維持。
+//
+// offset: 元段落の content 内オフセット, original: 元段落の raw テキスト,
+// parts: 空行で分割した段落配列 ([0]=前半 / [1..]=新規), splitIndex: 元段落の paragraphIndex,
+// pageNumber: 元段落のページ番号（markered なら 1-based 数値, markerless なら null）。
+// 戻り値: 分割・反映できたら true、検証失敗等で何もしなければ false。
+export function splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageNumber) {
+  const source = getTxtSource();
+  if (!source) return false;
+  if (!Number.isInteger(offset) || !Number.isInteger(splitIndex)) return false;
+
+  // 各 part は前後改行のみ trim・空は除外（再描画 splitBlocksWithOffsets の trim と一致）。
+  const cleanParts = (parts ?? [])
+    .map((p) => String(p ?? "").replace(/^\n+|\n+$/g, ""))
+    .filter((p) => p.length > 0);
+  if (cleanParts.length < 2) return false;
+
+  const content = (source.content ?? "").replace(/\r\n?/g, "\n");
+  const orig = String(original ?? "").replace(/\r\n?/g, "\n");
+  if (!orig || content.slice(offset, offset + orig.length) !== orig) return false;
+  const joined = cleanParts.join("\n\n");
+  if (joined === orig) return false;
+  const newContent = content.slice(0, offset) + joined + content.slice(offset + orig.length);
+  const newParts = cleanParts.slice(1);
+
+  // 配置先 PSD ページ / sourceTxtRef.pageNumber / cascade 対象ページの決定
+  // （commitNewTxtInput と同じ算出。markered=数値ページ, markerless=現在ページ基準）。
+  const pages = getPages();
+  const hasPsd = pages.length > 0;
+  const markered = Number.isInteger(pageNumber) && pageNumber > 0;
+  let placePage = null;
+  let refPageNumber = null;
+  let cascadePage = null;
+  if (markered) {
+    refPageNumber = pageNumber;
+    cascadePage = pageNumber;
+    placePage = hasPsd ? (pages[pageNumber - 1] ?? null) : null;
+  } else {
+    const pageIdx = hasPsd ? getCurrentPageIndex() : 0;
+    refPageNumber = hasPsd ? (pageIdx + 1) : getActivePageNumber();
+    cascadePage = null;
+    placePage = hasPsd ? (pages[pageIdx] ?? null) : null;
+  }
+
+  const direction = getNewTextDirection();
+  const sizePt = getTextSize();
+  const leadingPct = getLeadingPct();
+  const shift = newParts.length;
+
+  withHistoryTransient(() => {
+    // 1) 挿入カスケード: 同ページ・splitIndex より後ろの layer の paragraphIndex を +shift。
+    //    （削除側 deleteTxtBlockByIndex / cascadeRemoveTxtForLayers の -1 の逆）
+    const cmpPage = cascadePage == null ? null : Number(cascadePage);
+    for (const layer of getNewLayers().slice()) {
+      const ref = layer?.sourceTxtRef;
+      if (!ref) continue;
+      const refPage = ref.pageNumber == null ? null : Number(ref.pageNumber);
+      if (refPage !== cmpPage) continue;
+      if (ref.paragraphIndex > splitIndex) {
+        updateNewLayer(layer.tempId, {
+          sourceTxtRef: { ...ref, paragraphIndex: ref.paragraphIndex + shift },
+        });
+      }
+    }
+
+    // 2) 空行より後ろの各パートを PSD ページ中央へ新規配置（commitNewTxtInput と同じフィールド）。
+    if (placePage) {
+      newParts.forEach((part, i) => {
+        const placedText = convertHalfToFullForVertical(part, direction);
+        const coords = centerTopLeft(
+          placePage,
+          { contents: placedText, sizePt, direction, leadingPct },
+          placePage.width / 2,
+          placePage.height / 2,
+        );
+        addNewLayer({
+          psdPath: placePage.path,
+          x: coords.x,
+          y: coords.y,
+          contents: placedText,
+          fontPostScriptName: getCurrentFont() || null,
+          sizePt, direction, leadingPct,
+          strokeColor: getStrokeColor(),
+          strokeWidthPx: getStrokeWidthPx(),
+          fillColor: getFillColor(),
+          sourceTxtRef: { pageNumber: refPageNumber, paragraphIndex: splitIndex + 1 + i },
+        });
+      });
+    }
+
+    // 3) content 確定 → onTxtSourceChange 発火（syncPlacedFromTxt が整った index で前半 layer を
+    //    part0 へ追従、renderViewer がエディタ分割表示）。layer 調整を先に済ませてあるので整合。
+    setTxtSource({ name: source.name, content: newContent });
+    setTxtDirty(true);
+  });
+
+  if (placePage) {
+    try { refreshAllOverlays(); } catch (_) {}
+    try { rebuildLayerList(); } catch (_) {}
+  }
+  return true;
+}
+
 // 任意の input/textarea + 関連ボタン (id 規約: <inputId>-btn) の disabled 状態を更新。
 //   - input 自体は常に enabled（PSD 未読込でも下書きできるようにする）
 //   - ボタンは入力内容が無いときだけ disabled
@@ -1025,6 +1135,53 @@ function selectBlock(idx, text) {
   // 削除ボタン (#delete-txt-btn) は選択中ブロックがある時だけ有効。
   const deleteBtn = $("delete-txt-btn");
   if (deleteBtn) deleteBtn.disabled = idx == null;
+  // 原稿ブロック選択に対応する PSD 配置レイヤーも選択し、テキストプロパティ（バッジ）を表示。
+  // 未配置ブロックならレイヤー選択をクリア。クリック / cycleTxtBlockSelection の両経路で同期。
+  selectLayerForBlock(idx);
+}
+
+// 現在ページの配置済みレイヤーから、原稿ブロック idx に対応する layer を探す。
+// syncTxtSelectionToLayer の逆向き（block → layer）。一致しなければ null。
+function findPlacedLayerForBlock(blockIndex) {
+  if (!Number.isInteger(blockIndex) || blockIndex < 0) return null;
+  const pageIdx = getCurrentPageIndex();
+  const page = getPages()[pageIdx];
+  if (!page) return null;
+  const { blocks, hasMarkers, pageNumber } = getVisibleBlocks();
+  if (blockIndex >= blocks.length) return null;
+  const nl = getNewLayersForPsd(page.path).find((l) => {
+    const ref = l?.sourceTxtRef;
+    if (!ref || !Number.isInteger(ref.paragraphIndex)) return false;
+    const pageMatch = !hasMarkers || ref.pageNumber === pageNumber;
+    return pageMatch && ref.paragraphIndex === blockIndex;
+  });
+  return nl ? { pageIndex: pageIdx, layerId: nl.tempId } : null;
+}
+
+// 原稿ブロック idx に対応する配置レイヤーを選択（無ければ選択クリア）してバッジ／一覧を更新。
+function selectLayerForBlock(idx) {
+  const found = idx == null ? null : findPlacedLayerForBlock(idx);
+  if (found) setSelectedLayer(found.pageIndex, found.layerId);
+  else setSelectedLayers([]);
+  try { refreshAllOverlays(); } catch (_) {}
+  try { rebuildLayerList(); } catch (_) {}
+}
+
+// プレーン ↑/↓ を「原稿テキスト選択の移動」に振り替えてよい状態かを判定する。
+// 「選択中ブロックの対応レイヤー === 現在の選択レイヤー」のときだけ true。
+// ユーザーがキャンバスで別レイヤーを選び直すと自動的に false になり、↑/↓ は従来の nudge に戻る。
+export function isTxtBlockSelectionActive() {
+  // editor モードはサイドバー原稿パネルが非表示なので対象外（stale 選択での誤発火を防ぐ）。
+  if (getParallelViewMode() === "editor") return false;
+  const idx = getTxtSelectedBlockIndex();
+  if (idx == null || !getTxtSource()) return false;
+  const found = findPlacedLayerForBlock(idx);
+  const sel = getSelectedLayer();
+  if (found) {
+    return !!sel && getSelectedLayers().length === 1 && sel.layerId === found.layerId;
+  }
+  // 未配置ブロック: レイヤー未選択のときだけ原稿ナビを有効にする。
+  return !sel;
 }
 
 // 原稿テキスト (txt-source-viewer) の選択ブロックを Alt+↑/↓ で順送り / 逆送りする。
@@ -1111,14 +1268,15 @@ export function syncTxtSelectionToLayer(pageIndex, layerId) {
   if (deleteBtn) deleteBtn.disabled = false;
 }
 
-export async function pickTxtPath() {
+export async function pickTxtPath(opts = {}) {
   const { openFileDialog } = await import("./file-picker.js");
   const picked = await openFileDialog({
     mode: "open",
     multiple: false,
     title: "テキストを開く",
     filters: [{ name: "Text", extensions: ["txt"] }],
-    rememberKey: "txt-open",
+    // 呼び出し側が rememberKey を上書き可能（写植フローの 3 カードで共有フォルダ記憶に使う）。
+    rememberKey: opts.rememberKey ?? "txt-open",
   });
   return typeof picked === "string" ? picked : null;
 }

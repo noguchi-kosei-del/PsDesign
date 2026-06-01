@@ -34,6 +34,77 @@
 
 ## エントリ（新しい順）
 
+### [BUG-20260530-02] 複数選択でフォントサイズを一括変換すると自動配置の色が一部消えない
+
+- **日付**: 2026-05-30
+- **関連バージョン**: v2.2.5
+- **症状**: 自動配置で色マーカー（`autoFontSwitched` / バケット信号色）が付いたテキストを複数選択し、
+  サイドバーで**フォントサイズを一括変換（揃える）すると、一部のテキストだけ色が消えない**。
+- **再現手順**: 1. 背景の濃いコマ等で自動配置 → 複数レイヤーにバケット色が付く 2. そのうち一部を既定
+  サイズと同じ値にしておく 3. それらを複数選択し、サイドバーのサイズ入力で全体を 1 つの値に揃える
+  4. **元から目標値と同サイズだったレイヤーだけ色が残る**（フレーム / レイヤー一覧 / 原稿テキストの色）。
+- **根本原因**: [src/text-editor.js](src/text-editor.js) `commitSingleFieldToSelections`（= サイドバーの
+  サイズ一括変更の本体。`commitSizeToSelections` / サイズ入力 / +- / `[` `]` がすべて通る）に、
+  値が同じレイヤーを飛ばす早期 `if (cur === value) continue;` がある。**色マーカーの解除コードは
+  この continue の後にある**ため、「サイズを揃える」変更で**既に目標サイズと同値だった新規（自動配置）
+  レイヤーは skip され、マーカーが解除されない** → 色が残る（＝同サイズだったものだけ残る）。
+  正しく動く wheel 経路（[src/canvas-tools.js](src/canvas-tools.js) `resizeSelectedLayers`、v2.0.6 修正済み）
+  は、サイズ未変更でも `autoFontSwitched === true` の新規レイヤーはマーカーを**無条件で先に解除**してから
+  continue している。サイドバー経路にこの手当てが無いのが差。`commitFontToSelections`（フォント一括適用）
+  も同型の `if (cur === ps) continue;` を持ち、同じクラスのバグだった。
+- **対策**: wheel 経路と同じパターンを `commitSingleFieldToSelections`（size）と `commitFontToSelections`
+  （font）の 2 関数に導入。**新規レイヤー(`ref.kind === "new"`) かつ `autoFontSwitched === true` のとき、
+  値が未変更でもマーカー（`autoFontSwitched:false` / `autoFontSwitchBucket:-1`）だけ先に `updateNewLayer`
+  で解除して `continue`** する。`any = true` を立てるので末尾の `if (mutated)` ブロック
+  （`rebuildLayerList` / `refreshAllOverlays` / `refreshTextStyleMarkerViews`）が走り、フレーム・
+  レイヤー一覧・原稿テキストパネルの 3 か所すべての色が更新される（`refreshTextStyleMarkerViews` が
+  `renderTxtSourceViewer` を呼ぶため追加の refresh 配線は不要）。サイズは `field === "sizePt"` のときのみ
+  解除（行間 `leadingPct` 変更ではマーカーを解除しない既存挙動と一致）。
+- **影響ファイル**: [src/text-editor.js](src/text-editor.js)（`commitSingleFieldToSelections` /
+  `commitFontToSelections`）
+- **関連 RDD 要件**: 該当なし（自動配置の UI 色強調で、RDD のテキスト反映ロジックスコープ外）
+- **検証方法**: 複数の自動配置色付きテキスト（一部は既定サイズと同値）を選択 → サイズ一括変更 →
+  3 か所すべてで色が全消えすること（旧: 同値のものだけ残る）。+/- / `[` `]` 経由でも同様。フォント一括
+  適用で既に同フォントの自動配置レイヤーの色も消えること。サイズが実際に変わるレイヤーは中心固定で
+  サイズ反映＋色消えが従来どおり（リグレッション無し）。`npm run lint` / `build` / `check:encoding` 緑。
+- **備考 / 再発防止**: 「編集したら自動配置の色マーカーを解除する」処理は、**値未変更で skip される
+  経路でも必ず実行する**こと。一括 commit 系（`commitSingleFieldToSelections` /
+  `commitFontToSelections` / wheel `resizeSelectedLayers`）は `cur === value` の早期 continue を持つので、
+  マーカー解除はその continue より**前**に置く。
+
+### [BUG-20260530-01] テキストエディタで「見本」に切り替えると重い（pdf-view ResizeObserver の再レンダ storm）
+
+- **日付**: 2026-05-30
+- **関連バージョン**: v2.2.5
+- **症状**: テキストエディタモードで左ペインを「校正 → 見本」に切り替えると、切替の 0.3 秒間 UI が
+  カクついて重い。
+- **再現手順**: 1. 見本(PDF/画像)と PSD を読み込みテキストエディタモードに入る 2. 左ペインヘッダーの
+  「見本」をクリック 3. 見本が左半分に展開する間、描画がカクつく / もたつく。
+- **根本原因**: [src/pdf-view.js](src/pdf-view.js) の `ResizeObserver` が `.spreads-pdf-area`(`rootEl`)
+  を observe し、コールバックで `schedule()` → `redraw()` → pdfjs `page.render()` を直接呼ぶ。
+  「見本」切替では共有 transition rule（`.spreads-pdf-area` の `width 0.3s`）で pdf-area の幅が
+  0.3 秒かけてアニメするため、**幅が毎フレーム変化 → ResizeObserver が毎フレーム発火**し、重い
+  pdfjs 再レンダ（page.render は CPU コスト大、特に画像見本 / 大判ページ）が ~18 回連続で走る。
+  `schedule()` は rAF debounce だが**同一フレーム内の発火しか合流しない**ため、フレームをまたぐ
+  毎フレーム発火（= トランジション中の連続リサイズ）は間引けていなかった。
+- **対策**: pdf-view.js に ResizeObserver 専用の **trailing debounce**
+  （`scheduleResizeRedraw` / `RESIZE_REDRAW_DEBOUNCE_MS = 130`）を新設し、ResizeObserver の
+  コールバックを `schedule()` 直呼びから `scheduleResizeRedraw()` に変更。連続リサイズ（width
+  トランジション / ウインドウドラッグ）が収束してから 1 回だけ再レンダする。モード切替由来の明示
+  `schedule()`（`onEditorLeftPaneModeChange` / `onParallelViewModeChange` 等）は即時のままなので、
+  切替直後 1 回 + 収束後 1 回の計 2 回に削減（旧 ~18 回）。
+- **影響ファイル**: [src/pdf-view.js](src/pdf-view.js)（`resizeRedrawTimer` / `scheduleResizeRedraw`
+  追加、`ResizeObserver` コールバック差し替え）
+- **関連 RDD 要件**: 該当なし（見本(PDF/画像)プレビューの描画パフォーマンスで、RDD のテキスト
+  反映ロジックスコープ外）
+- **検証方法**: テキストエディタで「校正 ↔ 見本」を往復してもカクつかないこと（手動）。ウインドウ
+  リサイズ中も pdfjs 再レンダが収束後 1 回に間引かれること。`npm run lint` / `npm run build` 緑。
+- **備考 / 再発防止**: 「ResizeObserver → 重い処理」は CSS の width/height トランジションと
+  組み合わさると毎フレーム storm になりやすい。新たに ResizeObserver で重い処理（再レンダ等）を
+  呼ぶ場合は trailing debounce を挟む。PSD 側 [src/spread-view.js](src/spread-view.js) にも同様の
+  リサイズ → redraw 経路があるが、エディタモードでは PSD ペインが隠れるため今回の症状には無関係
+  （必要なら同様の debounce 化を検討）。
+
 ### [BUG-20260529-01] プロジェクト(.opus)を開くとロード画面が 86% で完了になる
 
 - **日付**: 2026-05-29

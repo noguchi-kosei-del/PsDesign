@@ -3427,8 +3427,8 @@ body.home-starting .home-screen {
 .spreads-editor-area {
   position: absolute;
   top: 0;
-  left: 50%;
-  width: 50%;
+  left: 55%;
+  width: 45%;
   height: 100%;
   z-index: 10; /* proofread-area (11) より背面 */
   display: flex;
@@ -3778,6 +3778,55 @@ body.home-starting .home-screen {
   flex-shrink: 0;
   min-width: 64px;
 }
+/* テキストエディタで文字を選択したときに、選択中の .editor-page-paragraph-text の
+   直下へ出すルビ入力ポップオーバー。`#editor-pages-viewer-wrap`（position: relative）を
+   基準にした absolute 配置（祖先 .spreads-editor-area が transform を持つため fixed は
+   使えない＝transform 祖先が fixed の containing block になり座標がずれる）。
+   left/top は JS（editor-pane.js positionRubyPopover）が wrap 相対で直書きする。 */
+.editor-ruby-popover {
+  position: absolute;
+  z-index: 80;
+  min-width: 220px;
+  max-width: 320px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35);
+}
+.editor-ruby-popover[hidden] { display: none !important; }
+.editor-ruby-popover-parent {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.editor-ruby-popover-parent-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  color: var(--text);
+  font-weight: 700;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.editor-ruby-popover-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.editor-ruby-popover-row .ruby-text-input { flex: 1 1 auto; min-width: 0; }
+.editor-ruby-popover-row .ruby-apply-btn {
+  flex: 0 0 auto;
+  min-width: 72px;
+  padding: 4px 18px;
+  white-space: nowrap;
+}
+.editor-ruby-popover-row .ruby-remove-btn { flex: 0 0 auto; white-space: nowrap; }
 /* promptDialog 用に confirm-modal 内へ動的挿入される `<input>`。 */
 .prompt-modal-input {
   display: block;
@@ -4841,6 +4890,13 @@ body.home-starting .home-screen {
   opacity: 0;
   pointer-events: none;
 }
+/* editor モードでは editor-area を少し狭く（left:55% / width:45%）したぶん、
+   左の校正/見本パネルを 55% に広げて両ドロワーを隙間なく隣接させる。
+   proofread モード単体（overlay）では 50% のまま（このルールは editor-mode 限定）。
+   見本サブ状態（.left-pdf）は専用ルール（width: var(--left-pdf-width)、より高特異度）が上書き。 */
+.workspace.editor-mode .spreads-proofread-area {
+  width: 55%;
+}
 .spreads-stage.proofread-visible .spreads-proofread-area,
 .spreads-stage.editor-visible .spreads-proofread-area {
   transform: translateX(0);
@@ -4921,22 +4977,20 @@ body.home-starting .home-screen {
   position: absolute;
   top: 34px; /* proofread-panel-header (padding 6+6 + button 22 = 34px) */
   left: 0;
-  width: var(--left-pdf-width, 50%);
+  /* 見本とテキストを常にウインドウ半分ずつにする（アスペクト比駆動の --left-pdf-width は使わない）。 */
+  width: 50%;
   height: calc(100% - 34px);
   z-index: 12;
   /* width のトランジションは shared rule (`width 0.3s`) に乗る。
      個別 transition 宣言で上書きすると slide-in 用の transform/opacity が消えるので注意。 */
 }
 .workspace.editor-mode.left-pdf .spreads-proofread-area {
-  /* proofread-area もパネル幅に合わせ、ヘッダーの右端を pdf-area 右端と揃える。
-     校正モードに戻ったときは left-pdf class が外れて元の 50% に戻る。 */
-  width: var(--left-pdf-width, 50%);
+  /* proofread-area も見本パネル幅（50%）に合わせ、ヘッダー右端を pdf-area 右端と揃える。 */
+  width: 50%;
 }
 .workspace.editor-mode.left-pdf .spreads-editor-area {
-  /* 残りの右側全体を editor-area が使う。left を pdf-area の右端に合わせ、width は auto 計算。
-     left は shared transition の対象外なので class toggle で snap するが、
-     trade-off として slide-in の opacity/transform を維持する方を優先。 */
-  left: var(--left-pdf-width, 50%);
+  /* 見本サブ状態では editor-area を右半分（50%）に固定。見本(左50%) と隙間なく隣接する。 */
+  left: 50%;
   width: auto;
   right: 0;
 }
@@ -4946,7 +5000,27 @@ body.home-starting .home-screen {
 }
 .workspace.editor-mode.left-pdf.flipped .spreads-editor-area {
   left: 0;
-  right: var(--left-pdf-width, 50%);
+  right: 50%;
+}
+/* ===== ワークスペース反転時の editor モード レイアウト（左右ミラー） =====
+   非反転時は「校正/見本パネル = 左、テキストエディタ = 右」。サイドバーが左に来る
+   反転運用ではこれをミラーし、校正/見本パネルを右、エディタを左へ寄せる。
+   見本サブ状態（.left-pdf）の spreads-pdf-area / spreads-editor-area は上の専用ルールが
+   既に右/左へ振り分け済み。ここでは校正/見本パネルの土台（spreads-proofread-area）と、
+   校正サブ状態（非 left-pdf）の editor-area もミラーして整合させる。
+   ※ これがないと、反転 + 見本表示時に校正/見本トグルのヘッダーだけ左に取り残され、
+     見本画像が右へ移っても操作部とズレてレイアウトが崩れる。 */
+.workspace.editor-mode.flipped .spreads-proofread-area {
+  left: auto;
+  right: 0;
+  transform: translateX(100%); /* 反転時は右からスライドイン */
+}
+.workspace.editor-mode.flipped .spreads-stage.proofread-visible .spreads-proofread-area,
+.workspace.editor-mode.flipped .spreads-stage.editor-visible .spreads-proofread-area {
+  transform: translateX(0);
+}
+.workspace.editor-mode.flipped .spreads-editor-area {
+  left: 0; /* base の left:55% を上書き。width:45% を維持して左半分に。見本サブ状態は上の専用ルールが上書き。 */
 }
 .proofread-tabs { display: flex; gap: 2px; flex: 0 0 auto; }
 .proofread-tab {
@@ -6284,7 +6358,7 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   width: auto;
 }
 .workspace.editor-mode.left-pdf.flipped .spreads-stage.extract-source-visible .spreads-editor-area {
-  right: calc(var(--left-pdf-width, 50%) + var(--extract-source-panel-width));
+  right: calc(50% + var(--extract-source-panel-width));
 }
 .extract-source-header {
   display: flex;

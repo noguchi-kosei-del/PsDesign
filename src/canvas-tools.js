@@ -1564,7 +1564,11 @@ export function layerRectForExisting(page, layer, edit) {
     { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
     { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
   );
-  const THICK_SAFETY = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM;
+  // 縦書きは content が右端 (block-start) に寄り、box 左端は固定されるため thick safety を
+  // 足すと左側に余白が溜まる（layerRectForNew と同方針）。縦書きは 0、横書きは従来どおり。
+  const THICK_SAFETY = isVertical
+    ? 0
+    : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM);
   const LONG_SAFETY = TEXT_BBOX_LONG_SAFETY_EM;
   const LONG_SCALE = TEXT_BBOX_HEURISTIC_LONG_SCALE;
   // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
@@ -1658,7 +1662,14 @@ export function layerRectForNew(page, nl) {
     }
     thickSum += v * lineMaxRatio;
   }
-  const thickSafety = lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM;
+  // 縦書き (vertical-rl) は content が block-start = 右端に寄り、box 左端 = nl.x は固定
+  // （ドラッグ基準のため scheduleBoxAutoFit も left/top は触らない）。ここで thick safety を
+  // 足すと余白が必ず box の「左側」に溜まる（右側は autofit が content +1px にハグして除去）。
+  // → 縦書きは thick safety を 0 にして content を nl.x まで詰める。横書きは content が上端に
+  //   寄り、余白は下側（= autofit が除去）に出るため従来どおり安全余白を残す。
+  const thickSafety = isVertical
+    ? 0
+    : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM);
   const longSafety = TEXT_BBOX_LONG_SAFETY_EM;
   const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE;
   const thick = Math.max(24, ptInPsdPx * (thickSum + thickSafety));

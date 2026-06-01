@@ -450,6 +450,20 @@
                   <p class="txt-source-empty-text">テキストファイルを選択、またはここにドロップ</p>
                 </div>
                 <div id="editor-pages-viewer" class="editor-pages-viewer" role="region" aria-label="ページ別原稿"></div>
+                <div id="editor-ruby-popover" class="editor-ruby-popover" hidden role="dialog" aria-label="ルビ入力">
+                  <div class="editor-ruby-popover-parent">
+                    <span class="editor-ruby-popover-parent-label">親文字</span>
+                    <span id="editor-ruby-popover-parent" class="editor-ruby-popover-parent-text" aria-live="polite"></span>
+                  </div>
+                  <div class="editor-ruby-popover-row">
+                    <input id="editor-ruby-popover-input" class="ruby-text-input" type="text"
+                           placeholder="ふりがな" aria-label="ふりがな"
+                           autocomplete="off" autocorrect="off" spellcheck="false" />
+                    <button id="editor-ruby-popover-apply" class="ruby-apply-btn" type="button">適用</button>
+                    <button id="editor-ruby-popover-remove" class="ruby-remove-btn" type="button" hidden
+                            title="選択範囲のルビを削除">削除</button>
+                  </div>
+                </div>
               </div>
             </div>
           </div>

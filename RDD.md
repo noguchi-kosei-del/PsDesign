@@ -123,6 +123,19 @@
 - **REQ-G4.4** `renderOverlay` の再描画で in-place 編集中のレイヤー DOM を破壊しない
   （フォント遅延ロード完了の再描画でキャレット/ルビが消えない）。
   - 確認: 編集中にフォント読込が走ってもキャレットが保持されること（手動）。
+- **REQ-G4.5** **縦書きレイヤーの bbox「厚み」安全余白 (`thickSafety`) は 0**。
+  `vertical-rl` は content が box の**右端（block-start）**に寄り、box 左端 = `nl.x` は固定
+  （ドラッグ基準のため `scheduleBoxAutoFit` も left/top は触らず右/下端だけ content にハグする）。
+  ここで thick safety を足すと余白が**必ず box の左側**に溜まる（＝自動配置テキスト左の余分な余白の
+  原因）。横書きは content が上端に寄り、余白は下側に出て autofit が除去するので従来の安全余白を残す。
+  - 対象 3 関数の thickSafety はいずれも `isVertical ? 0 : (lineCount > 1 ? 0.4em : 0)`:
+    `layerRectForNew` / `layerRectForExisting`（`src/canvas-tools.js`）、`estimateLayerSize`
+    （`src/auto-place.js`）。**この 3 関数は同じ式に揃える**（配置中心・実描画枠・原稿追従再配置が
+    一致するため。`centerTopLeft` / `syncPlacedFromTxt` / `recenterBox` がこれらを共有する）。
+  - **REQ-G10.7 の JSX `_thickSafetyEm` と必ず一致させる**（縦書き = 0）。不一致だと UI と PSD で
+    縦書きテキスト右端が thickSafety 分ズレる（典型バグ）。
+  - 確認: `rg -n "thickSafety|THICK_SAFETY" src/canvas-tools.js src/auto-place.js`（3 箇所すべて
+    `isVertical` 分岐）。縦書き複数行を自動配置 → フレーム左に余分な余白が出ず、文字に沿うこと（手動）。
 
 ### G5. ルビ適用 — `src/main.js`（`bindRubyTool` / `doApply`）
 
@@ -200,7 +213,14 @@
 - **REQ-G10.7** ルビレイヤーは autoLeadingPercentage 方式（固定 leading でなく）で行間を確保し、
   `createRubyLayer` の uiOffset（measureAllRubyOffsetsSync 由来）を優先する。新規レイヤーの縦書き
   位置はアンカー差を補正する。saveAs パスは `\` を `/` に正規化する。
-  - 確認: ルビ位置・縦書きテキスト位置が UI とほぼ一致すること、別名保存が成功すること（手動）。
+  - 新規レイヤー縦書きの位置補正（`nl.direction === "vertical"`）は `bounds.top-right` を
+    `nl.x + _thickCanvas` に揃える。`_thickCanvas = _ptInPx × (leadingFactor × lineCount + _thickSafetyEm)`
+    で、この **`_thickSafetyEm` は JS 側 bbox（`layerRectForNew` の thickSafety / REQ-G4.5）と
+    必ず一致**させる（縦書き = **0**）。`layerRectForNew` の thick から safety を抜いたのに JSX の
+    `_thickSafetyEm` を 0.4 のまま残すと、UI（safety 無し）と PSD（safety 有り）で縦書きテキスト
+    右端が 0.4em ズレる（**典型バグ／要 cargo パリティ確認**）。
+  - 確認: `rg -n "_thickSafetyEm" src-tauri/src/jsx_gen.rs` が縦書き分岐で 0（= REQ-G4.5 と一致）。
+    ルビ位置・縦書きテキスト位置が UI とほぼ一致すること、別名保存が成功すること（手動）。
 
 ### G11. payload パリティ — `src/state.js` `exportEdits` ↔ `src-tauri/src/lib.rs` `EditPayload`
 
@@ -305,6 +325,8 @@ GitHub に push する前に、以下を上から順に実施する。
    - REQ-G8.1: プロジェクト復元は `silentTxtListener: true` か。
    - REQ-G10.2: per-char 系の `set` クラスは `textLayer` か。
    - REQ-G11.1: JS payload と Rust struct の双方に新フィールドを足したか。
+   - REQ-G4.5 / G10.7: bbox の縦書き thickSafety を変えたなら、JS 3 関数と JSX
+     `_thickSafetyEm` を同値に揃えたか（不一致だと縦書きテキストが UI↔PSD でズレる）。
 3. **[最低限の手動スモークテスト]**（`npm run tauri dev` 実機、テストモード可）:
    1. ルビを適用 → 保存 → 再オープンしてルビが保持される。
    2. 本文の前方を編集しても per-char 属性（サイズ/フォント/太字/ルビ）が正しい文字に残る。

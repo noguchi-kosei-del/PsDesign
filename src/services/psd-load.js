@@ -71,14 +71,15 @@ export async function notifyUnsupportedBitmapPsdFiles(paths) {
   });
 }
 
-export async function pickPsdFiles() {
+export async function pickPsdFiles(opts = {}) {
   const { openFileDialog } = await import("../file-picker.js");
   const picked = await openFileDialog({
     mode: "open",
     multiple: true,
     title: "PSDを開く",
     filters: [{ name: "Photoshop Document", extensions: ["psd"] }],
-    rememberKey: "psd-open",
+    // 呼び出し側が rememberKey を上書き可能（写植フローの 3 カードで共有フォルダ記憶に使う）。
+    rememberKey: opts.rememberKey ?? "psd-open",
   });
   if (!picked) return [];
   return Array.isArray(picked) ? picked : [picked];

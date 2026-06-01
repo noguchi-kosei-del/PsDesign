@@ -1166,8 +1166,24 @@ function restoreSnapshot(snap) {
       for (const fn of state.txtSourceListeners) fn(state.txtSource);
     }
   }
+  // undo/redo で状態が変わった → 保存ダーティ。
+  markSaveDirty();
   for (const fn of state.historyListeners) fn();
 }
+
+// ── 保存ダーティ追跡 ──────────────────────────────────────────────
+// 「PSD へ未反映の編集があるか」「プロジェクト(.opus)へ未保存の状態があるか」を独立に追跡する。
+// 編集 (pushHistorySnapshot) / undo・redo で両方 dirty、PSD 保存で psd を、プロジェクト保存で
+// project を clean に戻す。clearPages / プロジェクト読込 (resetHistoryBaseline) で両方 clean。
+// ウインドウを閉じる確認ダイアログで「何が未保存か」を条件分岐するのに使う。
+let psdSaveDirty = false;
+let projectSaveDirty = false;
+function markSaveDirty() { psdSaveDirty = true; projectSaveDirty = true; }
+function markAllSaveClean() { psdSaveDirty = false; projectSaveDirty = false; }
+export function getPsdSaveDirty() { return psdSaveDirty; }
+export function getProjectSaveDirty() { return projectSaveDirty; }
+export function markPsdSaveClean() { psdSaveDirty = false; }
+export function markProjectSaveClean() { projectSaveDirty = false; }
 
 function pushHistorySnapshot() {
   if (state.historyTransientDepth > 0) return;
@@ -1176,6 +1192,7 @@ function pushHistorySnapshot() {
   state.history.push(snapshotState());
   if (state.history.length > HISTORY_MAX) state.history.shift();
   state.historyIndex = state.history.length - 1;
+  markSaveDirty();
   for (const fn of state.historyListeners) fn();
 }
 
@@ -1183,6 +1200,8 @@ function resetHistoryBaseline() {
   state.history = [snapshotState()];
   state.historyIndex = 0;
   state.historyTransientDepth = 0;
+  // 読込/クリア直後は「保存済み（未編集）」状態。次の編集まで両方 clean。
+  markAllSaveClean();
   for (const fn of state.historyListeners) fn();
 }
 

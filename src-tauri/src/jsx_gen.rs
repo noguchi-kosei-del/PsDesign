@@ -3804,7 +3804,12 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             // 【v2.x】縦書き位置補正:
             // canvas-tools.js layerRectForNew の bbox 幅 (thick) は:
             //   thick = ptInPx × (leadingFactor × lineCount + thickSafetyEm)
-            //   thickSafetyEm = 0 (単行) / 0.4 (複数行)
+            // 【fix】縦書きは thickSafetyEm を 0 に統一した（layerRectForNew /
+            //   auto-place.js estimateLayerSize と同方針）。理由: vertical-rl は content が
+            //   box の右端 (block-start) に寄り box 左端 = nl.x は固定のため、safety を足すと
+            //   余白が必ず box の「左側」に溜まる（自動配置テキスト左の余分な余白の原因）。
+            //   ここを 0 にしないと UI (safety 無し) と PSD (safety 有り) で text 右端が
+            //   0.4em ズレるため、JS 側の bbox 計算と必ず一致させる。
             // CSS .new-layer-text には padding は無く (width/height: 100% + box-sizing: border-box のみ)、
             // vertical-rl の自然挙動で first column が bbox 右端に揃う。
             // つまり PsDesign canvas での text 右端 = bbox.right = nl.x + thickCanvas。
@@ -3813,7 +3818,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             var _contentsForCount = String(nl.contents || "");
             var _lc = _contentsForCount.split(/\r?\n/).length;
             if (_lc < 1) _lc = 1;
-            var _thickSafetyEm = (_lc > 1) ? 0.4 : 0;
+            var _thickSafetyEm = 0;
             var _thickCanvas = _ptInPx * (_lpFactor * _lc + _thickSafetyEm);
             if (_thickCanvas < 24) _thickCanvas = 24;
             var _boxRight = nl.x + _thickCanvas;
