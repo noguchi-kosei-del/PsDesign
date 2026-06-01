@@ -62,6 +62,7 @@ import {
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import { getDefault, onSettingsChange, setDefault } from "./settings.js";
+import { formatTextSizePt, getTextSizeUnit } from "./text-size-unit.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
 
 const listEl = () => document.getElementById("layer-list");
@@ -465,8 +466,7 @@ function formatDisplayPt(actualPt, page) {
   const num = typeof actualPt === "number" ? actualPt : Number(actualPt);
   if (!Number.isFinite(num)) return "";
   const display = toDisplaySizePt(num, page);
-  const rounded = Math.round((display ?? 0) * 100) / 100;
-  return `${rounded}pt`;
+  return formatTextSizePt(display ?? 0, getTextSizeUnit(), true);
 }
 
 // per-layer 縦／横トグルの SVG（lucide 由来、既存サイドバー版と同形）。
@@ -854,6 +854,15 @@ let comboItems = [];
 let comboHighlighted = -1;
 let comboOpen = false;
 let fontPreviewObserver = null;
+let comboSuppressAutoOpenUntil = 0;
+
+function suppressComboAutoOpen(ms = 300) {
+  comboSuppressAutoOpenUntil = performance.now() + ms;
+}
+
+function shouldSuppressComboAutoOpen() {
+  return performance.now() < comboSuppressAutoOpenUntil;
+}
 
 function ensureComboBuilt() {
   const list = fontListEl();
@@ -959,7 +968,8 @@ function bindComboRepositionWhileOpen() {
 
 // showAll=true: 入力欄の値を無視して全フォントを表示（▾ トグルボタン専用）。
 // 通常 (focus / input イベント) は入力欄の値で絞り込む。
-function openCombo(showAll = false) {
+function openCombo(showAll = false, options = {}) {
+  if (!options.force && shouldSuppressComboAutoOpen()) return;
   ensureComboBuilt();
   const list = fontListEl();
   if (!list || !comboItems.length) return;
@@ -1428,6 +1438,7 @@ function moveComboHighlight(dir) {
 function commitFont(font) {
   const input = fontEl();
   if (!input) return;
+  suppressComboAutoOpen();
   input.value = font.name || font.postScriptName;
   input.dataset.ps = font.postScriptName;
   input.dataset.fontSearchCleared = "false";
@@ -1459,6 +1470,11 @@ function commitFont(font) {
     commitFontToSelections(font.postScriptName);
   }
   closeCombo();
+  rebuildFontOptions(font.postScriptName, { force: true });
+  requestAnimationFrame(() => {
+    closeCombo();
+    rebuildFontOptions(font.postScriptName, { force: true });
+  });
   // 選択直後は input からフォーカスを外して Space などのキーがキャンバス側に届くようにする。
   // ただし per-char 適用時は textarea のフォーカスを保持したいので blur しない。
   if (!(sel && sel.end > sel.start)) input.blur();
@@ -1832,10 +1848,15 @@ export function bindEditorEvents() {
       if (comboOpen) filterCombo("");
     };
     input.addEventListener("focus", () => {
+      if (shouldSuppressComboAutoOpen()) {
+        closeCombo();
+        return;
+      }
       resetFontSearchForTyping();
       openCombo(true);
     });
     input.addEventListener("mousedown", () => {
+      if (shouldSuppressComboAutoOpen()) return;
       if (document.activeElement === input) resetFontSearchForTyping();
     });
     input.addEventListener("input", () => {
@@ -1891,7 +1912,7 @@ export function bindEditorEvents() {
           // ▾ トグル経由は入力欄のフィルタを無視してインストール済み全フォントを一覧表示。
           // input.focus() は input イベントを発火しないので showAll=true のまま維持される。
           input.focus();
-          openCombo(true);
+          openCombo(true, { force: true });
         }
       });
     }

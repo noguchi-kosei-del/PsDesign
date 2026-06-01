@@ -40,6 +40,7 @@ const PAGE_MARKER_RE = /<<\s*([0-9\uFF10-\uFF19]+)\s*Page\s*>>/gi;
 let editorPageMode = loadEditorPageMode();
 let editingBlock = false;
 let lastEditorBlockSelection = null;
+let editorRubyMode = "auto";
 const editorTextMappings = new WeakMap();
 
 function getEls() {
@@ -55,6 +56,9 @@ function getEls() {
     rubyPopoverInput: $("editor-ruby-popover-input"),
     rubyPopoverApply: $("editor-ruby-popover-apply"),
     rubyPopoverRemove: $("editor-ruby-popover-remove"),
+    rubyModeAuto: $("editor-ruby-mode-auto-btn"),
+    rubyModeMono: $("editor-ruby-mode-mono-btn"),
+    rubyModeGroup: $("editor-ruby-mode-group-btn"),
     filename: $("editor-filename"),
     dirtyDot: $("editor-dirty-dot"),
     pagePrev: $("editor-page-prev-btn"),
@@ -310,6 +314,62 @@ const RUBY_BRACKETS = [
 // ルビ注記の区切り文字。選択文字列にこれらが含まれる場合は新規付与を弾く。
 const RUBY_DELIMITER_RE = /[｛｝（）{}()[\]]/;
 
+function normalizedRubyText(value) {
+  return String(value ?? "").trim().replace(/[\t\u3000]+/g, " ").replace(/ +/g, " ");
+}
+
+function rubyParts(value) {
+  return normalizedRubyText(value).split(/[ \u3000]+/).filter(Boolean);
+}
+
+function inferEditorRubyMode(parentText, rubyText) {
+  const parentLen = Array.from(String(parentText ?? "").replace(/[ \t\u3000]+/g, "")).length;
+  const parts = rubyParts(rubyText);
+  return parentLen > 0 && /[ \t\u3000]/.test(String(rubyText ?? "")) && parts.length === parentLen
+    ? "mono"
+    : "group";
+}
+
+function formatRubyForEditorMode(parentText, rubyText, mode) {
+  const text = normalizedRubyText(rubyText);
+  if (!text) return { ok: false, text: "" };
+  if (mode === "group") return { ok: true, text: text.replace(/[ \u3000]+/g, "") };
+  if (mode !== "mono") return { ok: true, text };
+
+  const parentLen = Array.from(String(parentText ?? "").replace(/[ \t\u3000]+/g, "")).length;
+  const parts = rubyParts(text);
+  if (parentLen > 0 && parts.length === parentLen) {
+    return { ok: true, text: parts.join(" ") };
+  }
+
+  const chars = Array.from(text.replace(/[ \u3000]+/g, ""));
+  if (parentLen > 0 && chars.length === parentLen) {
+    return { ok: true, text: chars.join(" ") };
+  }
+
+  return {
+    ok: false,
+    text,
+    reason: `モノルビは親文字数（${parentLen}）とルビの分割数を合わせてください。`,
+  };
+}
+
+function syncEditorRubyModeButtons(mode = editorRubyMode) {
+  const safeMode = mode === "mono" || mode === "group" ? mode : "auto";
+  editorRubyMode = safeMode;
+  const els = getEls();
+  [
+    [els.rubyModeAuto, "auto"],
+    [els.rubyModeMono, "mono"],
+    [els.rubyModeGroup, "group"],
+  ].forEach(([btn, key]) => {
+    if (!btn) return;
+    const active = key === safeMode;
+    btn.classList.toggle("active", active);
+    btn.setAttribute("aria-pressed", active ? "true" : "false");
+  });
+}
+
 // 選択範囲 [absStart, absEnd) が、ちょうど既存注記の親文字に一致するか調べる。
 // 一致すれば { parent, ruby, fullStart, fullEnd } を返す（注記全体の範囲）。
 function detectRubyAnnotationAtSelection(content, absStart, absEnd) {
@@ -393,6 +453,8 @@ function showRubyPopover(sel) {
     const content = (source?.content ?? "").replace(/\r\n?/g, "\n");
     const existing = detectRubyAnnotationAtSelection(content, sel.absStart, sel.absEnd);
     input.value = existing ? existing.ruby : "";
+    if (existing) syncEditorRubyModeButtons(inferEditorRubyMode(existing.parent, existing.ruby));
+    else syncEditorRubyModeButtons(editorRubyMode);
     if (removeBtn) removeBtn.hidden = !existing;
   }
 
@@ -411,16 +473,23 @@ function handleEditorSelectionChange() {
 
 function applyRubyFromPopover() {
   const els = getEls();
-  const ruby = (els.rubyPopoverInput?.value ?? "").trim();
   const sel = lastEditorBlockSelection;
   if (!sel) {
     hideRubyPopover();
     return;
   }
-  if (ruby === "") return;
+  const rawRuby = (els.rubyPopoverInput?.value ?? "").trim();
+  if (rawRuby === "") return;
   const source = getTxtSource();
   const content = (source?.content ?? "").replace(/\r\n?/g, "\n");
   const existing = detectRubyAnnotationAtSelection(content, sel.absStart, sel.absEnd);
+  const parentText = existing ? existing.parent : sel.text;
+  const formatted = formatRubyForEditorMode(parentText, rawRuby, editorRubyMode);
+  if (!formatted.ok) {
+    toast(formatted.reason || "ルビを適用できませんでした。入力を確認してください", { kind: "warning", duration: 2600 });
+    return;
+  }
+  const ruby = formatted.text;
 
   let ok = false;
   if (existing) {
@@ -840,6 +909,11 @@ export function bindEditorPane() {
   // ようにする（選択崩れ→ selectionchange でポップオーバーが消える競合を防ぐ）。
   els.rubyPopoverApply?.addEventListener("mousedown", (e) => e.preventDefault());
   els.rubyPopoverRemove?.addEventListener("mousedown", (e) => e.preventDefault());
+  [els.rubyModeAuto, els.rubyModeMono, els.rubyModeGroup].forEach((btn) => {
+    btn?.addEventListener("mousedown", (e) => e.preventDefault());
+    btn?.addEventListener("click", () => syncEditorRubyModeButtons(btn.dataset.mode));
+  });
+  syncEditorRubyModeButtons(editorRubyMode);
   els.rubyPopoverApply?.addEventListener("click", applyRubyFromPopover);
   els.rubyPopoverRemove?.addEventListener("click", removeRubyFromPopover);
   els.rubyPopoverInput?.addEventListener("keydown", (e) => {

@@ -50,7 +50,9 @@ fn user_runtime_dir(app: &AppHandle) -> Result<PathBuf, String> {
 fn resolve_mokuro_exe(app: &AppHandle) -> Result<PathBuf, String> {
     let candidates: Vec<PathBuf> = vec![
         // 1. ユーザーデータ領域 (本番: AIインストールでここに展開される)
-        user_runtime_dir(app).ok().map(|p| p.join("Scripts/mokuro.exe")),
+        user_runtime_dir(app)
+            .ok()
+            .map(|p| p.join("Scripts/mokuro.exe")),
         // 2. インストーラに同梱されているケース (将来用、現在は無し)
         app.path()
             .resource_dir()
@@ -87,10 +89,7 @@ fn resolve_setup_script(app: &AppHandle) -> Result<PathBuf, String> {
             .resource_dir()
             .ok()
             .map(|p| p.join("scripts/install-ai-models.ps1")),
-        Some(
-            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                .join("scripts/install-ai-models.ps1"),
-        ),
+        Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("scripts/install-ai-models.ps1")),
     ]
     .into_iter()
     .flatten()
@@ -121,11 +120,23 @@ pub struct MokuroBlock {
     // - surrounding_edge_changes: 1 周合計の白↔黒変化回数
     // - surrounding_min_segment_edge_changes: 4 セグメント中の最小変化数
     //   → ウニスコアの根拠 (全周分布のウニ突起検出)
-    #[serde(rename = "surroundingWhiteRatio", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "surroundingWhiteRatio",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub surrounding_white_ratio: Option<f64>,
-    #[serde(rename = "surroundingEdgeChanges", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "surroundingEdgeChanges",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub surrounding_edge_changes: Option<u32>,
-    #[serde(rename = "surroundingMinSegmentEdgeChanges", default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        rename = "surroundingMinSegmentEdgeChanges",
+        default,
+        skip_serializing_if = "Option::is_none"
+    )]
     pub surrounding_min_segment_edge_changes: Option<u32>,
 }
 
@@ -243,10 +254,7 @@ fn resolve_pdfium_dll(app: &AppHandle) -> Result<PathBuf, String> {
             .resource_dir()
             .ok()
             .map(|p| p.join("resources/pdfium/pdfium.dll")),
-        app.path()
-            .resource_dir()
-            .ok()
-            .map(|p| p.join("pdfium.dll")),
+        app.path().resource_dir().ok().map(|p| p.join("pdfium.dll")),
         Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources/pdfium/pdfium.dll")),
     ]
     .into_iter()
@@ -341,8 +349,7 @@ fn render_pdf_pages(
         .load_pdf_from_file(pdf_path, None)
         .map_err(|e| format!("PDF読み込み失敗 {}: {:?}", pdf_path.display(), e))?;
 
-    let render_config = PdfRenderConfig::new()
-        .scale_page_by_factor(PDF_RENDER_DPI / 72.0);
+    let render_config = PdfRenderConfig::new().scale_page_by_factor(PDF_RENDER_DPI / 72.0);
 
     let total = doc.pages().len();
     let mut rendered = 0usize;
@@ -357,11 +364,7 @@ fn render_pdf_pages(
         let img = bitmap.as_image();
         *out_index += 1;
         rendered += 1;
-        let dest = out_dir.join(format!(
-            "page_{:0width$}.jpg",
-            *out_index,
-            width = pad
-        ));
+        let dest = out_dir.join(format!("page_{:0width$}.jpg", *out_index, width = pad));
         img.to_rgb8()
             .save_with_format(&dest, image::ImageFormat::Jpeg)
             .map_err(|e| format!("JPG保存失敗 {}: {}", dest.display(), e))?;
@@ -406,8 +409,7 @@ fn make_temp_volume(
     let parent = std::env::temp_dir().join(format!("psdesign-ai-{}", ts));
     let volume_name = "volume".to_string();
     let volume_dir = parent.join(&volume_name);
-    std::fs::create_dir_all(&volume_dir)
-        .map_err(|e| format!("テンポラリ作成失敗: {}", e))?;
+    std::fs::create_dir_all(&volume_dir).map_err(|e| format!("テンポラリ作成失敗: {}", e))?;
 
     let guard = TempDirGuard {
         path: parent.clone(),
@@ -433,7 +435,11 @@ fn make_temp_volume(
     });
 
     let needs_pdf = sorted.iter().any(|p| is_pdf(Path::new(p)));
-    let pdfium = if needs_pdf { Some(make_pdfium(app)?) } else { None };
+    let pdfium = if needs_pdf {
+        Some(make_pdfium(app)?)
+    } else {
+        None
+    };
     let excluded_pages: HashSet<u32> = excluded_pages.iter().copied().filter(|v| *v > 0).collect();
 
     let mut overall_total: u32 = 0;
@@ -507,8 +513,7 @@ fn make_temp_volume(
                 .to_lowercase();
             idx += 1;
             let dest = volume_dir.join(format!("page_{:0width$}.{}", idx, ext, width = pad));
-            std::fs::copy(&src_path, &dest)
-                .map_err(|e| format!("コピー失敗 {}: {}", src, e))?;
+            std::fs::copy(&src_path, &dest).map_err(|e| format!("コピー失敗 {}: {}", src, e))?;
             app.emit(
                 "ai_ocr:progress",
                 ProgressEvent {
@@ -694,11 +699,7 @@ pub async fn run_ai_ocr(
 // mokuro 終了直後に .mokuro が見えなくても少し待つと現れることがある（Windows の
 // Defender スキャン等）。最大 ~1.5 秒、150ms 刻みで存在確認をする。期待パスにも
 // 親ディレクトリのいずれかにも見つからなければ None。
-fn wait_for_mokuro_file(
-    parent_dir: &Path,
-    volume_name: &str,
-    expected: &Path,
-) -> Option<PathBuf> {
+fn wait_for_mokuro_file(parent_dir: &Path, volume_name: &str, expected: &Path) -> Option<PathBuf> {
     use std::thread::sleep;
     use std::time::Duration;
     for attempt in 0..10 {
@@ -794,7 +795,10 @@ fn resolve_image_path(parent_dir: &Path, img_path: &str) -> Option<PathBuf> {
     None
 }
 
-fn analyze_block_surroundings(image: &image::DynamicImage, block: &MokuroBlock) -> Option<(f64, u32, u32)> {
+fn analyze_block_surroundings(
+    image: &image::DynamicImage,
+    block: &MokuroBlock,
+) -> Option<(f64, u32, u32)> {
     let (img_w, img_h) = image.dimensions();
     let img_w = img_w as i32;
     let img_h = img_h as i32;
@@ -1020,8 +1024,7 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
 
     // PID クリア (成功・失敗・キャンセル いずれの場合も)
     // cancel 経由で install_pid_holder.take() 済みなら None になっている。
-    let was_cancelled = install_pid_holder().lock().unwrap().take().is_none()
-        && !status.success();
+    let was_cancelled = install_pid_holder().lock().unwrap().take().is_none() && !status.success();
 
     if was_cancelled {
         return Err("AIインストールを中止しました".to_string());
@@ -1159,7 +1162,9 @@ pub async fn uninstall_ai_models(app: AppHandle) -> Result<UninstallResult, Stri
     if let Some(home) = home {
         let hf_hub = home.join(".cache").join("huggingface").join("hub");
         let model_dir = hf_hub.join("models--kha-white--manga-ocr-base");
-        let lock_dir = hf_hub.join(".locks").join("models--kha-white--manga-ocr-base");
+        let lock_dir = hf_hub
+            .join(".locks")
+            .join("models--kha-white--manga-ocr-base");
         let detector_model = home
             .join(".cache")
             .join("manga-ocr")

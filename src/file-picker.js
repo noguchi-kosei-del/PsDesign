@@ -422,7 +422,7 @@ async function loadFolder(dirPath) {
       if (e.isDirectory) return true;
       if (currentOpts.mode === "openFolder") return false; // フォルダ選択モードはファイル隠す
       if (!extRe) return true;
-      return extRe.test(e.name);
+      return extRe.test(e.name) || extRe.test(e.path);
     });
     currentPath = dirPath;
     selectedPaths.clear();

@@ -1506,15 +1506,22 @@ export function exportEdits() {
 
 export function setSelectedLayer(pageIndex, layerId) {
   state.selectedLayers = pageIndex == null ? [] : [{ pageIndex, layerId }];
+  notifySelectionChanged();
 }
 
 export function getSelectedLayer() { return state.selectedLayers[0] ?? null; }
 
 export function getSelectedLayers() { return state.selectedLayers; }
 
+function notifySelectionChanged() {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent("psdesign:selection-changed"));
+}
+
 export function setSelectedLayers(list) {
   if (!Array.isArray(list)) {
     state.selectedLayers = [];
+    notifySelectionChanged();
     return;
   }
   const seen = new Set();
@@ -1527,6 +1534,7 @@ export function setSelectedLayers(list) {
     out.push({ pageIndex: s.pageIndex, layerId: s.layerId });
   }
   state.selectedLayers = out;
+  notifySelectionChanged();
 }
 
 export function isLayerSelected(pageIndex, layerId) {
@@ -1540,6 +1548,7 @@ export function toggleLayerSelected(pageIndex, layerId) {
   } else {
     state.selectedLayers = [...state.selectedLayers, { pageIndex, layerId }];
   }
+  notifySelectionChanged();
 }
 
 export function setFonts(fonts) { state.fonts = fonts; }

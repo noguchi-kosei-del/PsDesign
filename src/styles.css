@@ -1163,7 +1163,8 @@ body.home-mode .toolbar .settings-toolbar-btn {
   line-height: 1;
   font-weight: normal;
   color: inherit;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: text;
   white-space: nowrap;
   user-select: none;
   /* 横書き: 親文字 wrap の中心から、行送りの半分だけ上 (= 前の行側) に
@@ -1178,8 +1179,7 @@ body.home-mode .toolbar .settings-toolbar-btn {
   margin-bottom: 0;
 }
 .layer-box.editing .ruby-text {
-  pointer-events: auto;
-  cursor: pointer;
+  cursor: text;
 }
 .ruby-text-selected {
   outline: 1px solid var(--accent);
@@ -3096,6 +3096,38 @@ body.home-starting .home-screen {
   width: 24px;
   padding: 0;
 }
+.text-size-unit-switch {
+  height: 24px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+}
+.text-size-unit-btn {
+  height: 23px;
+  min-width: 0;
+  padding: 0 8px;
+  border: none;
+  border-right: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--panel);
+  color: var(--text-muted);
+  font: 700 11px/1 var(--ui-font);
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.text-size-unit-btn:last-child {
+  border-right: none;
+}
+.text-size-unit-btn:hover:not([aria-pressed="true"]) {
+  color: var(--text);
+  background: var(--panel-hover);
+}
+.text-size-unit-btn[aria-pressed="true"] {
+  background: var(--accent);
+  color: #fff;
+}
 .side-toolbar > *:not(.panel-header) {
   transition: opacity 0.18s ease, visibility 0s linear 0s;
 }
@@ -3814,6 +3846,10 @@ body.home-starting .home-screen {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.editor-ruby-popover-mode {
+  display: flex;
+  justify-content: flex-start;
+}
 .editor-ruby-popover-row {
   display: flex;
   align-items: center;
@@ -4525,6 +4561,26 @@ body.home-starting .home-screen {
 .layer-size-badge-size:hover {
   background: rgba(255, 255, 255, 0.26);
 }
+.layer-size-badge-ruby-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 54px;
+  padding: 1px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font: 800 11px/1.25 var(--ui-font);
+  cursor: pointer;
+  pointer-events: auto;
+  white-space: nowrap;
+}
+.layer-size-badge-ruby-remove:hover {
+  background: rgba(217, 45, 32, 0.95);
+  border-color: #fff;
+  color: #fff;
+}
 .layer-size-badge-stroke {
   display: inline-flex;
   align-items: center;
@@ -4636,7 +4692,13 @@ body.home-starting .home-screen {
      box-shadow を none で打ち消し、選択フィードバックは caret のみに統一。 */
   box-shadow: none !important;
   pointer-events: auto;
-  z-index: 4;
+  z-index: 20;
+  transform-origin: center center;
+}
+.layer-box.editing.editing-zoomed {
+  --layer-edit-scale: 2;
+  transform: scale(var(--layer-edit-scale));
+  transform-origin: center center;
 }
 /* 編集中レイヤーの回転ハンドル・サイズバッジ（フォント名・pt 表示）は非表示。
    テキスト本体への入力に集中できるよう装飾を排除する。 */
@@ -6756,17 +6818,29 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .size-step-segment {
   flex-shrink: 0;
+  padding: 0;
+  gap: 0;
 }
-.size-step-segment .size-step-btn {
-  width: auto;
-  min-width: 32px;
-  height: 22px;
-  padding: 0 6px;
-  font-size: 10px;
+.size-step-select {
+  display: block;
+  box-sizing: border-box;
+  min-width: 86px;
+  height: 30px;
+  padding: 0 28px 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--panel-hover);
+  color: var(--text);
+  font-size: 13px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0;
-  line-height: 1;
+  line-height: normal;
+  cursor: pointer;
+  outline: none;
+}
+.size-step-select:focus {
+  box-shadow: 0 0 0 2px rgba(var(--accent-rgb), 0.3);
 }
 .editor-tab-panel.ruby-panel-floating + .editor-tab-panel {
   margin-top: 0;
@@ -6905,6 +6979,30 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .italic-toggle-btn {
   font-style: italic;
+}
+.text-ruby-remove-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 64px;
+  padding: 0 8px;
+  background: var(--panel-hover);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.text-ruby-remove-btn:hover:not(:disabled) {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+.text-ruby-remove-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 /* ========== フォントソース切替タブ ==========
    edit-font-combobox（インストール済み全フォント検索）と style-palette（社内プリセット）を

@@ -27,13 +27,17 @@ pub fn list_fonts() -> Result<Vec<FontEntry>, FontError> {
     let mut result: Vec<FontEntry> = Vec::new();
 
     for dir in &dirs {
-        let Ok(entries) = std::fs::read_dir(dir) else { continue };
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            continue;
+        };
         for entry in entries.flatten() {
             let path = entry.path();
             if !is_font_file(&path) {
                 continue;
             }
-            let Ok(bytes) = std::fs::read(&path) else { continue };
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
             extract_fonts(&bytes, &path, &mut seen, &mut result);
         }
     }
@@ -58,8 +62,12 @@ fn extract_fonts(bytes: &[u8], path: &Path, seen: &mut HashSet<String>, out: &mu
     let count = ttf_parser::fonts_in_collection(bytes).unwrap_or(1);
     let path_str = path.to_string_lossy().into_owned();
     for index in 0..count {
-        let Ok(face) = ttf_parser::Face::parse(bytes, index) else { continue };
-        let Some(mut entry) = build_entry(&face) else { continue };
+        let Ok(face) = ttf_parser::Face::parse(bytes, index) else {
+            continue;
+        };
+        let Some(mut entry) = build_entry(&face) else {
+            continue;
+        };
         if entry.post_script_name.is_empty() {
             continue;
         }
@@ -91,7 +99,9 @@ fn build_entry(face: &ttf_parser::Face) -> Option<FontEntry> {
     let mut aliases: Vec<String> = Vec::new();
 
     for record in face.names() {
-        let Some(decoded) = decode_name(&record) else { continue };
+        let Some(decoded) = decode_name(&record) else {
+            continue;
+        };
         match record.name_id {
             NAME_ID_FAMILY
             | NAME_ID_FULL
@@ -244,7 +254,10 @@ fn read_cache() -> Option<Vec<FontEntry>> {
     // 旧 v1 キャッシュ（path なし or face_index なし）は破棄して再ビルド。
     // face_index が無いと TTC 第 2 face 以降の Yu Gothic Bold 等が一切登録できないため、
     // 必ず再ビルドして全 face をキャッシュに含める必要がある。
-    if rows.iter().any(|r| r.path.is_none() || r.face_index.is_none() || r.aliases.is_none()) {
+    if rows
+        .iter()
+        .any(|r| r.path.is_none() || r.face_index.is_none() || r.aliases.is_none())
+    {
         return None;
     }
     Some(

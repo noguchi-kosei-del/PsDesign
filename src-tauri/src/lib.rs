@@ -304,6 +304,75 @@ async fn read_text_file(path: String) -> Result<String, String> {
     std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path, e))
 }
 
+fn is_windows_shortcut(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("lnk"))
+        .unwrap_or(false)
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_windows_shortcut_target(path: &Path) -> Option<PathBuf> {
+    if !is_windows_shortcut(path) {
+        return None;
+    }
+
+    let script = r#"
+$ErrorActionPreference = 'Stop'
+$shortcutPath = $env:OPUS_SHORTCUT_PATH
+$shell = New-Object -ComObject WScript.Shell
+$shortcut = $shell.CreateShortcut($shortcutPath)
+$target = [string]$shortcut.TargetPath
+if ($target.Length -gt 0) {
+  [Console]::Write([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($target)))
+}
+"#;
+    let output = Command::new("powershell.exe")
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-ExecutionPolicy",
+            "Bypass",
+            "-Command",
+            script,
+        ])
+        .env("OPUS_SHORTCUT_PATH", path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let encoded = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if encoded.is_empty() {
+        return None;
+    }
+    let bytes = STANDARD.decode(encoded).ok()?;
+    let mut u16s = Vec::with_capacity(bytes.len() / 2);
+    for chunk in bytes.chunks_exact(2) {
+        u16s.push(u16::from_le_bytes([chunk[0], chunk[1]]));
+    }
+    let target = String::from_utf16(&u16s).ok()?;
+    let target = target.trim();
+    if target.is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(target))
+}
+
+#[cfg(not(target_os = "windows"))]
+fn resolve_windows_shortcut_target(_path: &Path) -> Option<PathBuf> {
+    None
+}
+
+fn resolve_shortcut_path(path: &Path) -> PathBuf {
+    resolve_windows_shortcut_target(path)
+        .filter(|target| target.exists())
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
 #[tauri::command]
 async fn write_text_file(path: String, content: String) -> Result<(), String> {
     let path_buf = PathBuf::from(&path);
@@ -728,7 +797,9 @@ fn pad4(n: usize) -> usize {
 
 #[tauri::command]
 async fn list_psd_files(folder: String) -> Result<Vec<String>, String> {
-    let entries = std::fs::read_dir(&folder).map_err(|e| format!("{}: {}", folder, e))?;
+    let folder_path = resolve_shortcut_path(Path::new(&folder));
+    let entries =
+        std::fs::read_dir(&folder_path).map_err(|e| format!("{}: {}", folder_path.display(), e))?;
     let mut files: Vec<String> = entries
         .filter_map(|e| e.ok())
         .filter(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
@@ -931,8 +1002,7 @@ async fn get_photoshop_scratch_free_space() -> Result<DriveFreeSpace, String> {
 
         // システムドライブを取得（環境変数 SystemDrive、通常 "C:"）。
         // 末尾に "\\" を付けて root path として渡す。
-        let system_drive =
-            std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
+        let system_drive = std::env::var("SystemDrive").unwrap_or_else(|_| "C:".to_string());
         let root = format!("{}\\", system_drive);
 
         let wide: Vec<u16> = OsStr::new(&root)
@@ -975,14 +1045,16 @@ async fn get_photoshop_scratch_free_space() -> Result<DriveFreeSpace, String> {
 // 隠しファイル / シンボリックリンクの type 解決失敗は無視。サブツリー走査はしない（1 階層のみ）。
 #[tauri::command]
 async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
-    let entries = std::fs::read_dir(&path)
-        .map_err(|e| format!("ディレクトリ読み取り失敗 {}: {}", path, e))?;
+    let dir_path = resolve_shortcut_path(Path::new(&path));
+    let entries = std::fs::read_dir(&dir_path)
+        .map_err(|e| format!("ディレクトリ読み取り失敗 {}: {}", dir_path.display(), e))?;
     let mut out: Vec<DirEntry> = Vec::new();
     for entry in entries.filter_map(|e| e.ok()) {
         let p = entry.path();
-        let ft = entry.file_type().ok();
-        let is_dir = ft.as_ref().map(|t| t.is_dir()).unwrap_or(false);
-        let is_file = ft.as_ref().map(|t| t.is_file()).unwrap_or(false);
+        let resolved = resolve_shortcut_path(&p);
+        let meta = std::fs::metadata(&resolved).ok();
+        let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
+        let is_file = meta.as_ref().map(|m| m.is_file()).unwrap_or(false);
         if !is_dir && !is_file {
             continue;
         }
@@ -990,7 +1062,7 @@ async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
             Some(n) => n.to_string(),
             None => continue,
         };
-        let path_str = match p.to_str() {
+        let path_str = match resolved.to_str() {
             Some(s) => s.to_string(),
             None => continue,
         };
@@ -1053,9 +1125,10 @@ async fn startup_args() -> Vec<String> {
 
 #[tauri::command]
 async fn path_info(path: String) -> Result<PathInfo, String> {
-    let p = PathBuf::from(&path);
-    let meta =
-        std::fs::metadata(&p).map_err(|e| format!("パスを確認できません: {}: {}", path, e))?;
+    let input_path = PathBuf::from(&path);
+    let p = resolve_shortcut_path(&input_path);
+    let meta = std::fs::metadata(&p)
+        .map_err(|e| format!("パスを確認できません: {}: {}", p.display(), e))?;
     let name = p
         .file_name()
         .and_then(|n| n.to_str())
@@ -1063,7 +1136,7 @@ async fn path_info(path: String) -> Result<PathInfo, String> {
         .unwrap_or_else(|| path.clone());
     Ok(PathInfo {
         name,
-        path,
+        path: p.to_string_lossy().to_string(),
         is_directory: meta.is_dir(),
         is_file: meta.is_file(),
     })

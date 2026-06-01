@@ -15,6 +15,7 @@ import {
   setSelectedLayerBadgesUserHidden,
   toggleSelectionAdornmentsVisible,
   snapNextSize,
+  clearInplaceSelection,
   getLastInplaceSelection,
   getInplaceSelectionRect,
   getExistingLayerEffectiveSizePt,
@@ -97,6 +98,15 @@ import {
   onSettingsChange,
   setDefault,
 } from "./settings.js";
+import {
+  formatTextSizePt,
+  getTextSizeUnit,
+  onTextSizeUnitChange,
+  setTextSizeUnit,
+  textSizeUnitLabel,
+  textSizeUnitValueToPt,
+  textSizePtToUnitValue,
+} from "./text-size-unit.js";
 import { initSettingsUi } from "./settings-ui.js";
 import {
   initRulers,
@@ -1448,14 +1458,21 @@ function getSizeStep() {
 
 function normalizeSizeStep(value) {
   const v = Number(value);
-  if (v === 0.25 || v === 0.5) return v;
+  if (v === 0.25 || v === 0.5 || v === 1) return v;
   return 0.1;
+}
+
+function formatSizeInputValue(pt) {
+  return formatTextSizePt(pt, getTextSizeUnit(), false);
 }
 
 function stepTextSize(sign, multiplier = 1) {
   const baseStep = getSizeStep();
-  const next = snapNextSize(getTextSize(), baseStep, sign, multiplier);
-  applyTextSize(next);
+  const current = textSizePtToUnitValue(getTextSize(), getTextSizeUnit());
+  if (!Number.isFinite(current)) return;
+  const next = snapNextSize(current, baseStep, sign, multiplier);
+  const nextPt = textSizeUnitValueToPt(next, getTextSizeUnit());
+  if (Number.isFinite(nextPt)) applyTextSize(nextPt);
 }
 
 function stepTextPointSize(sign, multiplier = 1) {
@@ -1528,6 +1545,7 @@ function bindRubyTool() {
   const parentSelectBtn = document.getElementById("ruby-parent-select-btn");
   const dakutenBtn = document.getElementById("ruby-dakuten-btn");
   const nakaguroBtn = document.getElementById("ruby-nakaguro-btn");
+  const propertyRubyRemoveBtns = Array.from(document.querySelectorAll(".ruby-remove-selection-btn"));
   const modeAuto = document.getElementById("ruby-mode-auto-btn");
   const modeMono = document.getElementById("ruby-mode-mono-btn");
   const modeGroup = document.getElementById("ruby-mode-group-btn");
@@ -1549,7 +1567,7 @@ function bindRubyTool() {
   if (panelEl.parentElement !== document.body) document.body.appendChild(panelEl);
 
   const noFocusSteal = (el) => el && el.addEventListener("mousedown", (e) => e.preventDefault());
-  [applyBtn, removeBtn, parentSelectBtn, dakutenBtn, nakaguroBtn, modeAuto, modeMono, modeGroup].forEach(noFocusSteal);
+  [applyBtn, removeBtn, parentSelectBtn, dakutenBtn, nakaguroBtn, ...propertyRubyRemoveBtns, modeAuto, modeMono, modeGroup].forEach(noFocusSteal);
 
   const setMode = (m) => {
     currentMode = m;
@@ -1706,6 +1724,33 @@ function bindRubyTool() {
     };
   };
 
+  const contentsForRubySelection = (sel) => {
+    const ec = getEditingContext();
+    const selId = sel?.tempId ?? sel?.layerId;
+    const ecId = ec?.tempId ?? ec?.layerId;
+    if (ec?.psdPath === sel?.psdPath && selId != null && ecId === selId) return String(ec.contents ?? "");
+    if (!sel?.psdPath || selId == null) return "";
+    if (sel.tempId != null) {
+      const nl = getNewLayersForPsd(sel.psdPath).find((l) => l.tempId === sel.tempId);
+      return String(nl?.contents ?? "");
+    }
+    const page = getPages().find((p) => p.path === sel.psdPath);
+    const layer = page?.textLayers?.find?.((l) => l.id === sel.layerId);
+    const edit = getEdit(sel.psdPath, sel.layerId) ?? {};
+    return String(edit.contents ?? layer?.contents ?? layer?.text ?? "");
+  };
+
+  const isRubySelectionStillSelected = (sel) => {
+    if (!sel?.psdPath) return false;
+    const pageIndex = getPages().findIndex((p) => p.path === sel.psdPath);
+    if (pageIndex < 0) return false;
+    const targetId = sel.tempId ?? sel.layerId;
+    if (targetId == null) return false;
+    return getSelectedLayers().some((s) =>
+      Number(s.pageIndex) === pageIndex && String(s.layerId) === String(targetId)
+    );
+  };
+
   const normalizeManualRanges = (ranges, contents) => {
     const len = String(contents ?? "").length;
     return ranges
@@ -1727,9 +1772,13 @@ function bindRubyTool() {
     }
     const sel = getLastInplaceSelection();
     if (sel && sel.end > sel.start) {
-      const ec = getEditingContext();
+      if (!isRubySelectionStillSelected(sel)) {
+        manualParentRanges = [];
+        clearInplaceSelection();
+        return null;
+      }
       manualParentRanges = [];
-      return { ...sel, contents: String(ec?.contents ?? ""), objectSelection: false };
+      return { ...sel, contents: contentsForRubySelection(sel), objectSelection: false };
     }
     return null;
   };
@@ -1747,13 +1796,28 @@ function bindRubyTool() {
     if (panelEl.parentElement !== document.body) document.body.appendChild(panelEl);
   };
 
+  const selectorValue = (value) => {
+    const s = String(value);
+    return window.CSS?.escape ? CSS.escape(s) : s.replace(/\\/g, "\\\\").replace(/"/g, "\\\"");
+  };
+
+  const layerBoxForRubyTarget = (target) => {
+    if (target?.tempId != null) {
+      return document.querySelector(`.layer-box[data-temp-id="${selectorValue(target.tempId)}"]`);
+    }
+    if (target?.layerId != null) {
+      return document.querySelector(`.layer-box[data-layer-id="${selectorValue(target.layerId)}"]`);
+    }
+    return null;
+  };
+
   const placeRubyPanelNearText = () => {
     const target = currentRubyTarget();
     if (!target) {
       restoreRubyPanelHome();
       return;
     }
-    const anchor = document.querySelector(".layer-box.editing");
+    const anchor = document.querySelector(".layer-box.editing") ?? layerBoxForRubyTarget(target);
     if (!anchor) {
       restoreRubyPanelHome();
       return;
@@ -1866,6 +1930,97 @@ function bindRubyTool() {
     .join(" / ");
 
   const selectedRanges = (sel) => sel?.manualRanges ?? (sel ? [{ start: sel.start, end: sel.end }] : []);
+
+  const selectionHasAnyRuby = (sel) => {
+    const targetId = sel?.tempId ?? sel?.layerId;
+    if (!sel?.psdPath || targetId == null) return false;
+    return selectedRanges(sel).some((range) => rangeHasAnyRuby(sel.psdPath, targetId, range.start, range.end));
+  };
+
+  const setPropertyRubyRemoveDisabled = (disabled) => {
+    propertyRubyRemoveBtns.forEach((btn) => { btn.disabled = !!disabled; });
+  };
+
+  const collectRubyRemovalTargets = (sel) => {
+    const targetId = sel?.tempId ?? sel?.layerId;
+    if (!sel?.psdPath || targetId == null) return { bases: [], overlays: [] };
+    const ranges = selectedRanges(sel);
+    const overlapsAny = (from, to) => ranges.some((range) => from < range.end && to > range.start);
+    const bases = [];
+    const overlays = [];
+    const map = getCharRubies(sel.psdPath, targetId);
+    for (const k of Object.keys(map)) {
+      const start = Number(k);
+      const entry = map[k];
+      const end = Number(entry?.end);
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      if (overlapsAny(start, end)) {
+        bases.push({ start, end });
+        continue;
+      }
+      if (Array.isArray(entry?.overlays)) {
+        for (const overlay of entry.overlays) {
+          const overlayStart = Number(overlay?.start);
+          const overlayEnd = Number(overlay?.end);
+          if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd)) continue;
+          if (overlapsAny(overlayStart, overlayEnd) && typeof overlay.text === "string" && overlay.text) {
+            overlays.push({ start: overlayStart, end: overlayEnd, text: overlay.text });
+          }
+        }
+      }
+    }
+    return { bases, overlays };
+  };
+
+  const clearRubyLineLeadingIfEmptyForRange = (sel, targetId, from, to) => {
+    const contents = String(sel?.contents ?? "");
+    const lineIndexAt = (index) => {
+      const head = contents.slice(0, Math.max(0, index));
+      return head.split(/\r\n|\r|\n/).length - 1;
+    };
+    const lineRangeAt = (lineIndex) => {
+      let start = 0;
+      let current = 0;
+      const re = /\r\n|\r|\n/g;
+      let m;
+      while ((m = re.exec(contents))) {
+        if (current === lineIndex) return { start, end: m.index };
+        current += 1;
+        start = m.index + m[0].length;
+      }
+      return current === lineIndex ? { start, end: contents.length } : null;
+    };
+    const rangeHasAnyLeadingRuby = (lineStart, lineEnd) => {
+      const map = getCharRubies(sel.psdPath, targetId);
+      for (const k of Object.keys(map)) {
+        const start = Number(k);
+        const entry = map[k];
+        const end = Number(entry?.end);
+        if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+        if (start < lineEnd && end > lineStart && !isDakutenRubyMarkerText(entry?.text)) return true;
+        if (Array.isArray(entry?.overlays)) {
+          for (const overlay of entry.overlays) {
+            const overlayStart = Number(overlay?.start);
+            const overlayEnd = Number(overlay?.end);
+            if (!Number.isFinite(overlayStart) || !Number.isFinite(overlayEnd)) continue;
+            if (overlayStart < lineEnd && overlayEnd > lineStart && !isDakutenRubyMarkerText(overlay?.text)) return true;
+          }
+        }
+      }
+      return false;
+    };
+    const startLine = lineIndexAt(from);
+    const endLine = lineIndexAt(Math.max(from, to - 1));
+    for (let li = startLine; li <= endLine; li++) {
+      const targetLine = li - 1;
+      if (targetLine < 0) continue;
+      const range = lineRangeAt(li);
+      if (!range) continue;
+      if (!rangeHasAnyLeadingRuby(range.start, range.end)) {
+        setLineLeading(sel.psdPath, targetId, targetLine, null);
+      }
+    }
+  };
 
   const selectionContainsSmallKana = (sel) => {
     if (!sel) return false;
@@ -2291,6 +2446,7 @@ function bindRubyTool() {
       if (parentSelectBtn) parentSelectBtn.disabled = false;
       if (dakutenBtn) dakutenBtn.disabled = false;
       if (nakaguroBtn) nakaguroBtn.disabled = false;
+      setPropertyRubyRemoveDisabled(!selectionHasAnyRuby(sel));
       setSpecialButtonState(sel);
       const existing = sel.rubyOnly
         ? getCharRubyForRange(sel.psdPath, targetId, sel.start, sel.end, sel.rubyText ?? "", { overlay: sel.rubyOverlay === true })
@@ -2313,6 +2469,7 @@ function bindRubyTool() {
       if (parentSelectBtn) parentSelectBtn.disabled = !activeEditTarget();
       if (dakutenBtn) dakutenBtn.disabled = true;
       if (nakaguroBtn) nakaguroBtn.disabled = true;
+      setPropertyRubyRemoveDisabled(true);
       setSpecialButtonState(null);
       removeBtn.disabled = true;
       inputEl.value = "";
@@ -2329,6 +2486,14 @@ function bindRubyTool() {
   window.addEventListener("psdesign:selection-changed", updateSelection);
   window.addEventListener("resize", placeRubyPanelNearText);
   window.addEventListener("scroll", placeRubyPanelNearText, true);
+  window.addEventListener("psdesign:ruby-edit-request", () => {
+    requestAnimationFrame(() => {
+      if (!inputEl || inputEl.disabled) return;
+      placeRubyPanelNearText();
+      inputEl.focus({ preventScroll: true });
+      inputEl.select();
+    });
+  });
   updateSelection();
 
   parentSelectBtn?.addEventListener("pointerdown", (e) => {
@@ -2619,6 +2784,74 @@ function bindRubyTool() {
   });
 
   // 蜑企勁
+  const rubySelectionFromPropertyDetail = (detail) => {
+    if (!detail?.psdPath) return null;
+    const page = getPages().find((p) => p.path === detail.psdPath);
+    if (!page) return null;
+    if (detail.tempId != null) {
+      const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === detail.tempId);
+      const contents = String(nl?.contents ?? "");
+      if (!nl || !contents) return null;
+      return { psdPath: page.path, tempId: nl.tempId, start: 0, end: contents.length, contents, objectSelection: true };
+    }
+    const layerId = Number(detail.layerId);
+    if (!Number.isFinite(layerId)) return null;
+    const layer = page.textLayers?.find((l) => Number(l.id) === layerId);
+    if (!layer) return null;
+    const edit = getEdit(page.path, layerId) ?? {};
+    const contents = String(edit.contents ?? layer.text ?? layer.contents ?? "");
+    if (!contents) return null;
+    return { psdPath: page.path, layerId, start: 0, end: contents.length, contents, objectSelection: true };
+  };
+
+  const removeRubyForCurrentTextSelection = (fallbackDetail = null) => {
+    const current = currentRubyTarget();
+    const fallback = rubySelectionFromPropertyDetail(fallbackDetail);
+    const currentTargetId = current ? (current.tempId ?? current.layerId) : null;
+    const fallbackTargetId = fallback ? (fallback.tempId ?? fallback.layerId) : null;
+    const sel = fallback && (!current || current.psdPath !== fallback.psdPath || currentTargetId !== fallbackTargetId)
+      ? fallback
+      : (current ?? fallback);
+    if (!sel || sel.end <= sel.start) return;
+    const targetId = sel.tempId ?? sel.layerId;
+    const removals = collectRubyRemovalTargets(sel);
+    if (removals.bases.length === 0 && removals.overlays.length === 0) return;
+    const ranges = selectedRanges(sel);
+    withHistoryTransient(() => {
+      for (const item of removals.overlays) {
+        removeRubyTextRange(sel.psdPath, targetId, item.start, item.end, item.text);
+      }
+      for (const item of removals.bases) {
+        removeCharRubyAt(sel.psdPath, targetId, item.start);
+        setCharRubiesRange(sel.psdPath, targetId, item.start, item.end, "", "group", 50);
+      }
+      for (const range of ranges) {
+        clearRubyLineLeadingIfEmptyForRange(sel, targetId, range.start, range.end);
+      }
+    });
+    if (!sel.objectSelection) {
+      for (const range of ranges) {
+        removeEditModeRubyFromRange(range.start, range.end);
+      }
+    }
+    refreshAllOverlays();
+    rebuildLayerList();
+    if (!sel.objectSelection) {
+      restoreInplaceSelection(sel);
+      requestAnimationFrame(() => restoreInplaceSelection(sel));
+    }
+    inputEl.value = "";
+    removeBtn.disabled = true;
+    setPropertyRubyRemoveDisabled(true);
+    requestAnimationFrame(updateSelection);
+  };
+  propertyRubyRemoveBtns.forEach((btn) => {
+    btn.addEventListener("click", removeRubyForCurrentTextSelection);
+  });
+  window.addEventListener("psdesign:remove-ruby-from-property", (e) => {
+    removeRubyForCurrentTextSelection(e.detail);
+  });
+
   removeBtn.addEventListener("click", () => {
     const sel = currentRubyTarget();
     if (!sel || sel.end <= sel.start) return;
@@ -2733,26 +2966,29 @@ function bindRubyTool() {
 
 function bindSizeTool() {
   const input = document.getElementById("size-input");
+  const unitLabel = document.getElementById("size-unit-label");
   const dec = document.getElementById("size-dec-btn");
   const inc = document.getElementById("size-inc-btn");
-  const stepButtons = Array.from(document.querySelectorAll(".size-step-btn[data-size-step]"));
+  const stepSelect = document.getElementById("size-step-select");
   if (!input || !dec || !inc) return;
 
   const syncStepControls = () => {
     const step = getSizeStep();
     input.step = String(step);
-    stepButtons.forEach((btn) => {
-      const active = normalizeSizeStep(btn.dataset.sizeStep) === step;
-      btn.classList.toggle("active", active);
-      btn.setAttribute("aria-pressed", active ? "true" : "false");
-    });
+    if (stepSelect) stepSelect.value = String(step);
+    if (unitLabel) unitLabel.textContent = textSizeUnitLabel();
   };
   syncStepControls();
   onSettingsChange(syncStepControls);
+  onTextSizeUnitChange(() => {
+    syncStepControls();
+    input.value = formatSizeInputValue(getTextSize());
+    rebuildLayerList();
+  });
 
-  input.value = String(getTextSize());
+  input.value = formatSizeInputValue(getTextSize());
   onTextSizeChange((v) => {
-    if (document.activeElement !== input) input.value = String(v);
+    if (document.activeElement !== input) input.value = formatSizeInputValue(v);
   });
   onInplaceSelectionChange((sel) => {
     if (sel?.rubyOnly) syncTextSizeFromRubySelection(sel);
@@ -2761,22 +2997,42 @@ function bindSizeTool() {
   input.addEventListener("input", () => {
     const v = parseFloat(input.value);
     if (!Number.isFinite(v)) return;
-    applyTextSize(v);
+    const pt = textSizeUnitValueToPt(v, getTextSizeUnit());
+    if (Number.isFinite(pt)) applyTextSize(pt);
   });
   input.addEventListener("blur", () => {
-    input.value = String(getTextSize());
+    input.value = formatSizeInputValue(getTextSize());
   });
   dec.addEventListener("mousedown", (e) => e.preventDefault());
   inc.addEventListener("mousedown", (e) => e.preventDefault());
-  stepButtons.forEach((btn) => {
-    btn.addEventListener("mousedown", (e) => e.preventDefault());
-    btn.addEventListener("click", () => {
-      setDefault("textSizeStep", normalizeSizeStep(btn.dataset.sizeStep));
-      syncStepControls();
-    });
+  stepSelect?.addEventListener("change", () => {
+    setDefault("textSizeStep", normalizeSizeStep(stepSelect.value));
+    syncStepControls();
   });
   dec.addEventListener("click", () => stepTextSize(-1));
   inc.addEventListener("click", () => stepTextSize(+1));
+}
+
+function bindTextSizeUnitSwitch() {
+  const buttons = Array.from(document.querySelectorAll(".text-size-unit-btn[data-text-size-unit]"));
+  if (!buttons.length) return;
+  const sync = () => {
+    const unit = getTextSizeUnit();
+    buttons.forEach((btn) => {
+      const active = btn.dataset.textSizeUnit === unit;
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-pressed", active ? "true" : "false");
+    });
+  };
+  buttons.forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", () => {
+      setTextSizeUnit(btn.dataset.textSizeUnit);
+      sync();
+    });
+  });
+  onTextSizeUnitChange(sync);
+  sync();
 }
 
 function applyLeading(n) {
@@ -4482,6 +4738,7 @@ function init() {
   bindHistoryButtons();
   initHamburgerMenu();
   bindTools();
+  bindTextSizeUnitSwitch();
   bindSizeTool();
   bindLeadingTool();
   bindBoldToggle();

@@ -455,6 +455,16 @@
                     <span class="editor-ruby-popover-parent-label">親文字</span>
                     <span id="editor-ruby-popover-parent" class="editor-ruby-popover-parent-text" aria-live="polite"></span>
                   </div>
+                  <div class="editor-ruby-popover-mode">
+                    <div class="ruby-mode-toggle" role="group" aria-label="ルビ種別">
+                      <button id="editor-ruby-mode-auto-btn" class="ruby-mode-btn active" type="button"
+                              data-mode="auto" title="入力からモノ/グループを自動判定">自動</button>
+                      <button id="editor-ruby-mode-mono-btn" class="ruby-mode-btn" type="button"
+                              data-mode="mono" title="モノルビ強制">モノ</button>
+                      <button id="editor-ruby-mode-group-btn" class="ruby-mode-btn" type="button"
+                              data-mode="group" title="グループルビ強制">グループ</button>
+                    </div>
+                  </div>
                   <div class="editor-ruby-popover-row">
                     <input id="editor-ruby-popover-input" class="ruby-text-input" type="text"
                            placeholder="ふりがな" aria-label="ふりがな"
@@ -629,6 +639,10 @@
               </svg>
             </button>
           </div>
+          <div class="text-size-unit-switch" role="group" aria-label="文字サイズ単位">
+            <button id="text-size-unit-pt-btn" class="text-size-unit-btn" type="button" data-text-size-unit="pt" aria-pressed="true">ポイント</button>
+            <button id="text-size-unit-q-btn" class="text-size-unit-btn" type="button" data-text-size-unit="q" aria-pressed="false">級</button>
+          </div>
           <div class="side-panel-tabs" role="tablist">
             <button id="side-panel-tab-txt" class="side-panel-tab active" data-tab="txt" type="button" role="tab" aria-selected="true">原稿テキスト</button>
             <button id="side-panel-tab-editor" class="side-panel-tab" data-tab="editor" type="button" role="tab" aria-selected="false">基本スタイル</button>
@@ -705,7 +719,7 @@
                       <div class="size-group" role="group" aria-label="文字サイズ">
                         <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
                         <input id="size-input" class="size-input" type="text" inputmode="decimal" value="12" aria-label="サイズ" />
-                        <span class="size-unit">pt</span>
+                        <span id="size-unit-label" class="size-unit">pt</span>
                         <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
                       </div>
                     </div>
@@ -713,9 +727,12 @@
                   <div class="size-step-column">
                     <span class="size-step-label">刻み</span>
                     <div class="sync-segment view-mode-segment size-step-segment" role="group" aria-label="文字サイズの刻み">
-                      <button class="sync-seg-btn size-step-btn" type="button" data-size-step="0.1" title="0.1 pt" aria-label="0.1 pt" aria-pressed="false">0.1</button>
-                      <button class="sync-seg-btn size-step-btn" type="button" data-size-step="0.25" title="0.25 pt" aria-label="0.25 pt" aria-pressed="false">.25</button>
-                      <button class="sync-seg-btn size-step-btn" type="button" data-size-step="0.5" title="0.5 pt" aria-label="0.5 pt" aria-pressed="false">0.5</button>
+                      <select id="size-step-select" class="size-step-select" aria-label="文字サイズの刻み">
+                        <option value="0.1">0.1</option>
+                        <option value="0.25">.25</option>
+                        <option value="0.5">0.5</option>
+                        <option value="1">1</option>
+                      </select>
                     </div>
                   </div>
                 </div>
@@ -1141,6 +1158,7 @@
                 <option value="0.1">0.1 pt</option>
                 <option value="0.25">0.25 pt</option>
                 <option value="0.5">0.5 pt</option>
+                <option value="1">1 pt</option>
               </select>
             </div>
             <div class="settings-default-row">
@@ -1177,6 +1195,13 @@
               <select id="default-show-badge" class="settings-default-input">
                 <option value="show">表示</option>
                 <option value="hide">非表示</option>
+              </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-inplace-edit-zoom">ダブルクリック編集時の2倍表示</label>
+              <select id="default-inplace-edit-zoom" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
               </select>
             </div>
             <div class="settings-default-row">

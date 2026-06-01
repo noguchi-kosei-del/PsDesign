@@ -1,6 +1,10 @@
 use crate::EditPayload;
 
-pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progress_path: &str) -> String {
+pub fn generate_apply_script(
+    payload: &EditPayload,
+    sentinel_path: &str,
+    progress_path: &str,
+) -> String {
     let mut out = String::new();
     out.push_str(HEADER);
     out.push('\n');
@@ -170,10 +174,16 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
                 }
             }
             if let Some(b) = layer.synthetic_bold {
-                out.push_str(&format!(", syntheticBold: {}", if b { "true" } else { "false" }));
+                out.push_str(&format!(
+                    ", syntheticBold: {}",
+                    if b { "true" } else { "false" }
+                ));
             }
             if let Some(i) = layer.synthetic_italic {
-                out.push_str(&format!(", syntheticItalic: {}", if i { "true" } else { "false" }));
+                out.push_str(&format!(
+                    ", syntheticItalic: {}",
+                    if i { "true" } else { "false" }
+                ));
             }
             if let Some(ref cb) = layer.char_bolds {
                 if !cb.is_empty() {
@@ -291,10 +301,16 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
                 }
             }
             if let Some(b) = nl.synthetic_bold {
-                out.push_str(&format!(", syntheticBold: {}", if b { "true" } else { "false" }));
+                out.push_str(&format!(
+                    ", syntheticBold: {}",
+                    if b { "true" } else { "false" }
+                ));
             }
             if let Some(i) = nl.synthetic_italic {
-                out.push_str(&format!(", syntheticItalic: {}", if i { "true" } else { "false" }));
+                out.push_str(&format!(
+                    ", syntheticItalic: {}",
+                    if i { "true" } else { "false" }
+                ));
             }
             if let Some(ref cb) = nl.char_bolds {
                 if !cb.is_empty() {
@@ -321,11 +337,12 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
             .symbol_font_post_script_name
             .as_deref()
             .unwrap_or("");
-        let symbol_font_ps_js = if payload.symbol_font_replace_enabled && !symbol_font_ps_str.is_empty() {
-            js_string(symbol_font_ps_str)
-        } else {
-            String::from("\"\"")
-        };
+        let symbol_font_ps_js =
+            if payload.symbol_font_replace_enabled && !symbol_font_ps_str.is_empty() {
+                js_string(symbol_font_ps_str)
+            } else {
+                String::from("\"\"")
+            };
         let page_width = psd
             .page_width
             .filter(|v| v.is_finite() && *v > 0.0)
@@ -339,7 +356,11 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
             js_string(&save_path),
             payload.dash_tracking_mille,
             payload.tilde_tracking_mille,
-            if payload.tate_chu_yoko_enabled { "true" } else { "false" },
+            if payload.tate_chu_yoko_enabled {
+                "true"
+            } else {
+                "false"
+            },
             symbol_font_ps_js,
             payload.punctuation_tsume_percent,
             // 【v1.29.x】ルビあり行間 (%)。applyToPsd 内で「ルビありレイヤーの親文字行間」を
@@ -361,19 +382,20 @@ pub fn generate_apply_script(payload: &EditPayload, sentinel_path: &str, progres
         out.push_str("  }\n\n");
     }
 
-    out.push_str(&format!(
-        "  setProgress({0}, {0}, \"完了\");\n",
-        total
-    ));
+    out.push_str(&format!("  setProgress({0}, {0}, \"完了\");\n", total));
     // 1 件以上失敗した場合は "OK partial <ok>/<total>" を返し、Rust 側で
     // 「N / M 個の PSD を更新」表示に切替える。失敗詳細は |WARN suffix。
     out.push_str("  if (__saveFail > 0) {\n");
-    out.push_str("    writeSentinel(\"OK partial \" + __saveOk + \"/\" + (__saveOk + __saveFail));\n");
+    out.push_str(
+        "    writeSentinel(\"OK partial \" + __saveOk + \"/\" + (__saveOk + __saveFail));\n",
+    );
     out.push_str("  } else {\n");
     out.push_str("    writeSentinel(\"OK\");\n");
     out.push_str("  }\n");
     out.push_str("} catch (err) {\n");
-    out.push_str("  writeSentinel(\"ERROR \" + (err && err.toString ? err.toString() : String(err)));\n");
+    out.push_str(
+        "  writeSentinel(\"ERROR \" + (err && err.toString ? err.toString() : String(err)));\n",
+    );
     out.push_str("}\n");
     out
 }
@@ -394,15 +416,21 @@ fn emit_sorted_map_by_int_key<T, F>(
     out: &mut String,
     m: &std::collections::HashMap<String, T>,
     format_value: F,
-) where F: Fn(&T) -> String {
+) where
+    F: Fn(&T) -> String,
+{
     out.push('{');
     let mut first = true;
     let mut keys: Vec<&String> = m.keys().collect();
     keys.sort_by(|a, b| {
-        a.parse::<i64>().unwrap_or(i64::MAX).cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
+        a.parse::<i64>()
+            .unwrap_or(i64::MAX)
+            .cmp(&b.parse::<i64>().unwrap_or(i64::MAX))
     });
     for k in keys {
-        if !first { out.push_str(", "); }
+        if !first {
+            out.push_str(", ");
+        }
         first = false;
         out.push_str(&format!("\"{}\": {}", k, format_value(&m[k])));
     }

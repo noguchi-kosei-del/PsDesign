@@ -196,7 +196,7 @@ const FORMATTERS = {
 
 const DEFAULT_SCHEMA = [
   { id: "default-text-size",            key: "textSize",                  type: "number",           applyTool: true },
-  { id: "default-text-size-step",       key: "textSizeStep",              type: "number",           allowedValues: [0.1, 0.25, 0.5], applyTool: true },
+  { id: "default-text-size-step",       key: "textSizeStep",              type: "number",           allowedValues: [0.1, 0.25, 0.5, 1], applyTool: true },
   { id: "default-leading-pct",          key: "leadingPct",                type: "number",           applyTool: true },
   // 【v1.29.0】ルビ適用時にその行の lineLeadings を自動上書きする %
   { id: "default-ruby-leading-pct",     key: "rubyLeadingPct",            type: "number",           applyTool: false },
@@ -207,6 +207,7 @@ const DEFAULT_SCHEMA = [
   { id: "default-stroke-width",         key: "strokeWidthPx",             type: "number",           applyTool: true },
   { id: "default-font",                 key: "fontPostScriptName",        type: "text-trim",        applyTool: true },
   { id: "default-show-badge",           key: "showBadge",                 type: "bool-showhide",    applyTool: false },
+  { id: "default-inplace-edit-zoom",     key: "inPlaceEditZoomEnabled",    type: "bool-onoff",       applyTool: false },
   { id: "default-dash-run-tracking",    key: "dashRunTrackingMille",      type: "number",           applyTool: true },
   { id: "default-tilde-run-kerning",    key: "tildeRunKerningMille",      type: "number",           applyTool: true },
   { id: "default-tcy-enabled",          key: "tateChuYokoEnabled",        type: "bool-onoff",       applyTool: false },

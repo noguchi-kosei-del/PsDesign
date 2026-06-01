@@ -3,8 +3,8 @@ use std::process::Command;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
-use thiserror::Error;
 use tauri::Emitter;
+use thiserror::Error;
 
 use crate::{jsx_gen, EditPayload};
 
@@ -33,7 +33,10 @@ pub enum PhotoshopError {
     Io(#[from] std::io::Error),
 }
 
-pub fn apply_edits(payload: &EditPayload, app: &tauri::AppHandle) -> Result<String, PhotoshopError> {
+pub fn apply_edits(
+    payload: &EditPayload,
+    app: &tauri::AppHandle,
+) -> Result<String, PhotoshopError> {
     let ps_path = find_photoshop_executable().ok_or(PhotoshopError::NotFound)?;
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -57,7 +60,12 @@ pub fn apply_edits(payload: &EditPayload, app: &tauri::AppHandle) -> Result<Stri
         .arg(&jsx_path)
         .spawn()
         .map_err(|e| PhotoshopError::LaunchFailed(e.to_string()))?;
-    emit_progress(app, 0, payload.edits.len(), "Photoshop に処理を渡しています...");
+    emit_progress(
+        app,
+        0,
+        payload.edits.len(),
+        "Photoshop に処理を渡しています...",
+    );
 
     // 【v2.x】Photoshop 起動時の「仮想記憶ディスクの容量不足」警告ダイアログを自動 OK する。
     // このダイアログは Photoshop プロセスが起動するタイミング (= JSX 実行前) に出るため
@@ -238,8 +246,8 @@ fn dismiss_known_photoshop_dialogs() -> usize {
     use winapi::um::winuser::{
         EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextLengthW,
         GetWindowTextW, IsWindowVisible, PostMessageW, SendInput, SetForegroundWindow, BM_CLICK,
-        INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VK_RETURN, WM_CHAR, WM_CLOSE,
-        WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
+        INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VK_RETURN, WM_CHAR, WM_CLOSE, WM_COMMAND,
+        WM_KEYDOWN, WM_KEYUP,
     };
 
     // 検出対象のダイアログタイトル (小文字で部分一致判定)。複数のロケール / バージョン
@@ -289,7 +297,10 @@ fn dismiss_known_photoshop_dialogs() -> usize {
             return 1;
         }
 
-        eprintln!("[ps-dismiss] detected dialog hwnd={:?} title={:?}", hwnd, title);
+        eprintln!(
+            "[ps-dismiss] detected dialog hwnd={:?} title={:?}",
+            hwnd, title
+        );
 
         // 戦略 1: 子ウィンドウから OK ボタンを探して BM_CLICK。
         // 標準 Win32 Button が存在すれば確実。Adobe Skia UI ではボタンが

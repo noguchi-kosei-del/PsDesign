@@ -153,6 +153,7 @@ if (typeof document !== "undefined") {
   }, true);
 }
 export function getLastInplaceSelection() { return _lastInplaceSelection; }
+export function clearInplaceSelection() { setLastInplaceSelection(null); }
 export function onInplaceSelectionChange(fn) {
   _selectionChangeListeners.add(fn);
   return () => _selectionChangeListeners.delete(fn);
@@ -185,10 +186,20 @@ function clearInplaceSelectionHighlight() {
 
 function findRubySelectionElement(sel) {
   if (!sel?.rubyOnly) return null;
-  const editing = document.querySelector(".layer-box.editing");
-  if (!editing) return null;
-  const texts = editing.querySelectorAll(".ruby-text");
-  for (const rt of texts) {
+  const roots = [];
+  const seen = new Set();
+  const addRoot = (root) => {
+    if (!root || seen.has(root)) return;
+    seen.add(root);
+    roots.push(root);
+  };
+  addRoot(document.querySelector(".layer-box.editing"));
+  document.querySelectorAll(".layer-box.selected").forEach(addRoot);
+  document.querySelectorAll(".layer-box").forEach(addRoot);
+  for (const root of roots) for (const rt of root.querySelectorAll(".ruby-text")) {
+    const box = rt.closest(".layer-box");
+    if (sel.layerId != null && box?.dataset.layerId !== String(sel.layerId)) continue;
+    if (sel.tempId != null && box?.dataset.tempId !== String(sel.tempId)) continue;
     const start = Number(rt.dataset.rubyStart);
     const end = Number(rt.dataset.rubyEnd);
     if (!Number.isInteger(start) || !Number.isInteger(end)) continue;
@@ -1227,10 +1238,18 @@ function unwrapStyleSpansInRange(rootEl, range, styleProp) {
 // 環境設定（フォント名表示 / サイズ表示の切替など）が変わったらオーバーレイを再描画して
 // 選択中のバッジに即時反映する。
 let settingsListenerBound = false;
+function applyInPlaceEditZoomClass(box = document.querySelector(".layer-box.editing")) {
+  if (!box) return;
+  box.classList.toggle("editing-zoomed", getDefault("inPlaceEditZoomEnabled") !== false);
+}
+
 function bindSettingsListener() {
   if (settingsListenerBound) return;
   settingsListenerBound = true;
-  onSettingsChange(() => refreshAllOverlays());
+  onSettingsChange(() => {
+    applyInPlaceEditZoomClass();
+    refreshAllOverlays();
+  });
 }
 bindSettingsListener();
 
@@ -1801,7 +1820,7 @@ function renderOverlay(ctx) {
     const box = createBox(page, rect.left, rect.top, rect.width, rect.height, "existing");
     box.dataset.layerId = String(layer.id);
     box.dataset.direction = rect.isVertical ? "vertical" : "horizontal";
-    if (rotation) box.style.transform = `rotate(${rotation}deg)`;
+    applyLayerBoxRotation(box, rotation);
     box.title = rect.previewText.length > 60 ? rect.previewText.slice(0, 60) + "…" : rect.previewText;
 
     const inner = document.createElement("div");
@@ -1884,6 +1903,13 @@ function renderOverlay(ctx) {
           fontList,
           edit.strokeColor ?? layer.strokeColor ?? "none",
           edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
+          {
+            rubyRemove: {
+              psdPath: page.path,
+              layerId: layer.id,
+              hasRuby: Object.keys(edit.charRubies ?? layer.charRubies ?? {}).length > 0,
+            },
+          },
         );
         if (badge) box.appendChild(badge);
       }
@@ -1901,7 +1927,7 @@ function renderOverlay(ctx) {
     const box = createBox(page, rect.left, rect.top, rect.width, rect.height, "new");
     box.dataset.tempId = nl.tempId;
     box.dataset.direction = rect.isVertical ? "vertical" : "horizontal";
-    if (rotation) box.style.transform = `rotate(${rotation}deg)`;
+    applyLayerBoxRotation(box, rotation);
     box.classList.add("text-box-preview");
     // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置で背景/ウニ判定によりフォント切替された印
     // (UI 色強調用)。bucket = 0..5 の 10% 刻みでスコア帯ごとに別色 (青→緑→黄→橙→赤→濃赤)。
@@ -1979,6 +2005,13 @@ function renderOverlay(ctx) {
           fontListNew,
           nl.strokeColor ?? "none",
           nl.strokeWidthPx ?? 20,
+          {
+            rubyRemove: {
+              psdPath: page.path,
+              tempId: nl.tempId,
+              hasRuby: Object.keys(nl.charRubies ?? {}).length > 0,
+            },
+          },
         );
         if (newBadge) box.appendChild(newBadge);
       }
@@ -3607,7 +3640,7 @@ function onBadgeStrokeMouseDown(e) {
   openLayerStrokePanel({ getBoundingClientRect: () => anchorRect });
 }
 
-function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none", strokeWidthPx = 20) {
+function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none", strokeWidthPx = 20, options = {}) {
   // 環境設定（デフォルトタブ）でフォント名・文字サイズの表示/非表示を一括切替。
   // OFF の場合はバッジ自体を生成せず null を返し、呼び出し側で append をスキップする。
   if (getDefault("showBadge") === false) return null;
@@ -3655,6 +3688,26 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
   sizeEl.title = "文字サイズを変更";
   sizeEl.addEventListener("mousedown", onBadgeSizeMouseDown);
   el.appendChild(sizeEl);
+  if (options.rubyRemove?.hasRuby) {
+    const rubyBtn = document.createElement("button");
+    rubyBtn.type = "button";
+    rubyBtn.className = "layer-size-badge-ruby-remove";
+    rubyBtn.textContent = "ルビ削除";
+    rubyBtn.title = "このテキストのルビを削除";
+    rubyBtn.setAttribute("aria-label", "このテキストのルビを削除");
+    rubyBtn.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+    rubyBtn.addEventListener("click", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      window.dispatchEvent(new CustomEvent("psdesign:remove-ruby-from-property", {
+        detail: options.rubyRemove,
+      }));
+    });
+    el.appendChild(rubyBtn);
+  }
   const strokeBadge = createStrokeBadgeSwatches(strokeColor, strokeWidthPx);
   if (strokeBadge) el.appendChild(strokeBadge);
   return el;
@@ -3761,6 +3814,12 @@ function createBox(page, left, top, width, height, kind) {
   el.style.width = `${(width / page.width) * 100}%`;
   el.style.height = `${(height / page.height) * 100}%`;
   return el;
+}
+
+function applyLayerBoxRotation(box, rotation) {
+  const angle = Number(rotation) || 0;
+  if (!box || angle === 0) return;
+  box.style.transform = `rotate(${angle}deg) scale(var(--layer-edit-scale, 1))`;
 }
 
 // スクリーン空間の delta (dxS, dyS) を回転逆変換して「回転前のローカル空間」の delta に変換。
@@ -3975,9 +4034,68 @@ function enterInPlaceEditFromMove(ctx, target) {
   startInPlaceEdit(ctx, target);
 }
 
+function lineIndexAtChar(text, index) {
+  const head = String(text ?? "").slice(0, Math.max(0, index));
+  return head.split(/\r\n|\r|\n/).length - 1;
+}
+
+function handleRenderedRubyMouseDown(e, ctx, target) {
+  const rawTarget = e.target?.nodeType === Node.TEXT_NODE ? e.target.parentElement : e.target;
+  const rt = rawTarget?.closest?.(".ruby-text");
+  if (!rt || !e.currentTarget?.contains(rt)) return false;
+  const start = Number(rt.dataset.rubyStart);
+  const end = Number(rt.dataset.rubyEnd);
+  if (!Number.isInteger(start) || !Number.isInteger(end) || end <= start) return false;
+
+  e.stopPropagation();
+  e.preventDefault();
+  temporaryMultiSelectionAdornmentsVisible = false;
+  showSelectedLayerBadges();
+
+  const isExisting = target.kind === "existing";
+  const edit = isExisting ? (getEdit(ctx.page.path, target.layer.id) ?? {}) : {};
+  const contents = isExisting
+    ? String(edit.contents ?? target.layer.contents ?? target.layer.text ?? "")
+    : String(target.nl.contents ?? "");
+  const direction = isExisting
+    ? (edit.direction ?? target.layer.direction ?? "horizontal")
+    : (target.nl.direction ?? "vertical");
+  const layerMeta = isExisting
+    ? { psdPath: ctx.page.path, layerId: target.layer.id, direction: direction === "horizontal" ? "horizontal" : "vertical" }
+    : { psdPath: ctx.page.path, tempId: target.nl.tempId, direction: direction === "horizontal" ? "horizontal" : "vertical" };
+  const rubySel = {
+    ...layerMeta,
+    start,
+    end,
+    rubyOnly: true,
+    rubyText: rt.dataset.rubyText ?? rt.textContent ?? "",
+    rubyOverlay: rt.dataset.rubyOverlay === "true",
+  };
+  const layerKey = isExisting ? target.layer.id : target.nl.tempId;
+  setSelectedLayer(ctx.pageIndex, layerKey);
+  renderOverlay(ctx);
+  rebuildLayerList();
+
+  const lineIndex = lineIndexAtChar(contents, start);
+  const totalLines = (contents.match(/\n/g) ?? []).length + 1;
+  setEditingContext({
+    ...layerMeta,
+    currentLineIndex: lineIndex,
+    totalLines,
+    contents,
+    selectionStart: start,
+    selectionEnd: end,
+  });
+  setLastInplaceSelection(null);
+  setLastInplaceSelection(rubySel);
+  window.dispatchEvent(new CustomEvent("psdesign:ruby-edit-request", { detail: rubySel }));
+  return true;
+}
+
 function onExistingLayerMouseDown(e, ctx, layer) {
   const tool = getTool();
   if (tool !== "move") return;
+  if (!e.currentTarget?.classList?.contains("editing") && handleRenderedRubyMouseDown(e, ctx, { kind: "existing", layer })) return;
   // 【v1.21.0】編集中レイヤー (.editing) のクリックは contenteditable のキャレット移動に
   // 委ねる。preventDefault しないことで「全選択中に文字の途中をクリック → キャレット移動」
   // という Photoshop / 通常 textarea と同じ挙動を取り戻す。
@@ -4013,6 +4131,7 @@ function onExistingLayerMouseDown(e, ctx, layer) {
 function onNewLayerMouseDown(e, ctx, nl) {
   const tool = getTool();
   if (tool !== "move") return;
+  if (!e.currentTarget?.classList?.contains("editing") && handleRenderedRubyMouseDown(e, ctx, { kind: "new", nl })) return;
   // 編集中レイヤーのクリックは contenteditable に委ねる（上記 onExistingLayerMouseDown と同パターン）。
   if (e.currentTarget && e.currentTarget.classList.contains("editing")) return;
   e.stopPropagation();
@@ -4720,6 +4839,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
 
   // 4. 編集モード ON
   box.classList.add("editing");
+  applyInPlaceEditZoomClass(box);
   inner.contentEditable = "true";
   inner.spellcheck = false;
 
@@ -4788,6 +4908,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
       selectionStart: start,
       selectionEnd: end,
     });
+    window.dispatchEvent(new CustomEvent("psdesign:ruby-edit-request", { detail: rubySel }));
   };
   inner.addEventListener("mousedown", onRubyMouseDown, true);
 
@@ -5426,7 +5547,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     inner.removeEventListener("blur", onBlur);
     inner.removeEventListener("mousedown", onRubyMouseDown, true);
 
-    box.classList.remove("editing");
+    box.classList.remove("editing", "editing-zoomed");
     inner.removeAttribute("contenteditable");
     inner.removeAttribute("spellcheck");
     box.__finalize = null;

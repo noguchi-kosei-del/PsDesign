@@ -13,8 +13,8 @@
 use image::GenericImageView;
 use pdfium_render::prelude::*;
 use serde::Serialize;
-use tauri::AppHandle;
 use std::path::Path;
+use tauri::AppHandle;
 
 use crate::ocr::make_pdfium;
 
@@ -111,11 +111,13 @@ pub async fn compute_alignment(
     mokuro_img_height: Option<f64>,
 ) -> Result<Alignment, String> {
     // 1. 見本画像をロード (PDF / 通常画像 で分岐)
-    let ref_img = if let Some(ref_base64) = reference_image_data_base64.as_ref().filter(|s| !s.is_empty()) {
-        let ref_bytes = base64_decode(ref_base64)
-            .map_err(|e| format!("見本 base64 デコード失敗: {}", e))?;
-        image::load_from_memory(&ref_bytes)
-            .map_err(|e| format!("見本画像デコード失敗: {:?}", e))?
+    let ref_img = if let Some(ref_base64) = reference_image_data_base64
+        .as_ref()
+        .filter(|s| !s.is_empty())
+    {
+        let ref_bytes =
+            base64_decode(ref_base64).map_err(|e| format!("見本 base64 デコード失敗: {}", e))?;
+        image::load_from_memory(&ref_bytes).map_err(|e| format!("見本画像デコード失敗: {:?}", e))?
     } else if is_pdf_path(&reference_path) {
         let p = Path::new(&reference_path);
         let pi = reference_pdf_page_index.unwrap_or(0);
@@ -190,7 +192,8 @@ pub async fn compute_alignment(
         let init_scale = (ref_w as f64) / (psd_w as f64);
 
         // grid search パラメータ
-        let scale_steps: Vec<f64> = (-30..=30).step_by(3)
+        let scale_steps: Vec<f64> = (-30..=30)
+            .step_by(3)
             .map(|d| init_scale * (1.0 + (d as f64) / 100.0))
             .collect();
         let max_offset_x = (ref_w as i32) / 4; // 見本幅の ±25%
@@ -214,7 +217,9 @@ pub async fn compute_alignment(
         };
 
         for &s in &scale_steps {
-            if !s.is_finite() || s <= 0.0 { continue; }
+            if !s.is_finite() || s <= 0.0 {
+                continue;
+            }
             let mut ox = -max_offset_x;
             while ox <= max_offset_x {
                 let mut oy = -max_offset_y;
@@ -241,7 +246,9 @@ pub async fn compute_alignment(
         let coarse_ox = best_ox;
         let coarse_oy = best_oy;
         for ds in refine_scales {
-            if !ds.is_finite() || ds <= 0.0 { continue; }
+            if !ds.is_finite() || ds <= 0.0 {
+                continue;
+            }
             for ox in (coarse_ox - refine_range)..=(coarse_ox + refine_range) {
                 for oy in (coarse_oy - refine_range)..=(coarse_oy + refine_range) {
                     let d = compute_diff(psd_view, ref_view, ds, ox, oy);
@@ -262,7 +269,7 @@ pub async fn compute_alignment(
         // ref_full / psd_full = (ref_small × ref_back) / (psd_small × psd_back) = (ref_small/psd_small) × (ref_back/psd_back)
         // = best_scale × (ref_back / psd_back)
         let final_scale_inv = best_scale * (ref_back / psd_back); // mokuro 単位 / psd 単位
-        // alignment.scale を「PSD 単位 → mokuro 単位」(ref/psd) 比として返す
+                                                                  // alignment.scale を「PSD 単位 → mokuro 単位」(ref/psd) 比として返す
         let final_scale = final_scale_inv;
         // offset (mokuro 単位) = ox (ref_small 単位) × ref_back
         let final_offset_x = (best_ox as f64) * ref_back;
@@ -311,7 +318,6 @@ pub async fn compute_alignment(
             psd_full_size: [psd_w_f, psd_h_f],
             ref_full_size: [ref_w_f, ref_h_f],
         });
-
     }
 
     // === モード1: PSD 側に余分余白がある (見本が PSD の中央クロップ) ===
@@ -365,7 +371,12 @@ pub async fn compute_alignment(
         offset_y,
         diff_score: 0.0,
         candidates: 1,
-        psd_bbox: [psd_match_left, psd_match_top, psd_match_right, psd_match_bottom],
+        psd_bbox: [
+            psd_match_left,
+            psd_match_top,
+            psd_match_right,
+            psd_match_bottom,
+        ],
         ref_bbox: [0.0, 0.0, ref_w_f, ref_h_f],
         psd_full_size: [psd_w_f, psd_h_f],
         ref_full_size: [ref_w_f, ref_h_f],
@@ -444,12 +455,16 @@ fn compute_diff(
             // 旧: 両方 mask のみ skip → PSD 側にテキスト未配置だと「128 vs 背景白 (250)」の
             //     差分が大きく出て、見本のテキスト位置が正しく除外されず alignment が悪化。
             // 新: || で「テキスト位置に該当する全画素を確実に比較対象外」にする。
-            if ref_v == 128 || psd_v == 128 { continue; }
+            if ref_v == 128 || psd_v == 128 {
+                continue;
+            }
             total += (ref_v - psd_v).unsigned_abs() as u64;
             count += 1;
         }
     }
-    if count == 0 { return f64::INFINITY; }
+    if count == 0 {
+        return f64::INFINITY;
+    }
     (total as f64) / (count as f64) / 255.0
 }
 // 簡易 base64 デコーダ (data URL のヘッダ "data:...;base64," を取り除いてからデコード)
