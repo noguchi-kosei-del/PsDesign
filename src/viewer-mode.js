@@ -23,7 +23,6 @@ import { capturePdfViewportCenter, schedulePdfStageLayoutRefresh } from "./pdf-v
 import { capturePsdViewportCenter, schedulePsdStageLayoutRefresh, setNextPsdZoomAnchorFromClientPoint } from "./spread-view.js";
 
 const HINT_SHOW_DURATION = 3000;
-const CLOSE_BTN_FADE_DELAY = 3000;
 
 let isActive = false;
 let previousZoom = 1;
@@ -225,7 +224,10 @@ function setupEventListeners() {
   boundHandlers.mousemove = (e) => {
     if (!isActive) return;
     // 右上 150px 圏内に入ったら閉じるボタンを再フェードイン。
-    if (e.clientX < 150 && e.clientY < 150) {
+    const nearCloseSide = closeButtonShouldBeRight()
+      ? e.clientX > window.innerWidth - 150
+      : e.clientX < 150;
+    if (nearCloseSide && e.clientY < 150) {
       showCloseBtn();
     }
   };
@@ -276,18 +278,26 @@ function showCloseBtn() {
     closeBtn.classList.add("show");
   });
   clearTimeout(closeBtnHideTimer);
-  closeBtnHideTimer = setTimeout(() => {
-    if (closeBtn) closeBtn.classList.remove("show");
-  }, CLOSE_BTN_FADE_DELAY);
 }
 
 function mountCloseBtn() {
   if (!closeBtn) return;
-  const stage = document.getElementById("psd-stage");
-  const parent = stage || document.body;
+  const parent = document.body;
   if (closeBtn.parentElement !== parent) {
     parent.appendChild(closeBtn);
   }
+  syncCloseBtnPlacement();
+}
+
+function closeButtonShouldBeRight() {
+  return !!document.querySelector(".workspace")?.classList.contains("flipped");
+}
+
+function syncCloseBtnPlacement() {
+  if (!closeBtn) return;
+  const placeRight = closeButtonShouldBeRight();
+  closeBtn.classList.toggle("viewer-close-btn-right", placeRight);
+  closeBtn.classList.toggle("viewer-close-btn-left", !placeRight);
 }
 
 function hideCloseBtn() {

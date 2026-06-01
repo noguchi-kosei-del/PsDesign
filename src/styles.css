@@ -4061,7 +4061,6 @@ body.home-starting .home-screen {
 /* これらのボタンは旧仕様ではペイン右下に absolute 配置していたが、
    `.stage-label-bar > .stage-label-actions` の flex 子としてバー右端に並ぶ
    方式に変更。バー高さ 24px に収めるため 22px 角・SVG 15px に揃える。 */
-.pdf-font-book-btn,
 .pdf-rotate-btn,
 .psd-rotate-btn {
   width: 22px;
@@ -4077,13 +4076,11 @@ body.home-starting .home-screen {
   cursor: pointer;
   flex-shrink: 0;
 }
-.pdf-font-book-btn svg,
 .pdf-rotate-btn svg,
 .psd-rotate-btn svg {
   width: 15px;
   height: 15px;
 }
-.pdf-font-book-btn:hover:not(:disabled),
 .pdf-rotate-btn:hover:not(:disabled),
 .psd-rotate-btn:hover:not(:disabled) {
   background: transparent;
@@ -6064,6 +6061,61 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   border-color: var(--accent);
   background: var(--panel-hover);
 }
+.font-book-shot-image-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 112px;
+  background: #fff;
+  color: #6b7280;
+  overflow: hidden;
+}
+.font-book-list[data-size="S"] .font-book-shot-image-wrap {
+  min-height: 82px;
+}
+.font-book-list[data-size="L"] .font-book-shot-image-wrap {
+  min-height: 156px;
+}
+.font-book-shot-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  max-height: 240px;
+  object-fit: contain;
+  background: #fff;
+}
+.font-book-list[data-size="S"] .font-book-shot-image {
+  max-height: 150px;
+}
+.font-book-list[data-size="L"] .font-book-shot-image {
+  max-height: 360px;
+}
+.font-book-shot-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #6b7280;
+  font-size: 10px;
+  font-weight: 800;
+}
+.font-book-shot.image-loaded .font-book-shot-loading {
+  display: none;
+}
+.font-book-shot.image-error .font-book-shot-loading {
+  color: #b91c1c;
+}
+.font-book-shot.image-error .font-book-shot-loading::before {
+  content: "画像を読み込めません";
+}
+.font-book-shot.image-error .font-book-shot-loading {
+  font-size: 0;
+}
+.font-book-shot.image-error .font-book-shot-loading::before {
+  font-size: 10px;
+}
 .font-book-shot-caption,
 .font-book-note {
   display: block;
@@ -6962,11 +7014,6 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .font-style-toggle-btn:hover:not(:disabled) {
   color: var(--accent);
-}
-.pdf-font-book-btn[aria-pressed="true"] {
-  background: var(--accent, #3b82f6);
-  color: #fff;
-  border-color: var(--accent, #3b82f6);
 }
 .font-style-toggle-btn[aria-pressed="true"] {
   background: var(--accent);
@@ -12094,7 +12141,7 @@ body.viewer-mode .workspace .psd-stage {
 body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
 /* 閉じるボタン（右上角、マウス移動でフェードイン → 一定時間でフェードアウト） */
 .viewer-close-btn {
-  position: absolute;
+  position: fixed;
   top: 16px;
   left: 16px;
   z-index: 10001;
@@ -12118,7 +12165,16 @@ body.viewer-mode .viewer-nav-hint.show { opacity: 1; }
   pointer-events: none;
   padding: 0;
 }
+.viewer-close-btn.viewer-close-btn-left {
+  left: 16px;
+  right: auto;
+}
+.viewer-close-btn.viewer-close-btn-right {
+  left: auto;
+  right: 16px;
+}
 .viewer-close-btn svg { stroke: #fff; width: 20px; height: 20px; }
+body.viewer-mode .viewer-close-btn,
 .viewer-close-btn.show {
   opacity: 1;
   visibility: visible;

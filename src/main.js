@@ -62,7 +62,7 @@ import { bindProofreadUi, openProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
 import { bindStylePalette } from "./style-palette.js";
 import { bindFindChangeMode } from "./find-change.js";
-import { initFontBookPanel } from "./font-book.js";
+import { initFontBookPanel, setPdfFontBookVisible } from "./font-book.js";
 import {
   confirmDialog,
   hideModalAnimated,
@@ -1062,6 +1062,7 @@ const EDITOR_LEFT_PANE_LS_KEY = "psdesign_editor_left_pane_mode";
 function bindParallelViewMode() {
   const parallelBtn = document.getElementById("view-parallel-btn");
   const proofreadBtn = document.getElementById("view-proofread-btn");
+  const fontBookBtn = document.getElementById("view-font-book-btn");
   const spreadEditBtn = document.getElementById("view-spread-edit-btn");
   const editorBtn = document.getElementById("view-editor-btn");
   const proofreadArea = document.getElementById("spreads-proofread-area");
@@ -1069,11 +1070,11 @@ function bindParallelViewMode() {
   const proofreadPanel = document.getElementById("proofread-panel");
   const leftProofreadBtn = document.getElementById("editor-left-proofread-btn");
   const leftPdfBtn = document.getElementById("editor-left-pdf-btn");
-  if (!parallelBtn || !proofreadBtn || !spreadEditBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
+  if (!parallelBtn || !proofreadBtn || !fontBookBtn || !spreadEditBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
 
   try {
     const saved = localStorage.getItem(VIEW_MODE_LS_KEY);
-    if (saved === "parallel" || saved === "proofread" || saved === "editor" || saved === "spreadEdit") {
+    if (saved === "parallel" || saved === "proofread" || saved === "fontBook" || saved === "editor" || saved === "spreadEdit") {
       setParallelViewMode(saved);
     }
   } catch {}
@@ -1111,6 +1112,7 @@ function bindParallelViewMode() {
   };
   parallelBtn.addEventListener("click", () => switchViewMode("parallel"));
   proofreadBtn.addEventListener("click", () => switchViewMode("proofread"));
+  fontBookBtn.addEventListener("click", () => switchViewMode("fontBook"));
   spreadEditBtn.addEventListener("click", () => switchViewMode("spreadEdit"));
   editorBtn.addEventListener("click", () => switchViewMode("editor"));
   if (leftProofreadBtn) {
@@ -1133,10 +1135,12 @@ function bindParallelViewMode() {
     const mode = getParallelViewMode();
     const showEditor = mode === "editor";
     const showProofread = mode === "proofread";
+    const showFontBook = mode === "fontBook";
     const showSpreadEdit = mode === "spreadEdit";
     if (workspace) {
       workspace.classList.toggle("editor-mode", showEditor);
       workspace.classList.toggle("proofread-mode", showProofread);
+      workspace.classList.toggle("font-book-mode", showFontBook);
       workspace.classList.toggle("spread-edit-mode", showSpreadEdit);
     }
     if (stage) {
@@ -1145,16 +1149,19 @@ function bindParallelViewMode() {
     }
     parallelBtn.classList.toggle("active", mode === "parallel");
     proofreadBtn.classList.toggle("active", mode === "proofread");
+    fontBookBtn.classList.toggle("active", mode === "fontBook");
     spreadEditBtn.classList.toggle("active", mode === "spreadEdit");
     editorBtn.classList.toggle("active", mode === "editor");
     parallelBtn.setAttribute("aria-checked", mode === "parallel" ? "true" : "false");
     proofreadBtn.setAttribute("aria-checked", mode === "proofread" ? "true" : "false");
+    fontBookBtn.setAttribute("aria-checked", mode === "fontBook" ? "true" : "false");
     spreadEditBtn.setAttribute("aria-checked", mode === "spreadEdit" ? "true" : "false");
     editorBtn.setAttribute("aria-checked", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
     applyEditorLeftPaneClass();
 
     if (showProofread || showEditor) openProofread();
+    setPdfFontBookVisible(showFontBook);
 
     if (showEditor) focusEditor();
 

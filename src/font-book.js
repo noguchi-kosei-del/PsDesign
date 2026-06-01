@@ -40,6 +40,7 @@ const state = {
 let initialized = false;
 let expandedEntryId = null;
 let sampleObserver = null;
+let shotImageObserver = null;
 let initialLoadStarted = false;
 
 const $ = (id) => document.getElementById(id);
@@ -655,6 +656,10 @@ function renderEntry(entry) {
   const note = entry.note ? `<div class="font-book-note">${escapeHtml(entry.note)}</div>` : "";
   return `
     <button class="font-book-shot" type="button" data-entry-key="${escapeHtml(entry.key)}">
+      <span class="font-book-shot-image-wrap">
+        <span class="font-book-shot-loading">Loading...</span>
+        <img class="font-book-shot-image" data-entry-key="${escapeHtml(entry.key)}" alt="${escapeHtml(entry.fontDisplayName)}" loading="lazy" hidden />
+      </span>
       <span class="font-book-shot-caption">${escapeHtml(entry.sourceFile || entry.fontDisplayName)}</span>
       ${note}
     </button>`;
@@ -664,6 +669,10 @@ function bindRenderedCards() {
   if (sampleObserver) {
     sampleObserver.disconnect();
     sampleObserver = null;
+  }
+  if (shotImageObserver) {
+    shotImageObserver.disconnect();
+    shotImageObserver = null;
   }
   const fonts = fontMapByPostScript();
   sampleObserver = new IntersectionObserver((items) => {
@@ -689,6 +698,43 @@ function bindRenderedCards() {
   }
   for (const shot of document.querySelectorAll(".font-book-shot[data-entry-key]")) {
     shot.addEventListener("click", () => openExpanded(shot.dataset.entryKey));
+  }
+  const shotTargets = Array.from(document.querySelectorAll(".font-book-shot[data-entry-key]"));
+  if (typeof IntersectionObserver === "undefined") {
+    for (const shot of shotTargets) loadShotImage(shot.querySelector(".font-book-shot-image[data-entry-key]"));
+    return;
+  }
+  shotImageObserver = new IntersectionObserver((items) => {
+    for (const item of items) {
+      if (!item.isIntersecting) continue;
+      loadShotImage(item.target.querySelector(".font-book-shot-image[data-entry-key]"));
+      shotImageObserver?.unobserve(item.target);
+    }
+  }, { root: null, rootMargin: "260px" });
+  for (const shot of shotTargets) {
+    shotImageObserver.observe(shot);
+  }
+}
+
+async function loadShotImage(img) {
+  const entryKey = img?.dataset?.entryKey;
+  if (!entryKey || img.dataset.loaded === "1" || img.dataset.loading === "1") return;
+  const entry = state.entries.find((e) => e.key === entryKey || e.id === entryKey);
+  if (!entry) return;
+  img.dataset.loading = "1";
+  const shot = img.closest(".font-book-shot");
+  try {
+    const src = await imageDataUrl(entry);
+    if (!img.isConnected || img.dataset.entryKey !== entryKey) return;
+    img.src = src;
+    img.hidden = false;
+    img.dataset.loaded = "1";
+    shot?.classList.add("image-loaded");
+  } catch (e) {
+    console.error("font book thumbnail load failed:", e);
+    shot?.classList.add("image-error");
+  } finally {
+    delete img.dataset.loading;
   }
 }
 
@@ -746,16 +792,16 @@ function closeExpanded() {
   if (modal) modal.hidden = true;
 }
 
-function setPdfFontBookVisible(visible) {
+export function setPdfFontBookVisible(visible) {
   const area = $("spreads-pdf-area");
   const stage = $("pdf-font-book-stage");
   const pdfStage = $("pdf-stage");
   const btn = $("pdf-font-book-btn");
-  if (!area || !stage || !pdfStage || !btn) return;
+  if (!area || !stage || !pdfStage) return;
   area.classList.toggle("font-book-visible", visible);
   stage.hidden = !visible;
   pdfStage.hidden = visible;
-  btn.setAttribute("aria-pressed", visible ? "true" : "false");
+  btn?.setAttribute("aria-pressed", visible ? "true" : "false");
   if (visible) {
     loadInitialFontBook();
     renderFontBook();

@@ -19,11 +19,16 @@ export function getPdfVirtualPages() {
     return out;
   }
 
-  for (let i = 1; i <= total; i += 1) {
+  const startPage = skip ? 2 : 1;
+  for (let i = startPage; i <= total; i += 1) {
+    if (i === 1) {
+      out.push({ pageNum: i, side: "left" });
+      continue;
+    }
     out.push({ pageNum: i, side: "right" });
     out.push({ pageNum: i, side: "left" });
   }
-  return skip ? out.slice(1) : out;
+  return out;
 }
 
 export function getPdfVirtualPageCount() {

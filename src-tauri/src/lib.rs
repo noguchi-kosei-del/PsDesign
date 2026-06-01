@@ -313,6 +313,8 @@ fn is_windows_shortcut(path: &Path) -> bool {
 
 #[cfg(target_os = "windows")]
 fn resolve_windows_shortcut_target(path: &Path) -> Option<PathBuf> {
+    use std::os::windows::process::CommandExt;
+
     if !is_windows_shortcut(path) {
         return None;
     }
@@ -327,7 +329,8 @@ if ($target.Length -gt 0) {
   [Console]::Write([Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($target)))
 }
 "#;
-    let output = Command::new("powershell.exe")
+    let mut command = Command::new("powershell.exe");
+    let output = command
         .args([
             "-NoProfile",
             "-NonInteractive",
@@ -337,6 +340,7 @@ if ($target.Length -gt 0) {
             script,
         ])
         .env("OPUS_SHORTCUT_PATH", path)
+        .creation_flags(0x08000000)
         .output()
         .ok()?;
     if !output.status.success() {
@@ -537,7 +541,35 @@ fn write_progen_handoff(text_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("handoff folder create failed ({}): {}", dir.display(), e))?;
     let marker = dir.join(".progen_handoff.txt");
     fs::write(&marker, text_path.to_string_lossy().as_bytes())
-        .map_err(|e| format!("handoff marker write failed ({}): {}", marker.display(), e))
+        .map_err(|e| format!("handoff marker write failed ({}): {}", marker.display(), e))?;
+
+    // Keep the legacy marker as a plain path. Newer ProGen builds can use these
+    // sidecars to route saved text straight to the proofreading prompt.
+    let mode_marker = dir.join(".progen_handoff_mode.txt");
+    fs::write(&mode_marker, b"proofreading").map_err(|e| {
+        format!(
+            "handoff mode marker write failed ({}): {}",
+            mode_marker.display(),
+            e
+        )
+    })?;
+
+    let payload_marker = dir.join(".progen_handoff.json");
+    let payload = serde_json::json!({
+        "textPath": text_path.to_string_lossy(),
+        "mode": "proofreading",
+    });
+    let payload_bytes = serde_json::to_vec_pretty(&payload)
+        .map_err(|e| format!("handoff payload encode failed: {}", e))?;
+    fs::write(&payload_marker, payload_bytes).map_err(|e| {
+        format!(
+            "handoff payload write failed ({}): {}",
+            payload_marker.display(),
+            e
+        )
+    })?;
+
+    Ok(())
 }
 
 fn find_progen_launcher() -> Option<PathBuf> {
@@ -582,8 +614,16 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
     let text_path = PathBuf::from(text_path);
     write_progen_handoff(&text_path)?;
     let launcher = find_progen_launcher().ok_or_else(|| {
-        "ProGen launcher was not found under Desktop\\progen_DEMO\\progen or Desktop\\progen_DEMO\\data".to_string()
+        "ProGen launcher was not found under Desktop\\ProGen.lnk, AppData\\Local\\ProGen, Desktop\\progen_DEMO\\progen, or Desktop\\progen_DEMO\\data".to_string()
     })?;
+    let text_path_arg = text_path.to_string_lossy().to_string();
+    let launch_args = [
+        "--proofreading",
+        "--handoff-mode",
+        "proofreading",
+        "--text-path",
+        text_path_arg.as_str(),
+    ];
 
     let shell_launch = launcher
         .extension()
@@ -595,19 +635,21 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
         })
         .unwrap_or(false);
     if shell_launch {
-        Command::new("cmd")
+        let mut command = Command::new("cmd");
+        command
             .args(["/C", "start", "", &launcher.to_string_lossy()])
-            .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")))
-            .spawn()
-            .map_err(|e| {
-                format!(
-                    "ProGen launcher start failed ({}): {}",
-                    launcher.display(),
-                    e
-                )
-            })?;
+            .args(launch_args)
+            .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")));
+        command.spawn().map_err(|e| {
+            format!(
+                "ProGen launcher start failed ({}): {}",
+                launcher.display(),
+                e
+            )
+        })?;
     } else {
         Command::new(&launcher)
+            .args(launch_args)
             .spawn()
             .map_err(|e| format!("ProGen launch failed ({}): {}", launcher.display(), e))?;
     }
@@ -1051,8 +1093,10 @@ async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
     let mut out: Vec<DirEntry> = Vec::new();
     for entry in entries.filter_map(|e| e.ok()) {
         let p = entry.path();
-        let resolved = resolve_shortcut_path(&p);
-        let meta = std::fs::metadata(&resolved).ok();
+        // Desktop often contains many .lnk files. Resolving every child shortcut here
+        // spawns a shell process per entry and can flash many windows, so listing keeps
+        // child entries as-is. Explicit path navigation still resolves shortcuts above.
+        let meta = std::fs::metadata(&p).ok();
         let is_dir = meta.as_ref().map(|m| m.is_dir()).unwrap_or(false);
         let is_file = meta.as_ref().map(|m| m.is_file()).unwrap_or(false);
         if !is_dir && !is_file {
@@ -1062,7 +1106,7 @@ async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
             Some(n) => n.to_string(),
             None => continue,
         };
-        let path_str = match resolved.to_str() {
+        let path_str = match p.to_str() {
             Some(s) => s.to_string(),
             None => continue,
         };

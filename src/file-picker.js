@@ -176,6 +176,7 @@ const FILE_ICON = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" s
 const DESKTOP_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="14" x="2" y="3" rx="2"/><line x1="8" x2="16" y1="21" y2="21"/><line x1="12" x2="12" y1="17" y2="21"/></svg>';
 
 async function navigateToDesktop() {
+  if (isBusy) return;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     let desk = null;
@@ -453,6 +454,7 @@ async function loadFolder(dirPath) {
 }
 
 async function navigateInto(dirPath) {
+  if (isBusy) return;
   if (!dirPath) return;
   if (currentPath) navStack.push(currentPath);
   forwardStack = [];
@@ -496,6 +498,7 @@ async function navigateFromPathInput(rawPath) {
 }
 
 async function goBack() {
+  if (isBusy) return;
   if (navStack.length === 0) return;
   if (currentPath) forwardStack.push(currentPath);
   const prev = navStack.pop();
@@ -503,6 +506,7 @@ async function goBack() {
 }
 
 async function goForward() {
+  if (isBusy) return;
   if (forwardStack.length === 0) return;
   if (currentPath) navStack.push(currentPath);
   const next = forwardStack.pop();
@@ -510,6 +514,7 @@ async function goForward() {
 }
 
 async function goUp() {
+  if (isBusy) return;
   if (isPathRoot(currentPath)) return;
   const parent = parentDir(currentPath);
   if (!parent) return;

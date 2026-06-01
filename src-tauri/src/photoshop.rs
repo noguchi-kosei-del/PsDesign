@@ -8,6 +8,17 @@ use thiserror::Error;
 
 use crate::{jsx_gen, EditPayload};
 
+#[cfg(windows)]
+fn hide_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_cmd: &mut Command) {}
+
 const SENTINEL_TIMEOUT_SECS: u64 = 600;
 const SENTINEL_POLL_MS: u64 = 300;
 const PROGRESS_EVENT: &str = "photoshop_save_progress";
@@ -55,9 +66,10 @@ pub fn apply_edits(
     );
     let jsx_path = write_temp_jsx(&jsx, ts)?;
 
-    Command::new(&ps_path)
-        .arg("-r")
-        .arg(&jsx_path)
+    let mut command = Command::new(&ps_path);
+    command.arg("-r").arg(&jsx_path);
+    hide_console_window(&mut command);
+    command
         .spawn()
         .map_err(|e| PhotoshopError::LaunchFailed(e.to_string()))?;
     emit_progress(
@@ -177,9 +189,10 @@ impl HiddenPhotoshopWindows {
 #[cfg(windows)]
 fn cleanup_adobe_crash_processors() {
     for image_name in ["Adobe Crash Processor.exe", "Adobe Crash Handler.exe"] {
-        let _ = Command::new("taskkill")
-            .args(["/F", "/IM", image_name])
-            .output();
+        let mut command = Command::new("taskkill");
+        command.args(["/F", "/IM", image_name]);
+        hide_console_window(&mut command);
+        let _ = command.output();
     }
 }
 

@@ -35,6 +35,7 @@ import { rebuildLayerList } from "./text-editor.js";
 import { renderTxtSourceViewer } from "./txt-source.js";
 import { centerTopLeft } from "./canvas-tools.js";
 import { confirmDialog } from "./ui-feedback.js";
+import { runMechanicalChecks } from "./mechanical-checks.js";
 
 const PAGE_COUNT = 3;
 const PAGE_W = 1200;
@@ -97,5 +98,15 @@ export async function runTestMode() {
   rebuildLayerList();
   renderTxtSourceViewer();
   window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
+  await runMechanicalChecks({
+    source: "test-mode",
+    expected: {
+      psdPages: PAGE_COUNT,
+      pdfPages: PAGE_COUNT,
+      newLayers: PAGE_COUNT,
+    },
+    allowMutation: true,
+    notify: "always",
+  });
   return true;
 }
