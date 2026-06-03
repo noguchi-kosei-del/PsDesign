@@ -1,9 +1,397 @@
 use crate::EditPayload;
 
+// 【写植再利用】Photoshop で PSD を開き、全テキストレイヤーの内容・フォント・サイズ・
+// 座標・組方向を JSON に書き出し、さらに「テキストレイヤーを全て非表示にした合成画像」を
+// JPG で書き出す read-only スクリプトを生成する。ag-psd が CSP 由来等の PSD のライブ
+// テキストを解析できない問題を回避するため、Photoshop に直接読ませる。
+// PSD 自体は保存しない（doc.close DONOTSAVECHANGES）。
+pub fn generate_read_text_layers_script(
+    psd_path: &str,
+    out_json_path: &str,
+    ref_img_path: &str,
+    bg_img_path: &str,
+    sentinel_path: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str("#target photoshop\n");
+    out.push_str("app.displayDialogs = DialogModes.NO;\n");
+    out.push_str(
+        "try { app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS; } catch (e) {}\n",
+    );
+    out.push_str(&format!("var PSD_PATH = {};\n", js_string(psd_path)));
+    out.push_str(&format!("var OUT_JSON = {};\n", js_string(out_json_path)));
+    out.push_str(&format!("var REF_IMG = {};\n", js_string(ref_img_path)));
+    out.push_str(&format!("var BG_IMG = {};\n", js_string(bg_img_path)));
+    out.push_str(&format!(
+        "var SENTINEL_PATH = {};\n",
+        js_string(sentinel_path)
+    ));
+    out.push_str(READ_TEXT_BODY);
+    out
+}
+
+// 【写植再利用・一括】複数 PSD を 1 回の Photoshop セッションで処理する。
+// jobs: [(psd_jsx_path, ref_jpg_jsx_path, bg_jpg_jsx_path)]。
+// 出力 OUT_JSON は {"pages":[{ok,psdPath,docWidth,docHeight,dpi,refImage,bgImage,textLayers},...]}。
+// 1 枚ごとに Photoshop を起動し直さないので、起動・前面化の繰り返しを避けられる。
+pub fn generate_read_text_layers_batch_script(
+    jobs: &[(String, String, String)],
+    out_json_path: &str,
+    sentinel_path: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str("#target photoshop\n");
+    out.push_str("app.displayDialogs = DialogModes.NO;\n");
+    out.push_str(
+        "try { app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS; } catch (e) {}\n",
+    );
+    out.push_str(&format!("var OUT_JSON = {};\n", js_string(out_json_path)));
+    out.push_str(&format!(
+        "var SENTINEL_PATH = {};\n",
+        js_string(sentinel_path)
+    ));
+    out.push_str("var JOBS = [\n");
+    for (psd, ref_img, bg_img) in jobs {
+        out.push_str(&format!(
+            "  {{ psd: {}, ref: {}, bg: {} }},\n",
+            js_string(psd),
+            js_string(ref_img),
+            js_string(bg_img)
+        ));
+    }
+    out.push_str("];\n");
+    out.push_str(READ_TEXT_BATCH_BODY);
+    out
+}
+
+const READ_TEXT_BATCH_BODY: &str = r####"
+function writeSentinel(text) {
+  try {
+    var f = new File(SENTINEL_PATH);
+    f.encoding = "UTF-8";
+    f.open("w");
+    f.write(text);
+    f.close();
+  } catch (e) {}
+}
+function jsonStr(s) {
+  if (s === null || s === undefined) return '""';
+  s = String(s);
+  var out = '"';
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    var code = s.charCodeAt(i);
+    if (c === '"') out += '\\"';
+    else if (c === '\\') out += '\\\\';
+    else if (c === '\n') out += '\\n';
+    else if (c === '\r') out += '\\r';
+    else if (c === '\t') out += '\\t';
+    else if (code < 0x20) {
+      var h = code.toString(16);
+      while (h.length < 4) h = '0' + h;
+      out += '\\u' + h;
+    } else { out += c; }
+  }
+  return out + '"';
+}
+function jsonNum(n) {
+  if (n === null || n === undefined || isNaN(n)) return '0';
+  return String(n);
+}
+function jsonBool(b) { return b ? 'true' : 'false'; }
+
+function exportFlatJpg(doc, target) {
+  var dup = doc.duplicate();
+  try { dup.flatten(); } catch (eF) {}
+  var jpgOpts = new JPEGSaveOptions();
+  jpgOpts.quality = 11;
+  jpgOpts.embedColorProfile = false;
+  dup.saveAs(new File(target), jpgOpts, true, Extension.LOWERCASE);
+  dup.close(SaveOptions.DONOTSAVECHANGES);
+}
+
+function asPx(uv) {
+  try { return uv.as("px"); } catch (e) {
+    try { return Number(uv); } catch (e2) { return 0; }
+  }
+}
+
+// 1 PSD を処理して per-page JSON オブジェクト文字列を返す。
+function processOnePsd(psdPath, refImg, bgImg) {
+  var file = new File(psdPath);
+  if (!file.exists) {
+    return '{"ok":false,"psdPath":' + jsonStr(psdPath) + ',"error":"PSD not found"}';
+  }
+  var doc = app.open(file);
+  app.activeDocument = doc;
+  var docRes = doc.resolution;
+
+  var refOk = false;
+  try { exportFlatJpg(doc, refImg); refOk = true; } catch (eRef) {}
+
+  var textLayers = [];
+  function walk(container) {
+    for (var i = 0; i < container.layers.length; i++) {
+      var L = container.layers[i];
+      var isSet = false;
+      try { isSet = (L.typename === "LayerSet"); } catch (e) {}
+      if (isSet) { walk(L); }
+      else {
+        var isText = false;
+        try { isText = (L.kind == LayerKind.TEXT); } catch (e) {}
+        if (isText) textLayers.push(L);
+      }
+    }
+  }
+  walk(doc);
+
+  var items = [];
+  for (var i = 0; i < textLayers.length; i++) {
+    var L = textLayers[i];
+    var ti = null;
+    try { ti = L.textItem; } catch (e) {}
+    var contents = "";
+    var font = "";
+    var sizePt = 0;
+    var dir = "horizontal";
+    var visible = true;
+    try { visible = L.visible; } catch (e) {}
+    if (ti) {
+      try { contents = ti.contents; } catch (e) {}
+      try { font = ti.font; } catch (e) {}
+      try { sizePt = (ti.size && ti.size.as) ? ti.size.as("pt") : Number(ti.size); } catch (e) {}
+      try { dir = (ti.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (e) {}
+    }
+    var b = null;
+    try { b = L.bounds; } catch (e) {}
+    var left = 0, top = 0, right = 0, bottom = 0;
+    if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
+    if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
+    items.push(
+      '{"idx":' + jsonNum(i)
+      + ',"name":' + jsonStr(L.name)
+      + ',"contents":' + jsonStr(contents)
+      + ',"font":' + jsonStr(font)
+      + ',"sizePt":' + jsonNum(sizePt)
+      + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
+      + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
+      + ',"direction":' + jsonStr(dir)
+      + ',"visible":' + jsonBool(visible)
+      + '}'
+    );
+  }
+
+  for (var k = 0; k < textLayers.length; k++) {
+    try { textLayers[k].visible = false; } catch (e) {}
+  }
+  var bgOk = false;
+  try { exportFlatJpg(doc, bgImg); bgOk = true; } catch (eDup) {}
+
+  var pageJson = '{"ok":true,"psdPath":' + jsonStr(psdPath)
+    + ',"docWidth":' + jsonNum(doc.width.as ? doc.width.as("px") : doc.width)
+    + ',"docHeight":' + jsonNum(doc.height.as ? doc.height.as("px") : doc.height)
+    + ',"dpi":' + jsonNum(docRes)
+    + ',"refImage":' + jsonStr(refOk ? refImg : "")
+    + ',"bgImage":' + jsonStr(bgOk ? bgImg : "")
+    + ',"textLayers":[' + items.join(",") + ']}';
+
+  doc.close(SaveOptions.DONOTSAVECHANGES);
+  return pageJson;
+}
+
+try {
+  var prevRuler = app.preferences.rulerUnits;
+  var prevType = app.preferences.typeUnits;
+  app.preferences.rulerUnits = Units.PIXELS;
+  app.preferences.typeUnits = TypeUnits.POINTS;
+
+  var results = [];
+  for (var j = 0; j < JOBS.length; j++) {
+    try {
+      results.push(processOnePsd(JOBS[j].psd, JOBS[j].ref, JOBS[j].bg));
+    } catch (ej) {
+      results.push('{"ok":false,"psdPath":' + jsonStr(JOBS[j].psd) + ',"error":' + jsonStr(ej && ej.toString ? ej.toString() : String(ej)) + '}');
+    }
+  }
+
+  var json = '{"pages":[' + results.join(",") + ']}';
+  var jf = new File(OUT_JSON);
+  jf.encoding = "UTF-8";
+  jf.open("w");
+  jf.write(json);
+  jf.close();
+
+  app.preferences.rulerUnits = prevRuler;
+  app.preferences.typeUnits = prevType;
+  writeSentinel("OK " + JOBS.length);
+} catch (err) {
+  writeSentinel("ERROR " + (err && err.toString ? err.toString() : String(err)));
+}
+"####;
+
+const READ_TEXT_BODY: &str = r####"
+function writeSentinel(text) {
+  try {
+    var f = new File(SENTINEL_PATH);
+    f.encoding = "UTF-8";
+    f.open("w");
+    f.write(text);
+    f.close();
+  } catch (e) {}
+}
+
+// ExtendScript には JSON が無いので最小限のエンコーダを用意する。
+function jsonStr(s) {
+  if (s === null || s === undefined) return '""';
+  s = String(s);
+  var out = '"';
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    var code = s.charCodeAt(i);
+    if (c === '"') out += '\\"';
+    else if (c === '\\') out += '\\\\';
+    else if (c === '\n') out += '\\n';
+    else if (c === '\r') out += '\\r';
+    else if (c === '\t') out += '\\t';
+    else if (code < 0x20) {
+      var h = code.toString(16);
+      while (h.length < 4) h = '0' + h;
+      out += '\\u' + h;
+    } else {
+      out += c;
+    }
+  }
+  return out + '"';
+}
+function jsonNum(n) {
+  if (n === null || n === undefined || isNaN(n)) return '0';
+  return String(n);
+}
+function jsonBool(b) { return b ? 'true' : 'false'; }
+
+try {
+  var prevRuler = app.preferences.rulerUnits;
+  var prevType = app.preferences.typeUnits;
+  app.preferences.rulerUnits = Units.PIXELS;
+  app.preferences.typeUnits = TypeUnits.POINTS;
+
+  var file = new File(PSD_PATH);
+  if (!file.exists) { writeSentinel("ERROR PSD not found: " + PSD_PATH); }
+  else {
+    var doc = app.open(file);
+    app.activeDocument = doc;
+    var docRes = doc.resolution;
+
+    function exportFlatJpg(target) {
+      var dup = doc.duplicate();
+      try { dup.flatten(); } catch (eF) {}
+      var jpgOpts = new JPEGSaveOptions();
+      jpgOpts.quality = 11;
+      jpgOpts.embedColorProfile = false;
+      dup.saveAs(new File(target), jpgOpts, true, Extension.LOWERCASE);
+      dup.close(SaveOptions.DONOTSAVECHANGES);
+    }
+
+    // 見本（元テキスト入り合成画像）を先に書き出す。
+    var refOk = false;
+    try { exportFlatJpg(REF_IMG); refOk = true; } catch (eRef) {}
+
+    // 全テキストレイヤーを再帰収集（出現順＝後で保存時に同順で辿って非表示化するため）。
+    var textLayers = [];
+    function walk(container) {
+      for (var i = 0; i < container.layers.length; i++) {
+        var L = container.layers[i];
+        var isSet = false;
+        try { isSet = (L.typename === "LayerSet"); } catch (e) {}
+        if (isSet) { walk(L); }
+        else {
+          var isText = false;
+          try { isText = (L.kind == LayerKind.TEXT); } catch (e) {}
+          if (isText) textLayers.push(L);
+        }
+      }
+    }
+    walk(doc);
+
+    function asPx(uv) {
+      try { return uv.as("px"); } catch (e) {
+        try { return Number(uv); } catch (e2) { return 0; }
+      }
+    }
+
+    var items = [];
+    for (var i = 0; i < textLayers.length; i++) {
+      var L = textLayers[i];
+      var ti = null;
+      try { ti = L.textItem; } catch (e) {}
+      var contents = "";
+      var font = "";
+      var sizePt = 0;
+      var dir = "horizontal";
+      var visible = true;
+      try { visible = L.visible; } catch (e) {}
+      if (ti) {
+        try { contents = ti.contents; } catch (e) {}
+        try { font = ti.font; } catch (e) {}
+        try { sizePt = (ti.size && ti.size.as) ? ti.size.as("pt") : Number(ti.size); } catch (e) {}
+        try { dir = (ti.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (e) {}
+      }
+      var b = null;
+      try { b = L.bounds; } catch (e) {}
+      var left = 0, top = 0, right = 0, bottom = 0;
+      if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
+      // contents が空（取得失敗）ならレイヤー名で補完（PS はテキストレイヤーを内容で自動命名する）。
+      if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
+      items.push(
+        '{"idx":' + jsonNum(i)
+        + ',"name":' + jsonStr(L.name)
+        + ',"contents":' + jsonStr(contents)
+        + ',"font":' + jsonStr(font)
+        + ',"sizePt":' + jsonNum(sizePt)
+        + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
+        + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
+        + ',"direction":' + jsonStr(dir)
+        + ',"visible":' + jsonBool(visible)
+        + '}'
+      );
+    }
+
+    // テキストを全て非表示にした合成画像を JPG で書き出す（背景＝原稿表示用）。
+    // レイヤー効果（フチ等）もレイヤー非表示で一緒に消えるので、Photoshop の描画結果が
+    // そのまま「テキストを消した絵」になる。
+    for (var i = 0; i < textLayers.length; i++) {
+      try { textLayers[i].visible = false; } catch (e) {}
+    }
+    var bgOk = false;
+    try { exportFlatJpg(BG_IMG); bgOk = true; } catch (eDup) {}
+
+    var json = '{"docWidth":' + jsonNum(doc.width.as ? doc.width.as("px") : doc.width)
+      + ',"docHeight":' + jsonNum(doc.height.as ? doc.height.as("px") : doc.height)
+      + ',"dpi":' + jsonNum(docRes)
+      + ',"refImage":' + jsonStr(refOk ? REF_IMG : "")
+      + ',"bgImage":' + jsonStr(bgOk ? BG_IMG : "")
+      + ',"textLayers":[' + items.join(",") + ']}';
+    var jf = new File(OUT_JSON);
+    jf.encoding = "UTF-8";
+    jf.open("w");
+    jf.write(json);
+    jf.close();
+
+    doc.close(SaveOptions.DONOTSAVECHANGES);
+    app.preferences.rulerUnits = prevRuler;
+    app.preferences.typeUnits = prevType;
+    writeSentinel("OK " + items.length);
+  }
+} catch (err) {
+  writeSentinel("ERROR " + (err && err.toString ? err.toString() : String(err)));
+}
+"####;
+
 pub fn generate_apply_script(
     payload: &EditPayload,
     sentinel_path: &str,
     progress_path: &str,
+    quit_photoshop_after_finish: bool,
 ) -> String {
     let mut out = String::new();
     out.push_str(HEADER);
@@ -15,6 +403,10 @@ pub fn generate_apply_script(
     out.push_str(&format!(
         "var PROGRESS_PATH = {};\n",
         js_string(progress_path)
+    ));
+    out.push_str(&format!(
+        "var OPUS_QUIT_PHOTOSHOP_AFTER_FINISH = {};\n",
+        if quit_photoshop_after_finish { "true" } else { "false" }
     ));
     out.push_str("try {\n");
     out.push_str("  var __psver = photoshopVersion();\n");
@@ -209,6 +601,12 @@ pub fn generate_apply_script(
         for nl in &psd.new_layers {
             out.push_str("  {");
             out.push_str(&format!("x: {}, y: {}", nl.x, nl.y));
+            if let Some(cx) = nl.reuse_src_cx {
+                out.push_str(&format!(", reuseSrcCx: {}", cx));
+            }
+            if let Some(cy) = nl.reuse_src_cy {
+                out.push_str(&format!(", reuseSrcCy: {}", cy));
+            }
             out.push_str(&format!(", contents: {}", js_string(&nl.contents)));
             if let Some(ref f) = nl.font_post_script_name {
                 out.push_str(&format!(", font: {}", js_string(f)));
@@ -351,8 +749,17 @@ pub fn generate_apply_script(
             .page_height
             .filter(|v| v.is_finite() && *v > 0.0)
             .unwrap_or(0.0);
+        // 写植再利用モード: 非表示化する元テキストレイヤー id を JS 配列リテラルにする。
+        let hide_layer_ids_js = format!(
+            "[{}]",
+            psd.hide_layer_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>()
+                .join(",")
+        );
         out.push_str(&format!(
-            "], {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {});\n",
+            "], {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {});\n",
             js_string(&save_path),
             payload.dash_tracking_mille,
             payload.tilde_tracking_mille,
@@ -371,7 +778,15 @@ pub fn generate_apply_script(
             payload.ruby_photoshop_offset_em,
             payload.ruby_photoshop_bias_px,
             page_width,
-            page_height
+            page_height,
+            // 写植再利用: 保存時に非表示化する元テキストレイヤー id 群（末尾引数）。
+            hide_layer_ids_js,
+            // 写植再利用: true のとき元からあるテキストレイヤーを全て非表示にする。
+            if payload.reuse_hide_original_text {
+                "true"
+            } else {
+                "false"
+            }
         ));
         out.push_str("    __saveOk++;\n");
         out.push_str("  } catch (eFile) {\n");
@@ -396,6 +811,8 @@ pub fn generate_apply_script(
     out.push_str(
         "  writeSentinel(\"ERROR \" + (err && err.toString ? err.toString() : String(err)));\n",
     );
+    out.push_str("} finally {\n");
+    out.push_str("  finishOpusPhotoshopSession();\n");
     out.push_str("}\n");
     out
 }
@@ -625,6 +1042,21 @@ function closeProgress() {
   PSDESIGN_PROGRESS = null;
 }
 
+function purgeOpusPhotoshopCaches() {
+  try { app.purge(PurgeTarget.ALLCACHES); } catch (ePurgeAll) {
+    try { app.purge(PurgeTarget.CLIPBOARDCACHE); } catch (ePurgeClip) {}
+    try { app.purge(PurgeTarget.HISTORYCACHES); } catch (ePurgeHistory) {}
+  }
+}
+function finishOpusPhotoshopSession() {
+  try { purgeOpusPhotoshopCaches(); } catch (ePurge) {}
+  if (typeof OPUS_QUIT_PHOTOSHOP_AFTER_FINISH !== "undefined" && OPUS_QUIT_PHOTOSHOP_AFTER_FINISH) {
+    try { app.quit(); } catch (eQuit) {
+      addWarning("Photoshop quit failed: " + (eQuit && eQuit.toString ? eQuit.toString() : String(eQuit)));
+    }
+  }
+}
+
 // Photoshop バージョン判定。CS6 (v13) 未満は string ID の一部が未登録の可能性が
 // あるため、対象バージョンなら警告を出す。保存自体はそのまま試行する。
 function photoshopVersion() {
@@ -708,7 +1140,19 @@ function normalizeLineBreaks(s) {
 function normalizeFullWidthToHalfTcy(s, tcyEnabled) {
   if (!tcyEnabled) return s;
   if (typeof s !== "string") return s;
-  return s.replace(/！！/g, "!!").replace(/！？/g, "!?");
+  // 元 PSD は全角や「合成文字」で組まれることが多い。縦中横で半角ペアにするため:
+  //   - 単一の合成文字 ‼(U+203C) ⁇(U+2047) ⁈(U+2048) ⁉(U+2049) → 半角 2 文字へ展開
+  //     （1 文字 → 2 文字に増えるので per-char マップとは併用しない前提。写植再利用は per-char なし）
+  //   - 全角 2 連 ！！ / ！？ / ？！ / ？？ → 半角ペア（1:1）
+  return s
+    .replace(/‼/g, "!!")
+    .replace(/⁇/g, "??")
+    .replace(/⁈/g, "?!")
+    .replace(/⁉/g, "!?")
+    .replace(/！！/g, "!!")
+    .replace(/！？/g, "!?")
+    .replace(/？！/g, "?!")
+    .replace(/？？/g, "??");
 }
 
 function findLayerById(doc, id) {
@@ -2958,8 +3402,8 @@ function applyTateChuYoko(layer, contents, enabled, direction, charTateChuYokos)
         i = j;
         continue;
       }
-      // 「!!」「!?」検出 (1 ペア = 2 文字)
-      if (ch === "!" && i + 1 < fullText.length) {
+      // 「!!」「!?」「?!」「??」検出 (1 ペア = 2 文字)。半角化済みなので半角で判定。
+      if ((ch === "!" || ch === "?") && i + 1 < fullText.length) {
         var next = fullText.charAt(i + 1);
         if (next === "!" || next === "?") {
           pairs.push({ start: i, end: i + 2 });
@@ -3412,6 +3856,25 @@ function reapplyPunctuationTsumeForAllLayers(doc, tsumePct) {
   });
 }
 
+// 【写植再利用】PSD 内の全テキストレイヤー (LayerKind.TEXT) を再帰的に非表示にする。
+// 抽出テキストを newLayers として作成し直す前に呼び、元テキストとの二重表示を防ぐ。
+function hideAllTextLayers(container) {
+  for (var i = 0; i < container.layers.length; i++) {
+    var L = container.layers[i];
+    var isSet = false;
+    try { isSet = (L.typename === "LayerSet"); } catch (e) {}
+    if (isSet) {
+      hideAllTextLayers(L);
+    } else {
+      var isText = false;
+      try { isText = (L.kind == LayerKind.TEXT); } catch (e) {}
+      if (isText) {
+        try { L.visible = false; } catch (e) {}
+      }
+    }
+  }
+}
+
 // 【v1.31.x】applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定後に、
 // 連続記号ツメ (dash / tilde) を表示中テキストレイヤーへ再適用する safety net。
 function reapplyRepeatedTrackingForAllLayers(doc, dashMille, tildeMille) {
@@ -3423,6 +3886,24 @@ function reapplyRepeatedTrackingForAllLayers(doc, dashMille, tildeMille) {
       if (typeof ct === "string" && ct.length > 0) {
         applyRepeatedDashTracking(l, ct, dashTrack, tildeTrack);
       }
+    } catch (eR) {}
+  });
+}
+
+// 【写植再利用バグ修正】縦中横 (!! / !? / 半角2桁) の Phase B safety net。
+// applyDefaultTextSettingsToAllLayers の autoKerning DOM 設定が textStyleRange を flatten して
+// baselineDirection=cross を落とすため、保存直前に全テキストレイヤーへ再適用する。
+// レイヤーの組方向は PS から読み取り、縦書きのみ対象。冪等（半角化・cross 付与とも再実行安全）。
+function reapplyTateChuYokoForAllLayers(doc, enabled) {
+  if (!enabled) return;
+  visitVisibleTextLayers(doc, function (l) {
+    try {
+      var ct = l.textItem.contents;
+      if (typeof ct !== "string" || ct.length === 0) return;
+      var dir = "horizontal";
+      try { dir = (l.textItem.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (eD) {}
+      if (dir !== "vertical") return;
+      applyTateChuYoko(l, ct, enabled, dir, null);
     } catch (eR) {}
   });
 }
@@ -3488,7 +3969,7 @@ function reapplyManualTextSpacingForPayload(doc, edits, newLayers) {
   }
 }
 
-function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent, rubyLeadingPct, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx, uiPageWidth, uiPageHeight) {
+function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent, rubyLeadingPct, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx, uiPageWidth, uiPageHeight, hideLayerIds, reuseHideOriginalText) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[OPUS] skip missing: " + psdPath); return; }
   var prevUnits = app.preferences.rulerUnits;
@@ -3523,6 +4004,11 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
   }
   var doc = app.open(file);
   try {
+    // 【写植再利用】reuseHideOriginalText: 元からあるテキストレイヤーを全て非表示にする。
+    // 新規レイヤー (newLayers) はこの後に作成されるので隠れない。抽出テキストで写植し直す。
+    if (reuseHideOriginalText === true) {
+      try { hideAllTextLayers(doc); } catch (eHideAll) { addWarning("元テキスト一括非表示に失敗: " + eHideAll); }
+    }
     // 【v2.x】フォント名解決インデックスを構築。以降 resolvePhotoshopFontPS が
     // app.fonts と照合した正しい PS 名に補正する。symbolFontPostScriptName も入口で
     // 一度だけ resolve しておくと、以降のループ内で繰り返し補正する必要がなくなる。
@@ -3788,6 +4274,15 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           try { nti.direction = Direction.HORIZONTAL; } catch (eDir2) {}
         }
         nti.contents = normalizeLineBreaks(nl.contents);
+        // 【縦中横】縦書き + TCY 有効のとき、全角「！！」「！？」を半角「!!」「!?」へ先に変換する。
+        // applyTateChuYoko 内での contents 再代入（フォント等の per-char 書式が壊れる）を避けるため、
+        // フォント・書式を当てる前にここで一度だけ行う。全角→半角は char index 1:1 で per-char に影響なし。
+        if (tateChuYokoEnabled && nl.direction === "vertical") {
+          try {
+            var __halfNL = normalizeFullWidthToHalfTcy(nti.contents, true);
+            if (__halfNL !== nti.contents) nti.contents = __halfNL;
+          } catch (eHalfNL) {}
+        }
         if (typeof nl.font === "string" && nl.font.length > 0) {
           // 【v2.x】Photoshop が認識する PS 名に解決してから当てる。中丸ゴシック等の
           // -WIN-RKSJ-H サフィックス付きで Photoshop が登録している CJK フォントに対応。
@@ -3824,11 +4319,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var _actualLeft  = _b[0].as("px");
           var _actualTop   = _b[1].as("px");
           var _actualRight = _b[2].as("px");
+          var _actualBottom = _b[3].as("px");
           var _dpi = doc.resolution;
           var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
           var _ptInPx = _sizePt * (_dpi / 72);
           var _fixDx, _fixDy;
-          if (nl.direction === "vertical") {
+          if (typeof nl.reuseSrcCx === "number" && typeof nl.reuseSrcCy === "number") {
+            // 【写植再利用】作り直したテキストの「実 bounds 中心」を元レイヤー中心に合わせる。
+            // UI の枠幅推定や CSS/Photoshop のジオメトリ差・複数行の左余白に依存せず、
+            // 元の位置を厳密に再現する（左余白による右ずれを解消）。
+            var _actCx = (_actualLeft + _actualRight) / 2;
+            var _actCy = (_actualTop + _actualBottom) / 2;
+            _fixDx = nl.reuseSrcCx - _actCx;
+            _fixDy = nl.reuseSrcCy - _actCy;
+          } else if (nl.direction === "vertical") {
             // 【v2.x】縦書き位置補正:
             // canvas-tools.js layerRectForNew の bbox 幅 (thick) は:
             //   thick = ptInPx × (leadingFactor × lineCount + thickSafetyEm)
@@ -4118,6 +4622,25 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     }
     try { reapplyManualTextSpacingForPayload(doc, edits, newLayers); }
     catch (eRManualSpacing) { addWarning("manual text spacing reapply failed: " + eRManualSpacing); }
+    // 【写植再利用バグ修正】縦中横 (!! / !?) は autoKerning flatten で消えるため再適用する。
+    // 他の per-char 再適用（記号フォント / manual spacing）が textStyleRange を再構築して
+    // cross を落とさないよう、Phase B の最後に実行する。
+    if (tateChuYokoEnabled) {
+      try { reapplyTateChuYokoForAllLayers(doc, tateChuYokoEnabled); }
+      catch (eRTcy) { addWarning("縦中横の再適用に失敗: " + eRTcy); }
+    }
+    // 写植再利用モード: 抽出テキストは newLayers として作成済みなので、元のテキスト
+    // レイヤーを非表示にして二重表示を防ぐ。id で探して visible=false にするだけ。
+    if (hideLayerIds && hideLayerIds.length) {
+      for (var __hi = 0; __hi < hideLayerIds.length; __hi++) {
+        try {
+          var __hideLayer = findLayerById(doc, hideLayerIds[__hi]);
+          if (__hideLayer) __hideLayer.visible = false;
+        } catch (eHide) {
+          addWarning("元テキストレイヤー非表示化に失敗 (id " + hideLayerIds[__hi] + "): " + eHide);
+        }
+      }
+    }
     if (typeof savePath === "string" && savePath.length > 0) {
       var outFile = new File(savePath);
       try {

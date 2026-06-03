@@ -799,14 +799,23 @@ fn analyze_block_surroundings(
     image: &image::DynamicImage,
     block: &MokuroBlock,
 ) -> Option<(f64, u32, u32)> {
+    analyze_region_surroundings(image, &block.bbox, block.font_size)
+}
+
+// bbox [x1,y1,x2,y2] の外周リングを解析して (白率, エッジ変化数, 4 セグメント最小変化数) を返す。
+// analyze_block_surroundings の中核。写植再利用 (analyze_image_text_regions) でも再利用する。
+fn analyze_region_surroundings(
+    image: &image::DynamicImage,
+    bb: &[f64; 4],
+    font_size: f64,
+) -> Option<(f64, u32, u32)> {
     let (img_w, img_h) = image.dimensions();
     let img_w = img_w as i32;
     let img_h = img_h as i32;
     if img_w < 8 || img_h < 8 {
         return None;
     }
-    let bb = &block.bbox;
-    let fs = block.font_size.max(8.0);
+    let fs = font_size.max(8.0);
 
     // bbox 外側にマージンを取ってサンプリング。
     // margin が大きすぎると隣のコマ枠 / 絵柄を巻き込んで white_ratio が下がりすぎ、
@@ -907,6 +916,64 @@ fn analyze_doc_in_place(doc: &mut MokuroDocument, parent_dir: &Path) {
 pub fn export_ai_text(content: String, output_path: String) -> Result<(), String> {
     std::fs::write(&output_path, content).map_err(|e| format!("書き込み失敗: {}", e))?;
     Ok(())
+}
+
+// 【写植再利用】任意の画像（テキスト非表示の原稿背景 JPG 等）について、指定した複数の
+// テキスト領域の「周辺解析」(白率 / エッジ変化 / 4 セグメント最小変化) を返す。
+// 通常写植の自動白フチ・中丸ゴシック判定と同じ analyze_region_surroundings を使うので、
+// 再利用モードでも同一基準で「白フチ自動付与」「中丸ゴシック自動切替」を反映できる。
+#[derive(serde::Deserialize)]
+pub struct AnalyzeRegion {
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    #[serde(rename = "fontSizePx", default)]
+    pub font_size_px: f64,
+}
+
+#[derive(serde::Serialize)]
+pub struct RegionMetrics {
+    pub ok: bool,
+    #[serde(rename = "whiteRatio")]
+    pub white_ratio: f64,
+    #[serde(rename = "edgeChanges")]
+    pub edge_changes: u32,
+    #[serde(rename = "minSegmentEdgeChanges")]
+    pub min_segment_edge_changes: u32,
+}
+
+#[tauri::command]
+pub fn analyze_image_text_regions(
+    image_path: String,
+    regions: Vec<AnalyzeRegion>,
+) -> Result<Vec<RegionMetrics>, String> {
+    let image =
+        image::open(&image_path).map_err(|e| format!("画像読込失敗 ({}): {}", image_path, e))?;
+    let mut out = Vec::with_capacity(regions.len());
+    for r in &regions {
+        let bb = [r.left, r.top, r.right, r.bottom];
+        let fs = if r.font_size_px > 0.0 {
+            r.font_size_px
+        } else {
+            24.0
+        };
+        match analyze_region_surroundings(&image, &bb, fs) {
+            Some((white, edge, min_seg)) => out.push(RegionMetrics {
+                ok: true,
+                white_ratio: white,
+                edge_changes: edge,
+                min_segment_edge_changes: min_seg,
+            }),
+            None => out.push(RegionMetrics {
+                ok: false,
+                white_ratio: 1.0,
+                edge_changes: 0,
+                min_segment_edge_changes: 0,
+            }),
+        }
+    }
+    Ok(out)
 }
 
 #[derive(Serialize, Clone, Debug)]

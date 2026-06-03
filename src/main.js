@@ -68,6 +68,8 @@ import {
   hideModalAnimated,
   hideProgress,
   notifyDialog,
+  pickReuseFontSize,
+  showProgress,
   showOpusProgressComplete,
   OPUS_SUCCESS_HOLD_DURATION,
   showModalAnimated,
@@ -88,6 +90,7 @@ import {
   notifyUnsupportedBitmapPsdFiles,
   pickPsdFiles,
 } from "./services/psd-load.js";
+import { loadPsdFilesForReuse } from "./services/reuse.js";
 import { bindSaveMenu, handleSave } from "./bind/save.js";
 import { bindProjectButtons, openProject, openProjectFromPath, saveProject } from "./services/project.js";
 import {
@@ -104,6 +107,7 @@ import {
 import {
   formatTextSizePt,
   getTextSizeUnit,
+  nextTextSizeUnit,
   onTextSizeUnitChange,
   setTextSizeUnit,
   textSizeUnitLabel,
@@ -556,8 +560,8 @@ function bindTools() {
         const sign = e.key === "ArrowUp" ? +1 : -1;
         const multiplier = e.shiftKey ? 10 : 1;
         const changed = hasRangeSelection
-          ? stepTextPointSize(sign, multiplier)
-          : resizeSelectedLayers(1, sign, multiplier);
+          ? stepTextSize(sign, multiplier)
+          : resizeSelectedLayers(getSizeStepPt(), sign, multiplier);
         if (changed) {
           e.preventDefault();
           e.stopPropagation();
@@ -1479,16 +1483,17 @@ function formatSizeInputValue(pt) {
 function stepTextSize(sign, multiplier = 1) {
   const baseStep = getSizeStep();
   const current = textSizePtToUnitValue(getTextSize(), getTextSizeUnit());
-  if (!Number.isFinite(current)) return;
+  if (!Number.isFinite(current)) return false;
   const next = snapNextSize(current, baseStep, sign, multiplier);
   const nextPt = textSizeUnitValueToPt(next, getTextSizeUnit());
-  if (Number.isFinite(nextPt)) applyTextSize(nextPt);
+  if (!Number.isFinite(nextPt)) return false;
+  applyTextSize(nextPt);
+  return true;
 }
 
-function stepTextPointSize(sign, multiplier = 1) {
-  const next = snapNextSize(getTextSize(), 1, sign, multiplier);
-  applyTextSize(next);
-  return true;
+function getSizeStepPt() {
+  const pt = textSizeUnitValueToPt(getSizeStep(), getTextSizeUnit());
+  return Number.isFinite(pt) && pt > 0 ? pt : getSizeStep();
 }
 
 function bindBoldToggle() {
@@ -2986,7 +2991,14 @@ function bindSizeTool() {
     const step = getSizeStep();
     input.step = String(step);
     if (stepSelect) stepSelect.value = String(step);
-    if (unitLabel) unitLabel.textContent = textSizeUnitLabel();
+    if (unitLabel) {
+      const unit = getTextSizeUnit();
+      const nextUnit = nextTextSizeUnit(unit);
+      unitLabel.textContent = textSizeUnitLabel(unit);
+      unitLabel.dataset.textSizeUnit = unit;
+      unitLabel.setAttribute("title", `${textSizeUnitLabel(nextUnit)}に切り替え`);
+      unitLabel.setAttribute("aria-label", `文字サイズ単位: ${textSizeUnitLabel(unit)}。クリックで${textSizeUnitLabel(nextUnit)}に切り替え`);
+    }
   };
   syncStepControls();
   onSettingsChange(syncStepControls);
@@ -3018,6 +3030,10 @@ function bindSizeTool() {
   stepSelect?.addEventListener("change", () => {
     setDefault("textSizeStep", normalizeSizeStep(stepSelect.value));
     syncStepControls();
+  });
+  unitLabel?.addEventListener("mousedown", (e) => e.preventDefault());
+  unitLabel?.addEventListener("click", () => {
+    setTextSizeUnit(nextTextSizeUnit());
   });
   dec.addEventListener("click", () => stepTextSize(-1));
   inc.addEventListener("click", () => stepTextSize(+1));
@@ -4777,9 +4793,81 @@ async function startHomeTranscribeFlow() {
   }
 }
 
+// 【リサイクル】ホームの「リサイクル」カードから起動。スキャンエンジン (OCR) は使わず、
+// PSD のテキストレイヤーを直接抽出するため、エンジン未インストールでも利用可能。
+async function startHomeReuseFlow() {
+  let files = [];
+  try {
+    files = await pickPsdFiles();
+  } catch (e) {
+    console.error(e);
+    toast(`ファイル選択に失敗しました: ${e?.message ?? e}`, { kind: "error", duration: 3500 });
+    return;
+  }
+  if (!files.length) return;
+
+  // フォント・サイズを「元のまま再現」するか「選んで統一」するかを選ばせる。
+  const reproduce = await confirmDialog({
+    title: "フォント・サイズの扱い",
+    message: "再生成するテキストのフォントとサイズをどうしますか？\n\n"
+      + "・「元を再現」… 元レイヤーのフォント・サイズを再現します。\n"
+      + "・「選んで統一」… 指定したフォント・サイズで全テキストを統一します（位置は元のまま）。",
+    confirmLabel: "元を再現",
+    cancelLabel: "選んで統一",
+  });
+  const fontSizeMode = reproduce ? "reproduce" : "select";
+  let unifyFont = null;
+  let unifySize = null;
+  if (fontSizeMode === "select") {
+    // 統一に使うフォント種類とサイズをユーザーに選ばせる。
+    const fontList = getFonts()
+      .map((f) => ({ postScriptName: f.postScriptName, label: getFontDisplayName(f.postScriptName) || f.name || f.postScriptName }))
+      .filter((f) => f.postScriptName)
+      .sort((a, b) => String(a.label).localeCompare(String(b.label), "ja"));
+    const picked = await pickReuseFontSize({
+      fonts: fontList,
+      defaultFontPs: getDefault("fontPostScriptName"),
+      defaultSizePt: Number(getDefault("textSize")) || 12,
+    });
+    if (!picked) return; // キャンセル → 開始を中止
+    unifyFont = picked.fontPostScriptName;
+    unifySize = picked.sizePt;
+  }
+
+  // 他のスタートカードと同じ 3 段演出 (暗転 → 星空 → 進捗立ち上がり)。
+  await transitionFromHome({
+    afterStarsPeak: () => {
+      showProgress({
+        title: "リサイクルを準備中…",
+        detail: "PSD を解析中…",
+        current: 0,
+        total: files.length,
+        variant: "load",
+      });
+    },
+  });
+  try {
+    setParallelViewMode("parallel");
+    await loadPsdFilesForReuse(files, { keepProgressOpen: true, fontSizeMode, unifyFont, unifySize });
+    if (!getPages().length) {
+      await hideProgress();
+      return;
+    }
+    await transitionToWorkspaceWithStars();
+  } catch (e) {
+    console.error(e);
+    await hideProgress();
+    await notifyDialog({
+      title: "リサイクルを開始できません",
+      message: String(e?.message ?? e ?? "不明なエラー"),
+    });
+  }
+}
+
 function bindHomeScreen() {
   document.getElementById("home-transcribe-start-btn")?.addEventListener("click", () => { void startHomeTranscribeFlow(); });
   document.getElementById("home-typeset-start-btn")?.addEventListener("click", () => { void startHomeTypesetFlow(); });
+  document.getElementById("home-reuse-start-btn")?.addEventListener("click", () => { void startHomeReuseFlow(); });
   document.getElementById("home-project-open-btn")?.addEventListener("click", () => { void openProject(); });
   window.addEventListener("psdesign:scan-model-status", (e) => {
     setHomeScanEngineState(!!e.detail?.available);
@@ -4811,6 +4899,9 @@ async function closeStartupSplash() {
 }
 
 function init() {
+  // init の途中で例外が出てもスプラッシュは必ず閉じる（finally）。これがないと
+  // bind 系のどれか 1 つが throw しただけで起動前画面が残り、メインが表示されない。
+  try {
   applyThemeColor();
   void syncHomeVersionLabel();
   bindProjectButtons();
@@ -4885,7 +4976,12 @@ function init() {
   });
   maybeShowFirstRunSetup();
   void openStartupFilesFromArgs();
-  void closeStartupSplash();
+  } catch (e) {
+    console.error("[OPUS] init failed:", e);
+  } finally {
+    // 成功・失敗にかかわらずスプラッシュを閉じてメインウィンドウを表示する。
+    void closeStartupSplash();
+  }
 }
 
 function bindGlobalBlurOnOutsideClick() {

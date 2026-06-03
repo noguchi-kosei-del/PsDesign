@@ -242,6 +242,39 @@
   measureAllRubyOffsetsSync で埋めた値が serde で渡ること。
   - 確認: ルビ位置が PSD に反映されること（REQ-G6.1 / G10.7 と併せて手動）。
 
+### G12. 写植再利用モード — `src/services/reuse.js` / `src/psd-loader.js` / `src-tauri/src/jsx_gen.rs`（v2.3.0）
+
+「文字入り PSD」を読み込み、文字を剥がして同位置・同内容で編集テキストとして作り直すモード。
+テキスト反映ロジック（再生成・中心合わせ・元テキスト非表示・縦中横）の不変条件。
+
+- **REQ-G12.1 元テキスト非表示**: 原稿ペインの背景は **bgImage（全テキストレイヤーを非表示にして
+  書き出した「絵だけ」画像）**を使う。保存時は `reuseHideOriginalText`（appMode==="reuse"）→
+  jsx_gen `hideAllTextLayers(doc)` ＋ `hideLayerIds` で**元テキストを全非表示**にし、抽出テキスト
+  （newLayers）で写植し直す。元テキストとの**二重表示をしない**。
+  - 確認: 写植再利用で読み込んだ原稿に元の文字が残っていない。保存後の PSD で元テキストレイヤーが非表示。
+- **REQ-G12.2 同座標再生成**: `extractTextLayersToNewLayers` が `reusePsTextItems`（Photoshop 実読み）を
+  優先し、無ければ ag-psd 抽出にフォールバックして、各テキストを **同じ内容・組方向で新規編集レイヤー化**する。
+  内容は `\r`→`\n` 正規化。
+  - 確認: 再生成テキストが元と同じ文章・縦横で編集できる。
+- **REQ-G12.3 中心合わせ（UI）**: `layerRectForNew` は実テキスト寸法 `textLongPx`（measureText 由来）/
+  `textThickPx`（thickSum）を返し、`alignReuseLayersToSourceCenters(targets, pages)` がフォントロード後に
+  **実テキスト中心を元レイヤー中心に合わせる**（縦書きは厚み=右アンカー）。**DOM 測定
+  （`uiTextBasisRectForBox`）は枠を測ってしまうため中心合わせに使わない。**
+  - 確認: 再生成テキストが見本と同じ位置に重なる。
+- **REQ-G12.4 中心合わせ（保存）**: 各再生成レイヤーは `reuseSrcCx/Cy`（元中心 PSD px）を持ち、保存の位置補正で
+  **実 bounds 中心を `reuseSrcCx/Cy` に合わせる**。`exportEdits`（…rest 経由）→ Rust `NewLayer.reuse_src_cx/cy`
+  （serde rename）→ jsx_gen emit/位置補正、の3層に**欠落なく**渡す（REQ-G11.1 と同じ規律）。
+  - 確認: 保存後の PSD のテキストが元位置に重なる。
+- **REQ-G12.5 枠の詰め＋autofit除外**: 詰め枠レイヤーは `reuseTightThick` で厚み安全余白を 0 にし、box に
+  `layer-box-reuse-tight` を付けて **`scheduleBoxAutoFit` から除外**する（autofit が右へ広げて縦書きを右ずれ
+  させるのを防ぐ）。`reuseTightThick` は UI 専用 boolean（Rust 側 struct には不要、unknown field は無視）。
+  - 確認: 縦書き複数列で左余白が出ない。ページ切替の再描画で右にずれない。
+- **REQ-G12.6 縦中横の保存反映**: 全角 2 連 `！！/！？/？！/？？` と単一合成文字 `‼⁇⁈⁉` を**半角 2 文字へ変換**して
+  縦中横対象にする。変換は **新規レイヤー作成直後（書式適用前）に一度だけ**行い、`applyTateChuYoko` 内で contents を
+  再代入して書式を壊さない。autoKerning flatten で cross が落ちるため `reapplyTateChuYokoForAllLayers` を
+  **Phase B の最後**に実行する（記号フォント/manual spacing 再適用の後）。
+  - 確認: 写植再利用で `!! / !? / ‼ / ⁉` 等が保存後の PSD で縦中横になる（通常写植と同じ）。
+
 ---
 
 ## 3. 移植機能の要件（PORT_NOTES_2026-05-29）
@@ -327,6 +360,8 @@ GitHub に push する前に、以下を上から順に実施する。
    - REQ-G11.1: JS payload と Rust struct の双方に新フィールドを足したか。
    - REQ-G4.5 / G10.7: bbox の縦書き thickSafety を変えたなら、JS 3 関数と JSX
      `_thickSafetyEm` を同値に揃えたか（不一致だと縦書きテキストが UI↔PSD でズレる）。
+   - REQ-G12.4: 写植再利用の `reuseSrcCx/Cy` を JS→Rust→JSX の3層に渡したか。
+   - REQ-G12.6: 縦中横は半角化を作成時に1回＋`reapplyTateChuYoko` を Phase B 最後で再適用したか。
 3. **[最低限の手動スモークテスト]**（`npm run tauri dev` 実機、テストモード可）:
    1. ルビを適用 → 保存 → 再オープンしてルビが保持される。
    2. 本文の前方を編集しても per-char 属性（サイズ/フォント/太字/ルビ）が正しい文字に残る。

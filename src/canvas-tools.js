@@ -1686,7 +1686,9 @@ export function layerRectForNew(page, nl) {
   // 足すと余白が必ず box の「左側」に溜まる（右側は autofit が content +1px にハグして除去）。
   // → 縦書きは thick safety を 0 にして content を nl.x まで詰める。横書きは content が上端に
   //   寄り、余白は下側（= autofit が除去）に出るため従来どおり安全余白を残す。
-  const thickSafety = isVertical
+  // 【写植再利用】reuseTightThick=true のレイヤーは厚み方向の安全余白を 0 にして、枠を
+  // 実テキスト列幅ぴったりに詰める（複数列で左側に余白＝右ずれに見える問題を解消）。
+  const thickSafety = (isVertical || nl.reuseTightThick === true)
     ? 0
     : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM);
   const longSafety = TEXT_BBOX_LONG_SAFETY_EM;
@@ -1699,7 +1701,14 @@ export function layerRectForNew(page, nl) {
   const long = Math.min(longRaw, maxLong);
   const width = isVertical ? thick : long;
   const height = isVertical ? long : thick;
-  return { left: nl.x, top: nl.y, right: nl.x + width, bottom: nl.y + height, width, height, isVertical, ptInPsdPx };
+  // 実テキストの描画寸法（PSD px）。枠は安全余白で大きめに出るので、中心合わせ用に
+  // 「実テキスト長（長軸）= measureText 由来 measuredEm」「実テキスト厚み = thickSum」を別途返す。
+  const textLongPx = (Number.isFinite(measuredEm) && measuredEm > 0 ? measuredEm : longChars) * ptInPsdPx;
+  const textThickPx = thickSum * ptInPsdPx;
+  return {
+    left: nl.x, top: nl.y, right: nl.x + width, bottom: nl.y + height,
+    width, height, isVertical, ptInPsdPx, textLongPx, textThickPx,
+  };
 }
 
 function rectsIntersect(a, b) {
@@ -1914,6 +1923,7 @@ function renderOverlay(ctx) {
         if (badge) box.appendChild(badge);
       }
     }
+    bindHoverSelect(box, ctx, layer.id);
     box.addEventListener("mousedown", (e) => onExistingLayerMouseDown(e, ctx, layer));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, layer.id), { passive: false });
     overlay.appendChild(box);
@@ -1929,6 +1939,9 @@ function renderOverlay(ctx) {
     box.dataset.direction = rect.isVertical ? "vertical" : "horizontal";
     applyLayerBoxRotation(box, rotation);
     box.classList.add("text-box-preview");
+    // 【写植再利用】詰め枠は明示サイズ・明示位置なので autofit（はみ出し検知で枠を広げる）対象外にする。
+    // autofit が白フチのにじみ等を含めて右へ広げ、右アンカーの縦書きテキストが右へずれるのを防ぐ。
+    if (nl.reuseTightThick === true) box.classList.add("layer-box-reuse-tight");
     // 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置で背景/ウニ判定によりフォント切替された印
     // (UI 色強調用)。bucket = 0..5 の 10% 刻みでスコア帯ごとに別色 (青→緑→黄→橙→赤→濃赤)。
     if (nl.autoFontSwitched) {
@@ -2016,6 +2029,7 @@ function renderOverlay(ctx) {
         if (newBadge) box.appendChild(newBadge);
       }
     }
+    bindHoverSelect(box, ctx, nl.tempId);
     box.addEventListener("mousedown", (e) => onNewLayerMouseDown(e, ctx, nl));
     box.addEventListener("wheel", (e) => onLayerWheel(e, ctx, nl.tempId), { passive: false });
     overlay.appendChild(box);
@@ -2364,6 +2378,50 @@ function uiTextBasisRectForBox(box) {
   };
 }
 
+// 【写植再利用】再生成テキストの中心を、元レイヤーの bbox 中心に合わせる（決定論的）。
+// targets: [{ psdPath, tempId, cx, cy }]（cx/cy = 元レイヤー bbox 中心の PSD px）。
+// pages: 全ページ配列。フォントロード完了後（measureText 確定）に呼ぶ。DOM 非依存・全ページ一括。
+//
+// .new-layer-text は padding なし・始端アンカー。実テキスト寸法（textLongPx/textThickPx）で中央に置く:
+//   - 厚み軸（横=Y / 縦=X）: textThickPx を中央配置（横=上アンカー / 縦 vertical-rl=右アンカー）。
+//   - 長軸: textLongPx を中央配置（始端アンカー）。
+// ※注: DOM 測定（uiTextBasisRectForBox）は内側要素＝枠を測ってしまい実グリフではないため使わない。
+export function alignReuseLayersToSourceCenters(targets, pages) {
+  if (!Array.isArray(targets) || targets.length === 0) return 0;
+  const pageByPath = new Map();
+  for (const p of (Array.isArray(pages) ? pages : [])) {
+    if (p && p.path) pageByPath.set(p.path, p);
+  }
+  let moved = 0;
+  for (const t of targets) {
+    if (!t || !Number.isFinite(t.cx) || !Number.isFinite(t.cy)) continue;
+    const page = pageByPath.get(t.psdPath);
+    if (!page) continue;
+    const nl = getNewLayersForPsd(t.psdPath).find((l) => l.tempId === t.tempId);
+    if (!nl) continue;
+    const rect = layerRectForNew(page, nl);
+    if (!rect || !(rect.width > 0) || !(rect.height > 0)) continue;
+    const longPx = Number.isFinite(rect.textLongPx) && rect.textLongPx > 0
+      ? rect.textLongPx : (rect.isVertical ? rect.height : rect.width);
+    const thickPx = Number.isFinite(rect.textThickPx) && rect.textThickPx > 0
+      ? rect.textThickPx : (rect.isVertical ? rect.width : rect.height);
+    let x;
+    let y;
+    if (rect.isVertical) {
+      x = t.cx - rect.width + thickPx / 2;
+      y = t.cy - longPx / 2;
+    } else {
+      x = t.cx - longPx / 2;
+      y = t.cy - thickPx / 2;
+    }
+    if (!Number.isFinite(x) || !Number.isFinite(y)) continue;
+    if (Math.abs((nl.x ?? 0) - x) < 0.25 && Math.abs((nl.y ?? 0) - y) < 0.25) continue;
+    updateNewLayer(t.tempId, { x, y });
+    moved += 1;
+  }
+  return moved;
+}
+
 // 1 ctx 分の ruby 位置測定 (同期、副作用は state 書き戻しのみ)。
 // rAF 版と save-time 同期版から共有する内部実装。
 function measureRubyOffsetsForOverlay(overlay, canvas, page) {
@@ -2581,6 +2639,8 @@ function scheduleBoxAutoFit(ctx) {
     if (overlayW <= 0 || overlayH <= 0) return;
     for (const box of ctx.overlay.querySelectorAll(".layer-box")) {
       if (box.classList.contains("editing")) continue;
+      // 写植再利用の詰め枠は明示サイズのため autofit しない（右ずれ防止）。
+      if (box.classList.contains("layer-box-reuse-tight")) continue;
       // 回転済みの box は getClientRects() が回転後の外接矩形を返すため、
       // その値で幅/高さを書き戻すと縦書きテキストが再流し込みされて崩れる。
       if (box.style.transform && box.style.transform !== "none") continue;
@@ -4008,6 +4068,9 @@ export function maybeApplyStickyFont() {
 const DBLCLICK_THRESHOLD_MS = 350;
 let lastLayerClickAt = 0;
 let lastLayerClickKey = null;
+const HOVER_SELECT_DELAY_MS = 700;
+let hoverSelectTimer = null;
+let hoverSelectToken = 0;
 
 function isLayerDoubleClick(pageIndex, layerKey) {
   const now = performance.now();
@@ -4016,6 +4079,41 @@ function isLayerDoubleClick(pageIndex, layerKey) {
   lastLayerClickAt = now;
   lastLayerClickKey = composite;
   return isDouble;
+}
+
+function cancelHoverSelect() {
+  hoverSelectToken += 1;
+  if (hoverSelectTimer !== null) {
+    clearTimeout(hoverSelectTimer);
+    hoverSelectTimer = null;
+  }
+}
+
+function scheduleHoverSelect(box, ctx, layerId) {
+  if (getTool() !== "move") return;
+  if (box?.classList?.contains("editing")) return;
+  if (isLayerSelected(ctx.pageIndex, layerId)) return;
+  cancelHoverSelect();
+  const token = hoverSelectToken;
+  hoverSelectTimer = window.setTimeout(() => {
+    hoverSelectTimer = null;
+    if (token !== hoverSelectToken) return;
+    if (!box.isConnected || !box.matches(":hover")) return;
+    if (getTool() !== "move") return;
+    if (document.querySelector(".layer-box.editing")) return;
+    if (isLayerSelected(ctx.pageIndex, layerId)) return;
+    temporaryMultiSelectionAdornmentsVisible = false;
+    showSelectedLayerBadges();
+    setSelectedLayer(ctx.pageIndex, layerId);
+    renderOverlay(ctx);
+    rebuildLayerList();
+  }, HOVER_SELECT_DELAY_MS);
+}
+
+function bindHoverSelect(box, ctx, layerId) {
+  box.addEventListener("mouseenter", () => scheduleHoverSelect(box, ctx, layerId));
+  box.addEventListener("mouseleave", cancelHoverSelect);
+  box.addEventListener("mousedown", cancelHoverSelect);
 }
 
 // V（選択）ツール選択中にテキストフレームをダブルクリックすると、in-place 編集を開始する。

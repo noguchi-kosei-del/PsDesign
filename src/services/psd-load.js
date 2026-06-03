@@ -6,7 +6,7 @@
 // `psdesign:psd-loaded` の CustomEvent を window に dispatch する。main.js 側は init() で
 // 1 度だけリスナーを張り、必要な update 関数群を呼ぶ。
 
-import { addPage, clearPages, hasEdits, setFolder } from "../state.js";
+import { addPage, clearPages, hasEdits, setFolder, setAppMode } from "../state.js";
 import { confirmDialog, hideProgress, notifyDialog, showProgress, toast, updateProgress } from "../ui-feedback.js";
 import { withProgressFlow } from "../progress-flow.js";
 import { renderAllSpreads } from "../spread-view.js";
@@ -131,6 +131,8 @@ export async function loadPsdFilesByPaths(files, {
     files = files.filter((path) => !unsupportedSet.has(path));
     if (!files.length) return;
   }
+  // 通常の PSD 読込なので写植再利用モードを解除する（reuse から通常へ切替えたケース対応）。
+  setAppMode("normal");
   // 最初に選んだファイルの親ディレクトリを「別名で保存」の既定フォルダ名算出に使う。
   setFolder(parentDir(files[0]) ?? null);
   // PSD を読み込み直すタイミングでガイドロックは解除。新しい PSD のガイドが

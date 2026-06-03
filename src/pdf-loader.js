@@ -191,6 +191,20 @@ function makeCompositeDoc(sources) {
   };
 }
 
+// 【写植再利用】メモリ上の canvas 群（元テキスト入りの合成画像）を見本 doc にする。
+//   items: Array<{ canvas: HTMLCanvasElement, path: string }>
+// 各 canvas を ImageBitmap 化して makeImagePage に渡すので pdf-view.js と互換。
+// getSourcePath で各ページの元 PSD パスを返す（ステージのファイル名表示用）。
+export async function buildReferenceDocFromCanvases(items) {
+  const sources = [];
+  for (const it of Array.isArray(items) ? items : []) {
+    if (!it?.canvas) continue;
+    const bitmap = await createImageBitmap(it.canvas);
+    sources.push({ type: "image", bitmap, path: it.path ?? null });
+  }
+  return makeCompositeDoc(sources);
+}
+
 // テストモード用: ディスク I/O 無しで白紙 count ページの見本（合成 doc）を作る。
 // 既存の makeCompositeDoc / makeImagePage をそのまま再利用するので pdf-view.js と互換。
 export async function buildBlankReferenceDoc(count, width, height) {

@@ -1,9 +1,17 @@
 const TEXT_SIZE_UNIT_KEY = "psdesign_text_size_unit";
 const PT_PER_Q = 72 / 25.4 * 0.25;
+const PT_PER_MM = 72 / 25.4;
+const TEXT_SIZE_UNITS = ["pt", "q", "mm"];
 const listeners = new Set();
 
 export function normalizeTextSizeUnit(unit) {
-  return unit === "q" ? "q" : "pt";
+  return TEXT_SIZE_UNITS.includes(unit) ? unit : "pt";
+}
+
+export function nextTextSizeUnit(unit = getTextSizeUnit()) {
+  const current = normalizeTextSizeUnit(unit);
+  const index = TEXT_SIZE_UNITS.indexOf(current);
+  return TEXT_SIZE_UNITS[(index + 1) % TEXT_SIZE_UNITS.length];
 }
 
 export function getTextSizeUnit() {
@@ -30,19 +38,28 @@ export function onTextSizeUnitChange(fn) {
 }
 
 export function textSizeUnitLabel(unit = getTextSizeUnit()) {
-  return normalizeTextSizeUnit(unit) === "q" ? "級" : "pt";
+  const normalized = normalizeTextSizeUnit(unit);
+  if (normalized === "q") return "級";
+  if (normalized === "mm") return "mm";
+  return "pt";
 }
 
 export function textSizePtToUnitValue(pt, unit = getTextSizeUnit()) {
   const n = Number(pt);
   if (!Number.isFinite(n)) return null;
-  return normalizeTextSizeUnit(unit) === "q" ? n / PT_PER_Q : n;
+  const normalized = normalizeTextSizeUnit(unit);
+  if (normalized === "q") return n / PT_PER_Q;
+  if (normalized === "mm") return n / PT_PER_MM;
+  return n;
 }
 
 export function textSizeUnitValueToPt(value, unit = getTextSizeUnit()) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
-  return normalizeTextSizeUnit(unit) === "q" ? n * PT_PER_Q : n;
+  const normalized = normalizeTextSizeUnit(unit);
+  if (normalized === "q") return n * PT_PER_Q;
+  if (normalized === "mm") return n * PT_PER_MM;
+  return n;
 }
 
 export function formatTextSizeUnitValue(value) {

@@ -2344,6 +2344,102 @@ export function promptDialog({
   });
 }
 
+// 【写植再利用】「既定で統一」用：フォント種類とサイズを選ぶダイアログ。
+// confirm-modal を流用し、メッセージ直下にフォント <select> とサイズ <input number> を挿入する。
+// fonts: [{ postScriptName, label }]。OK で { fontPostScriptName, sizePt } を resolve、
+// キャンセル / Esc / 背景クリックで null を resolve。
+export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizePt = 12 } = {}) {
+  return new Promise((resolve) => {
+    const modal = $("confirm-modal");
+    const titleEl = $("confirm-modal-title");
+    const msgEl = $("confirm-modal-message");
+    const okBtn = $("confirm-modal-ok");
+    const cancelBtn = $("confirm-modal-cancel");
+    if (!modal || !okBtn || !cancelBtn || !msgEl) { resolve(null); return; }
+    if (titleEl) {
+      titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
+      titleEl.textContent = "統一するフォントとサイズ";
+    }
+    msgEl.textContent = "再生成する全テキストに適用するフォントとサイズを選んでください。";
+    okBtn.textContent = "この設定で統一";
+    cancelBtn.textContent = "キャンセル";
+
+    const wrap = document.createElement("div");
+    wrap.className = "reuse-fontsize-fields";
+
+    const fontLabel = document.createElement("label");
+    fontLabel.className = "reuse-fontsize-label";
+    fontLabel.textContent = "フォント";
+    const fontSel = document.createElement("select");
+    fontSel.className = "prompt-modal-input reuse-fontsize-select";
+    if (!fonts.length) {
+      const opt = document.createElement("option");
+      opt.value = defaultFontPs || "";
+      opt.textContent = defaultFontPs || "(既定)";
+      opt.selected = true;
+      fontSel.appendChild(opt);
+    }
+    for (const f of fonts) {
+      if (!f || !f.postScriptName) continue;
+      const opt = document.createElement("option");
+      opt.value = f.postScriptName;
+      opt.textContent = f.label || f.postScriptName;
+      if (f.postScriptName === defaultFontPs) opt.selected = true;
+      fontSel.appendChild(opt);
+    }
+
+    const sizeLabel = document.createElement("label");
+    sizeLabel.className = "reuse-fontsize-label";
+    sizeLabel.textContent = "サイズ (pt)";
+    const sizeInput = document.createElement("input");
+    sizeInput.type = "number";
+    sizeInput.className = "prompt-modal-input reuse-fontsize-size";
+    sizeInput.min = "6";
+    sizeInput.max = "999";
+    sizeInput.step = "0.1";
+    sizeInput.value = String(Number.isFinite(defaultSizePt) && defaultSizePt > 0 ? defaultSizePt : 12);
+
+    wrap.appendChild(fontLabel);
+    wrap.appendChild(fontSel);
+    wrap.appendChild(sizeLabel);
+    wrap.appendChild(sizeInput);
+    msgEl.parentNode.insertBefore(wrap, msgEl.nextSibling);
+
+    okBtn.classList.remove("page-jump-btn-place");
+    if (!okBtn.classList.contains("page-jump-btn-primary")) okBtn.classList.add("page-jump-btn-primary");
+    showModalAnimated(modal);
+
+    const cleanup = (result) => {
+      hideModalAnimated(modal);
+      setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, MODAL_ANIM_MS);
+      okBtn.removeEventListener("click", onOk);
+      cancelBtn.removeEventListener("click", onCancel);
+      modal.removeEventListener("mousedown", onOverlay);
+      document.removeEventListener("keydown", onKey);
+      resolve(result);
+    };
+    const onOk = () => {
+      const ps = fontSel.value || null;
+      const sz = parseFloat(sizeInput.value);
+      cleanup({
+        fontPostScriptName: ps,
+        sizePt: Number.isFinite(sz) && sz > 0 ? Math.min(999, Math.max(6, sz)) : null,
+      });
+    };
+    const onCancel = () => cleanup(null);
+    const onOverlay = (e) => { if (e.target === modal) cleanup(null); };
+    const onKey = (e) => {
+      if (e.key === "Escape") { e.preventDefault(); cleanup(null); }
+      else if (e.key === "Enter") { e.preventDefault(); onOk(); }
+    };
+    okBtn.addEventListener("click", onOk);
+    cancelBtn.addEventListener("click", onCancel);
+    modal.addEventListener("mousedown", onOverlay);
+    document.addEventListener("keydown", onKey);
+    requestAnimationFrame(() => fontSel.focus());
+  });
+}
+
 export function toast(_message, _opts = {}) {
   // Right-top toast notifications are intentionally disabled app-wide.
 }

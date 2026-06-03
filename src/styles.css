@@ -763,6 +763,23 @@ body.home-mode .toolbar .settings-toolbar-btn {
   font-size: 11px;
   margin-left: 2px;
 }
+.size-unit-toggle {
+  min-width: 24px;
+  padding: 2px 4px;
+  margin-left: 0;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  background: transparent;
+  font: 700 11px/1 var(--ui-font);
+  letter-spacing: 0;
+  cursor: pointer;
+}
+.size-unit-toggle:hover,
+.size-unit-toggle:focus-visible {
+  color: var(--accent);
+  border-color: var(--border);
+  outline: none;
+}
 .size-row {
   display: flex;
   align-items: center;
@@ -1698,10 +1715,11 @@ body.home-starting .home-screen {
 }
 .home-start-grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(220px, 276px));
+  /* 4 cards (書き起こし / 写植 / リサイクル / プロジェクト) in a single row. */
+  grid-template-columns: repeat(4, minmax(220px, 276px));
   justify-content: center;
   gap: 28px;
-  width: min(900px, calc(100vw - 120px));
+  width: min(1188px, calc(100vw - 120px));
   /* v2.2.x: Ver + 光の横線が hero グラデ境界に絶対配置。カード grid は divider より
      下に来るよう margin-top を確保しつつ、下げ過ぎないバランス値に。 */
   margin-top: clamp(120px, 22vh, 240px);
@@ -2964,7 +2982,7 @@ body.home-starting .home-screen {
     margin-top: 8px;
   }
   .home-start-grid {
-    margin-top: clamp(40px, 8vh, 80px);
+    margin-top: clamp(128px, 20vh, 160px);
   }
   .home-start-card {
     min-height: 176px;
@@ -3879,6 +3897,22 @@ body.home-starting .home-screen {
 }
 .prompt-modal-input:focus {
   border-color: var(--accent);
+}
+/* 【写植再利用】統一フォント・サイズ選択ダイアログ */
+.reuse-fontsize-fields {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 4px;
+  min-width: min(420px, calc(100vw - 80px));
+  text-align: left;
+}
+.reuse-fontsize-label {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-top: 6px;
+}
+.reuse-fontsize-fields .prompt-modal-input {
+  margin: 2px 0 0;
 }
 .project-save-form {
   display: grid;

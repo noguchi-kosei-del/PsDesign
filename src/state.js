@@ -47,6 +47,11 @@ const state = {
   scanExtractTextSourceListeners: new Set(),
   scanExtractTextDiffs: [],
   scanExtractTextDiffListeners: new Set(),
+  // 【写植再利用】PSD ごとの再利用情報。
+  //   psdPath -> { hideLayerIds: number[], referenceCanvas: HTMLCanvasElement }
+  // hideLayerIds: 保存時に visible=false にする元テキストレイヤー id 群。
+  // referenceCanvas: 元テキスト入りの合成画像 (見本 + プロジェクト保存時の JPG 化用)。
+  reuseInfo: new Map(),
 };
 
 const HISTORY_MAX = 100;
@@ -156,6 +161,10 @@ const $parallelSyncMode = createObservable(true, _normBool);
 const $activePane = createObservable("psd", _normActivePane);
 const $parallelViewMode = createObservable("parallel", _normParallelViewMode);
 const $editorLeftPaneMode = createObservable("proofread", _normEditorLeftPaneMode);
+// 【写植再利用】アプリの動作モード。"normal" = 通常の写植 / "reuse" = 写植再利用。
+// reuse のとき: PSD 編集ペインはテキスト除去版を表示、保存時に元テキストレイヤーを
+// 非表示化、プロジェクト保存時に見本を JPG 化する。ホームに戻ると normal に戻す。
+const $appMode = createObservable("normal", (v) => (v === "reuse" ? "reuse" : "normal"));
 // V ツールで空所をダブルクリックして新規テキスト入力を開くときの方向。
 // サイドツールバーの V ボタン直下にあるトグルで切替・localStorage に永続化。
 const $newTextDirection = createObservable("vertical", _normNewTextDir);
@@ -180,6 +189,8 @@ export function clearPages() {
   state.selectedLayers = [];
   state.edits.clear();
   state.newLayers = [];
+  // 写植再利用情報も PSD と一緒にクリア。再利用フローはこの後 setReuseInfo で再登録する。
+  state.reuseInfo.clear();
   const prev = state.currentPageIndex;
   state.currentPageIndex = 0;
   if (prev !== 0) {
@@ -1496,10 +1507,16 @@ export function exportEdits() {
     rubyLeadingPct,
     rubyPhotoshopOffsetEm,
     rubyPhotoshopBiasPx,
+    // 写植再利用モード: 保存時に「元から PSD にあるテキストレイヤーを全て非表示」にする。
+    // 抽出テキストは newLayers として新規作成されるため、元テキストは隠して置き換える。
+    // id を持たない PSD でも確実に隠せるよう、id 指定ではなく「全テキスト非表示」方式。
+    reuseHideOriginalText: $appMode.get() === "reuse",
     edits: Array.from(byPsd.entries()).map(([psdPath, { layers, newLayers }]) => ({
       psdPath,
       layers,
       newLayers,
+      // 写植再利用: 保存時に非表示化する元テキストレイヤー id 群。通常モードは空配列。
+      hideLayerIds: state.reuseInfo.get(psdPath)?.hideLayerIds ?? [],
     })),
   };
 }
@@ -1848,6 +1865,32 @@ export const onParallelViewModeChange = $parallelViewMode.on;
 export const getEditorLeftPaneMode = $editorLeftPaneMode.get;
 export const setEditorLeftPaneMode = $editorLeftPaneMode.set;
 export const onEditorLeftPaneModeChange = $editorLeftPaneMode.on;
+
+// 【写植再利用】アプリ動作モード ("normal" | "reuse")。
+export const getAppMode = $appMode.get;
+export const setAppMode = $appMode.set;
+export const onAppModeChange = $appMode.on;
+
+// 【写植再利用】PSD ごとの再利用情報 (hideLayerIds + referenceCanvas)。
+export function setReuseInfo(psdPath, info) {
+  if (!psdPath) return;
+  state.reuseInfo.set(psdPath, {
+    hideLayerIds: Array.isArray(info?.hideLayerIds) ? [...info.hideLayerIds] : [],
+    referenceCanvas: info?.referenceCanvas ?? null,
+  });
+}
+export function getReuseInfo(psdPath) {
+  return state.reuseInfo.get(psdPath) ?? null;
+}
+export function getAllReuseInfo() {
+  return state.reuseInfo;
+}
+export function clearReuseInfo() {
+  state.reuseInfo.clear();
+}
+export function hasReuseInfo() {
+  return state.reuseInfo.size > 0;
+}
 
 export const getCurrentFont = $currentFont.get;
 export const setCurrentFont = $currentFont.set;

@@ -22,6 +22,8 @@ import {
   applyProjectSnapshot,
   exportProjectSnapshot,
   getActivePane,
+  getAllReuseInfo,
+  getAppMode,
   getCurrentPageIndex,
   getEditorLeftPaneMode,
   getPages,
@@ -52,6 +54,7 @@ import {
   setPsdZoom,
 } from "../state.js";
 import { loadPsdFilesByPaths } from "./psd-load.js";
+import { loadPsdFilesForReuse } from "./reuse.js";
 import { baseName, joinPath, parentDir } from "../utils/path.js";
 
 const PROJECT_KIND = "opus-project";
@@ -416,6 +419,51 @@ async function copyFilesToProject(paths, destDir, { prefix = "" } = {}) {
   return { copied, pathMap };
 }
 
+// 【写植再利用】canvas を JPEG バイト列 (number[]) にエンコードする。
+// Rust の write_binary_file (Vec<u8>) にそのまま渡せる。
+function canvasToJpegBytes(canvas, quality = 0.92) {
+  return new Promise((resolve, reject) => {
+    try {
+      canvas.toBlob((blob) => {
+        if (!blob) { reject(new Error("canvas.toBlob returned null")); return; }
+        blob.arrayBuffer()
+          .then((buf) => resolve(Array.from(new Uint8Array(buf))))
+          .catch(reject);
+      }, "image/jpeg", quality);
+    } catch (e) {
+      reject(e);
+    }
+  });
+}
+
+// 【写植再利用】reuseInfo の referenceCanvas (元テキスト入りの合成画像) を JPG として
+// プロジェクトの見本フォルダへ書き出す。戻り値: { copied: string[] }（ページ順の JPG パス）。
+async function writeReuseReferenceJpgs(destDir) {
+  const { invoke } = await import("@tauri-apps/api/core");
+  const pages = getPages();
+  const reuseInfo = getAllReuseInfo();
+  const copied = [];
+  const used = new Set();
+  let idx = 0;
+  for (const page of pages) {
+    idx += 1;
+    const info = reuseInfo.get(page.path);
+    const canvas = info?.referenceCanvas;
+    if (!canvas) continue;
+    const stem = (baseName(page.path) || `page-${idx}`).replace(/\.psd$/i, "");
+    const name = uniqueName(`${String(idx).padStart(2, "0")}_${stem}.jpg`, used);
+    const dest = joinPath(destDir, name);
+    try {
+      const bytes = await canvasToJpegBytes(canvas, 0.92);
+      await invoke("write_binary_file", { path: dest, data: bytes });
+      copied.push(dest);
+    } catch (e) {
+      console.warn("[project] reuse reference JPG write failed:", page.path, e);
+    }
+  }
+  return { copied };
+}
+
 async function listProjectRootEntries(rootDir) {
   const { invoke } = await import("@tauri-apps/api/core");
   try {
@@ -473,8 +521,15 @@ async function createProjectBundle(snapshot, options = {}) {
     }
   }
 
-  const refBundle = await copyFilesToProject(getPdfPaths(), projectRefDir);
+  // 【写植再利用】見本は PDF/画像ファイルではなく、元テキスト入りの合成画像 (canvas)。
+  // これを JPG にエンコードして見本フォルダへ保存する。通常モードは従来どおりファイルコピー。
+  const isReuse = getAppMode() === "reuse";
+  const refBundle = isReuse
+    ? { ...(await writeReuseReferenceJpgs(projectRefDir)), pathMap: new Map() }
+    : await copyFilesToProject(getPdfPaths(), projectRefDir);
   const doc = makeProjectDocument();
+  // 再開時に「再利用モードで開く（PSD のテキストを消した編集ペイン）」と判別するためのフラグ。
+  doc.reuse = isReuse ? { mode: true } : null;
   doc.savedAt = new Date().toISOString();
   doc.projectDir = projectDir;
   doc.projectName = projectName;
@@ -539,13 +594,28 @@ async function overwriteCurrentProjectFile() {
   doc.volume = currentProjectVolume || "";
   doc.psdPaths = rewrittenSnapshot.psdPaths;
   doc.snapshot = rewrittenSnapshot;
-  doc.references = {
-    paths: mapPaths(getPdfPaths(), currentProjectReferencePathMap),
-    originalPaths: getPdfPaths(),
-    excludedPages: Array.from(getPdfExcludedReferencePages()),
-    splitMode: getPdfSplitMode(),
-    skipFirstBlank: getPdfSkipFirstBlank(),
-  };
+  // 【写植再利用】見本は元テキスト入り合成画像を JPG 化して見本フォルダへ書き出す。
+  const isReuse = getAppMode() === "reuse";
+  doc.reuse = isReuse ? { mode: true } : null;
+  if (isReuse) {
+    const refDir = joinPath(projectDir, PROJECT_REFERENCE_DIR_NAME);
+    const jpg = await writeReuseReferenceJpgs(refDir);
+    doc.references = {
+      paths: jpg.copied,
+      originalPaths: [],
+      excludedPages: [],
+      splitMode: false,
+      skipFirstBlank: false,
+    };
+  } else {
+    doc.references = {
+      paths: mapPaths(getPdfPaths(), currentProjectReferencePathMap),
+      originalPaths: getPdfPaths(),
+      excludedPages: Array.from(getPdfExcludedReferencePages()),
+      splitMode: getPdfSplitMode(),
+      skipFirstBlank: getPdfSkipFirstBlank(),
+    };
+  }
   const { invoke } = await import("@tauri-apps/api/core");
   let textPath = currentProjectTextPath;
   let textName = textPath ? baseName(textPath) : null;
@@ -715,14 +785,31 @@ export async function openProjectFromPath(path) {
       { detail: "プロジェクト読込 完了" },
     );
     projectLoadInProgress = true;
-    await loadPsdFilesByPaths(project.psdPaths, {
-      label: "プロジェクトを読み込み中",
-      variant: "place",
-      keepProgressOpen: true,
-      confirmUnsaved: false,
-      preserveOrder: true,
-      progressFlow: { id: progressFlowId, stepId: "psd-load" },
-    });
+    const isReuseProject = project.reuse?.mode === true;
+    if (isReuseProject) {
+      // 【写植再利用】PSD はテキストを消した編集ペイン用に読み込む。テキスト抽出は
+      // しない（編集済みテキストは snapshot.newLayers から復元する）。見本は保存済み
+      // JPG を別途読み込むため skipReference: true。
+      await loadPsdFilesForReuse(project.psdPaths, {
+        progressFlow: { id: progressFlowId, stepId: "psd-load" },
+        keepProgressOpen: true,
+        extract: false,
+        skipReference: true,
+      });
+      completeProgressFlowStep(
+        { id: progressFlowId, stepId: "psd-load" },
+        { detail: "PSD 読込 完了" },
+      );
+    } else {
+      await loadPsdFilesByPaths(project.psdPaths, {
+        label: "プロジェクトを読み込み中",
+        variant: "place",
+        keepProgressOpen: true,
+        confirmUnsaved: false,
+        preserveOrder: true,
+        progressFlow: { id: progressFlowId, stepId: "psd-load" },
+      });
+    }
     projectLoadInProgress = false;
     if (getPages().length === 0) {
       throw new Error("プロジェクト内の PSD を読み込めませんでした");

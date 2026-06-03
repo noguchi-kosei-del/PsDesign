@@ -4,6 +4,7 @@ import {
   clearPdf,
   clearTxtSource,
   setActivePane,
+  setAppMode,
   setFolder,
   setFontPickerStuck,
   setParallelSyncMode,
@@ -98,6 +99,8 @@ async function goHome() {
   });
   if (!ok) return;
   setFolder(null);
+  // 写植再利用モードを解除して通常モードに戻す。
+  setAppMode("normal");
   clearPages();
   clearTxtSource();
   clearScanExtractDoc();

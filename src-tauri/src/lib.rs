@@ -14,6 +14,17 @@ use std::process::Command;
 use tauri::webview::PageLoadEvent;
 use tauri::Manager;
 
+#[cfg(windows)]
+fn hide_console_window(cmd: &mut Command) {
+    use std::os::windows::process::CommandExt;
+
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    cmd.creation_flags(CREATE_NO_WINDOW);
+}
+
+#[cfg(not(windows))]
+fn hide_console_window(_cmd: &mut Command) {}
+
 // 【v1.26.0】ルビ 1 件分のエントリ。state.js の charRubies スキーマと対応。
 // 【v1.29.x UI-coord】offset_x / offset_y: ビューアー上のルビ wrap の実描画位置を
 // 親レイヤー基準の PSD 座標 (px) で保持。canvas-tools.js scheduleRubyOffsetMeasure が
@@ -185,6 +196,12 @@ pub struct NewLayer {
     // 【v1.26.0】文字ごとのルビ。start index をキー、value は {end, text, type, scale}。
     #[serde(rename = "charRubies", default)]
     pub char_rubies: Option<HashMap<String, RubyEntry>>,
+    // 【写植再利用】元テキストレイヤーの bbox 中心（PSD px）。指定があれば保存時に
+    // 「作り直したテキストの実 bounds 中心」をこの座標へ合わせる（元の位置を厳密再現）。
+    #[serde(rename = "reuseSrcCx", default)]
+    pub reuse_src_cx: Option<f64>,
+    #[serde(rename = "reuseSrcCy", default)]
+    pub reuse_src_cy: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -198,6 +215,11 @@ pub struct PsdEdits {
     pub layers: Vec<LayerEdit>,
     #[serde(rename = "newLayers", default)]
     pub new_layers: Vec<NewLayer>,
+    // 写植再利用モード: 保存時に非表示化する元テキストレイヤーの id 群。
+    // 抽出テキストは newLayers として新規作成されるため、元レイヤーは hidden にして
+    // 二重表示を防ぐ。通常モードでは空配列。
+    #[serde(rename = "hideLayerIds", default)]
+    pub hide_layer_ids: Vec<i64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -245,6 +267,10 @@ pub struct EditPayload {
         default = "default_ruby_photoshop_bias_px"
     )]
     pub ruby_photoshop_bias_px: f64,
+    // 【写植再利用】true のとき、保存時に各 PSD の「元からあるテキストレイヤー」を全て
+    // 非表示にする（抽出テキストは newLayers として新規作成済み）。
+    #[serde(rename = "reuseHideOriginalText", default)]
+    pub reuse_hide_original_text: bool,
 }
 
 fn default_ruby_leading_pct() -> f64 {
@@ -287,6 +313,24 @@ async fn apply_edits_via_photoshop(
         }
     }
     photoshop::apply_edits(&payload, &app).map_err(|e| e.to_string())
+}
+
+// 【写植再利用】Photoshop で PSD のテキストレイヤーを列挙し、テキスト非表示の合成画像
+// (JPG) を書き出す。戻り値は JSX が生成した JSON 文字列（{docWidth,docHeight,dpi,
+// bgImage,textLayers:[...]}）。フロント側で parse して再利用フローに使う。
+#[tauri::command]
+async fn read_psd_text_layers(app: tauri::AppHandle, psd_path: String) -> Result<String, String> {
+    photoshop::read_text_layers(&psd_path, &app).map_err(|e| e.to_string())
+}
+
+// 【写植再利用・一括】複数 PSD を 1 回の Photoshop セッションで読み取る。戻り値は
+// {"pages":[{ok,psdPath,docWidth,docHeight,dpi,refImage,bgImage,textLayers},...]} の JSON。
+#[tauri::command]
+async fn read_psd_text_layers_batch(
+    app: tauri::AppHandle,
+    psd_paths: Vec<String>,
+) -> Result<String, String> {
+    photoshop::read_text_layers_batch(&psd_paths, &app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -388,6 +432,22 @@ async fn write_text_file(path: String, content: String) -> Result<(), String> {
     }
     fs::write(&path_buf, content)
         .map_err(|e| format!("text write failed ({}): {}", path_buf.display(), e))
+}
+
+// 任意のバイナリデータをディスクへ書き出す。写植再利用モードで、見本（元テキスト入りの
+// 合成画像）を JPG にエンコードしてプロジェクトフォルダへ保存するために使う。
+// フロント側は canvas.toBlob("image/jpeg") → ArrayBuffer → number[] で渡す。
+#[tauri::command]
+async fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
+    let path_buf = PathBuf::from(&path);
+    if let Some(parent) = path_buf.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("folder create failed ({}): {}", parent.display(), e))?;
+        }
+    }
+    fs::write(&path_buf, &data)
+        .map_err(|e| format!("binary write failed ({}): {}", path_buf.display(), e))
 }
 
 #[tauri::command]
@@ -544,9 +604,9 @@ fn write_progen_handoff(text_path: &Path) -> Result<(), String> {
         .map_err(|e| format!("handoff marker write failed ({}): {}", marker.display(), e))?;
 
     // Keep the legacy marker as a plain path. Newer ProGen builds can use these
-    // sidecars to route saved text straight to the proofreading prompt.
+    // sidecars to open at home and load the saved text after genre/label selection.
     let mode_marker = dir.join(".progen_handoff_mode.txt");
-    fs::write(&mode_marker, b"proofreading").map_err(|e| {
+    fs::write(&mode_marker, b"home").map_err(|e| {
         format!(
             "handoff mode marker write failed ({}): {}",
             mode_marker.display(),
@@ -557,7 +617,10 @@ fn write_progen_handoff(text_path: &Path) -> Result<(), String> {
     let payload_marker = dir.join(".progen_handoff.json");
     let payload = serde_json::json!({
         "textPath": text_path.to_string_lossy(),
-        "mode": "proofreading",
+        "mode": "home",
+        "source": "opus",
+        "loadTiming": "afterGenreLabelSelection",
+        "deferTextLoadUntil": "genreLabelSelected",
     });
     let payload_bytes = serde_json::to_vec_pretty(&payload)
         .map_err(|e| format!("handoff payload encode failed: {}", e))?;
@@ -618,28 +681,41 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
     })?;
     let text_path_arg = text_path.to_string_lossy().to_string();
     let launch_args = [
-        "--proofreading",
         "--handoff-mode",
-        "proofreading",
+        "home",
         "--text-path",
         text_path_arg.as_str(),
     ];
 
-    let shell_launch = launcher
+    let launcher_ext = launcher
         .extension()
         .and_then(|s| s.to_str())
-        .map(|s| {
-            s.eq_ignore_ascii_case("bat")
-                || s.eq_ignore_ascii_case("cmd")
-                || s.eq_ignore_ascii_case("lnk")
-        })
-        .unwrap_or(false);
-    if shell_launch {
+        .unwrap_or("");
+    let batch_launch =
+        launcher_ext.eq_ignore_ascii_case("bat") || launcher_ext.eq_ignore_ascii_case("cmd");
+    let shortcut_launch = launcher_ext.eq_ignore_ascii_case("lnk");
+    if batch_launch {
+        let mut command = Command::new("cmd");
+        command
+            .arg("/C")
+            .arg(&launcher)
+            .args(launch_args)
+            .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")));
+        hide_console_window(&mut command);
+        command.spawn().map_err(|e| {
+            format!(
+                "ProGen launcher start failed ({}): {}",
+                launcher.display(),
+                e
+            )
+        })?;
+    } else if shortcut_launch {
         let mut command = Command::new("cmd");
         command
             .args(["/C", "start", "", &launcher.to_string_lossy()])
             .args(launch_args)
             .current_dir(launcher.parent().unwrap_or_else(|| Path::new(".")));
+        hide_console_window(&mut command);
         command.spawn().map_err(|e| {
             format!(
                 "ProGen launcher start failed ({}): {}",
@@ -648,8 +724,10 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
             )
         })?;
     } else {
-        Command::new(&launcher)
-            .args(launch_args)
+        let mut command = Command::new(&launcher);
+        command.args(launch_args);
+        hide_console_window(&mut command);
+        command
             .spawn()
             .map_err(|e| format!("ProGen launch failed ({}): {}", launcher.display(), e))?;
     }
@@ -1232,7 +1310,13 @@ async fn close_splash(window: tauri::Window) -> Result<(), String> {
 
     if let Some(main_window) = app.get_webview_window("main") {
         apply_app_icon(&main_window);
+        // visible:false で生成したメインウィンドウが、起動方法や WebView2 / Windows の
+        // 状態によっては「最小化」状態で現れることがある（show() だけだと最小化のまま
+        // 画面に出ず、ユーザーには「スプラッシュしか見えない / 何も出ない」状態になる）。
+        // unminimize → show → set_focus を順に呼んで、確実に通常表示・前面化する。
+        let _ = main_window.unminimize();
         main_window.show().map_err(|e| e.to_string())?;
+        let _ = main_window.unminimize();
         let _ = main_window.set_focus();
     }
 
@@ -1290,10 +1374,13 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             close_splash,
             apply_edits_via_photoshop,
+            read_psd_text_layers,
+            read_psd_text_layers_batch,
             list_fonts,
             read_binary_file,
             read_text_file,
             write_text_file,
+            write_binary_file,
             copy_file,
             opus_project_root_path,
             create_opus_project_dir,
@@ -1316,6 +1403,7 @@ pub fn run() {
             ocr::uninstall_ai_models,
             ocr::run_ai_ocr,
             ocr::export_ai_text,
+            ocr::analyze_image_text_regions,
             alignment::compute_alignment,
             kenban::detect_kenban_exe,
             kenban::launch_kenban_psd_pdf,

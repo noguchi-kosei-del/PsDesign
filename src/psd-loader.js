@@ -453,6 +453,32 @@ function collectVisibleNonTextLayers(layer, parentVisible, out) {
   }
 }
 
+// 【写植再利用】可視テキストレイヤーを再帰収集する。buildTextRemovedCanvas で
+// 「絵柄から消す対象」、保存時に非表示化する元レイヤー id の取得に使う。
+// canvas があればその寸法を、無ければ bbox (right-left / bottom-top) を上書き範囲に使う。
+function collectVisibleTextLayersForMasking(layer, parentVisible, out) {
+  const effectiveVisible = parentVisible && !isLayerHidden(layer);
+  if (effectiveVisible && layer.text && typeof layer.id === "number") {
+    const stroke = extractStroke(layer);
+    const strokePx = stroke.strokeColor === "none" ? 0 : stroke.strokeWidthPx;
+    const lc = layer.canvas;
+    const hasCanvas = lc && lc.width > 0 && lc.height > 0;
+    const left = layer.left ?? 0;
+    const top = layer.top ?? 0;
+    const width = hasCanvas ? lc.width : Math.max(0, (layer.right ?? 0) - left);
+    const height = hasCanvas ? lc.height : Math.max(0, (layer.bottom ?? 0) - top);
+    if (width > 0 && height > 0) {
+      // canvas はグリフ形状マスク（文字部分だけを白で消す）に使う。無ければ矩形白塗りに退避。
+      out.push({ id: layer.id, left, top, width, height, strokePx, canvas: hasCanvas ? lc : null });
+    }
+  }
+  if (Array.isArray(layer.children)) {
+    for (const child of layer.children) {
+      collectVisibleTextLayersForMasking(child, effectiveVisible, out);
+    }
+  }
+}
+
 // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
 // 矩形が「ほぼ白で塗られている (= 絵柄が無い)」かを軽量サンプリングで判定。
 // 4 隅 + 中央の 5 点を getImageData で取り、すべて白に近ければ true。
@@ -641,6 +667,217 @@ async function rebuildCanvasMaskingHidden(psd) {
     console.warn("rebuildCanvasMaskingHidden failed:", e);
     return null;
   }
+}
+
+// 【写植再利用】「テキストを消した絵」を作る。
+// この種の PSD（OPUS 保存物など）は個別レイヤーの canvas が空で、絵柄は psd.canvas
+// (合成画像) にしか無いことが多い。そこで psd.canvas をベースに、各テキストレイヤーの
+// 「グリフ形状」をマスクにして文字部分だけを白で塗って消す。矩形ではなくグリフ形状で
+// 消すので、吹き出しの外（暗い絵柄）に白い矩形ハローが残らない。
+// 吹き出し内文字 → 既に白地なので白で消して自然。吹き出し外文字（白フチ等）→ グリフ
+// 形状ぶんだけ白くなるが、その上に再作成した編集テキストが重なるので実用上問題ない。
+// テキストレイヤーの canvas が取得できない場合のみ矩形白塗りに退避。
+async function buildTextRemovedCanvas(psd) {
+  try {
+    if (!psd || !psd.width || !psd.height) return null;
+    const textList = [];
+    if (Array.isArray(psd.children)) {
+      for (const child of psd.children) collectVisibleTextLayersForMasking(child, true, textList);
+    }
+    if (textList.length === 0) {
+      // テキストが無い → 元 canvas をそのまま使う (null を返すと呼出側が psd.canvas を採用)
+      return null;
+    }
+
+    await waitForNextFrame();
+    const canvas = document.createElement("canvas");
+    canvas.width = psd.width;
+    canvas.height = psd.height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    if (psd.canvas) {
+      ctx.drawImage(psd.canvas, 0, 0);
+    } else {
+      ctx.fillStyle = "#ffffff";
+      ctx.fillRect(0, 0, psd.width, psd.height);
+    }
+
+    const psdW = psd.width;
+    const psdH = psd.height;
+    let yieldStartedAt = nowMs();
+    for (let i = 0; i < textList.length; i++) {
+      const item = textList[i];
+      const strokePx = Number.isFinite(item.strokePx) && item.strokePx > 0 ? item.strokePx : 0;
+      const lc = item.canvas;
+      if (lc && lc.width > 0 && lc.height > 0) {
+        // グリフ形状マスク: テキストレイヤー canvas のアルファを使い、文字＋フチ＋AA ぶんを
+        // 膨張させた「白いグリフ」を作って psd.canvas 上の文字へ重ねて消す。
+        const pad = Math.ceil(strokePx) + 6;
+        const mw = lc.width + pad * 2;
+        const mh = lc.height + pad * 2;
+        const mask = document.createElement("canvas");
+        mask.width = mw;
+        mask.height = mh;
+        const mc = mask.getContext("2d");
+        if (mc) {
+          // pad ぶん全方向に少しずつずらして描画 → グリフを膨張（フチ／AA の取りこぼし防止）。
+          const step = Math.max(1, Math.round(pad / 2));
+          for (let dx = -pad; dx <= pad; dx += step) {
+            for (let dy = -pad; dy <= pad; dy += step) {
+              mc.drawImage(lc, pad + dx, pad + dy);
+            }
+          }
+          // グリフのアルファ形状を白で塗りつぶす（source-in で形状を保ったまま色を白に）。
+          mc.globalCompositeOperation = "source-in";
+          mc.fillStyle = "#ffffff";
+          mc.fillRect(0, 0, mw, mh);
+          mc.globalCompositeOperation = "source-over";
+          ctx.drawImage(mask, (item.left ?? 0) - pad, (item.top ?? 0) - pad);
+        }
+      } else {
+        // canvas 無し → 矩形白塗りに退避（稀）。
+        const DILATE = Math.ceil(strokePx) + 4;
+        const sx = Math.max(0, Math.floor((item.left ?? 0) - DILATE));
+        const sy = Math.max(0, Math.floor((item.top ?? 0) - DILATE));
+        const ex = Math.min(psdW, Math.ceil((item.left ?? 0) + item.width + DILATE));
+        const ey = Math.min(psdH, Math.ceil((item.top ?? 0) + item.height + DILATE));
+        if (ex > sx && ey > sy) {
+          ctx.fillStyle = "#ffffff";
+          ctx.fillRect(sx, sy, ex - sx, ey - sy);
+        }
+      }
+      if ((i + 1) % 2 === 0) yieldStartedAt = await yieldIfNeeded(yieldStartedAt);
+    }
+    return canvas;
+  } catch (e) {
+    console.warn("buildTextRemovedCanvas failed:", e);
+    return null;
+  }
+}
+
+// JPG ファイルを読み込んで指定サイズの canvas に描画する。
+async function jpgFileToCanvas(imgPath, width, height) {
+  const bytes = await readFileBytes(imgPath);
+  const bitmap = await createImageBitmap(new Blob([bytes]));
+  const w = width > 0 ? width : bitmap.width;
+  const h = height > 0 ? height : bitmap.height;
+  const canvas = createBlankCanvas(w, h);
+  const ctx = canvas.getContext("2d");
+  if (ctx) ctx.drawImage(bitmap, 0, 0, w, h);
+  try { bitmap.close?.(); } catch (_) {}
+  return canvas;
+}
+
+// 【写植再利用】PSD を「再利用」用に読み込む。
+// まず Photoshop に PSD を開かせ、(a) 全テキストレイヤーの実内容/フォント/サイズ/座標、
+// (b) 見本（テキスト入り合成画像 JPG）、(c) 原稿（テキスト非表示の合成画像 JPG）を取得する。
+// ag-psd は CSP 由来等の PSD のライブテキストを解析できない（TySh 1 バイトずれ）ため、
+// Photoshop に直接読ませるのが確実。Photoshop が使えない/失敗した場合は ag-psd による
+// 抽出にフォールバックする（OPUS 保存物などライブテキストが読める PSD 向け）。
+//
+// 返り値:
+//   canvas               : テキストを消した絵柄 (編集ペイン表示用 = page.canvas)
+//   textLayers           : [] (既存レイヤーオーバーレイは出さない)
+//   reuseReferenceCanvas : 元テキスト入りの合成画像 (見本ペイン + JPG 用)
+//   reusePsTextItems     : Photoshop が読んだ実テキスト [{contents,font,sizePt,left,top,
+//                          right,bottom,direction,name,visible}] （優先して新規レイヤー化）
+//   reuseTextLayers      : ag-psd 抽出テキスト（フォールバック時のみ）
+//   reuseTextLayerIds    : ag-psd 抽出の元レイヤー id（フォールバック時のみ）
+
+// Photoshop が書き出した per-page データ（{docWidth,docHeight,dpi,refImage,bgImage,textLayers}）
+// から再利用ページオブジェクトを構築する。単一読み取り（loadPsdForReuse）と一括読み取り
+// （read_psd_text_layers_batch）の両方から共有する。データ不足なら null を返す。
+export async function buildReusePageFromPsData(path, psData) {
+  if (!psData) return null;
+  const width = Math.round(Number(psData.docWidth) || 0);
+  const height = Math.round(Number(psData.docHeight) || 0);
+  const dpi = Number(psData.dpi) || 72;
+  if (!(width > 0 && height > 0 && psData.refImage && psData.bgImage)) return null;
+  const reuseReferenceCanvas = await jpgFileToCanvas(psData.refImage, width, height);
+  const editCanvas = await jpgFileToCanvas(psData.bgImage, width, height);
+  return {
+    path,
+    width,
+    height,
+    dpi,
+    canvas: editCanvas,
+    textLayers: [],
+    reuseReferenceCanvas,
+    reusePsTextItems: Array.isArray(psData.textLayers) ? psData.textLayers : [],
+    // テキスト非表示の背景 JPG パス（自動白フチ / 中丸ゴシック判定の周辺解析に使う）。
+    reuseBgImagePath: psData.bgImage || null,
+    reuseTextLayers: [],
+    reuseTextLayerIds: [],
+  };
+}
+
+export async function loadPsdForReuse(path) {
+  // --- 第一経路: Photoshop で読む ---
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const json = await invoke("read_psd_text_layers", { psdPath: path });
+    const psData = JSON.parse(json);
+    const page = await buildReusePageFromPsData(path, psData);
+    if (page) return page;
+    console.warn("[reuse] Photoshop read returned incomplete data, falling back to ag-psd", psData);
+  } catch (e) {
+    console.warn("[reuse] Photoshop text read failed, falling back to ag-psd:", e);
+  }
+
+  // --- フォールバック: ag-psd（ライブテキストが解析できる PSD 向け） ---
+  const bytes = await readFileBytes(path);
+  await waitForNextFrame();
+  const psd = readPsd(bytes, {
+    skipLayerImageData: false,
+    skipThumbnail: true,
+    useImageData: false,
+  });
+  await waitForNextFrame();
+  if (isBitmapPsd(psd)) {
+    throw new UnsupportedBitmapPsdError(path);
+  }
+
+  const textLayers = [];
+  const visibleTextItems = [];
+  if (Array.isArray(psd.children)) {
+    for (const child of psd.children) collectTextLayers(child, textLayers, true);
+    for (const child of psd.children) collectVisibleTextLayersForMasking(child, true, visibleTextItems);
+  }
+  const reuseTextLayerIds = visibleTextItems
+    .map((it) => it.id)
+    .filter((id) => typeof id === "number");
+  const dpi = psd.imageResources?.resolutionInfo?.horizontalResolution ?? 72;
+
+  const reuseReferenceCanvas = createBlankCanvas(psd.width, psd.height);
+  if (psd.canvas) {
+    const rctx = reuseReferenceCanvas.getContext("2d");
+    if (rctx) rctx.drawImage(psd.canvas, 0, 0);
+  }
+
+  let editCanvas = await buildTextRemovedCanvas(psd);
+  if (!editCanvas) {
+    editCanvas = createBlankCanvas(psd.width, psd.height);
+    if (psd.canvas) {
+      const ectx = editCanvas.getContext("2d");
+      if (ectx) ectx.drawImage(psd.canvas, 0, 0);
+    }
+  }
+  if (editCanvas.width !== psd.width || editCanvas.height !== psd.height) {
+    editCanvas = createBlankCanvas(psd.width, psd.height);
+  }
+
+  return {
+    path,
+    width: psd.width,
+    height: psd.height,
+    canvas: editCanvas,
+    textLayers: [],
+    dpi,
+    reuseReferenceCanvas,
+    reusePsTextItems: null,
+    reuseTextLayers: textLayers,
+    reuseTextLayerIds,
+  };
 }
 
 export async function loadPsdFromPath(path) {
