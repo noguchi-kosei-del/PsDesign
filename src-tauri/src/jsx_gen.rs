@@ -3420,7 +3420,7 @@ function applyTateChuYoko(layer, contents, enabled, direction, charTateChuYokos)
       if (charTateChuYokos[String(mi)] === true) {
         var mj = mi + 1;
         while (mj < fullText.length && charTateChuYokos[String(mj)] === true) mj++;
-        pairs.push({ start: mi, end: mj });
+        if (mj - mi >= 2) pairs.push({ start: mi, end: mj });
         mi = mj;
       } else {
         mi++;

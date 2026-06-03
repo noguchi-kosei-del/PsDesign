@@ -4,7 +4,18 @@
 // に書き出す。フロント側で空きフォルダ名を確定してから Rust に渡す。
 // 外向き API: bindSaveMenu / handleSave / 保存可能フラグの get/set。
 
-import { exportEdits, getEdit, getNewLayersForPsd, getPages, getPdfPaths, getPsdRotation, hasEdits, markPsdSaveClean } from "../state.js";
+import {
+  exportEdits,
+  getEdit,
+  getNewLayersForPsd,
+  getPages,
+  getPdfPaths,
+  getProjectSaveDirty,
+  getPsdRotation,
+  hasEdits,
+  markProjectSaveClean,
+  markPsdSaveClean,
+} from "../state.js";
 import {
   confirmDialog,
   hideModalAnimated,
@@ -629,6 +640,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     saveMode,
     targetDir: targetDir ?? null,
   };
+  const projectWasCleanBeforePsdSave = !getProjectSaveDirty();
   saveInflight = true;
   const saveBtn = document.getElementById("project-save-btn");
   if (saveBtn) saveBtn.disabled = true;
@@ -659,6 +671,9 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     hasSavedThisSession = true;
     // PSD への反映が完了 → PSD 側の保存ダーティを解消（ウインドウ閉じる確認の条件分岐用）。
     markPsdSaveClean();
+    if (projectWasCleanBeforePsdSave) {
+      markProjectSaveClean();
+    }
     // 警告ありなら success アニメをスキップして即閉じ（ユーザーには警告通知を優先表示）。
     // 純粋な成功時のみ緑チェックマークを再生してから閉じる。
     await hideProgress({ success: !hasWarn });
@@ -969,8 +984,8 @@ export function bindSaveMenu() {
   bothItem?.addEventListener("click", () => {
     if (bothItem.disabled) return;
     void runAndClose(async () => {
-      await saveProject();
       await handleSave();
+      await saveProject();
     });
   });
   document.addEventListener("click", (e) => {

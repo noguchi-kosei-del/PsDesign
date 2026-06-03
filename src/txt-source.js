@@ -132,6 +132,55 @@ export function splitBlocksRaw(s) {
     .filter((p) => p.length > 0);
 }
 
+function splitBlocksWithOffsets(sectionText, sectionStart = 0) {
+  const text = String(sectionText ?? "").replace(/\r\n?/g, "\n");
+  const blocks = [];
+  const re = /\n[ \t\u3000]*\n/g;
+  let start = 0;
+  const push = (end) => {
+    const raw = text.slice(start, end);
+    const leading = raw.match(/^\n*/)?.[0]?.length ?? 0;
+    const trimmed = raw.replace(/^\n+|\n+$/g, "");
+    if (trimmed.length > 0) {
+      blocks.push({ text: trimmed, offset: sectionStart + start + leading });
+    }
+  };
+  let match;
+  while ((match = re.exec(text)) !== null) {
+    push(match.index);
+    start = match.index + match[0].length;
+  }
+  push(text.length);
+  return blocks;
+}
+
+function findBlockOffsetByIndex(content, pageNumber, paragraphIndex) {
+  if (!Number.isInteger(paragraphIndex) || paragraphIndex < 0) return null;
+  const norm = String(content ?? "").replace(/\r\n?/g, "\n");
+  if (!Number.isInteger(pageNumber) || pageNumber <= 0) {
+    return splitBlocksWithOffsets(norm, 0)[paragraphIndex]?.offset ?? null;
+  }
+
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let sectionStart = -1;
+  let sectionEnd = norm.length;
+  let inTargetPage = false;
+  let match;
+  while ((match = re.exec(norm)) !== null) {
+    const num = toHalfWidthInt(match[1]);
+    if (inTargetPage) {
+      sectionEnd = match.index;
+      break;
+    }
+    if (num === pageNumber) {
+      inTargetPage = true;
+      sectionStart = match.index + match[0].length;
+    }
+  }
+  if (!inTargetPage) return null;
+  return splitBlocksWithOffsets(norm.slice(sectionStart, sectionEnd), sectionStart)[paragraphIndex]?.offset ?? null;
+}
+
 function toHalfWidthInt(s) {
   const normalized = String(s).replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0));
   const n = parseInt(normalized, 10);
@@ -480,6 +529,23 @@ function startInlineEdit(el, originalText, pageNumber) {
     // textContent ではなく innerText で取得して LF 正規化したテキストを得る。
     const newText = (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n");
     if (newText !== originalText) {
+      let parts = newText
+        .split(/\n[ \t\u3000]*\n/)
+        .map((s) => s.replace(/^\n+|\n+$/g, ""))
+        .filter((s) => s.length > 0);
+      if (parts.length <= 1 && !String(originalText ?? "").includes("\n") && newText.includes("\n")) {
+        parts = newText
+          .split(/\n[ \t\u3000]*/)
+          .map((s) => s.replace(/^\n+|\n+$/g, ""))
+          .filter((s) => s.length > 0);
+      }
+      if (parts.length > 1) {
+        const paragraphIndex = Number(el.dataset.blockIndex);
+        const offset = findBlockOffsetByIndex(getTxtSource()?.content, pageNumber, paragraphIndex);
+        if (offset != null && splitTxtBlockAndPlace(offset, originalText, parts, paragraphIndex, pageNumber)) {
+          return;
+        }
+      }
       updateTxtSourceBlock(pageNumber, originalText, newText);
       // setTxtSource → onTxtSourceChange → renderViewer で DOM 再構築されるため
       // この el への以降の操作は不要。
@@ -849,7 +915,7 @@ export function convertHalfToFullForVertical(text, direction) {
   const s = String(text ?? "");
   if (direction !== "vertical") return s;
   if (getDefault("verticalHalfToFullEnabled") === false) return s;
-  return s.replace(/[0-9A-Za-z]/g, (c) =>
+  return s.replace(/[\x21-\x7E]/g, (c) =>
     String.fromCharCode(c.charCodeAt(0) + 0xFEE0),
   );
 }
@@ -1039,10 +1105,35 @@ export function splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageN
     placePage = hasPsd ? (pages[pageIdx] ?? null) : null;
   }
 
-  const direction = getNewTextDirection();
-  const sizePt = getTextSize();
-  const leadingPct = getLeadingPct();
+  const sourceLayer = placePage
+    ? getNewLayersForPsd(placePage.path).find((layer) => {
+        const ref = layer?.sourceTxtRef;
+        if (!ref || !Number.isInteger(ref.paragraphIndex)) return false;
+        if (ref.paragraphIndex !== splitIndex) return false;
+        if (markered) return Number(ref.pageNumber) === refPageNumber;
+        return true;
+      }) ?? null
+    : null;
+  const direction = sourceLayer?.direction ?? getNewTextDirection();
+  const sizePt = sourceLayer?.sizePt ?? getTextSize();
+  const leadingPct = sourceLayer?.leadingPct ?? getLeadingPct();
+  const fontPostScriptName = sourceLayer?.fontPostScriptName ?? getCurrentFont() ?? null;
+  const strokeColor = sourceLayer?.strokeColor ?? getStrokeColor();
+  const strokeWidthPx = sourceLayer?.strokeWidthPx ?? getStrokeWidthPx();
+  const fillColor = sourceLayer?.fillColor ?? getFillColor();
   const shift = newParts.length;
+  const sourceTempId = sourceLayer?.tempId ?? null;
+  const clonePlain = (value) => {
+    if (value == null) return value;
+    try {
+      return JSON.parse(JSON.stringify(value));
+    } catch (_) {
+      return value;
+    }
+  };
+  const existingLayerSnapshots = getNewLayers()
+    .map((layer) => clonePlain(layer))
+    .filter((layer) => layer?.tempId);
 
   withHistoryTransient(() => {
     // 1) 挿入カスケード: 同ページ・splitIndex より後ろの layer の paragraphIndex を +shift。
@@ -1052,7 +1143,7 @@ export function splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageN
       const ref = layer?.sourceTxtRef;
       if (!ref) continue;
       const refPage = ref.pageNumber == null ? null : Number(ref.pageNumber);
-      if (refPage !== cmpPage) continue;
+      if (markered && refPage !== cmpPage) continue;
       if (ref.paragraphIndex > splitIndex) {
         updateNewLayer(layer.tempId, {
           sourceTxtRef: { ...ref, paragraphIndex: ref.paragraphIndex + shift },
@@ -1060,7 +1151,7 @@ export function splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageN
       }
     }
 
-    // 2) 空行より後ろの各パートを PSD ページ中央へ新規配置（commitNewTxtInput と同じフィールド）。
+    // 2) 空行より後ろの各パートを、別テキストとして PSD ページ中央へ新規配置。
     if (placePage) {
       newParts.forEach((part, i) => {
         const placedText = convertHalfToFullForVertical(part, direction);
@@ -1075,11 +1166,11 @@ export function splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageN
           x: coords.x,
           y: coords.y,
           contents: placedText,
-          fontPostScriptName: getCurrentFont() || null,
+          fontPostScriptName,
           sizePt, direction, leadingPct,
-          strokeColor: getStrokeColor(),
-          strokeWidthPx: getStrokeWidthPx(),
-          fillColor: getFillColor(),
+          strokeColor,
+          strokeWidthPx,
+          fillColor,
           sourceTxtRef: { pageNumber: refPageNumber, paragraphIndex: splitIndex + 1 + i },
         });
       });
@@ -1088,6 +1179,21 @@ export function splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageN
     // 3) content 確定 → onTxtSourceChange 発火（syncPlacedFromTxt が整った index で前半 layer を
     //    part0 へ追従、renderViewer がエディタ分割表示）。layer 調整を先に済ませてあるので整合。
     setTxtSource({ name: source.name, content: newContent });
+    // 分割時は「既存テキストを動かさない/変えない」が仕様。
+    // setTxtSource の同期で既存レイヤーが再センタリング・再同期されても、ここで元状態へ戻す。
+    const currentLayersById = new Map(getNewLayers().map((layer) => [layer.tempId, layer]));
+    for (const snapshot of existingLayerSnapshots) {
+      const current = currentLayersById.get(snapshot.tempId);
+      if (!current) continue;
+      if (snapshot.tempId === sourceTempId) {
+        updateNewLayer(snapshot.tempId, { x: snapshot.x, y: snapshot.y });
+      } else {
+        updateNewLayer(snapshot.tempId, {
+          ...snapshot,
+          sourceTxtRef: current.sourceTxtRef,
+        });
+      }
+    }
     setTxtDirty(true);
   });
 

@@ -23,6 +23,8 @@ fn hide_console_window(_cmd: &mut Command) {}
 const SENTINEL_TIMEOUT_SECS: u64 = 600;
 const SENTINEL_POLL_MS: u64 = 300;
 const PHOTOSHOP_HIDE_POLL_MS: u64 = 25;
+const SAVED_PSD_UNLOCK_TIMEOUT_MS: u64 = 5_000;
+const SAVED_PSD_UNLOCK_POLL_MS: u64 = 250;
 const PROGRESS_EVENT: &str = "photoshop_save_progress";
 static OPUS_OWNS_PHOTOSHOP_SESSION: AtomicBool = AtomicBool::new(false);
 
@@ -52,6 +54,7 @@ pub fn apply_edits(
     app: &tauri::AppHandle,
 ) -> Result<String, PhotoshopError> {
     let ps_path = find_photoshop_executable().ok_or(PhotoshopError::NotFound)?;
+    let saved_psd_paths = saved_psd_paths_for_payload(payload);
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_millis())
@@ -125,6 +128,7 @@ pub fn apply_edits(
                 OPUS_OWNS_PHOTOSHOP_SESSION.store(false, Ordering::SeqCst);
             }
             cleanup_adobe_crash_processors();
+            let lock_warnings = release_saved_psd_locks(&saved_psd_paths);
             let trimmed = content.trim().to_string();
             // "head" は OK ステータス本体（"OK" / "OK partial 7/10"）、
             // "warn_suffix" は addWarning 由来の警告群（失敗 PSD 詳細含む）。
@@ -151,8 +155,18 @@ pub fn apply_edits(
                 } else {
                     format!("{} 個の PSD を更新", total)
                 };
+                let mut warnings = Vec::new();
                 if !warn_suffix.is_empty() {
-                    return Ok(format!("{}（警告: {}）", base, warn_suffix));
+                    warnings.push(warn_suffix);
+                }
+                if !lock_warnings.is_empty() {
+                    warnings.push(format!(
+                        "保存PSDのロック解除を確認できませんでした: {}",
+                        lock_warnings.join(", ")
+                    ));
+                }
+                if !warnings.is_empty() {
+                    return Ok(format!("{}（警告: {}）", base, warnings.join(" / ")));
                 }
                 return Ok(base);
             }
@@ -453,7 +467,7 @@ impl HiddenPhotoshopWindows {
 fn cleanup_adobe_crash_processors() {
     for image_name in ["Adobe Crash Processor.exe", "Adobe Crash Handler.exe"] {
         let mut command = Command::new("taskkill");
-        command.args(["/F", "/IM", image_name]);
+        command.args(["/T", "/F", "/IM", image_name]);
         hide_console_window(&mut command);
         let _ = command.output();
     }
@@ -461,6 +475,54 @@ fn cleanup_adobe_crash_processors() {
 
 #[cfg(not(windows))]
 fn cleanup_adobe_crash_processors() {}
+
+fn saved_psd_paths_for_payload(payload: &EditPayload) -> Vec<PathBuf> {
+    let save_as = payload.save_mode.as_deref() == Some("saveAs");
+    let target_dir = payload.target_dir.as_deref().filter(|s| !s.is_empty());
+    payload
+        .edits
+        .iter()
+        .filter_map(|psd| {
+            if save_as {
+                let dir = target_dir?;
+                let name = Path::new(&psd.psd_path).file_name()?;
+                Some(Path::new(dir).join(name))
+            } else {
+                Some(PathBuf::from(&psd.psd_path))
+            }
+        })
+        .collect()
+}
+
+fn release_saved_psd_locks(paths: &[PathBuf]) -> Vec<String> {
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    let deadline = Instant::now() + Duration::from_millis(SAVED_PSD_UNLOCK_TIMEOUT_MS);
+    loop {
+        cleanup_adobe_crash_processors();
+        let locked: Vec<String> = paths
+            .iter()
+            .filter(|path| is_psd_file_locked(path))
+            .map(|path| path.display().to_string())
+            .collect();
+        if locked.is_empty() || Instant::now() >= deadline {
+            return locked;
+        }
+        std::thread::sleep(Duration::from_millis(SAVED_PSD_UNLOCK_POLL_MS));
+    }
+}
+
+fn is_psd_file_locked(path: &Path) -> bool {
+    if !path.exists() {
+        return false;
+    }
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .is_err()
+}
 
 // 【v2.x】Photoshop 起動時に出る「仮想記憶ディスクの容量不足」警告ダイアログを
 // バックグラウンドで監視し、見つけたら自動的に OK を押す。

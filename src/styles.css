@@ -4454,7 +4454,7 @@ body.home-starting .home-screen {
   -webkit-text-combine: none;
   display: inline-block;
   position: relative;
-  --tcy-line-center-shift: -0.36em;
+  --tcy-line-center-shift: -0.18em;
   width: 1em;
   height: 1em;
   writing-mode: horizontal-tb;

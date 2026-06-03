@@ -545,7 +545,7 @@ fn script_output_text_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| "Desktop folder was not found".to_string())?;
     Ok(desktop
         .join("Script_Output")
-        .join("COMIPO_text\u{62BD}\u{51FA}"))
+        .join("OPUSテキスト"))
 }
 
 fn sanitize_txt_filename(name: &str) -> String {
@@ -569,6 +569,44 @@ fn sanitize_txt_filename(name: &str) -> String {
     out
 }
 
+fn is_editor_page_marker_line(line: &str) -> bool {
+    let s = line.trim();
+    if !s.starts_with("<<") || !s.ends_with(">>") || s.len() < 8 {
+        return false;
+    }
+    let inner = s[2..s.len() - 2].trim();
+    let Some(number) = inner.strip_suffix("Page") else {
+        return false;
+    };
+    let number = number.trim();
+    !number.is_empty()
+        && number
+            .chars()
+            .all(|c| c.is_ascii_digit() || ('０'..='９').contains(&c))
+}
+
+fn ensure_blank_line_after_page_markers(content: &str) -> String {
+    let normalized = content.replace("\r\n", "\n").replace('\r', "\n");
+    let mut out = String::with_capacity(normalized.len());
+    let mut lines = normalized.split('\n').peekable();
+
+    while let Some(line) = lines.next() {
+        out.push_str(line);
+        if lines.peek().is_some() {
+            out.push('\n');
+        }
+        if is_editor_page_marker_line(line) {
+            if let Some(next_line) = lines.peek() {
+                if !next_line.trim().is_empty() {
+                    out.push('\n');
+                }
+            }
+        }
+    }
+
+    out
+}
+
 #[tauri::command]
 async fn save_editor_text_to_script_output(
     content: String,
@@ -577,13 +615,14 @@ async fn save_editor_text_to_script_output(
     let dir = script_output_text_dir()?;
     fs::create_dir_all(&dir).map_err(|e| {
         format!(
-            "Script_Output folder create failed ({}): {}",
+            "OPUSテキスト folder create failed ({}): {}",
             dir.display(),
             e
         )
     })?;
     let name = sanitize_txt_filename(default_name.as_deref().unwrap_or("untitled.txt"));
     let path = dir.join(name);
+    let content = ensure_blank_line_after_page_markers(&content);
     fs::write(&path, content)
         .map_err(|e| format!("text save failed ({}): {}", path.display(), e))?;
     Ok(path.to_string_lossy().to_string())

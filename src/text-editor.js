@@ -352,7 +352,7 @@ function rangesForTcy(text, start, end) {
       if (isTcyTargetChar(text[i])) {
         let j = i + 1;
         while (j < to && isTcyTargetChar(text[j])) j++;
-        runs.push({ start: i, end: j });
+        if (j - i >= 2) runs.push({ start: i, end: j });
         i = j;
       } else {
         i++;
@@ -370,7 +370,7 @@ function rangesForTcy(text, start, end) {
     pos = from - 1;
   }
   if (!isTcyTargetChar(text[pos])) return [];
-  return [{ start: pos, end: pos + 1 }];
+  return [];
 }
 
 function tcyRunsActive(runs, map) {
@@ -407,6 +407,48 @@ function syncVerticalHalfToFullSelect() {
   const select = verticalHalfToFullSelectEl();
   if (!select) return;
   select.value = getDefault("verticalHalfToFullEnabled") === false ? "off" : "on";
+}
+
+function convertHalfWidthAsciiToFullWidth(text) {
+  return String(text ?? "").replace(/[\x21-\x7E]/g, (c) =>
+    String.fromCharCode(c.charCodeAt(0) + 0xFEE0),
+  );
+}
+
+function applyVerticalHalfToFullToSelectedLayers() {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  let mutated = false;
+  withHistoryTransient(() => {
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      const direction = ref.kind === "existing"
+        ? ((getEdit(ref.page.path, ref.layer.id) ?? {}).direction ?? ref.layer.direction ?? "horizontal")
+        : (ref.newLayer.direction ?? "vertical");
+      if (direction !== "vertical") continue;
+      const current = ref.kind === "existing"
+        ? ((getEdit(ref.page.path, ref.layer.id) ?? {}).contents ?? ref.layer.text ?? "")
+        : (ref.newLayer.contents ?? "");
+      const converted = convertHalfWidthAsciiToFullWidth(current);
+      if (converted === current) continue;
+      const oldCenter = getLayerCenter(ref);
+      if (ref.kind === "existing") {
+        setEdit(ref.page.path, ref.layer.id, { contents: converted });
+      } else {
+        updateNewLayer(ref.newLayer.tempId, { contents: converted });
+      }
+      const fresh = resolveLayerRef(sel);
+      if (fresh) recenterLayerToCenter(fresh, oldCenter);
+      mutated = true;
+    }
+    return mutated;
+  });
+  if (mutated) {
+    rebuildLayerList();
+    refreshAllOverlays();
+  }
+  return mutated;
 }
 
 function syncSizeInputMixedDisplay(sizes, page) {
@@ -2228,8 +2270,13 @@ function bindVerticalHalfToFullSelect() {
   select.dataset.halfToFullBound = "true";
   syncVerticalHalfToFullSelect();
   select.addEventListener("change", () => {
-    setDefault("verticalHalfToFullEnabled", select.value !== "off");
+    const enabled = select.value !== "off";
+    setDefault("verticalHalfToFullEnabled", enabled);
+    if (enabled) applyVerticalHalfToFullToSelectedLayers();
     syncVerticalHalfToFullSelect();
+  });
+  select.addEventListener("click", () => {
+    if (select.value !== "off") applyVerticalHalfToFullToSelectedLayers();
   });
   onSettingsChange(() => syncVerticalHalfToFullSelect());
 }

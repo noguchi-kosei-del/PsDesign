@@ -6,7 +6,7 @@
 // 1) ネスト形式: { work, checks: { simple: { items: [...] }, variation: { items: [...] } } }
 // 2) フラット配列形式: [{ category, page, excerpt, content, checkKind }, ...]
 
-import { setCurrentPageIndex } from "./state.js";
+import { setCurrentPageIndex, setPdfPageIndex } from "./state.js";
 import { notifyDialog } from "./ui-feedback.js";
 
 const $ = (id) => document.getElementById(id);
@@ -36,6 +36,12 @@ function parsePageNumber(pageStr) {
 // ProGen が出力した校正チェックデータが置かれるフォルダ。Tauri の open() に
 // defaultPath として渡すので、ファイル選択ダイアログがこの場所で開く。
 // 実環境にこのパスが無い場合は OS が親ディレクトリ等にフォールバックする。
+function jumpToProofreadPage(pageNumber) {
+  const pageIndex = Math.max(0, Math.round(pageNumber) - 1);
+  setCurrentPageIndex(pageIndex);
+  setPdfPageIndex(pageIndex);
+}
+
 const PROOFREAD_BASE_PATH =
   "G:\\共有ドライブ\\CLLENN\\編集部フォルダ\\編集企画部\\写植・校正用テキストログ";
 
@@ -717,7 +723,7 @@ function renderItem(item, itemKey, notifyChange) {
       p.title = `ページ ${parsedPage} へジャンプ`;
       p.addEventListener("click", (e) => {
         e.stopPropagation(); // 行クリックとの二重発火を防止
-        setCurrentPageIndex(parsedPage - 1);
+        jumpToProofreadPage(parsedPage);
       });
       meta.appendChild(p);
     } else {
@@ -751,7 +757,7 @@ function renderItem(item, itemKey, notifyChange) {
     if (e.target.closest(".proofread-item-checkbox")) return;
     if (!item.page) return;
     const pn = parsePageNumber(item.page);
-    if (pn !== null) setCurrentPageIndex(pn - 1);
+    if (pn !== null) jumpToProofreadPage(pn);
   });
 
   return el;

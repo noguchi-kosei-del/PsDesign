@@ -365,6 +365,8 @@ export function refreshActiveInPlaceEditPreview(sel = _lastInplaceSelection) {
       { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
       { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
       { ...(layer.charFillColors ?? {}), ...(edit.charFillColors ?? {}) },
+      edit.horizontalScale ?? layer.horizontalScale ?? 100,
+      edit.verticalScale ?? layer.verticalScale ?? 100,
     );
     inner.contentEditable = "true";
     return syncInplaceSelectionHighlight(sel);
@@ -399,6 +401,8 @@ export function refreshActiveInPlaceEditPreview(sel = _lastInplaceSelection) {
       nl.charKernings,
       nl.charTateChuYokos,
       nl.charFillColors,
+      nl.horizontalScale ?? 100,
+      nl.verticalScale ?? 100,
     );
     inner.contentEditable = "true";
     return syncInplaceSelectionHighlight(sel);
@@ -1575,7 +1579,14 @@ export function layerRectForExisting(page, layer, edit) {
   // 【v1.16.0】measureMaxLineExtentEm はここで sizePt が確定してから呼ぶ（per-char override も反映）。
   const charFontsExisting = edit.charFonts ?? layer.charFonts ?? {};
   const existingCharSizes = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
-  const measuredEm = measureMaxLineExtentEm(previewText, fontPs, sizePt, existingCharSizes, charFontsExisting, punctTsumePctExisting, tcyEnabledExisting);
+  const existingCharHorizontalScales = { ...(layer.charHorizontalScales ?? {}), ...(edit.charHorizontalScales ?? {}) };
+  const existingCharVerticalScales = { ...(layer.charVerticalScales ?? {}), ...(edit.charVerticalScales ?? {}) };
+  const existingHorizontalScale = edit.horizontalScale ?? layer.horizontalScale ?? 100;
+  const existingVerticalScale = edit.verticalScale ?? layer.verticalScale ?? 100;
+  const measuredEm = measureMaxLineExtentEm(
+    previewText, fontPs, sizePt, existingCharSizes, charFontsExisting, punctTsumePctExisting, tcyEnabledExisting,
+    isVertical, existingCharHorizontalScales, existingCharVerticalScales, existingHorizontalScale, existingVerticalScale,
+  );
   const spacingEmExisting = estimateMaxPositiveSpacingEm(
     previewText,
     edit.trackingMille ?? layer.trackingMille ?? 0,
@@ -1595,6 +1606,8 @@ export function layerRectForExisting(page, layer, edit) {
   // per-char サイズ override がある行はその行の最大文字サイズで line-height をスケール。
   const lineLeadings = edit.lineLeadings ?? {};
   const charSizesMap = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
+  const charHorizontalScalesMap = existingCharHorizontalScales;
+  const charVerticalScalesMap = existingCharVerticalScales;
   const linesArrE = previewText.split(/\r?\n/);
   const lineStartsE = getLineStartOffsets(previewText);
   let thickSum = 0;
@@ -1607,10 +1620,11 @@ export function layerRectForExisting(page, layer, edit) {
     const startIdx = lineStartsE[i] ?? 0;
     for (let k = 0; k < line.length; k++) {
       const cs = charSizesMap[startIdx + k];
-      if (Number.isFinite(cs) && cs > 0) {
-        const ratio = cs / sizePt;
-        if (ratio > lineMaxRatio) lineMaxRatio = ratio;
-      }
+      const sizeRatio = Number.isFinite(cs) && cs > 0 ? cs / sizePt : 1;
+      const hs = Number.isFinite(charHorizontalScalesMap[startIdx + k]) ? charHorizontalScalesMap[startIdx + k] : existingHorizontalScale;
+      const vs = Number.isFinite(charVerticalScalesMap[startIdx + k]) ? charVerticalScalesMap[startIdx + k] : existingVerticalScale;
+      const ratio = sizeRatio * textAxisScaleRatio(isVertical, hs, vs, "thick");
+      if (ratio > lineMaxRatio) lineMaxRatio = ratio;
     }
     thickSum += leading * lineMaxRatio;
   }
@@ -1650,7 +1664,12 @@ export function layerRectForNew(page, nl) {
   // 【v1.x.0】縦中横（!!/!?/！！/！？）も bbox 長軸に反映（TCY ペアごとに 1em 縮む）。
   const tcyEnabledNew = (getDefault("tateChuYokoEnabled") !== false) && isVertical;
   // 【v1.16.0】枠の自動調整 — 実描画幅で long を auto-fit（フォント変更 + per-char サイズ/フォント変更で bbox 自動更新）。
-  const measuredEm = measureMaxLineExtentEm(contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts, punctTsumePctNew, tcyEnabledNew);
+  const newHorizontalScale = nl.horizontalScale ?? 100;
+  const newVerticalScale = nl.verticalScale ?? 100;
+  const measuredEm = measureMaxLineExtentEm(
+    contents, nl.fontPostScriptName, sizePt, nl.charSizes, nl.charFonts, punctTsumePctNew, tcyEnabledNew,
+    isVertical, nl.charHorizontalScales, nl.charVerticalScales, newHorizontalScale, newVerticalScale,
+  );
   const spacingEmNew = estimateMaxPositiveSpacingEm(
     contents,
     nl.trackingMille ?? 0,
@@ -1663,6 +1682,8 @@ export function layerRectForNew(page, nl) {
   // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
   const lineLeadings = nl.lineLeadings ?? {};
   const charSizesMap = nl.charSizes ?? {};
+  const charHorizontalScalesMap = nl.charHorizontalScales ?? {};
+  const charVerticalScalesMap = nl.charVerticalScales ?? {};
   const linesArrN = contents.split(/\r?\n/);
   const lineStartsN = getLineStartOffsets(contents);
   let thickSum = 0;
@@ -1674,10 +1695,11 @@ export function layerRectForNew(page, nl) {
     const startIdx = lineStartsN[i] ?? 0;
     for (let k = 0; k < line.length; k++) {
       const cs = charSizesMap[startIdx + k];
-      if (Number.isFinite(cs) && cs > 0) {
-        const ratio = cs / sizePt;
-        if (ratio > lineMaxRatio) lineMaxRatio = ratio;
-      }
+      const sizeRatio = Number.isFinite(cs) && cs > 0 ? cs / sizePt : 1;
+      const hs = Number.isFinite(charHorizontalScalesMap[startIdx + k]) ? charHorizontalScalesMap[startIdx + k] : newHorizontalScale;
+      const vs = Number.isFinite(charVerticalScalesMap[startIdx + k]) ? charVerticalScalesMap[startIdx + k] : newVerticalScale;
+      const ratio = sizeRatio * textAxisScaleRatio(isVertical, hs, vs, "thick");
+      if (ratio > lineMaxRatio) lineMaxRatio = ratio;
     }
     thickSum += v * lineMaxRatio;
   }
@@ -1868,6 +1890,8 @@ function renderOverlay(ctx) {
       { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
       { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
       { ...(layer.charFillColors ?? {}), ...(edit.charFillColors ?? {}) },
+      edit.horizontalScale ?? layer.horizontalScale ?? 100,
+      edit.verticalScale ?? layer.verticalScale ?? 100,
     );
     const existingPs = edit.fontPostScriptName ?? layer.font;
     const existingFontCss = cssFontFamily(existingPs);
@@ -1985,6 +2009,8 @@ function renderOverlay(ctx) {
       nl.charKernings,
       nl.charTateChuYokos,
       nl.charFillColors,
+      nl.horizontalScale ?? 100,
+      nl.verticalScale ?? 100,
     );
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
@@ -2720,7 +2746,19 @@ function getMeasureContext() {
 // (charSize / layerSize) 倍してから加算する → bbox が大きい文字に応じて伸びる。
 //
 // 戻り値: 0 〜 ∞（layer.sizePt em 単位）。空行は 0。測定不能なら null。
-function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs, punctTsumePct, tcyEnabled) {
+function normalizeScaleRatio(value) {
+  const n = Number(value);
+  return Number.isFinite(n) && n > 0 ? n / 100 : 1;
+}
+
+function textAxisScaleRatio(isVertical, horizontalScale, verticalScale, axis) {
+  const sx = normalizeScaleRatio(horizontalScale);
+  const sy = normalizeScaleRatio(verticalScale);
+  if (axis === "long") return isVertical ? sy : sx;
+  return isVertical ? sx : sy;
+}
+
+function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFonts, layerSizePt, layerFontPs, punctTsumePct, tcyEnabled, isVertical = false, charHorizontalScales = null, charVerticalScales = null, layerHorizontalScale = 100, layerVerticalScale = 100) {
   if (!line) return 0;
   if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
   let ctx;
@@ -2736,7 +2774,9 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
       const cc = line.charCodeAt(k);
       if (PUNCT_TSUME_CHAR_CODES.has(cc)) {
         const charSz = Number.isFinite(charSizes?.[lineStartIdx + k]) ? charSizes[lineStartIdx + k] : layerSizePt;
-        tsumeReductionEm += tsumeMag * (charSz / layerSizePt);
+        const hs = Number.isFinite(charHorizontalScales?.[lineStartIdx + k]) ? charHorizontalScales[lineStartIdx + k] : layerHorizontalScale;
+        const vs = Number.isFinite(charVerticalScales?.[lineStartIdx + k]) ? charVerticalScales[lineStartIdx + k] : layerVerticalScale;
+        tsumeReductionEm += tsumeMag * (charSz / layerSizePt) * textAxisScaleRatio(isVertical, hs, vs, "long");
       }
     }
   }
@@ -2756,15 +2796,19 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
     const tcyFam = cssFontFamily(layerFontPs) || "sans-serif";
     for (let k = 0; k < line.length - 1; ) {
       const two = line.slice(k, k + 2);
-      if (two === "!!" || two === "!?" || two === "！！" || two === "！？") {
+      if (isTcyPunctuationPair(two)) {
         let pairOrigEm = 0;
         try {
           ctx.font = `${refSizePx}px ${tcyFam}`;
           const w = ctx.measureText(two).width;
           pairOrigEm = w / refSizePx;
         } catch { pairOrigEm = 0; }
-        // 元の幅 (totalEm に既に含まれている) を引き、TCY 後の 1em を足す
-        tcyAdjustEm += 1 - pairOrigEm;
+        // 元の幅 (totalEm に既に含まれている) を引き、TCY 後の 1em を足す。
+        // text scale がある場合は長軸方向の倍率も同じように効く。
+        const absIdx = lineStartIdx + k;
+        const hs = Number.isFinite(charHorizontalScales?.[absIdx]) ? charHorizontalScales[absIdx] : layerHorizontalScale;
+        const vs = Number.isFinite(charVerticalScales?.[absIdx]) ? charVerticalScales[absIdx] : layerVerticalScale;
+        tcyAdjustEm += (1 - pairOrigEm) * textAxisScaleRatio(isVertical, hs, vs, "long");
         k += 2;
       } else {
         k += 1;
@@ -2776,12 +2820,16 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
     const sizeStart = Number.isFinite(charSizes?.[lineStartIdx + i]) ? charSizes[lineStartIdx + i] : layerSizePt;
     const fontStart = (typeof charFonts?.[lineStartIdx + i] === "string" && charFonts[lineStartIdx + i].length > 0)
       ? charFonts[lineStartIdx + i] : layerFontPs;
+    const hScaleStart = Number.isFinite(charHorizontalScales?.[lineStartIdx + i]) ? charHorizontalScales[lineStartIdx + i] : layerHorizontalScale;
+    const vScaleStart = Number.isFinite(charVerticalScales?.[lineStartIdx + i]) ? charVerticalScales[lineStartIdx + i] : layerVerticalScale;
     let j = i + 1;
     while (j < line.length) {
       const sz = Number.isFinite(charSizes?.[lineStartIdx + j]) ? charSizes[lineStartIdx + j] : layerSizePt;
       const fn = (typeof charFonts?.[lineStartIdx + j] === "string" && charFonts[lineStartIdx + j].length > 0)
         ? charFonts[lineStartIdx + j] : layerFontPs;
-      if (sz !== sizeStart || fn !== fontStart) break;
+      const hs = Number.isFinite(charHorizontalScales?.[lineStartIdx + j]) ? charHorizontalScales[lineStartIdx + j] : layerHorizontalScale;
+      const vs = Number.isFinite(charVerticalScales?.[lineStartIdx + j]) ? charVerticalScales[lineStartIdx + j] : layerVerticalScale;
+      if (sz !== sizeStart || fn !== fontStart || hs !== hScaleStart || vs !== vScaleStart) break;
       j++;
     }
     const segText = line.slice(i, j);
@@ -2811,7 +2859,12 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
     let w;
     if (fontReady) {
       ctx.font = fontShorthand;
-      try { w = ctx.measureText(segText).width; } catch { return null; }
+      try {
+        const metrics = ctx.measureText(segText);
+        w = metrics.width;
+        const inkWidth = Number(metrics.actualBoundingBoxLeft) + Number(metrics.actualBoundingBoxRight);
+        if (Number.isFinite(inkWidth) && inkWidth > w) w = inkWidth;
+      } catch { return null; }
       if (!Number.isFinite(w) || w <= 0) {
         w = segText.length * refSizePx;
       }
@@ -2822,7 +2875,8 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
     // refSizePx font-size での実幅（CSS px）→ そのセグメントの「sizeStart pt」での幅に正規化
     // → さらに「layerSizePt em」に換算（layer サイズを 1 とした比率）
     const segWidthAtCharSizeEm = w / refSizePx;
-    const segWidthAtLayerEm = segWidthAtCharSizeEm * (sizeStart / layerSizePt);
+    const scaleRatio = textAxisScaleRatio(isVertical, hScaleStart, vScaleStart, "long");
+    const segWidthAtLayerEm = segWidthAtCharSizeEm * (sizeStart / layerSizePt) * scaleRatio;
     totalEm += segWidthAtLayerEm;
     i = j;
   }
@@ -2836,7 +2890,7 @@ function measureLineExtentEmWithOverrides(line, lineStartIdx, charSizes, charFon
 // charSizes / charFonts に override があれば反映、なければ layer フォント単一で測定。
 // punctTsumePct: 句読点ツメ%。0 のとき無効。各行の measureLineExtentEmWithOverrides に伝搬。
 // tcyEnabled: 縦中横を bbox 計算に反映するか。true なら !!/!?/！！/！？ ペアの 1 文字幅ぶんを減算。
-function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts, punctTsumePct, tcyEnabled) {
+function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, charFonts, punctTsumePct, tcyEnabled, isVertical = false, charHorizontalScales = null, charVerticalScales = null, layerHorizontalScale = 100, layerVerticalScale = 100) {
   if (!text) return 0;
   if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
   const fullText = String(text);
@@ -2846,6 +2900,7 @@ function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, ch
   for (let li = 0; li < linesArr.length; li++) {
     const em = measureLineExtentEmWithOverrides(
       linesArr[li], lineStarts[li], charSizes, charFonts, layerSizePt, postScriptName, punctTsumePct, tcyEnabled,
+      isVertical, charHorizontalScales, charVerticalScales, layerHorizontalScale, layerVerticalScale,
     );
     if (em == null) continue;
     if (em > maxEm) maxEm = em;
@@ -2984,6 +3039,26 @@ function isHalfWidthDigitForTcy(ch) {
   return ch >= "0" && ch <= "9";
 }
 
+const FW_EXCLAMATION = "\uFF01";
+const FW_QUESTION = "\uFF1F";
+
+function isTcyPunctuationChar(ch) {
+  return ch === "!" || ch === "?" || ch === FW_EXCLAMATION || ch === FW_QUESTION;
+}
+
+function isTcyPunctuationPair(text) {
+  return text.length === 2 && isTcyPunctuationChar(text[0]) && isTcyPunctuationChar(text[1]);
+}
+
+function normalizeTcyPunctuationPair(text) {
+  if (!isTcyPunctuationPair(text)) return text;
+  return text.replace(/\uFF01/g, "!").replace(/\uFF1F/g, "?");
+}
+
+function normalizeTcyPunctuationPairs(text) {
+  return String(text ?? "").replace(/[\u0021\u003F\uFF01\uFF1F]{2}/g, normalizeTcyPunctuationPair);
+}
+
 function findTcyPairs(line) {
   const pairs = [];
   let i = 0;
@@ -2997,16 +3072,11 @@ function findTcyPairs(line) {
       i = j;
       continue;
     }
-    // 半角「!!」「!?」 / 全角「！！」「！？」 検出 (1 ペア = 2 文字)
-    if ((ch === "!" || ch === "！") && i + 1 < line.length) {
-      const next = line[i + 1];
-      const isHalfPair = ch === "!" && (next === "!" || next === "?");
-      const isFullPair = ch === "！" && (next === "！" || next === "？");
-      if (isHalfPair || isFullPair) {
-        pairs.push({ start: i, end: i + 2 });
-        i += 2;
-        continue;
-      }
+    // 半角/全角の ! ? は 2 文字ペアだけ TCY 対象。単独の「！」/「？」は通常の縦組みのまま。
+    if (i + 1 < line.length && isTcyPunctuationPair(line.slice(i, i + 2))) {
+      pairs.push({ start: i, end: i + 2 });
+      i += 2;
+      continue;
     }
     i += 1;
   }
@@ -3029,7 +3099,7 @@ function findTcyPairs(line) {
 // tcyOn は呼び出し側で「設定 ON かつ縦書きレイヤー」の合成済みフラグを期待する。
 //
 // 連続する同 signature (size, tracking, font) の文字を 1 span にまとめて DOM 軽量化。
-function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null, charFillColors = null) {
+function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMille, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null, charFillColors = null, layerHorizontalScale = 100, layerVerticalScale = 100) {
   if (!line.length) {
     // 空行は zero-width space で line-box を維持（縦書きで列が消えないように）。
     parentEl.appendChild(document.createTextNode("​"));
@@ -3042,7 +3112,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
   // charFonts, charBolds 等) の参照も壊れない。jsx_gen.rs applyTateChuYoko も同じ変換を
   // するので、プレビューと PSD 保存後の見た目が一致する。
   if (tcyOn) {
-    line = line.replace(/！！/g, "!!").replace(/！？/g, "!?");
+    line = normalizeTcyPunctuationPairs(line);
   }
   const dashTrack = Number.isFinite(Number(dashMille)) ? Number(dashMille) : 0;
   const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
@@ -3054,7 +3124,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
       if (charTateChuYokos[absIdx] === true) {
         let j = i + 1;
         while (j < line.length && charTateChuYokos[lineStartIdx + j] === true) j++;
-        manualTcyRanges.push({ start: i, end: j });
+        if (j - i >= 2) manualTcyRanges.push({ start: i, end: j });
         i = j;
       } else {
         i++;
@@ -3164,16 +3234,15 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
           fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
           hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg,
           charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
-          charFillColors, hasCharFillColors);
+          charFillColors, hasCharFillColors, layerHorizontalScale, layerVerticalScale);
       }
       const span = document.createElement("span");
       span.className = "tcy-span";
       const innerSpan = document.createElement("span");
       innerSpan.className = "tcy-inner";
       span.textContent = sub
-        .slice(pair.start, pair.end)
-        .replace(/！/g, "!")
-        .replace(/？/g, "?");
+        .slice(pair.start, pair.end);
+      span.textContent = normalizeTcyPunctuationPair(span.textContent);
       innerSpan.textContent = span.textContent;
       span.textContent = "";
       span.dataset.tcyLength = String(innerSpan.textContent.length);
@@ -3183,10 +3252,10 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
     }
     if (pos < sub.length) {
       appendStyledSegment(parentEl, sub.slice(pos),
-        fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
-        hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg,
-        charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
-        charFillColors, hasCharFillColors);
+          fromLocal + pos, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts,
+          hasCharSizes, hasCharFonts, symbolActive ? symbolFontPS : null, charBolds, charItalics, hasCharBolds, hasCharItalics, tsumeArg,
+          charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
+          charFillColors, hasCharFillColors, layerHorizontalScale, layerVerticalScale);
     }
   };
 
@@ -3200,7 +3269,7 @@ function appendLineWithTracking(parentEl, line, lineStartIdx, dashMille, tildeMi
         symbolActive ? symbolFontPS : null, charBolds, charItalics,
         hasCharSizes, hasCharFonts, hasCharBolds, hasCharItalics, tsumeArg,
         charHorizontalScales, charVerticalScales, hasCharHorizontalScales, hasCharVerticalScales,
-        charFillColors, hasCharFillColors);
+        charFillColors, hasCharFillColors, layerHorizontalScale, layerVerticalScale);
       cursor = seg.end;
     }
     if (cursor < line.length) emitNonRubyRange(cursor, line.length);
@@ -3364,7 +3433,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
 // lineStartIdx: line が full contents のどの位置から始まるか（charSizes / charFonts の絶対 index 算出用）
 // 【v1.x.0】punctTsumeMag (0..1) で句読点/括弧を縮める。例: 0.5 で 0.5em 詰める。
 //   始め括弧（「/〝）は前側、その他は後ろ側を詰める。
-function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag, charHorizontalScales = null, charVerticalScales = null, hasCharHorizontalScales = false, hasCharVerticalScales = false, charFillColors = null, hasCharFillColors = false) {
+function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, trackings, charSizes, defaultSizePt, charFonts, hasCharSizes, hasCharFonts, symbolFontPS, charBolds, charItalics, hasCharBolds, hasCharItalics, punctTsumeMag, charHorizontalScales = null, charVerticalScales = null, hasCharHorizontalScales = false, hasCharVerticalScales = false, charFillColors = null, hasCharFillColors = false, layerHorizontalScale = 100, layerVerticalScale = 100) {
   if (!segText.length) return;
   // 【v1.22.0】per-char font 解決: ユーザー手動指定 (charFonts[idx]) があれば最優先、
   // 無ければ symbol char に対しては symbolFontPS で自動置換、それでも無ければ undefined（layer 既定）。
@@ -3395,8 +3464,8 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     const sigBold = hasCharBolds ? charBolds[absIdx] : undefined;
     const sigItalic = hasCharItalics ? charItalics[absIdx] : undefined;
     const sigFill = hasCharFillColors ? charFillColors[absIdx] : undefined;
-    const sigHScale = hasCharHorizontalScales ? charHorizontalScales[absIdx] : undefined;
-    const sigVScale = hasCharVerticalScales ? charVerticalScales[absIdx] : undefined;
+    const sigHScale = hasCharHorizontalScales && Number.isFinite(charHorizontalScales[absIdx]) ? charHorizontalScales[absIdx] : layerHorizontalScale;
+    const sigVScale = hasCharVerticalScales && Number.isFinite(charVerticalScales[absIdx]) ? charVerticalScales[absIdx] : layerVerticalScale;
     // 【v1.x.0】句読点ツメ。signature に含めて同じ詰め方向の連続文字を 1 span にまとめる。
     const sigTsume = tsumeForChar(segText[i]);
     let j = i + 1;
@@ -3408,8 +3477,8 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       const b = hasCharBolds ? charBolds[absJ] : undefined;
       const it = hasCharItalics ? charItalics[absJ] : undefined;
       const fl = hasCharFillColors ? charFillColors[absJ] : undefined;
-      const hs = hasCharHorizontalScales ? charHorizontalScales[absJ] : undefined;
-      const vs = hasCharVerticalScales ? charVerticalScales[absJ] : undefined;
+      const hs = hasCharHorizontalScales && Number.isFinite(charHorizontalScales[absJ]) ? charHorizontalScales[absJ] : layerHorizontalScale;
+      const vs = hasCharVerticalScales && Number.isFinite(charVerticalScales[absJ]) ? charVerticalScales[absJ] : layerVerticalScale;
       const tu = tsumeForChar(segText[j]);
       if (
         s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || it !== sigItalic ||
@@ -3489,7 +3558,7 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
 // それ以外は単一テキストノードで描画（最軽量）。
 // isVertical: true なら writing-mode: vertical-rl 想定で per-line の幅 (列幅) を切替える。
 // defaultSizePt: layer 全体の sizePt（charSizes の em 換算に使う）。
-function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumePct, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null, charFillColors = null) {
+function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille, tildeMille, tcyOn, isVertical, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumePct, charRubies, charHorizontalScales = null, charVerticalScales = null, trackingMille = 0, kerningMille = 0, charTrackings = null, charKernings = null, charTateChuYokos = null, charFillColors = null, layerHorizontalScale = 100, layerVerticalScale = 100) {
   inner.textContent = "";
   const overrides = lineLeadings && Object.keys(lineLeadings).length > 0 ? lineLeadings : null;
   const hasCharSizes = charSizes && Object.keys(charSizes).length > 0;
@@ -3498,7 +3567,9 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const hasCharItalics = charItalics && Object.keys(charItalics).length > 0;
   const hasCharFillColors = charFillColors && Object.keys(charFillColors).length > 0;
   const hasCharScales = (charHorizontalScales && Object.keys(charHorizontalScales).length > 0)
-    || (charVerticalScales && Object.keys(charVerticalScales).length > 0);
+    || (charVerticalScales && Object.keys(charVerticalScales).length > 0)
+    || (Number.isFinite(layerHorizontalScale) && layerHorizontalScale !== 100)
+    || (Number.isFinite(layerVerticalScale) && layerVerticalScale !== 100);
   const hasCharTateChuYokos = charTateChuYokos && Object.keys(charTateChuYokos).length > 0;
   const hasCharSpacings = (charTrackings && Object.keys(charTrackings).length > 0)
     || (charKernings && Object.keys(charKernings).length > 0);
@@ -3570,7 +3641,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
           lineEl.style.marginBlockStart = `${extra}em`;
         }
       }
-      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos, charFillColors);
+      appendLineWithTracking(lineEl, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos, charFillColors, layerHorizontalScale, layerVerticalScale);
       inner.appendChild(lineEl);
     }
   } else {
@@ -3584,7 +3655,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     // charRubies を渡すように修正。
     for (let i = 0; i < lines.length; i++) {
       if (i > 0) inner.appendChild(document.createTextNode("\n"));
-      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos, charFillColors);
+      appendLineWithTracking(inner, lines[i], lineStarts[i], dashTrack, tildeTrack, tcyOn, charSizes, defaultSizePt, charFonts, symbolFontPS, charBolds, charItalics, punctTsumeMag, charRubies, charHorizontalScales, charVerticalScales, baseTracking, baseKerning, charTrackings, charKernings, charTateChuYokos, charFillColors, layerHorizontalScale, layerVerticalScale);
     }
   }
 }
@@ -4895,6 +4966,8 @@ function startContentEditableEdit(ctx, target, options = {}) {
       startCharKernings,
       startCharTateChuYokos,
       startCharFillColors,
+      startEdit.horizontalScale ?? target.layer.horizontalScale ?? 100,
+      startEdit.verticalScale ?? target.layer.verticalScale ?? 100,
     );
   } else {
     const dashMille = Number(getDefault("dashRunTrackingMille")) || 0;
@@ -4922,6 +4995,8 @@ function startContentEditableEdit(ctx, target, options = {}) {
       startCharKernings,
       startCharTateChuYokos,
       startCharFillColors,
+      target.nl.horizontalScale ?? 100,
+      target.nl.verticalScale ?? 100,
     );
   }
 
@@ -5076,7 +5151,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
   const maybeConvertHalfToFull = (s) => {
     if (editDirection !== "vertical") return s;
     if (getDefault("verticalHalfToFullEnabled") === false) return s;
-    return s.replace(/[0-9A-Za-z]/g, (c) =>
+    return s.replace(/[\x21-\x7E]/g, (c) =>
       String.fromCharCode(c.charCodeAt(0) + 0xFEE0),
     );
   };

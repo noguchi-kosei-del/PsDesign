@@ -19,6 +19,7 @@ import {
   setTxtSource,
 } from "../state.js";
 import { getPdfVirtualPageCount } from "../pdf-pages.js";
+import { nextPageIndexForTurn } from "../page-navigation.js";
 import {
   commitNewTxtInput,
   deleteTxtBlockByIndex,
@@ -700,10 +701,16 @@ function bindParagraphEdit(el) {
     if (newText === originalDisplay) return;
     // 空行（連続改行）で分割されていれば、空行より後ろのパートを画像中央へ新規配置する。
     // 分割正規表現は再描画 splitBlocksWithOffsets と同じ（全角スペースも含む空行を許容）。
-    const parts = newText
+    let parts = newText
       .split(/\n[ \t　]*\n/)
       .map((s) => s.replace(/^\n+|\n+$/g, ""))
       .filter((s) => s.length > 0);
+    if (parts.length <= 1 && !originalDisplay.includes("\n") && newText.includes("\n")) {
+      parts = newText
+        .split(/\n[ \t\u3000]*/)
+        .map((s) => s.replace(/^\n+|\n+$/g, ""))
+        .filter((s) => s.length > 0);
+    }
     if (parts.length > 1) {
       const pn = Number(el.dataset.pageNumber);
       const ok = splitTxtBlockAndPlace(
@@ -823,7 +830,7 @@ function localActivePageSource() {
 function localAdvancePage(delta) {
   const info = localActivePageSource();
   if (!info) return;
-  const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
+  const next = nextPageIndexForTurn(info.source, info.current, info.total, delta);
   if (info.source === "psd") setCurrentPageIndex(next);
   else setPdfPageIndex(next);
 }
@@ -839,8 +846,12 @@ function syncPageNav() {
     return;
   }
   els.pageLabel.textContent = `P${String(info.current + 1).padStart(2, "0")} / ${info.total}`;
-  if (els.pagePrev) els.pagePrev.disabled = info.current <= 0;
-  if (els.pageNext) els.pageNext.disabled = info.current >= info.total - 1;
+  if (els.pagePrev) {
+    els.pagePrev.disabled = nextPageIndexForTurn(info.source, info.current, info.total, -1) === info.current;
+  }
+  if (els.pageNext) {
+    els.pageNext.disabled = nextPageIndexForTurn(info.source, info.current, info.total, +1) === info.current;
+  }
 }
 
 function onEditorPageNavShortcut(e) {

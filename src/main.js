@@ -213,6 +213,7 @@ import {
   getPdfVirtualPageAt,
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
+import { nextPageIndexForTurn } from "./page-navigation.js";
 
 let homeTypesetDropHandler = null;
 let homeTypesetDragOverHandler = null;
@@ -899,25 +900,26 @@ function updatePageNav() {
   const txtCount = getTxtPageCount();
   let total = 0;
   let current = 0;
+  let source = null;
   if (getParallelSyncMode()) {
-    if (psdCount > 0) { total = psdCount; current = getCurrentPageIndex(); }
-    else if (pdfCount > 0) { total = pdfCount; current = getPdfPageIndex(); }
-    else if (txtCount > 0) { total = txtCount; current = getPdfPageIndex(); }
+    if (psdCount > 0) { source = "psd"; total = psdCount; current = getCurrentPageIndex(); }
+    else if (pdfCount > 0) { source = "pdf"; total = pdfCount; current = getPdfPageIndex(); }
+    else if (txtCount > 0) { source = "txt"; total = txtCount; current = getPdfPageIndex(); }
   } else if (getActivePane() === "pdf" && pdfCount > 0) {
-    total = pdfCount; current = getPdfPageIndex();
+    source = "pdf"; total = pdfCount; current = getPdfPageIndex();
   } else if (psdCount > 0) {
-    total = psdCount; current = getCurrentPageIndex();
+    source = "psd"; total = psdCount; current = getCurrentPageIndex();
   } else if (pdfCount > 0) {
-    total = pdfCount; current = getPdfPageIndex();
+    source = "pdf"; total = pdfCount; current = getPdfPageIndex();
   } else if (txtCount > 0) {
-    total = txtCount; current = getPdfPageIndex();
+    source = "txt"; total = txtCount; current = getPdfPageIndex();
   }
   if (label) {
     label.textContent = total > 0 ? `${current + 1} / ${total}` : "- / -";
   }
   const disabled = total === 0;
-  if (prev) prev.disabled = disabled || current <= 0;
-  if (next) next.disabled = disabled || current >= total - 1;
+  if (prev) prev.disabled = disabled || !source || nextPageIndexForTurn(source, current, total, -1) === current;
+  if (next) next.disabled = disabled || !source || nextPageIndexForTurn(source, current, total, +1) === current;
 }
 
 const ARROW_REPEAT_THROTTLE_MS = 80;
@@ -948,21 +950,19 @@ export function advancePage(delta) {
   if (getParallelSyncMode()) {
     const info = activePageSource();
     if (!info) return;
-    const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
+    const next = nextPageIndexForTurn(info.source, info.current, info.total, delta);
     setActivePageIndex(info.source, next);
     return;
   }
   if (getActivePane() === "pdf") {
     const vcount = getPdfVirtualPageCount();
-    const next = getPdfPageIndex() + delta;
-    const clamped = Math.max(0, Math.min(Math.max(0, vcount - 1), next));
-    setPdfPageIndex(clamped);
+    setPdfPageIndex(nextPageIndexForTurn("pdf", getPdfPageIndex(), vcount, delta));
   } else if (getPages().length > 0) {
-    setCurrentPageIndex(getCurrentPageIndex() + delta);
+    setCurrentPageIndex(nextPageIndexForTurn("psd", getCurrentPageIndex(), getPages().length, delta));
   } else {
     const info = activePageSource();
     if (!info) return;
-    const next = Math.max(0, Math.min(info.total - 1, info.current + delta));
+    const next = nextPageIndexForTurn(info.source, info.current, info.total, delta);
     setActivePageIndex(info.source, next);
   }
 }
@@ -1002,11 +1002,11 @@ function bindWheelPageNav() {
     if (pane === "pdf") {
       const vcount = getPdfVirtualPageCount();
       if (vcount > 0) {
-        const next = Math.max(0, Math.min(vcount - 1, getPdfPageIndex() + delta));
+        const next = nextPageIndexForTurn("pdf", getPdfPageIndex(), vcount, delta);
         setPdfPageIndex(next);
       }
     } else if (getPages().length > 0) {
-      setCurrentPageIndex(getCurrentPageIndex() + delta);
+      setCurrentPageIndex(nextPageIndexForTurn("psd", getCurrentPageIndex(), getPages().length, delta));
     }
   };
 
@@ -4061,11 +4061,15 @@ function openHomeTypesetDialog() {
       row.querySelector(".home-typeset-row-icon")?.remove();
       row.insertAdjacentHTML("afterbegin", `<span class="home-typeset-row-icon">${info.icon}</span>`);
     }
+    for (const row of modal.querySelectorAll('.home-typeset-row[data-slot="reference"], .home-typeset-row[data-slot="psd"]')) {
+      if (!row.querySelector(".home-typeset-progress")) {
+        row.insertAdjacentHTML(
+          "beforeend",
+          '<div class="home-typeset-progress" aria-hidden="true"><span></span></div>'
+        );
+      }
+    }
     const referenceRow = modal.querySelector('.home-typeset-row[data-slot="reference"]');
-    referenceRow?.insertAdjacentHTML(
-      "beforeend",
-      '<div class="home-typeset-progress" aria-hidden="true"><span></span></div>'
-    );
     referenceRow?.querySelector('.home-typeset-pick-btn[data-pick="reference"]')?.insertAdjacentHTML(
       "beforebegin",
       '<button class="home-typeset-pick-btn home-typeset-hide-btn" data-reference-hide type="button" disabled>非表示選択</button>'
@@ -4276,7 +4280,11 @@ function openHomeTypesetDialog() {
           countEl.textContent = count > 0 ? String(count) : "";
           countEl.hidden = count === 0;
         }
-        row.classList.toggle("loading", slot === "reference" && referenceLoading);
+        row.classList.toggle(
+          "loading",
+          (slot === "reference" && referenceLoading)
+          || (slot === "psd" && psdPreflightChecking)
+        );
         row.classList.toggle("selected", active);
       }
       const hideBtn = modal.querySelector("[data-reference-hide]");
