@@ -41,6 +41,7 @@ import {
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
 import { commitFontToSelections, openLayerFontPanel, openLayerSizePanel, openLayerStrokePanel, rebuildLayerList } from "./text-editor.js";
+import { formatTextSizePt, getTextSizeUnit } from "./text-size-unit.js";
 import {
   appendBlockToCurrentPageContent,
   cascadeRemoveTxtForLayers,
@@ -1689,8 +1690,11 @@ export function layerRectForNew(page, nl) {
   const lineStartsN = getLineStartOffsets(contents);
   let thickSum = 0;
   for (let i = 0; i < lineCount; i++) {
-    // lineLeadings[N] is the leading of line N, so it opens the gap before line N + 1.
-    const v = (i > 0 && Number.isFinite(lineLeadings[i - 1])) ? lineLeadings[i - 1] / 100 : leadingFactor;
+    // 1 行目の厚みは 1em。leading は「前行から次行への送り」なので 2 行目以降にだけ足す。
+    // ここで 1 行目にも 125% を掛けると、縦書きでは余分な幅が box 左側に溜まる。
+    const v = i === 0
+      ? 1
+      : (Number.isFinite(lineLeadings[i - 1]) ? lineLeadings[i - 1] / 100 : leadingFactor);
     let lineMaxRatio = 1;
     const line = linesArrN[i] ?? "";
     const startIdx = lineStartsN[i] ?? 0;
@@ -1716,14 +1720,16 @@ export function layerRectForNew(page, nl) {
     : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM);
   const longSafety = TEXT_BBOX_LONG_SAFETY_EM;
   const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE;
-  const thick = Math.max(24, ptInPsdPx * (thickSum + thickSafety));
+  const minThick = nl.reuseTightThick === true ? Math.max(1, ptInPsdPx) : 24;
+  const thick = Math.max(minThick, ptInPsdPx * (thickSum + thickSafety));
   const heuristicLong = (longScale * estimateMaxLineExtentCells(contents, punctTsumePctNew, tcyEnabledNew)) + spacingEmNew;
   const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
   const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (longChars + longSafety));
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
-  const width = isVertical ? thick : long;
-  const height = isVertical ? long : thick;
+  const sourceBounds = reuseSourceBoundsForNewLayer(nl, sizePt);
+  const width = sourceBounds ? sourceBounds.width : (isVertical ? thick : long);
+  const height = sourceBounds ? sourceBounds.height : (isVertical ? long : thick);
   // 実テキストの描画寸法（PSD px）。枠は安全余白で大きめに出るので、中心合わせ用に
   // 「実テキスト長（長軸）= measureText 由来 measuredEm」「実テキスト厚み = thickSum」を別途返す。
   const textLongPx = (Number.isFinite(measuredEm) && measuredEm > 0 ? measuredEm : longChars) * ptInPsdPx;
@@ -2013,6 +2019,9 @@ function renderOverlay(ctx) {
       nl.horizontalScale ?? 100,
       nl.verticalScale ?? 100,
     );
+    if (rect.isVertical && nl.reuseTightThick === true && countLines(nl.contents ?? "") <= 1) {
+      inner.style.lineHeight = "1";
+    }
     const newFontCss = cssFontFamily(nl.fontPostScriptName);
     if (newFontCss) inner.style.fontFamily = newFontCss;
     ensureFontLoaded(nl.fontPostScriptName);
@@ -2700,6 +2709,21 @@ function quoteFontFamily(name) {
   }
   const escaped = String(name).replace(/["\\]/g, "\\$&");
   return `"${escaped}"`;
+}
+
+function reuseSourceBoundsForNewLayer(nl, sizePt) {
+  if (nl?.reuseTightThick !== true) return null;
+  const sourceContents = nl.reuseSourceContents;
+  if (sourceContents == null) return null;
+  if (String(nl.contents ?? "").replace(/\r\n?/g, "\n") !== String(sourceContents).replace(/\r\n?/g, "\n")) return null;
+  const sourceSize = Number(nl.reuseSourceSizePt);
+  if (Number.isFinite(sourceSize) && Number.isFinite(sizePt) && Math.abs(sourceSize - sizePt) > 0.01) return null;
+  const left = Number(nl.reuseSrcLeft);
+  const top = Number(nl.reuseSrcTop);
+  const right = Number(nl.reuseSrcRight);
+  const bottom = Number(nl.reuseSrcBottom);
+  if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
+  return { width: right - left, height: bottom - top };
 }
 
 export function cssFontFamily(psName) {
@@ -3751,8 +3775,7 @@ function formatBadgeSizeLabel(sizePtOrValues, page) {
     .filter((pt) => Number.isFinite(Number(pt)))
     .map((pt) => {
       const display = toDisplaySizePt(Number(pt), page);
-      const rounded = Math.round((display ?? 0) * 100) / 100;
-      return `${rounded}pt`;
+      return formatTextSizePt(display ?? 0, getTextSizeUnit(), true);
     })
     .join("/");
 }

@@ -68,6 +68,7 @@ import {
   hideModalAnimated,
   hideProgress,
   notifyDialog,
+  chooseReuseFontSizeMode,
   pickReuseFontSize,
   showProgress,
   showOpusProgressComplete,
@@ -3057,6 +3058,7 @@ function bindSizeTool() {
     syncStepControls();
     input.value = formatSizeInputValue(getTextSize());
     rebuildLayerList();
+    refreshAllOverlays();
   });
 
   input.value = formatSizeInputValue(getTextSize());
@@ -4890,16 +4892,9 @@ async function startHomeReuseFlow() {
   }
   if (!files.length) return;
 
-  // フォント・サイズを「元のまま再現」するか「選んで統一」するかを選ばせる。
-  const reproduce = await confirmDialog({
-    title: "フォント・サイズの扱い",
-    message: "再生成するテキストのフォントとサイズをどうしますか？\n\n"
-      + "・「元を再現」… 元レイヤーのフォント・サイズを再現します。\n"
-      + "・「選んで統一」… 指定したフォント・サイズで全テキストを統一します（位置は元のまま）。",
-    confirmLabel: "元を再現",
-    cancelLabel: "選んで統一",
-  });
-  const fontSizeMode = reproduce ? "reproduce" : "select";
+  // フォント・サイズを「写植見本を再現」するか「フォント・サイズを指定」するかを選ばせる。
+  const fontSizeMode = await chooseReuseFontSizeMode();
+  if (!fontSizeMode) return;
   let unifyFont = null;
   let unifySize = null;
   if (fontSizeMode === "select") {

@@ -8,6 +8,7 @@ import {
   getParallelViewMode,
   getTool,
   onEditorLeftPaneModeChange,
+  onPageIndexChange,
   onParallelViewModeChange,
   onPdfChange,
   onPdfPageIndexChange,
@@ -15,12 +16,15 @@ import {
   onPdfSkipFirstBlankChange,
   onPdfSplitModeChange,
   onPdfZoomChange,
+  onPsdRotationChange,
+  onPsdZoomChange,
   onToolChange,
 } from "./state.js";
 import {
   getPdfVirtualPageAt,
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
+import { getCurrentPsdPageDisplaySize } from "./spread-view.js";
 import {
   applyOverscrollMargin,
   captureViewportCenterFraction,
@@ -64,6 +68,24 @@ let lastStageH = null;
 
 function isEditorPdfSampleMode() {
   return getParallelViewMode() === "editor" && getEditorLeftPaneMode() === "pdf";
+}
+
+function getEditorSampleSizeFromPsd(pageAR) {
+  if (!isEditorPdfSampleMode()) return null;
+  const psd = getCurrentPsdPageDisplaySize();
+  if (!psd) return null;
+  const targetW = Number(psd.width);
+  const targetH = Number(psd.height);
+  if (!(targetW > 0) || !(targetH > 0) || !(pageAR > 0)) return null;
+  const targetAR = targetW / targetH;
+  const diff = Math.abs(pageAR - targetAR) / Math.max(targetAR, 0.0001);
+  if (diff <= 0.02) {
+    return { width: targetW, height: targetH };
+  }
+  if (pageAR >= targetAR) {
+    return { width: targetW, height: targetW / pageAR };
+  }
+  return { width: targetH * pageAR, height: targetH };
 }
 
 function cancelInFlightRender() {
@@ -140,6 +162,9 @@ export function mountPdfView() {
   onPdfSkipFirstBlankChange(() => schedule());
   onParallelViewModeChange(() => schedule());
   onEditorLeftPaneModeChange(() => schedule());
+  onPsdZoomChange(() => { if (isEditorPdfSampleMode()) schedule(); });
+  onPsdRotationChange(() => { if (isEditorPdfSampleMode()) schedule(); });
+  onPageIndexChange(() => { if (isEditorPdfSampleMode()) schedule(); });
 
   // パンツール対応：canvas 上で mousedown→move→up で stage をスクロールする。
   // PSD 側 (canvas-tools.js) と同じく、リスナーは canvas 自身に張り、毎回 stopPropagation
@@ -409,20 +434,27 @@ async function redraw() {
 
   const fullAR = viewport0.width / viewport0.height;
   const pageAR = side === "full" ? fullAR : fullAR / 2;
-  const availAR = availW / availH;
   let cssW;
   let cssH;
-  if (pageAR >= availAR) {
-    cssW = availW;
-    cssH = availW / pageAR;
+  const editorMatchedSize = getEditorSampleSizeFromPsd(pageAR);
+  if (editorMatchedSize) {
+    cssW = editorMatchedSize.width;
+    cssH = editorMatchedSize.height;
   } else {
-    cssH = availH;
-    cssW = availH * pageAR;
+    const availAR = availW / availH;
+    if (pageAR >= availAR) {
+      cssW = availW;
+      cssH = availW / pageAR;
+    } else {
+      cssH = availH;
+      cssW = availH * pageAR;
+    }
+    const fitToPane = isEditorPdfSampleMode();
+    const zoom = fitToPane ? PDF_FIT_ZOOM : getPdfZoom();
+    cssW *= PDF_FIT_BASE_SCALE * zoom;
+    cssH *= PDF_FIT_BASE_SCALE * zoom;
   }
   const fitToPane = isEditorPdfSampleMode();
-  const zoom = fitToPane ? PDF_FIT_ZOOM : getPdfZoom();
-  cssW *= PDF_FIT_BASE_SCALE * zoom;
-  cssH *= PDF_FIT_BASE_SCALE * zoom;
 
   let dpr = window.devicePixelRatio || 1;
   const maxSideCss = side === "full" ? cssW : cssW * 2;

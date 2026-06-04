@@ -4335,7 +4335,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           } else if (nl.direction === "vertical") {
             // 【v2.x】縦書き位置補正:
             // canvas-tools.js layerRectForNew の bbox 幅 (thick) は:
-            //   thick = ptInPx × (leadingFactor × lineCount + thickSafetyEm)
+            //   thick = ptInPx × (1 + leadingFactor × (lineCount - 1) + thickSafetyEm)
             // 【fix】縦書きは thickSafetyEm を 0 に統一した（layerRectForNew /
             //   auto-place.js estimateLayerSize と同方針）。理由: vertical-rl は content が
             //   box の右端 (block-start) に寄り box 左端 = nl.x は固定のため、safety を足すと
@@ -4351,7 +4351,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             var _lc = _contentsForCount.split(/\r?\n/).length;
             if (_lc < 1) _lc = 1;
             var _thickSafetyEm = 0;
-            var _thickCanvas = _ptInPx * (_lpFactor * _lc + _thickSafetyEm);
+            var _thickBase = 1 + Math.max(0, _lc - 1) * _lpFactor;
+            var _thickCanvas = _ptInPx * (_thickBase + _thickSafetyEm);
             if (_thickCanvas < 24) _thickCanvas = 24;
             var _boxRight = nl.x + _thickCanvas;
             _fixDx = _boxRight - _actualRight;

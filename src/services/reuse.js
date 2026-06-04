@@ -24,6 +24,9 @@ import {
   setReuseInfo,
   setPdf,
   getPages,
+  setTxtDirty,
+  setTxtFilePath,
+  setTxtSource,
 } from "../state.js";
 import { hideProgress, showProgress, toast, updateProgress } from "../ui-feedback.js";
 import { withProgressFlow } from "../progress-flow.js";
@@ -117,7 +120,44 @@ async function analyzeReuseRegions(bgImagePath, psItems, dpi) {
 // fontSizeMode:
 //   "reproduce" (既定) … 元レイヤーのフォント・サイズを再現する。
 //   "select"          … 指定フォント・サイズ（unifyFont / unifySize、無ければ既定）で全テキストを統一する（位置は元のまま）。
-async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "reproduce", unifyFont = null, unifySize = null) {
+function truncateReuseReproduceSizePt(sizePt) {
+  const n = Number(sizePt);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  return Math.trunc(n * 10 + 1e-8) / 10;
+}
+
+function appendReuseTextSourceBlock(sourcePages, pageNumber, text) {
+  if (!Array.isArray(sourcePages)) return null;
+  const normalized = String(text ?? "").replace(/\r\n?/g, "\n").trim();
+  if (!normalized) return null;
+  const pageNum = Number.isInteger(pageNumber) && pageNumber > 0 ? pageNumber : 1;
+  let pageEntry = sourcePages.find((entry) => entry.pageNumber === pageNum);
+  if (!pageEntry) {
+    pageEntry = { pageNumber: pageNum, blocks: [] };
+    sourcePages.push(pageEntry);
+  }
+  const paragraphIndex = pageEntry.blocks.length;
+  pageEntry.blocks.push(normalized);
+  return { pageNumber: pageNum, paragraphIndex };
+}
+
+function buildReuseTextSourceContent(sourcePages) {
+  if (!Array.isArray(sourcePages) || sourcePages.length === 0) return "";
+  return [...sourcePages]
+    .filter((entry) => Array.isArray(entry.blocks) && entry.blocks.length > 0)
+    .sort((a, b) => a.pageNumber - b.pageNumber)
+    .map((entry) => `<<${entry.pageNumber}Page>>\n\n${entry.blocks.join("\n\n")}`)
+    .join("\n\n");
+}
+
+function reuseTextSourceName(files) {
+  if (Array.isArray(files) && files.length === 1) {
+    return `${baseName(files[0]).replace(/\.psd$/i, "")}_recycle.txt`;
+  }
+  return "recycle_text.txt";
+}
+
+async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "reproduce", unifyFont = null, unifySize = null, sourcePages = null, pageNumber = 1) {
   const unify = fontSizeMode === "select";
   const defaultFont = unify ? (unifyFont || getDefault("fontPostScriptName") || null) : null;
   const sizeRaw = unify ? Number(unifySize ?? getDefault("textSize")) : NaN;
@@ -136,11 +176,13 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       const direction = it.direction === "vertical" ? "vertical" : "horizontal";
       const hasBounds = [it.left, it.top, it.right, it.bottom].every((v) => Number.isFinite(v))
         && it.right > it.left && it.bottom > it.top;
-      // サイズ: 公称 pt と実 bbox から逆算したサイズの小さい方を採用。写植でスケールされた
-      // テキストは公称 pt が実表示サイズと食い違うため、bounds 由来サイズで補正する。
+      // サイズ: Photoshop が読んだ textItem.size を元サイズとして採用する。
+      // Photoshop 経路の bounds は描画済み bbox なので、縦書き・複数行・句読点ツメでは
+      // 厚み軸が実 fontSize より小さく出やすい。ここで bounds 逆算を優先すると
+      // 「写植見本を再現」時に文字が縮むため、sizePt が取れない場合だけフォールバックに使う。
       const nominalPt = Number(it.sizePt);
       let sizePt = Number.isFinite(nominalPt) && nominalPt > 0 ? nominalPt : null;
-      if (hasBounds) {
+      if (!sizePt && hasBounds) {
         const boundsSize = getExistingLayerEffectiveSizePt(
           page,
           { left: it.left, top: it.top, right: it.right, bottom: it.bottom, fontSize: nominalPt, direction, text: contents },
@@ -155,7 +197,9 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       );
       // 「統一」モードでは既定フォント・サイズで上書き（位置は元のまま中心合わせ）。
       const layerFont = defaultFont ?? auto.fontPostScriptName;
-      const layerSize = defaultSizePt ?? sizePt;
+      const layerSize = defaultSizePt ?? truncateReuseReproduceSizePt(sizePt);
+      const useSourceBounds = !unify && hasBounds;
+      const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
       const created = addNewLayer({
         psdPath: page.path,
         x: Number.isFinite(it.left) ? it.left : 0,
@@ -169,6 +213,7 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
         leadingPct: 125,
         autoFontSwitched: auto.autoFontSwitched,
         autoFontSwitchBucket: auto.autoFontSwitchBucket,
+        sourceTxtRef,
       });
       // 元レイヤーの実 bbox 中心に新規枠の中心を合わせる（auto-place と同じ中心固定方式）。
       // OPUS の新規レイヤー枠は文字数推定ベースなので、top-left 配置だと縦書きアンカー差や
@@ -178,11 +223,27 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       if (created && hasBounds) {
         const cx = (it.left + it.right) / 2;
         const cy = (it.top + it.bottom) / 2;
-        const rect = layerRectForNew(page, created);
         // reuseSrcCx/Cy = 元レイヤーの中心。保存時に「実 bounds 中心」をここへ合わせ、元の位置を厳密再現。
         // reuseTightThick = 枠の厚み方向を実テキスト幅に詰める（左余白を作らない）。
-        updateNewLayer(created.tempId, { x: cx - rect.width / 2, y: cy - rect.height / 2, reuseSrcCx: cx, reuseSrcCy: cy, reuseTightThick: true });
-        if (Array.isArray(alignTargets)) {
+        const updates = { reuseSrcCx: cx, reuseSrcCy: cy, reuseTightThick: true };
+        if (useSourceBounds) {
+          Object.assign(updates, {
+            x: it.left,
+            y: it.top,
+            reuseSrcLeft: it.left,
+            reuseSrcTop: it.top,
+            reuseSrcRight: it.right,
+            reuseSrcBottom: it.bottom,
+            reuseSourceContents: contents,
+            reuseSourceSizePt: layerSize,
+          });
+        } else {
+          const rect = layerRectForNew(page, created);
+          updates.x = cx - rect.width / 2;
+          updates.y = cy - rect.height / 2;
+        }
+        updateNewLayer(created.tempId, updates);
+        if (!useSourceBounds && Array.isArray(alignTargets)) {
           alignTargets.push({ psdPath: page.path, tempId: created.tempId, cx, cy, font: layerFont || null });
         }
       }
@@ -199,12 +260,15 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
     const boundsSizePt = getExistingLayerEffectiveSizePt(page, tl, null);
     // 「統一」モードでは既定フォント・サイズで上書き（位置は元のまま中心合わせ）。
     const layerFont = defaultFont ?? (tl.font || null);
-    const layerSize = defaultSizePt ?? (Number.isFinite(boundsSizePt) && boundsSizePt > 0 ? boundsSizePt : null);
+    const layerSize = defaultSizePt ?? truncateReuseReproduceSizePt(boundsSizePt);
+    const contents = String(tl.text ?? "").replace(/\r\n?/g, "\n");
+    if (!contents) continue;
+    const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
     const created = addNewLayer({
       psdPath: page.path,
       x: Number.isFinite(tl.left) ? tl.left : 0,
       y: Number.isFinite(tl.top) ? tl.top : 0,
-      contents: tl.text ?? "",
+      contents,
       fontPostScriptName: layerFont,
       sizePt: layerSize,
       direction: tl.direction === "vertical" ? "vertical" : "horizontal",
@@ -216,6 +280,7 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       verticalScale: Number.isFinite(tl.verticalScale) ? tl.verticalScale : 100,
       trackingMille: Number.isFinite(tl.trackingMille) ? tl.trackingMille : 0,
       kerningMille: Number.isFinite(tl.kerningMille) ? tl.kerningMille : 0,
+      sourceTxtRef,
     });
     const updates = {};
     // per-char フォントは「再現」モードのみ反映（「統一」モードは単一フォントに揃える）。
@@ -228,15 +293,26 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
     if (created && hasBounds) {
       const cx = (tl.left + tl.right) / 2;
       const cy = (tl.top + tl.bottom) / 2;
-      const rect = layerRectForNew(page, created);
-      updates.x = cx - rect.width / 2;
-      updates.y = cy - rect.height / 2;
       // 保存時に実 bounds 中心を元中心へ合わせるため、元中心を保持する。
       updates.reuseSrcCx = cx;
       updates.reuseSrcCy = cy;
       // 枠の厚み方向を実テキスト幅に詰める（左余白を作らない）。
       updates.reuseTightThick = true;
-      if (Array.isArray(alignTargets)) {
+      if (!unify) {
+        updates.x = tl.left;
+        updates.y = tl.top;
+        updates.reuseSrcLeft = tl.left;
+        updates.reuseSrcTop = tl.top;
+        updates.reuseSrcRight = tl.right;
+        updates.reuseSrcBottom = tl.bottom;
+        updates.reuseSourceContents = contents;
+        updates.reuseSourceSizePt = layerSize;
+      } else {
+        const rect = layerRectForNew(page, created);
+        updates.x = cx - rect.width / 2;
+        updates.y = cy - rect.height / 2;
+      }
+      if (unify && Array.isArray(alignTargets)) {
         alignTargets.push({ psdPath: page.path, tempId: created.tempId, cx, cy, font: layerFont || null });
       }
     }
@@ -290,6 +366,7 @@ export async function loadPsdFilesForReuse(files, {
   const failures = [];
   const unsupported = [];
   const referenceItems = [];
+  const reuseTextSourcePages = [];
   // フォントロード後に中心を合わせるための配置補正ターゲット群。
   const alignTargets = [];
 
@@ -333,7 +410,17 @@ export async function loadPsdFilesForReuse(files, {
       // バッチ未取得 / 不完全なページは個別読み取りにフォールバック。
       if (!page) page = await loadPsdForReuse(path);
       addPage(page);
-      if (extract) await extractTextLayersToNewLayers(page, alignTargets, fontSizeMode, unifyFont, unifySize);
+      if (extract) {
+        await extractTextLayersToNewLayers(
+          page,
+          alignTargets,
+          fontSizeMode,
+          unifyFont,
+          unifySize,
+          reuseTextSourcePages,
+          i + 1,
+        );
+      }
       setReuseInfo(page.path, {
         hideLayerIds: page.reuseTextLayerIds || [],
         referenceCanvas: page.reuseReferenceCanvas || null,
@@ -362,6 +449,13 @@ export async function loadPsdFilesForReuse(files, {
 
   // 見本ペインに元テキスト入りの合成画像を流し込む。
   // 再開時 (skipReference) は保存済み JPG を別途読み込むのでスキップ。
+  if (extract) {
+    const content = buildReuseTextSourceContent(reuseTextSourcePages);
+    setTxtSource(content ? { name: reuseTextSourceName(files), content } : null);
+    setTxtFilePath(null);
+    setTxtDirty(false);
+  }
+
   if (referenceItems.length > 0 && !skipReference) {
     try {
       const doc = await buildReferenceDocFromCanvases(referenceItems);

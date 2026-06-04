@@ -2348,6 +2348,88 @@ export function promptDialog({
 // confirm-modal を流用し、メッセージ直下にフォント <select> とサイズ <input number> を挿入する。
 // fonts: [{ postScriptName, label }]。OK で { fontPostScriptName, sizePt } を resolve、
 // キャンセル / Esc / 背景クリックで null を resolve。
+export function chooseReuseFontSizeMode() {
+  return new Promise((resolve) => {
+    let settled = false;
+    const modal = document.createElement("div");
+    modal.className = "home-typeset-modal reuse-fontsize-mode-modal";
+    modal.hidden = true;
+    modal.innerHTML = `
+      <div class="home-typeset-card reuse-fontsize-mode-card" role="dialog" aria-modal="true" aria-labelledby="reuse-fontsize-mode-title">
+        <div class="home-typeset-header">
+          <span class="home-typeset-title" id="reuse-fontsize-mode-title">フォント・サイズの扱い</span>
+          <span class="home-typeset-subtitle">再生成するテキストのフォントとサイズを選択</span>
+        </div>
+        <div class="home-typeset-list reuse-fontsize-mode-list">
+          <button class="home-typeset-row reuse-fontsize-mode-row" type="button" data-mode="reproduce">
+            <span class="home-typeset-row-icon" aria-hidden="true">
+              <svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M28 8h20l10 10v27"/>
+                <path d="M48 8v10h10"/>
+                <path d="M11 22a4 4 0 0 1 4-4h24l11 11v27a4 4 0 0 1-4 4H15a4 4 0 0 1-4-4Z"/>
+                <path d="M39 18v11h11"/>
+              </svg>
+            </span>
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">写植見本を再現</span>
+              <span class="home-typeset-row-desc">写植見本のフォント・サイズを再現します。</span>
+            </div>
+          </button>
+          <button class="home-typeset-row reuse-fontsize-mode-row" type="button" data-mode="select">
+            <span class="home-typeset-row-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M4 7h16M4 12h16M4 17h10"/>
+                <path d="M8 5v14M16 5v9"/>
+                <path d="m17 18 2 2 3-4"/>
+              </svg>
+            </span>
+            <div class="home-typeset-row-main">
+              <span class="home-typeset-row-title">フォント・サイズを指定</span>
+              <span class="home-typeset-row-desc">指定したフォント・サイズで全テキストを統一します。位置は元のままです。</span>
+            </div>
+          </button>
+        </div>
+        <div class="home-typeset-actions">
+          <button class="page-jump-btn reuse-fontsize-mode-cancel" type="button">キャンセル</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+
+    const cleanup = (result) => {
+      if (settled) return;
+      settled = true;
+      hideModalAnimated(modal);
+      modal.removeEventListener("mousedown", onOverlay);
+      document.removeEventListener("keydown", onKey);
+      for (const btn of modal.querySelectorAll("[data-mode]")) {
+        btn.removeEventListener("click", onModeClick);
+      }
+      modal.querySelector(".reuse-fontsize-mode-cancel")?.removeEventListener("click", onCancel);
+      setTimeout(() => modal.remove(), MODAL_ANIM_MS);
+      resolve(result);
+    };
+    const onModeClick = (e) => cleanup(e.currentTarget?.dataset?.mode || null);
+    const onCancel = () => cleanup(null);
+    const onOverlay = (e) => { if (e.target === modal) cleanup(null); };
+    const onKey = (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cleanup(null);
+      }
+    };
+
+    for (const btn of modal.querySelectorAll("[data-mode]")) {
+      btn.addEventListener("click", onModeClick);
+    }
+    modal.querySelector(".reuse-fontsize-mode-cancel")?.addEventListener("click", onCancel);
+    modal.addEventListener("mousedown", onOverlay);
+    document.addEventListener("keydown", onKey);
+    showModalAnimated(modal);
+    requestAnimationFrame(() => modal.querySelector('[data-mode="reproduce"]')?.focus());
+  });
+}
+
 export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizePt = 12 } = {}) {
   return new Promise((resolve) => {
     const modal = $("confirm-modal");

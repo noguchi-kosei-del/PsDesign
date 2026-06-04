@@ -239,6 +239,22 @@ export function refreshOverlays() {
   refreshAllOverlays();
 }
 
+export function getCurrentPsdPageDisplaySize() {
+  const root = container();
+  const pages = getPages();
+  if (!root || pages.length === 0) return null;
+  const idx = Math.max(0, Math.min(pages.length - 1, getCurrentPageIndex()));
+  const metrics = computePageMetrics(pages[idx], root, 1);
+  if (!metrics) return null;
+  return {
+    width: metrics.visualW,
+    height: metrics.visualH,
+    canvasWidth: metrics.cssW,
+    canvasHeight: metrics.cssH,
+    rotation: metrics.rotation,
+  };
+}
+
 function computePageMetrics(page, root, fitSlots = 1) {
   const box = root.getBoundingClientRect();
   const totalGap = fitSlots > 1 ? PSD_SPREAD_GAP * (fitSlots - 1) : 0;
