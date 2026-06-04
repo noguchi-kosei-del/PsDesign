@@ -948,10 +948,16 @@ function attachFontPreviewObserver(list) {
       item.styled = true;
       const { font, main } = item;
       const parts = [];
-      if (font.name) parts.push(`"${font.name.replace(/"/g, '\\"')}"`);
-      if (font.postScriptName && font.postScriptName !== font.name) {
-        parts.push(`"${font.postScriptName.replace(/"/g, '\\"')}"`);
-      }
+      const add = (name) => {
+        const trimmed = String(name ?? "").trim();
+        if (!trimmed) return;
+        if (/^(regular|bold|italic|bold italic|light|medium|heavy|ultra|demi ?bold|semi ?bold|extra ?light|ex ?light|black)$/i.test(trimmed)) return;
+        const q = `"${trimmed.replace(/["\\]/g, "\\$&")}"`;
+        if (!parts.includes(q)) parts.push(q);
+      };
+      add(font.name);
+      for (const alias of Array.isArray(font.aliases) ? font.aliases : []) add(alias);
+      add(font.postScriptName);
       parts.push("sans-serif");
       main.style.fontFamily = parts.join(", ");
       ensureFontLoaded(font.postScriptName);

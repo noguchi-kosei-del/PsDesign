@@ -107,7 +107,6 @@ import {
 import {
   formatTextSizePt,
   getTextSizeUnit,
-  nextTextSizeUnit,
   onTextSizeUnitChange,
   setTextSizeUnit,
   textSizeUnitLabel,
@@ -127,6 +126,7 @@ import {
   clearAllEdits,
   clearScanExtractDoc,
   getActivePane,
+  getAppMode,
   getCurrentPageIndex,
   getEdit,
   getNewLayersForPsd,
@@ -169,6 +169,7 @@ import {
   onToolChange,
   onTxtSourceChange,
   setActivePane,
+  setAppMode,
   setCurrentPageIndex,
   setFonts,
   setParallelSyncMode,
@@ -181,6 +182,7 @@ import {
   setPsdZoom,
   setTextSize,
   setTool,
+  onAppModeChange,
   redo,
   undo,
   getLeadingPct,
@@ -323,7 +325,7 @@ function runShortcut(id) {
     case "sizeDown":   stepTextSize(-1, Math.max(1, Math.round(2 / getSizeStep()))); break;
     case "unifyTextSize": runUnifyTextSize(); break;
     case "toggleRulers": toggleRulersVisible(); break;
-    case "viewerMode":   toggleViewerMode(); break;
+    case "viewerMode":   if (getAppMode() !== "transcribe") toggleViewerMode(); break;
   }
 }
 
@@ -1072,12 +1074,30 @@ function bindParallelViewMode() {
   const fontBookBtn = document.getElementById("view-font-book-btn");
   const spreadEditBtn = document.getElementById("view-spread-edit-btn");
   const editorBtn = document.getElementById("view-editor-btn");
+  const fullscreenItem = document.getElementById("view-fullscreen-psd-btn");
   const proofreadArea = document.getElementById("spreads-proofread-area");
   const editorArea = document.getElementById("spreads-editor-area");
   const proofreadPanel = document.getElementById("proofread-panel");
   const leftProofreadBtn = document.getElementById("editor-left-proofread-btn");
   const leftPdfBtn = document.getElementById("editor-left-pdf-btn");
   if (!parallelBtn || !proofreadBtn || !fontBookBtn || !spreadEditBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
+
+  const psdEditViewModes = new Set(["parallel", "proofread", "fontBook", "spreadEdit"]);
+  const isTranscribeMode = () => getAppMode() === "transcribe";
+  const isPsdEditViewLocked = (mode) => isTranscribeMode() && psdEditViewModes.has(mode);
+  const setViewItemDisabled = (item, disabled) => {
+    if (!item) return;
+    item.disabled = disabled;
+    item.setAttribute("aria-disabled", disabled ? "true" : "false");
+  };
+  const updateTranscribeViewLocks = () => {
+    const locked = isTranscribeMode();
+    setViewItemDisabled(parallelBtn, locked);
+    setViewItemDisabled(proofreadBtn, locked);
+    setViewItemDisabled(fontBookBtn, locked);
+    setViewItemDisabled(spreadEditBtn, locked);
+    setViewItemDisabled(fullscreenItem, locked);
+  };
 
   try {
     const saved = localStorage.getItem(VIEW_MODE_LS_KEY);
@@ -1098,6 +1118,7 @@ function bindParallelViewMode() {
   let pendingPdfViewportCenter = null;
   let lastParallelPdfViewportCenter = null;
   const switchViewMode = (mode) => {
+    if (isPsdEditViewLocked(mode)) return;
     const currentMode = getParallelViewMode();
     const visiblePsdCenter = currentMode === "parallel"
       ? capturePsdViewportCenter()
@@ -1140,6 +1161,11 @@ function bindParallelViewMode() {
   };
   const sync = () => {
     const mode = getParallelViewMode();
+    if (isPsdEditViewLocked(mode)) {
+      setParallelViewMode("editor");
+      return;
+    }
+    updateTranscribeViewLocks();
     const showEditor = mode === "editor";
     const showProofread = mode === "proofread";
     const showFontBook = mode === "fontBook";
@@ -1180,6 +1206,7 @@ function bindParallelViewMode() {
     schedulePdfStageLayoutRefresh({ recenter: !pdfViewportCenter, viewportCenter: pdfViewportCenter });
   };
   onParallelViewModeChange(sync);
+  onAppModeChange(sync);
 
   // 【v2.2.x】View ▾ ドロップダウン: trigger 開閉 + メニュー項目クリックで閉じる。
   // 既存の view-parallel-btn / view-proofread-btn / view-spread-edit-btn / view-editor-btn
@@ -1187,7 +1214,6 @@ function bindParallelViewMode() {
   // そのまま使うので、click イベントは既存リスナーに届く。
   const dropdownTrigger = document.getElementById("view-mode-trigger");
   const dropdownMenu = document.getElementById("view-mode-menu");
-  const fullscreenItem = document.getElementById("view-fullscreen-psd-btn");
   if (dropdownTrigger && dropdownMenu) {
     const closeDropdown = () => {
       dropdownMenu.hidden = true;
@@ -1221,7 +1247,10 @@ function bindParallelViewMode() {
     // 「PSD全画面モード」項目: viewer-mode を起動 (toggleViewerMode は起動のみ、終了は Esc / ×)。
     // PSD 未読込時は toggleViewerMode 内の getPages().length === 0 ガードで何もしない。
     if (fullscreenItem) {
-      fullscreenItem.addEventListener("click", () => toggleViewerMode());
+      fullscreenItem.addEventListener("click", () => {
+        if (isTranscribeMode()) return;
+        toggleViewerMode();
+      });
     }
   }
 
@@ -2982,10 +3011,28 @@ function bindRubyTool() {
 function bindSizeTool() {
   const input = document.getElementById("size-input");
   const unitLabel = document.getElementById("size-unit-label");
+  const unitMenu = document.getElementById("size-unit-menu");
+  const unitOptions = Array.from(unitMenu?.querySelectorAll(".size-unit-option[data-text-size-unit]") ?? []);
   const dec = document.getElementById("size-dec-btn");
   const inc = document.getElementById("size-inc-btn");
   const stepSelect = document.getElementById("size-step-select");
   if (!input || !dec || !inc) return;
+
+  const closeUnitMenu = () => {
+    if (!unitMenu) return;
+    unitMenu.hidden = true;
+    unitLabel?.setAttribute("aria-expanded", "false");
+  };
+  const openUnitMenu = () => {
+    if (!unitMenu || !unitLabel) return;
+    unitMenu.hidden = false;
+    unitLabel.setAttribute("aria-expanded", "true");
+  };
+  const toggleUnitMenu = () => {
+    if (!unitMenu) return;
+    if (unitMenu.hidden) openUnitMenu();
+    else closeUnitMenu();
+  };
 
   const syncStepControls = () => {
     const step = getSizeStep();
@@ -2993,12 +3040,16 @@ function bindSizeTool() {
     if (stepSelect) stepSelect.value = String(step);
     if (unitLabel) {
       const unit = getTextSizeUnit();
-      const nextUnit = nextTextSizeUnit(unit);
       unitLabel.textContent = textSizeUnitLabel(unit);
       unitLabel.dataset.textSizeUnit = unit;
-      unitLabel.setAttribute("title", `${textSizeUnitLabel(nextUnit)}に切り替え`);
-      unitLabel.setAttribute("aria-label", `文字サイズ単位: ${textSizeUnitLabel(unit)}。クリックで${textSizeUnitLabel(nextUnit)}に切り替え`);
+      unitLabel.setAttribute("title", "文字サイズ単位を選択");
+      unitLabel.setAttribute("aria-label", `文字サイズ単位: ${textSizeUnitLabel(unit)}。クリックで単位を選択`);
     }
+    unitOptions.forEach((btn) => {
+      const active = btn.dataset.textSizeUnit === getTextSizeUnit();
+      btn.classList.toggle("active", active);
+      btn.setAttribute("aria-checked", active ? "true" : "false");
+    });
   };
   syncStepControls();
   onSettingsChange(syncStepControls);
@@ -3032,8 +3083,26 @@ function bindSizeTool() {
     syncStepControls();
   });
   unitLabel?.addEventListener("mousedown", (e) => e.preventDefault());
-  unitLabel?.addEventListener("click", () => {
-    setTextSizeUnit(nextTextSizeUnit());
+  unitLabel?.addEventListener("click", (e) => {
+    e.stopPropagation();
+    toggleUnitMenu();
+  });
+  unitOptions.forEach((btn) => {
+    btn.addEventListener("mousedown", (e) => e.preventDefault());
+    btn.addEventListener("click", (e) => {
+      e.stopPropagation();
+      setTextSizeUnit(btn.dataset.textSizeUnit);
+      closeUnitMenu();
+    });
+  });
+  document.addEventListener("mousedown", (e) => {
+    if (!unitMenu || unitMenu.hidden) return;
+    if (unitLabel?.contains(e.target) || unitMenu.contains(e.target)) return;
+    closeUnitMenu();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key !== "Escape" || !unitMenu || unitMenu.hidden) return;
+    closeUnitMenu();
   });
   dec.addEventListener("click", () => stepTextSize(-1));
   inc.addEventListener("click", () => stepTextSize(+1));
@@ -4082,10 +4151,16 @@ function openHomeTypesetDialog() {
     const fontList = modal.querySelector("#home-typeset-font-list");
     const fontFamilyFor = (font) => {
       const parts = [];
-      if (font?.name) parts.push(`"${String(font.name).replace(/"/g, '\\"')}"`);
-      if (font?.postScriptName && font.postScriptName !== font.name) {
-        parts.push(`"${String(font.postScriptName).replace(/"/g, '\\"')}"`);
-      }
+      const add = (name) => {
+        const trimmed = String(name ?? "").trim();
+        if (!trimmed) return;
+        if (/^(regular|bold|italic|bold italic|light|medium|heavy|ultra|demi ?bold|semi ?bold|extra ?light|ex ?light|black)$/i.test(trimmed)) return;
+        const q = `"${trimmed.replace(/["\\]/g, "\\$&")}"`;
+        if (!parts.includes(q)) parts.push(q);
+      };
+      add(font?.name);
+      for (const alias of Array.isArray(font?.aliases) ? font.aliases : []) add(alias);
+      add(font?.postScriptName);
       parts.push("sans-serif");
       return parts.join(", ");
     };
@@ -4782,6 +4857,7 @@ async function startHomeTranscribeFlow() {
         extract: "transcribe",
       },
     });
+    setAppMode("transcribe");
     setParallelViewMode("editor");
     setEditorLeftPaneMode("pdf");
     setActivePane("pdf");

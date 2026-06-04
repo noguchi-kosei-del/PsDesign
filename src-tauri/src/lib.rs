@@ -787,16 +787,14 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
 #[tauri::command]
 async fn read_font_face_bytes(path: String, face_index: u32) -> Result<Vec<u8>, String> {
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))?;
-    // face_index == 0 は旧挙動と同じく元のファイル bytes をそのまま返す。
-    // - 単独 TTF/OTF: 通常通り
-    // - TTC の先頭 face: FontFace は TTC bytes を渡されると先頭 face を自動採用するので
-    //   ここで TTC をそのまま返しても旧 read_binary_file と等価動作
-    // 抽出ロジックは face_index >= 1 のみで動かして、face[0] には絶対影響を与えないようにする。
-    if face_index == 0 {
-        return Ok(bytes);
-    }
+    // Extract every TTC/OTC face, including face 0, into standalone SFNT bytes.
+    // Some WebView2 builds fail to load older Japanese TTC files through FontFace.
     if bytes.len() >= 4 && &bytes[0..4] == b"ttcf" {
         if let Some(extracted) = extract_face_from_ttc(&bytes, face_index) {
+            let extracted = match repair_sfnt_for_webview(extracted.clone()) {
+                Some(repaired) => repaired,
+                None => extracted,
+            };
             // ttf-parser で構造を検証してから返す。検証失敗時は元 TTC bytes に
             // フォールバックして「先頭 face が登録される」旧挙動に戻す。
             // FontFace.load が完全に失敗するよりは何かしら登録される方がマシ。
@@ -808,7 +806,7 @@ async fn read_font_face_bytes(path: String, face_index: u32) -> Result<Vec<u8>, 
         return Ok(bytes);
     }
     // 単独 TTF/OTF で face_index > 0 → 仕様上不正だが、互換のため元 bytes を返す。
-    Ok(bytes)
+    Ok(repair_sfnt_for_webview(bytes.clone()).unwrap_or(bytes))
 }
 
 // 【v1.16.0】使用フォントの拡張 — TTC → 単独 TTF 再構築のコア実装。
@@ -947,6 +945,169 @@ fn extract_face_from_ttc(ttc: &[u8], face_index: u32) -> Option<Vec<u8>> {
         }
     }
     Some(out)
+}
+
+fn repair_sfnt_for_webview(mut sfnt: Vec<u8>) -> Option<Vec<u8>> {
+    if sfnt.len() < 12 || &sfnt[0..4] == b"ttcf" {
+        return None;
+    }
+    let num_tables = u16::from_be_bytes([sfnt[4], sfnt[5]]) as usize;
+    let dir_size = num_tables.checked_mul(16)?;
+    if sfnt.len() < 12 + dir_size {
+        return None;
+    }
+
+    let mut tables: Vec<(u32, u32, u32)> = Vec::with_capacity(num_tables);
+    for i in 0..num_tables {
+        let p = 12 + i * 16;
+        let tag = u32::from_be_bytes([sfnt[p], sfnt[p + 1], sfnt[p + 2], sfnt[p + 3]]);
+        let offset = u32::from_be_bytes([sfnt[p + 8], sfnt[p + 9], sfnt[p + 10], sfnt[p + 11]]);
+        let length = u32::from_be_bytes([sfnt[p + 12], sfnt[p + 13], sfnt[p + 14], sfnt[p + 15]]);
+        let end = (offset as usize).checked_add(length as usize)?;
+        if end > sfnt.len() {
+            return None;
+        }
+        tables.push((tag, offset, length));
+    }
+
+    let cmap_tag = u32::from_be_bytes(*b"cmap");
+    let mut changed = false;
+    for &(tag, offset, length) in &tables {
+        if tag == cmap_tag {
+            changed |= repair_cmap_format4_search_params(&mut sfnt, offset as usize, length as usize);
+        }
+    }
+    if !changed {
+        return None;
+    }
+
+    rewrite_sfnt_checksums(&mut sfnt, &tables)?;
+    Some(sfnt)
+}
+
+fn repair_cmap_format4_search_params(sfnt: &mut [u8], cmap_off: usize, cmap_len: usize) -> bool {
+    let cmap_end = match cmap_off.checked_add(cmap_len) {
+        Some(end) if end <= sfnt.len() => end,
+        _ => return false,
+    };
+    if cmap_len < 4 {
+        return false;
+    }
+    let num_records = u16::from_be_bytes([sfnt[cmap_off + 2], sfnt[cmap_off + 3]]) as usize;
+    let records_end = match cmap_off.checked_add(4 + num_records.saturating_mul(8)) {
+        Some(end) if end <= cmap_end => end,
+        _ => return false,
+    };
+
+    let mut changed = false;
+    for i in 0..num_records {
+        let rec = cmap_off + 4 + i * 8;
+        if rec + 8 > records_end {
+            break;
+        }
+        let sub_rel = u32::from_be_bytes([sfnt[rec + 4], sfnt[rec + 5], sfnt[rec + 6], sfnt[rec + 7]]) as usize;
+        let sub = match cmap_off.checked_add(sub_rel) {
+            Some(v) if v + 14 <= cmap_end => v,
+            _ => continue,
+        };
+        let format = u16::from_be_bytes([sfnt[sub], sfnt[sub + 1]]);
+        if format != 4 {
+            continue;
+        }
+        let length = u16::from_be_bytes([sfnt[sub + 2], sfnt[sub + 3]]) as usize;
+        if sub.checked_add(length).map_or(true, |end| end > cmap_end) || length < 14 {
+            continue;
+        }
+        let seg_count_x2 = u16::from_be_bytes([sfnt[sub + 6], sfnt[sub + 7]]);
+        if seg_count_x2 == 0 || seg_count_x2 % 2 != 0 {
+            continue;
+        }
+        let seg_count = seg_count_x2 / 2;
+        let entry_selector = floor_log2_u16(seg_count);
+        let search_range = (1u16 << (entry_selector as u32)).saturating_mul(2);
+        let range_shift = seg_count_x2.saturating_sub(search_range);
+        changed |= write_u16_if_changed(sfnt, sub + 8, search_range);
+        changed |= write_u16_if_changed(sfnt, sub + 10, entry_selector);
+        changed |= write_u16_if_changed(sfnt, sub + 12, range_shift);
+    }
+    changed
+}
+
+fn rewrite_sfnt_checksums(sfnt: &mut [u8], tables: &[(u32, u32, u32)]) -> Option<()> {
+    let head_tag = u32::from_be_bytes(*b"head");
+    let mut head_off = None;
+    for (i, &(tag, offset, length)) in tables.iter().enumerate() {
+        if tag == head_tag {
+            let off = offset as usize;
+            if length < 12 || off + 12 > sfnt.len() {
+                return None;
+            }
+            head_off = Some(off);
+        }
+        let checksum = table_checksum(sfnt, offset as usize, length as usize)?;
+        let dir_checksum_pos = 12 + i * 16 + 4;
+        if dir_checksum_pos + 4 > sfnt.len() {
+            return None;
+        }
+        sfnt[dir_checksum_pos..dir_checksum_pos + 4].copy_from_slice(&checksum.to_be_bytes());
+    }
+
+    let head_off = head_off?;
+    sfnt[head_off + 8..head_off + 12].copy_from_slice(&0u32.to_be_bytes());
+    for (i, &(_tag, offset, length)) in tables.iter().enumerate() {
+        let checksum = table_checksum(sfnt, offset as usize, length as usize)?;
+        let dir_checksum_pos = 12 + i * 16 + 4;
+        sfnt[dir_checksum_pos..dir_checksum_pos + 4].copy_from_slice(&checksum.to_be_bytes());
+    }
+
+    let file_sum = checksum_bytes(sfnt);
+    let adjustment = 0xB1B0_AFBA_u32.wrapping_sub(file_sum);
+    sfnt[head_off + 8..head_off + 12].copy_from_slice(&adjustment.to_be_bytes());
+    Some(())
+}
+
+fn table_checksum(sfnt: &[u8], offset: usize, length: usize) -> Option<u32> {
+    let end = offset.checked_add(length)?;
+    if end > sfnt.len() {
+        return None;
+    }
+    Some(checksum_padded_bytes(&sfnt[offset..end]))
+}
+
+fn checksum_bytes(bytes: &[u8]) -> u32 {
+    checksum_padded_bytes(bytes)
+}
+
+fn checksum_padded_bytes(bytes: &[u8]) -> u32 {
+    let mut sum: u32 = 0;
+    let mut idx = 0usize;
+    while idx + 4 <= bytes.len() {
+        let v = u32::from_be_bytes([bytes[idx], bytes[idx + 1], bytes[idx + 2], bytes[idx + 3]]);
+        sum = sum.wrapping_add(v);
+        idx += 4;
+    }
+    if idx < bytes.len() {
+        let mut tail = [0u8; 4];
+        tail[..bytes.len() - idx].copy_from_slice(&bytes[idx..]);
+        sum = sum.wrapping_add(u32::from_be_bytes(tail));
+    }
+    sum
+}
+
+fn floor_log2_u16(v: u16) -> u16 {
+    15 - v.leading_zeros() as u16
+}
+
+fn write_u16_if_changed(bytes: &mut [u8], offset: usize, value: u16) -> bool {
+    if offset + 2 > bytes.len() {
+        return false;
+    }
+    let new_bytes = value.to_be_bytes();
+    if bytes[offset..offset + 2] == new_bytes {
+        return false;
+    }
+    bytes[offset..offset + 2].copy_from_slice(&new_bytes);
+    true
 }
 
 #[inline]

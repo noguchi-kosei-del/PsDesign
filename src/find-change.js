@@ -595,6 +595,7 @@ function readOptions() {
     : Object.fromEntries(Object.entries(readDialogStyle()).map(([k, v]) =>
         k.endsWith("Enabled") ? [k, false] : [k, v]));
   return {
+    activeTab,
     query,
     caseSensitive: $("find-change-case")?.checked === true,
     replaceEnabled,
@@ -624,6 +625,10 @@ function countMatchesAcrossLayers(needle, caseSensitive) {
     }
   }
   return count;
+}
+
+function wholeTextRange(text) {
+  return [{ start: 0, end: String(text ?? "").length }];
 }
 
 function findFallbackNeedle(options) {
@@ -699,6 +704,10 @@ function transformLayer({
       charFillColors = applyStyleRanges(charFillColors, styleRanges, dialogStyle.fillColor);
       changes.charFillColors = charFillColors;
     }
+    if (dialogStyle.strokeEnabled) {
+      changes.strokeColor = dialogStyle.strokeColor;
+      changes.strokeWidthPx = dialogStyle.strokeWidthPx;
+    }
     if (dialogStyle.horizontalScaleEnabled && Number.isFinite(dialogStyle.horizontalScale)) {
       charHorizontalScales = applyStyleRanges(charHorizontalScales, styleRanges, dialogStyle.horizontalScale);
       changes.charHorizontalScales = charHorizontalScales;
@@ -731,6 +740,7 @@ function transformLayer({
 function hasDialogStyleEdits(style) {
   return !!style && (
     (style.fillEnabled && style.fillColor !== "default")
+    || style.strokeEnabled
     || style.horizontalScaleEnabled
     || style.verticalScaleEnabled
     || style.kerningEnabled
@@ -741,7 +751,8 @@ function hasDialogStyleEdits(style) {
 }
 
 function applyFindChange(options) {
-  if (!options.query) {
+  const applyWholeLayer = options.activeTab === "convert" && !options.query;
+  if (!options.query && !applyWholeLayer) {
     toast("検索文字を入力してください", { kind: "info", duration: 2200 });
     return;
   }
@@ -775,8 +786,8 @@ function applyFindChange(options) {
     return;
   }
 
-  const queryMatchCount = countMatchesAcrossLayers(options.query, options.caseSensitive);
-  const fallback = queryMatchCount === 0 ? findFallbackNeedle(options) : null;
+  const queryMatchCount = applyWholeLayer ? 1 : countMatchesAcrossLayers(options.query, options.caseSensitive);
+  const fallback = !applyWholeLayer && queryMatchCount === 0 ? findFallbackNeedle(options) : null;
   const activeQuery = fallback?.needle ?? options.query;
   const shouldReplaceFallback = !!fallback
     && options.replaceEnabled
@@ -793,7 +804,7 @@ function applyFindChange(options) {
     for (const page of getPages()) {
       for (const layer of page.textLayers ?? []) {
         const text = layerText(page, layer);
-        const matches = findLiteralMatches(text, activeQuery, options.caseSensitive);
+        const matches = applyWholeLayer ? wholeTextRange(text) : findLiteralMatches(text, activeQuery, options.caseSensitive);
         if (matches.length === 0) continue;
         const edit = getEdit(page.path, layer.id) ?? {};
         const result = transformLayer({
@@ -817,13 +828,13 @@ function applyFindChange(options) {
         if (Object.keys(result.changes).length === 0) continue;
         setEdit(page.path, layer.id, result.changes);
         layerCount++;
-        matchCount += matches.length;
+        matchCount += applyWholeLayer ? 1 : matches.length;
         any = true;
       }
 
       for (const nl of getNewLayersForPsd(page.path)) {
         const text = String(nl.contents ?? "");
-        const matches = findLiteralMatches(text, activeQuery, options.caseSensitive);
+        const matches = applyWholeLayer ? wholeTextRange(text) : findLiteralMatches(text, activeQuery, options.caseSensitive);
         if (matches.length === 0) continue;
         const result = transformLayer({
           ...transformOptions,
@@ -850,7 +861,7 @@ function applyFindChange(options) {
         }
         updateNewLayer(nl.tempId, result.changes);
         layerCount++;
-        matchCount += matches.length;
+        matchCount += applyWholeLayer ? 1 : matches.length;
         any = true;
       }
     }
@@ -923,6 +934,9 @@ function bindModalEvents() {
   const fontToggle = $("find-change-font-toggle");
   const fillSelect = $("find-change-fill");
   const fillCustom = $("find-change-fill-custom");
+  const strokeEnabled = $("find-change-stroke-enabled");
+  const strokeSelect = $("find-change-stroke-color");
+  const strokeWidthInput = $("find-change-stroke-width");
   const boldCheckbox = $("find-change-bold");
   const italicCheckbox = $("find-change-italic");
   // 太字/斜体の相互排他: 一方を ON にしたら他方を OFF。
@@ -997,6 +1011,12 @@ function bindModalEvents() {
   });
   fillCustom?.addEventListener("input", () => { if (fillSelect) fillSelect.value = "custom"; });
   fillCustom?.addEventListener("change", () => { if (fillSelect) fillSelect.value = "custom"; });
+  const enableWhiteStroke = () => {
+    if (strokeEnabled) strokeEnabled.checked = true;
+    if (strokeSelect && strokeSelect.value === "none") strokeSelect.value = "white";
+  };
+  strokeWidthInput?.addEventListener("input", enableWhiteStroke);
+  strokeWidthInput?.addEventListener("focus", enableWhiteStroke);
   modal.querySelectorAll("[data-enables]").forEach((control) => {
     const targetId = control.getAttribute("data-enables");
     const enable = () => {

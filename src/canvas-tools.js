@@ -11,6 +11,7 @@ import {
   getFillColor,
   getFontDisplayName,
   getFontPickerStuck,
+  getFonts,
   getLeadingPct,
   getNewLayersForPsd,
   getNewTextDirection,
@@ -2694,18 +2695,28 @@ function scheduleBoxAutoFit(ctx) {
 // 無効化される事故が発生していた。常時引用にすればこれらを完全に防げる。
 function quoteFontFamily(name) {
   if (!name) return null;
+  if (/^(regular|bold|italic|bold italic|light|medium|heavy|ultra|demi ?bold|semi ?bold|extra ?light|ex ?light|black)$/i.test(String(name).trim())) {
+    return null;
+  }
   const escaped = String(name).replace(/["\\]/g, "\\$&");
   return `"${escaped}"`;
 }
 
 export function cssFontFamily(psName) {
   if (!psName) return null;
+  const font = getFonts().find((f) => f.postScriptName === psName);
   const display = getFontDisplayName(psName);
   const parts = [];
-  const q1 = quoteFontFamily(display);
-  const q2 = quoteFontFamily(psName);
-  if (q1) parts.push(q1);
-  if (q2 && q2 !== q1) parts.push(q2);
+  const add = (name) => {
+    const q = quoteFontFamily(name);
+    if (q && !parts.includes(q)) parts.push(q);
+  };
+  add(display);
+  add(font?.name);
+  for (const alias of Array.isArray(font?.aliases) ? font.aliases : []) {
+    add(alias);
+  }
+  add(psName);
   parts.push("sans-serif");
   return parts.join(", ");
 }

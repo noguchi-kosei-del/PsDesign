@@ -22,9 +22,12 @@ import { getPdfVirtualPageCount } from "../pdf-pages.js";
 import { nextPageIndexForTurn } from "../page-navigation.js";
 import {
   commitNewTxtInput,
+  consumeQuickAddTextShortcut,
   deleteTxtBlockByIndex,
   getActivePageNumber,
   getTxtPageCount,
+  isQuickAddTextShortcut,
+  shouldHandleBlurredQuickAddShortcut,
   splitTxtBlockAndPlace,
   syncNewInputAvailabilityFor,
 } from "../txt-source.js";
@@ -42,6 +45,7 @@ let editorPageMode = loadEditorPageMode();
 let editingBlock = false;
 let lastEditorBlockSelection = null;
 let editorRubyMode = "auto";
+let editorQuickAddShortcutBound = false;
 const editorTextMappings = new WeakMap();
 
 function getEls() {
@@ -51,7 +55,6 @@ function getEls() {
     newInput: $("editor-new-input"),
     newInputBtn: $("editor-new-input-btn"),
     save: $("editor-save-btn"),
-    ruby: $("editor-ruby-btn"),
     rubyPopover: $("editor-ruby-popover"),
     rubyPopoverParent: $("editor-ruby-popover-parent"),
     rubyPopoverInput: $("editor-ruby-popover-input"),
@@ -744,7 +747,6 @@ function syncFromState() {
   const hasContent = !!source;
   if (els.dirtyDot) els.dirtyDot.hidden = !(hasContent && dirty);
   if (els.save) els.save.disabled = !hasContent;
-  if (els.ruby) els.ruby.disabled = !hasContent;
   if (els.newInput) syncNewInputAvailabilityFor(els.newInput);
   syncEditorPageModeButtons();
 }
@@ -798,17 +800,6 @@ async function handleSaveAuto() {
       },
     },
   });
-}
-
-function handleAddRuby() {
-  const sel = updateEditorBlockSelectionFromDom();
-  if (!sel || !sel.text || sel.text.includes("\n")) {
-    toast("ルビを付けたい文字を1行内で選択してください", { kind: "info", duration: 2000 });
-    return;
-  }
-  showRubyPopover(sel);
-  const els = getEls();
-  els.rubyPopoverInput?.focus();
 }
 
 function handleCommitNewInput() {
@@ -886,8 +877,8 @@ function bindNewInput() {
   if (!els.newInput) return;
   els.newInput.addEventListener("input", () => syncNewInputAvailabilityFor(els.newInput));
   els.newInput.addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-      e.preventDefault();
+    if (isQuickAddTextShortcut(e)) {
+      consumeQuickAddTextShortcut(e);
       handleCommitNewInput();
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -900,6 +891,17 @@ function bindNewInput() {
     }
   });
   els.newInputBtn?.addEventListener("click", handleCommitNewInput);
+  if (!editorQuickAddShortcutBound) {
+    editorQuickAddShortcutBound = true;
+    document.addEventListener("keydown", (e) => {
+      if (getParallelViewMode() !== "editor") return;
+      if (editingBlock) return;
+      const currentEls = getEls();
+      if (!shouldHandleBlurredQuickAddShortcut(e, currentEls.newInput)) return;
+      consumeQuickAddTextShortcut(e);
+      commitNewTxtInput({ inputEl: currentEls.newInput });
+    }, true);
+  }
 }
 
 export function bindEditorPane() {
@@ -907,7 +909,6 @@ export function bindEditorPane() {
   if (!els.viewer) return;
 
   els.save?.addEventListener("click", handleSaveAuto);
-  els.ruby?.addEventListener("click", handleAddRuby);
   els.pagePrev?.addEventListener("click", () => localAdvancePage(-1));
   els.pageNext?.addEventListener("click", () => localAdvancePage(+1));
   els.pageModeAll?.addEventListener("click", () => setEditorPageMode("all"));

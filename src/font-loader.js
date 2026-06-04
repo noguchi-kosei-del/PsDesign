@@ -25,6 +25,27 @@ function releaseSlot() {
   if (next) next();
 }
 
+function addFontName(names, value) {
+  const name = String(value ?? "").trim();
+  if (!name || isGenericStyleName(name)) return;
+  names.add(name);
+}
+
+function isGenericStyleName(name) {
+  return /^(regular|bold|italic|bold italic|light|medium|heavy|ultra|demi ?bold|semi ?bold|extra ?light|ex ?light|black)$/i
+    .test(String(name ?? "").trim());
+}
+
+function fontFamilyNames(font, psName) {
+  const names = new Set();
+  addFontName(names, font?.name);
+  for (const alias of Array.isArray(font?.aliases) ? font.aliases : []) {
+    addFontName(names, alias);
+  }
+  addFontName(names, psName);
+  return names;
+}
+
 export function onFontsRegistered(fn) {
   changeListeners.add(fn);
   return () => changeListeners.delete(fn);
@@ -76,9 +97,7 @@ async function loadFontInternal(psName) {
     // FontFace は buffer を消費するので名前ごとに新しいコピーを渡す必要がある。
     const makeBuffer = () => new Uint8Array(rawBytes).buffer;
     // family 名と PS 名の両方で登録し、cssFontFamily の "Family", "PS", sans-serif どちらでもヒットさせる。
-    const names = new Set();
-    if (font.name) names.add(font.name);
-    if (psName) names.add(psName);
+    const names = fontFamilyNames(font, psName);
     let registered = false;
     for (const familyName of names) {
       // 既に登録済みならスキップ（HMR 等）

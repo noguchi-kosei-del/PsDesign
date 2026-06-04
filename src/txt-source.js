@@ -1223,6 +1223,30 @@ export function syncNewInputAvailabilityFor(inputEl) {
   if (btn) btn.disabled = !hasText;
 }
 
+export function isQuickAddTextShortcut(e) {
+  if (!e || e.isComposing || e.keyCode === 229) return false;
+  if (!(e.ctrlKey || e.metaKey)) return false;
+  return e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter";
+}
+
+export function consumeQuickAddTextShortcut(e) {
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation?.();
+}
+
+export function shouldHandleBlurredQuickAddShortcut(e, inputEl) {
+  if (!isQuickAddTextShortcut(e)) return false;
+  if (!inputEl || inputEl.disabled) return false;
+  if (!(inputEl.value ?? "").trim()) return false;
+  const target = e.target;
+  if (target === inputEl) return false;
+  if (target && inputEl.contains?.(target)) return false;
+  const tag = target?.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return false;
+  return true;
+}
+
 // PSD 読込状態 + 入力内容に応じて textarea / button の disabled を切替。
 // サイドパネルの #txt-new-input + #txt-new-input-btn を更新する従来 API。
 function syncNewInputAvailability() {
@@ -1648,8 +1672,8 @@ export function initTxtSource() {
   if (newInputEl) {
     newInputEl.addEventListener("input", syncNewInputAvailability);
     newInputEl.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
+      if (isQuickAddTextShortcut(e)) {
+        consumeQuickAddTextShortcut(e);
         commitNewTxtInput({ inputEl: newInputEl });
       } else if (e.key === "Escape") {
         e.preventDefault();
@@ -1665,6 +1689,12 @@ export function initTxtSource() {
   if (newInputBtn) {
     newInputBtn.addEventListener("click", () => commitNewTxtInput({ inputEl: newInputEl }));
   }
+  document.addEventListener("keydown", (e) => {
+    if (getParallelViewMode() === "editor") return;
+    if (!shouldHandleBlurredQuickAddShortcut(e, newInputEl)) return;
+    consumeQuickAddTextShortcut(e);
+    commitNewTxtInput({ inputEl: newInputEl });
+  }, true);
   // PSD 読込状態 + 入力内容で disabled を更新する listener 群。
   // PSD ロード/クリアは psdesign:psd-loaded CustomEvent (main.js が dispatch) と
   // onPageIndexChange の両方で発火する。両方を購読して取りこぼしを防ぐ。

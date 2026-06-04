@@ -675,6 +675,21 @@ function bindRenderedCards() {
     shotImageObserver = null;
   }
   const fonts = fontMapByPostScript();
+  const fontFamilyFor = (font) => {
+    const parts = [];
+    const add = (name) => {
+      const trimmed = String(name ?? "").trim();
+      if (!trimmed) return;
+      if (/^(regular|bold|italic|bold italic|light|medium|heavy|ultra|demi ?bold|semi ?bold|extra ?light|ex ?light|black)$/i.test(trimmed)) return;
+      const q = `"${trimmed.replace(/["\\]/g, "\\$&")}"`;
+      if (!parts.includes(q)) parts.push(q);
+    };
+    add(font?.name);
+    for (const alias of Array.isArray(font?.aliases) ? font.aliases : []) add(alias);
+    add(font?.postScriptName);
+    parts.push("sans-serif");
+    return parts.join(", ");
+  };
   sampleObserver = new IntersectionObserver((items) => {
     for (const item of items) {
       if (!item.isIntersecting) continue;
@@ -682,7 +697,7 @@ function bindRenderedCards() {
       const ps = sample.dataset.fontPs;
       const font = fonts.get(ps);
       if (font) {
-        sample.style.fontFamily = `"${font.name}", "${font.postScriptName}", sans-serif`;
+        sample.style.fontFamily = fontFamilyFor(font);
         ensureFontLoaded(font.postScriptName);
       }
       sampleObserver?.unobserve(sample);
@@ -692,7 +707,7 @@ function bindRenderedCards() {
     const ps = sample.dataset.fontPs;
     const font = fonts.get(ps);
     if (font) {
-      sample.style.fontFamily = `"${font.name}", "${font.postScriptName}", sans-serif`;
+      sample.style.fontFamily = fontFamilyFor(font);
     }
     sampleObserver.observe(sample);
   }

@@ -130,6 +130,13 @@
             </button>
           </div>
         </div>
+        <button id="find-change-btn" class="icon-btn header-find-change-btn" type="button" title="検索・置換 / 全変換" aria-label="検索・置換 / 全変換">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M15.7 14.7 21 20"/>
+            <path d="M19 8.7a7.3 7.3 0 1 1-2.1-5.1"/>
+            <path d="m6.5 9.7 3.1 3.2 7-7.1"/>
+          </svg>
+        </button>
         <div class="toolbar-history" role="group" aria-label="履歴">
           <button id="undo-btn" class="icon-btn history-btn" type="button" title="元に戻す (Ctrl+Z)" aria-label="元に戻す" disabled>
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -417,16 +424,6 @@
                   </svg>
                   <span>テキスト保存</span>
                 </button>
-                <button id="editor-ruby-btn" class="editor-toolbar-btn" type="button" title="選択した文字にルビを付ける" disabled>
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                    <path d="M5 7h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M8 7v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M16 7v12" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    <path d="M6.5 20h11" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
-                    <text x="12" y="5" text-anchor="middle" font-size="4" fill="currentColor" font-family="sans-serif">ル</text>
-                  </svg>
-                  <span>ルビ</span>
-                </button>
                 <div id="editor-page-mode-tabs" class="editor-page-mode-tabs" role="tablist" aria-label="ページ表示モード">
                   <button id="editor-page-mode-all" class="editor-page-mode-btn active" type="button" data-mode="all" aria-pressed="true">全ページ</button>
                   <button id="editor-page-mode-single" class="editor-page-mode-btn" type="button" data-mode="single" aria-pressed="false">ページごと</button>
@@ -547,14 +544,6 @@
               <path d="M4 12h4"/>
               <path d="M16 12h4"/>
             </svg>
-          </button>
-          <button id="find-change-btn" class="icon-btn side-tool-btn" type="button" title="検索・置換 / 全変換" aria-label="検索・置換 / 全変換">
-              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.1" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                <path d="M15.5 20H17a3 3 0 0 0 3-3V5"/>
-                <path d="M16.4 8.6 20 5l2.5 3.6"/>
-                <path d="M8.5 4H7a3 3 0 0 0-3 3v12"/>
-                <path d="M7.6 15.4 4 19l-2.5-3.6"/>
-              </svg>
           </button>
           <button id="tool-pan" class="tool-btn icon-btn side-tool-btn" data-tool="pan" title="パンツール (Space長押し)" aria-label="パンツール">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -734,7 +723,12 @@
                       <div class="size-group" role="group" aria-label="文字サイズ">
                         <button id="size-inc-btn" class="size-btn" type="button" title="大きく ( ] )">＋</button>
                         <input id="size-input" class="size-input" type="text" inputmode="decimal" value="12" aria-label="サイズ" />
-                        <button id="size-unit-label" class="size-unit size-unit-toggle" type="button" aria-label="文字サイズ単位を切り替え">pt</button>
+                        <button id="size-unit-label" class="size-unit size-unit-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="文字サイズ単位を選択">pt</button>
+                        <div id="size-unit-menu" class="size-unit-menu" role="menu" hidden>
+                          <button class="size-unit-option" type="button" role="menuitemradio" aria-checked="true" data-text-size-unit="pt">pt</button>
+                          <button class="size-unit-option" type="button" role="menuitemradio" aria-checked="false" data-text-size-unit="q">級</button>
+                          <button class="size-unit-option" type="button" role="menuitemradio" aria-checked="false" data-text-size-unit="mm">mm</button>
+                        </div>
                         <button id="size-dec-btn" class="size-btn" type="button" title="小さく ( [ )">−</button>
                       </div>
                     </div>

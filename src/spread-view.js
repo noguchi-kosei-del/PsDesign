@@ -153,16 +153,6 @@ export function renderAllSpreads() {
   const psdLabelEl = document.getElementById("psd-stage-label");
   if (pages.length === 0) {
     if (psdLabelEl) psdLabelEl.textContent = "";
-    const empty = document.createElement("div");
-    empty.className = "spreads-empty";
-    empty.innerHTML = `
-      <svg class="spreads-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
-        <text x="12" y="17" font-size="6.5" text-anchor="middle" fill="currentColor" stroke="none" style="font-family: sans-serif; font-weight: 700;">PSD</text>
-      </svg>
-      <p class="spreads-empty-text">「PSD を開く」で編集したい PSD ファイルを選択、またはこのウィンドウにドロップしてください。</p>
-    `;
-    root.appendChild(empty);
     return;
   }
 

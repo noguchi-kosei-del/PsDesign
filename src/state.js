@@ -164,7 +164,7 @@ const $editorLeftPaneMode = createObservable("proofread", _normEditorLeftPaneMod
 // 【写植再利用】アプリの動作モード。"normal" = 通常の写植 / "reuse" = 写植再利用。
 // reuse のとき: PSD 編集ペインはテキスト除去版を表示、保存時に元テキストレイヤーを
 // 非表示化、プロジェクト保存時に見本を JPG 化する。ホームに戻ると normal に戻す。
-const $appMode = createObservable("normal", (v) => (v === "reuse" ? "reuse" : "normal"));
+const $appMode = createObservable("normal", (v) => (v === "reuse" || v === "transcribe" ? v : "normal"));
 // V ツールで空所をダブルクリックして新規テキスト入力を開くときの方向。
 // サイドツールバーの V ボタン直下にあるトグルで切替・localStorage に永続化。
 const $newTextDirection = createObservable("vertical", _normNewTextDir);
