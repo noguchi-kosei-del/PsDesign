@@ -2089,16 +2089,6 @@ function renderOverlay(ctx) {
   scheduleRubyOffsetMeasure(ctx);
 }
 
-export function renderStaticPageOverlay({ canvas, overlay, page, pageIndex = 0 }) {
-  if (!canvas || !overlay || !page) return;
-  const ctx = { canvas, overlay, page, pageIndex, staticPreview: true };
-  renderOverlay(ctx);
-  overlay.classList.add("selection-adornments-hidden", "finish-review-static-overlay");
-  for (const el of overlay.querySelectorAll(".layer-box")) {
-    el.style.pointerEvents = "none";
-  }
-}
-
 function rubyFallbackAdvancePx(box, rt) {
   const rootStyle = getComputedStyle(document.documentElement);
   const pct = Number(rootStyle.getPropertyValue("--ruby-row-leading-pct")) || Number(getDefault("rubyLeadingPct")) || 150;
@@ -2716,14 +2706,16 @@ function reuseSourceBoundsForNewLayer(nl, sizePt) {
   const sourceContents = nl.reuseSourceContents;
   if (sourceContents == null) return null;
   if (String(nl.contents ?? "").replace(/\r\n?/g, "\n") !== String(sourceContents).replace(/\r\n?/g, "\n")) return null;
-  const sourceSize = Number(nl.reuseSourceSizePt);
-  if (Number.isFinite(sourceSize) && Number.isFinite(sizePt) && Math.abs(sourceSize - sizePt) > 0.01) return null;
   const left = Number(nl.reuseSrcLeft);
   const top = Number(nl.reuseSrcTop);
   const right = Number(nl.reuseSrcRight);
   const bottom = Number(nl.reuseSrcBottom);
   if (![left, top, right, bottom].every(Number.isFinite) || right <= left || bottom <= top) return null;
-  return { width: right - left, height: bottom - top };
+  const sourceSize = Number(nl.reuseSourceSizePt);
+  const scale = Number.isFinite(sourceSize) && sourceSize > 0 && Number.isFinite(sizePt) && sizePt > 0
+    ? sizePt / sourceSize
+    : 1;
+  return { width: (right - left) * scale, height: (bottom - top) * scale };
 }
 
 export function cssFontFamily(psName) {

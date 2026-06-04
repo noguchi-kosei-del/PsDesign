@@ -1518,11 +1518,6 @@ function advanceOpusConstellationBurst(count = 1, { stagger = false } = {}) {
   return true;
 }
 
-function advanceOpusConstellation() {
-  pruneOpusConstellationQueue();
-  return !!startOpusConstellation();
-}
-
 function startOpusConstellation() {
   const instance = createOpusConstellationInstance();
   opusProgress.constellationCurrent = instance;
@@ -1823,16 +1818,6 @@ function spawnOpusShootingStar() {
   el.style.setProperty("--travel-late", `${travel * 0.72}px`);
   stage.appendChild(el);
   setTimeout(() => el.remove(), inside ? 1900 : 2800);
-}
-
-function playOpusCompletionConstellation() {
-  const stage = opusProgress.stage || ensureOpusProgressStage();
-  if (!stage || opusProgress.completionBurstPlayed || opusProgress.variant === "save") return;
-  opusProgress.completionBurstPlayed = true;
-  stage.classList.add("is-completion-constellation");
-  window.setTimeout(() => {
-    stage.classList.remove("is-completion-constellation");
-  }, 2600);
 }
 
 function completeOpusProgress() {

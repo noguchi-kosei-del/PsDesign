@@ -166,20 +166,6 @@ export function completeProgressFlowStep(flowRef, data = {}) {
   updateProgress(payload);
 }
 
-export function completeProgressFlow(id, data = {}) {
-  const flow = getFlow(id);
-  if (!flow) return data;
-  flow.completed = true;
-  flow.steps.forEach((step) => {
-    step.status = "done";
-    step.progress = 100;
-  });
-  return {
-    ...data,
-    flow: snapshot(flow),
-  };
-}
-
 export function clearProgressFlow(id) {
   if (!id || activeFlow?.id === id) activeFlow = null;
 }

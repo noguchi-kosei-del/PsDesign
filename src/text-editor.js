@@ -2786,18 +2786,6 @@ function currentWidthForCommit() {
   return getStrokeWidthPx();
 }
 
-function commitField(field, value) {
-  const resolved = resolveSelection();
-  if (!resolved) return;
-  if (resolved.kind === "existing") {
-    setEdit(resolved.page.path, resolved.layer.id, { [field]: value });
-  } else {
-    updateNewLayer(resolved.newLayer.tempId, { [field]: value });
-  }
-  rebuildLayerList();
-  refreshAllOverlays();
-}
-
 export function hasSelection() {
   return resolveSelection() != null;
 }

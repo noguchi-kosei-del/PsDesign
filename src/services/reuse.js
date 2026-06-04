@@ -120,10 +120,10 @@ async function analyzeReuseRegions(bgImagePath, psItems, dpi) {
 // fontSizeMode:
 //   "reproduce" (既定) … 元レイヤーのフォント・サイズを再現する。
 //   "select"          … 指定フォント・サイズ（unifyFont / unifySize、無ければ既定）で全テキストを統一する（位置は元のまま）。
-function truncateReuseReproduceSizePt(sizePt) {
+function roundReuseReproduceSizePt(sizePt) {
   const n = Number(sizePt);
   if (!Number.isFinite(n) || n <= 0) return null;
-  return Math.trunc(n * 10 + 1e-8) / 10;
+  return Math.round(n * 10 + 1e-8) / 10;
 }
 
 function appendReuseTextSourceBlock(sourcePages, pageNumber, text) {
@@ -197,7 +197,7 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       );
       // 「統一」モードでは既定フォント・サイズで上書き（位置は元のまま中心合わせ）。
       const layerFont = defaultFont ?? auto.fontPostScriptName;
-      const layerSize = defaultSizePt ?? truncateReuseReproduceSizePt(sizePt);
+      const layerSize = defaultSizePt ?? roundReuseReproduceSizePt(sizePt);
       const useSourceBounds = !unify && hasBounds;
       const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
       const created = addNewLayer({
@@ -260,7 +260,7 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
     const boundsSizePt = getExistingLayerEffectiveSizePt(page, tl, null);
     // 「統一」モードでは既定フォント・サイズで上書き（位置は元のまま中心合わせ）。
     const layerFont = defaultFont ?? (tl.font || null);
-    const layerSize = defaultSizePt ?? truncateReuseReproduceSizePt(boundsSizePt);
+    const layerSize = defaultSizePt ?? roundReuseReproduceSizePt(boundsSizePt);
     const contents = String(tl.text ?? "").replace(/\r\n?/g, "\n");
     if (!contents) continue;
     const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
