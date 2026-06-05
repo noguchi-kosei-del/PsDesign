@@ -678,7 +678,10 @@ fn find_progen_launcher() -> Option<PathBuf> {
     let desktop = dirs::desktop_dir().or_else(|| dirs::home_dir().map(|p| p.join("Desktop")))?;
     let home = dirs::home_dir();
     let demo_root = desktop.join("progen_DEMO");
-    let mut candidates = vec![desktop.join("ProGen.lnk")];
+    let native_checkout_root = desktop.join("ネイティブデータ").join("progen");
+    let mut candidates = Vec::new();
+
+    candidates.push(desktop.join("ProGen.lnk"));
     if let Some(home) = home {
         candidates.push(
             home.join("AppData")
@@ -687,6 +690,14 @@ fn find_progen_launcher() -> Option<PathBuf> {
                 .join("progen.exe"),
         );
     }
+    candidates.push(
+        native_checkout_root
+            .join("src-tauri")
+            .join("target")
+            .join("release")
+            .join("progen.exe"),
+    );
+
     let checkout_roots = [
         // Current ProGen checkout layout.
         demo_root.join("progen"),
@@ -700,13 +711,6 @@ fn find_progen_launcher() -> Option<PathBuf> {
                 .join("release")
                 .join("progen.exe"),
         );
-        candidates.push(
-            root.join("src-tauri")
-                .join("target")
-                .join("debug")
-                .join("progen.exe"),
-        );
-        candidates.push(root.join("dev.bat"));
     }
     candidates.into_iter().find(|p| p.exists())
 }
@@ -716,7 +720,7 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
     let text_path = PathBuf::from(text_path);
     write_progen_handoff(&text_path)?;
     let launcher = find_progen_launcher().ok_or_else(|| {
-        "ProGen launcher was not found under Desktop\\ProGen.lnk, AppData\\Local\\ProGen, Desktop\\progen_DEMO\\progen, or Desktop\\progen_DEMO\\data".to_string()
+        "ProGen launcher was not found under Desktop\\ProGen.lnk, AppData\\Local\\ProGen, Desktop\\ネイティブデータ\\progen, Desktop\\progen_DEMO\\progen, or Desktop\\progen_DEMO\\data".to_string()
     })?;
     let text_path_arg = text_path.to_string_lossy().to_string();
     let launch_args = [

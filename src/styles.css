@@ -1970,7 +1970,9 @@ body.home-starting .home-screen {
 .home-start-card p {
   position: relative;
   z-index: 1;
-  margin: 0 0 24px;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 24px;
   color: var(--home-muted);
   font-family: "Noto Serif JP", "Yu Mincho", "YuMincho", serif;
   font-size: 18px;
@@ -3998,7 +4000,7 @@ body.home-starting .home-screen {
 }
 .reuse-fontsize-mode-modal .home-typeset-subtitle {
   width: min(500px, 100%);
-  text-align: left;
+  text-align: center;
 }
 .reuse-fontsize-mode-modal .home-typeset-list {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -4008,7 +4010,7 @@ body.home-starting .home-screen {
 .reuse-fontsize-mode-modal .home-typeset-row {
   appearance: none;
   min-height: 210px;
-  justify-content: center;
+  justify-content: flex-start;
   align-items: center;
   gap: 22px;
   padding: 30px 28px 28px !important;
@@ -4027,8 +4029,17 @@ body.home-starting .home-screen {
     var(--opus-dialog-inner-card-shadow) !important;
 }
 .reuse-fontsize-mode-modal .home-typeset-row-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 64px;
+  width: 64px;
+  height: 64px;
+  margin-top: 20px;
+}
+.reuse-fontsize-mode-modal .home-typeset-row-icon svg {
   width: 58px;
   height: 58px;
+  object-fit: contain;
 }
 .reuse-fontsize-mode-modal .home-typeset-row-main {
   align-items: flex-start;
@@ -4865,6 +4876,7 @@ body.home-starting .home-screen {
   /* 編集中は selection ring (.selected) も swap-target もすべて隠す。
      box-shadow を none で打ち消し、選択フィードバックは caret のみに統一。 */
   box-shadow: none !important;
+  background: rgba(255, 255, 255, 0.6);
   pointer-events: auto;
   z-index: 20;
   transform-origin: center center;
@@ -4878,6 +4890,9 @@ body.home-starting .home-screen {
    テキスト本体への入力に集中できるよう装飾を排除する。 */
 .layer-box.editing .layer-rotate-handle,
 .layer-box.editing .layer-size-badge {
+  display: none !important;
+}
+.layer-box.editing .stroke-preview-underlay {
   display: none !important;
 }
 .layer-box.editing .new-layer-text,
@@ -4902,12 +4917,7 @@ body.home-starting .home-screen {
   color: inherit;
 }
 /* 既存レイヤーは通常 opacity 0.35 で canvas-baked 上の薄い重ね。
-   編集中だけ opacity 1.0 に上げて、編集テキストが見やすくする。
-   さらに白背景を被せて canvas に焼き込まれた旧テキストを隠す
-   （contents 編集中の二重表示混乱を防止）。 */
-.layer-box-existing.editing {
-  background: rgba(255, 255, 255, 0.95);
-}
+   編集中だけ opacity 1.0 に上げて、編集テキストが見やすくする。 */
 .layer-box-existing.editing .existing-layer-text {
   opacity: 1;
 }

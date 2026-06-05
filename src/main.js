@@ -70,7 +70,6 @@ import {
   notifyDialog,
   chooseReuseFontSizeMode,
   pickReuseFontSize,
-  showProgress,
   showOpusProgressComplete,
   OPUS_SUCCESS_HOLD_DURATION,
   showModalAnimated,
@@ -79,6 +78,7 @@ import {
 import {
   clearProgressFlow,
   completeProgressFlowStep,
+  createHomeReuseSteps,
   createHomeTranscribeSteps,
   createHomeTypesetSteps,
   startProgressFlow,
@@ -565,7 +565,7 @@ function bindTools() {
         const multiplier = e.shiftKey ? 10 : 1;
         const changed = hasRangeSelection
           ? stepTextSize(sign, multiplier)
-          : resizeSelectedLayers(getSizeStepPt(), sign, multiplier);
+          : resizeSelectedLayers(getSizeStep(), sign, multiplier, { unit: getTextSizeUnit() });
         if (changed) {
           e.preventDefault();
           e.stopPropagation();
@@ -1506,6 +1506,11 @@ function normalizeSizeStep(value) {
   return 0.1;
 }
 
+function getSizeSnapTolerance() {
+  const tolerance = Math.abs(textSizePtToUnitValue(0.011, getTextSizeUnit()));
+  return Number.isFinite(tolerance) && tolerance > 0 ? tolerance : 1e-9;
+}
+
 function formatSizeInputValue(pt) {
   return formatTextSizePt(pt, getTextSizeUnit(), false);
 }
@@ -1514,16 +1519,11 @@ function stepTextSize(sign, multiplier = 1) {
   const baseStep = getSizeStep();
   const current = textSizePtToUnitValue(getTextSize(), getTextSizeUnit());
   if (!Number.isFinite(current)) return false;
-  const next = snapNextSize(current, baseStep, sign, multiplier);
+  const next = snapNextSize(current, baseStep, sign, multiplier, getSizeSnapTolerance());
   const nextPt = textSizeUnitValueToPt(next, getTextSizeUnit());
   if (!Number.isFinite(nextPt)) return false;
   applyTextSize(nextPt);
   return true;
-}
-
-function getSizeStepPt() {
-  const pt = textSizeUnitValueToPt(getSizeStep(), getTextSizeUnit());
-  return Number.isFinite(pt) && pt > 0 ? pt : getSizeStep();
 }
 
 function bindBoldToggle() {
@@ -4913,21 +4913,35 @@ async function startHomeReuseFlow() {
     unifySize = picked.sizePt;
   }
 
+  const progressFlowId = `home-reuse-${Date.now()}`;
   // 他のスタートカードと同じ 3 段演出 (暗転 → 星空 → 進捗立ち上がり)。
   await transitionFromHome({
     afterStarsPeak: () => {
-      showProgress({
+      startProgressFlow({
+        id: progressFlowId,
         title: "リサイクルを準備中…",
-        detail: "PSD を解析中…",
-        current: 0,
-        total: files.length,
-        variant: "load",
+        variant: "place",
+        icon: PLACE_ICON_SVG,
+        steps: createHomeReuseSteps(),
+        detail: "PSD を読み取り中…",
       });
     },
   });
   try {
     setParallelViewMode("parallel");
-    await loadPsdFilesForReuse(files, { keepProgressOpen: true, fontSizeMode, unifyFont, unifySize });
+    await loadPsdFilesForReuse(files, {
+      keepProgressOpen: true,
+      fontSizeMode,
+      unifyFont,
+      unifySize,
+      progressFlow: { id: progressFlowId, stepId: "psd-read" },
+      progressFlowSteps: {
+        read: "psd-read",
+        extract: "extract",
+        place: "place",
+        view: "view-ready",
+      },
+    });
     if (!getPages().length) {
       await hideProgress();
       return;
@@ -4940,6 +4954,8 @@ async function startHomeReuseFlow() {
       title: "リサイクルを開始できません",
       message: String(e?.message ?? e ?? "不明なエラー"),
     });
+  } finally {
+    clearProgressFlow(progressFlowId);
   }
 }
 

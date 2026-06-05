@@ -195,6 +195,15 @@ export function createHomeTranscribeSteps() {
   ];
 }
 
+export function createHomeReuseSteps() {
+  return [
+    { id: "psd-read", label: "PSD読み取り", labelEn: "psd reading", weight: 42 },
+    { id: "extract", label: "テキスト抽出", labelEn: "text extraction", weight: 28 },
+    { id: "place", label: "配置調整", labelEn: "placement", weight: 22 },
+    { id: "view-ready", label: "表示準備", labelEn: "preparing view", weight: 8 },
+  ];
+}
+
 export function createProjectLoadSteps() {
   return [
     { id: "project-read", label: "プロジェクト読込", labelEn: "project file", weight: 10 },

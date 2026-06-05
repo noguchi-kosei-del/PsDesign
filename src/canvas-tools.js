@@ -41,7 +41,13 @@ import {
 import { ensureFontLoaded } from "./font-loader.js";
 import { getDefault, onSettingsChange } from "./settings.js";
 import { commitFontToSelections, openLayerFontPanel, openLayerSizePanel, openLayerStrokePanel, rebuildLayerList } from "./text-editor.js";
-import { formatTextSizePt, getTextSizeUnit } from "./text-size-unit.js";
+import {
+  formatTextSizePt,
+  getTextSizeUnit,
+  normalizeTextSizeUnit,
+  textSizePtToUnitValue,
+  textSizeUnitValueToPt,
+} from "./text-size-unit.js";
 import {
   appendBlockToCurrentPageContent,
   cascadeRemoveTxtForLayers,
@@ -54,6 +60,7 @@ const resizeObservers = new Set();
 let toolListenerBound = false;
 const RUBY_TOWARD_PARENT_RATIO = 1.60;
 const TEXT_BBOX_THICK_SAFETY_EM = 0;
+const TEXT_BBOX_VERTICAL_THICK_SAFETY_EM = 0.22;
 const TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM = 0.4;
 const TEXT_BBOX_LONG_SAFETY_EM = 0.4;
 const TEXT_BBOX_HEURISTIC_LONG_SCALE = 1.05;
@@ -1396,10 +1403,11 @@ function clampSizePt(v) {
 // - グリッド外（例：0.5 刻み設定で 12.3）なら sign 方向の最寄りグリッドへスナップ
 //   （+1 は ceil、-1 は floor）。これにより 12.3 + 0.5 step → 12.5（13.0 ではない）
 // - multiplier > 1（Shift+wheel 等）はスナップ後に追加でグリッドを進む。
-export function snapNextSize(cur, baseStep, sign, multiplier = 1) {
+export function snapNextSize(cur, baseStep, sign, multiplier = 1, tolerance = 1e-9) {
   if (!Number.isFinite(cur) || !Number.isFinite(baseStep) || baseStep <= 0) return cur;
   const ratio = cur / baseStep;
-  const onGrid = Math.abs(ratio - Math.round(ratio)) < 1e-9;
+  const snapTolerance = Number.isFinite(tolerance) && tolerance > 0 ? tolerance : 1e-9;
+  const onGrid = Math.abs(cur - Math.round(ratio) * baseStep) <= snapTolerance;
   const firstStep = onGrid
     ? Math.round(ratio) + sign
     : (sign > 0 ? Math.ceil(ratio) : Math.floor(ratio));
@@ -1407,12 +1415,19 @@ export function snapNextSize(cur, baseStep, sign, multiplier = 1) {
   return Math.round(finalGrid * baseStep * 100) / 100;
 }
 
+function sizeSnapToleranceForUnit(unit) {
+  if (!unit) return 1e-9;
+  const tolerance = Math.abs(textSizePtToUnitValue(0.011, unit));
+  return Number.isFinite(tolerance) && tolerance > 0 ? tolerance : 1e-9;
+}
+
 // 選択中レイヤーをサイズ変更。sign（+1 / -1）と multiplier（Shift+wheel で 10）で
 // 各レイヤーの現在 sizePt を snapNextSize で次の baseStep グリッドへ移動する。
 // 中心固定のため矩形差の半分だけ x/y を補正するのは従来通り。
-export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
+export function resizeSelectedLayers(baseStep, sign, multiplier = 1, options = {}) {
   const selections = getSelectedLayers();
   if (selections.length === 0) return false;
+  const unit = options.unit ? normalizeTextSizeUnit(options.unit) : null;
   const pages = getPages();
   const targets = [];
   for (const sel of selections) {
@@ -1446,13 +1461,19 @@ export function resizeSelectedLayers(baseStep, sign, multiplier = 1) {
       });
     }
   }
-  const sizes = targets.map((t) => t.cur);
-  if (sizes.length === 0) return false;
-  const baseSize = sign > 0 ? Math.max(...sizes) : Math.min(...sizes);
-  const allSameSize = sizes.every((s) => Math.abs(s - baseSize) < 1e-9);
-  const next = clampSizePt(allSameSize
-    ? snapNextSize(baseSize, baseStep, sign, multiplier)
-    : baseSize);
+  const stepSizes = targets
+    .map((t) => unit ? textSizePtToUnitValue(t.cur, unit) : t.cur)
+    .filter((s) => Number.isFinite(s));
+  if (stepSizes.length === 0) return false;
+  const baseSize = sign > 0 ? Math.max(...stepSizes) : Math.min(...stepSizes);
+  const snapTolerance = sizeSnapToleranceForUnit(unit);
+  const allSameSize = stepSizes.every((s) => Math.abs(s - baseSize) <= snapTolerance);
+  const nextStepSize = allSameSize
+    ? snapNextSize(baseSize, baseStep, sign, multiplier, snapTolerance)
+    : baseSize;
+  const nextRaw = unit ? textSizeUnitValueToPt(nextStepSize, unit) : nextStepSize;
+  if (!Number.isFinite(nextRaw)) return false;
+  const next = clampSizePt(nextRaw);
   let clearedAutoFontMarker = false;
   const changed = withHistoryTransient(() => {
     let any = false;
@@ -1596,10 +1617,11 @@ export function layerRectForExisting(page, layer, edit) {
     { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
     { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
   );
-  // 縦書きは content が右端 (block-start) に寄り、box 左端は固定されるため thick safety を
-  // 足すと左側に余白が溜まる（layerRectForNew と同方針）。縦書きは 0、横書きは従来どおり。
+  // 縦書きは content が右端 (block-start) に寄り、box 左端は固定されるため大きな thick safety を
+  // 足すと余白が溜まる。ただし 0em だと単位変換後の丸めや実フォントの ink overhang で
+  // 文字端が切れるため、縦方向専用のごく小さな保険だけ入れる。
   const THICK_SAFETY = isVertical
-    ? 0
+    ? TEXT_BBOX_VERTICAL_THICK_SAFETY_EM
     : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM);
   const LONG_SAFETY = TEXT_BBOX_LONG_SAFETY_EM;
   const LONG_SCALE = TEXT_BBOX_HEURISTIC_LONG_SCALE;
@@ -1709,15 +1731,13 @@ export function layerRectForNew(page, nl) {
     thickSum += v * lineMaxRatio;
   }
   // 縦書き (vertical-rl) は content が block-start = 右端に寄り、box 左端 = nl.x は固定
-  // （ドラッグ基準のため scheduleBoxAutoFit も left/top は触らない）。ここで thick safety を
-  // 足すと余白が必ず box の「左側」に溜まる（右側は autofit が content +1px にハグして除去）。
-  // → 縦書きは thick safety を 0 にして content を nl.x まで詰める。横書きは content が上端に
-  //   寄り、余白は下側（= autofit が除去）に出るため従来どおり安全余白を残す。
+  // （ドラッグ基準のため scheduleBoxAutoFit も left/top は触らない）。大きな余白は位置ズレに
+  // 見えるが、0em ではサイズ単位変換後の丸めで文字が切れるため最小限の保険を残す。
   // 【写植再利用】reuseTightThick=true のレイヤーは厚み方向の安全余白を 0 にして、枠を
   // 実テキスト列幅ぴったりに詰める（複数列で左側に余白＝右ずれに見える問題を解消）。
-  const thickSafety = (isVertical || nl.reuseTightThick === true)
+  const thickSafety = nl.reuseTightThick === true
     ? 0
-    : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM);
+    : (isVertical ? TEXT_BBOX_VERTICAL_THICK_SAFETY_EM : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM));
   const longSafety = TEXT_BBOX_LONG_SAFETY_EM;
   const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE;
   const minThick = nl.reuseTightThick === true ? Math.max(1, ptInPsdPx) : 24;
@@ -1817,6 +1837,16 @@ function appendStrokePreviewUnderlay(box, inner, strokeColor, strokeWidthPx, pxP
   underlay.style.filter = "";
   inner.classList.add("stroke-preview-fill");
   box.appendChild(underlay);
+}
+
+function applyEditableStrokePreview(inner, strokeColor, strokeWidthPx, pxPerPsd) {
+  if (!inner) return;
+  inner.style.textShadow = "";
+  if (!strokeColor || strokeColor === "none" || !(strokeWidthPx > 0) || !(pxPerPsd > 0)) return;
+  const cssColor = strokeColor === "white" ? "#fff" : "#000";
+  const w = Math.max(0.5, strokeWidthPx * pxPerPsd);
+  inner.style.webkitTextStroke = "0";
+  inner.style.textShadow = buildRoundStrokeShadows(w, cssColor);
 }
 
 function renderOverlay(ctx) {
@@ -2678,8 +2708,10 @@ function scheduleBoxAutoFit(ctx) {
       const fitPad = 1;
       const boxLeft = Math.max(0, boxRect.left - overlayRect.left);
       const boxTop = Math.max(0, boxRect.top - overlayRect.top);
-      const right = Math.min(overlayW, contentRect.right - overlayRect.left + fitPad);
-      const bottom = Math.min(overlayH, contentRect.bottom - overlayRect.top + fitPad);
+      const currentRight = Math.max(boxLeft + 1, boxRect.right - overlayRect.left);
+      const currentBottom = Math.max(boxTop + 1, boxRect.bottom - overlayRect.top);
+      const right = Math.min(overlayW, Math.max(currentRight, contentRect.right - overlayRect.left + fitPad));
+      const bottom = Math.min(overlayH, Math.max(currentBottom, contentRect.bottom - overlayRect.top + fitPad));
       const width = Math.max(1, right - boxLeft);
       const height = Math.max(1, bottom - boxTop);
       box.style.width = `${(width / overlayW) * 100}%`;
@@ -4910,12 +4942,22 @@ function startContentEditableEdit(ctx, target, options = {}) {
   if (!box) return null;
   const inner = box.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return null;
+  for (const underlay of Array.from(box.querySelectorAll(".stroke-preview-underlay"))) {
+    underlay.remove();
+  }
+  inner.classList.remove("stroke-preview-fill");
 
   // 2. 開始時点のスナップショット（cancel 時の復元用）
   const startEdit = isExisting ? (getEdit(page.path, target.layer.id) ?? {}) : null;
   const startContents = isExisting
     ? (startEdit.contents ?? target.layer.text ?? "")
     : (target.nl.contents ?? "");
+  const editStrokeColor = isExisting
+    ? (startEdit.strokeColor ?? target.layer.strokeColor ?? "none")
+    : (target.nl.strokeColor ?? "none");
+  const editStrokeWidthPx = isExisting
+    ? (startEdit.strokeWidthPx ?? target.layer.strokeWidthPx ?? 20)
+    : (target.nl.strokeWidthPx ?? 20);
 
   // 縦書きレイヤーの半角→全角自動変換 direction（edit 開始時に一度だけ確定。
   // edit 中の direction 変更は対象外）。readContents 内で maybeConvert に渡される。
@@ -5025,6 +5067,10 @@ function startContentEditableEdit(ctx, target, options = {}) {
       target.nl.verticalScale ?? 100,
     );
   }
+  const pxPerPsd = ctx.canvas.clientWidth > 0 && page.width > 0
+    ? ctx.canvas.clientWidth / page.width
+    : 0;
+  applyEditableStrokePreview(inner, editStrokeColor, editStrokeWidthPx, pxPerPsd);
 
   // 【v1.21.0】編集前の bbox 中心を握っておく。文字数変化（特に改行追加）で bbox の
   // 幅・高さが伸びると、左上 anchor 固定の box は右下方向にだけ伸びるため

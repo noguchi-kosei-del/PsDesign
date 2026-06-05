@@ -406,7 +406,11 @@ pub fn generate_apply_script(
     ));
     out.push_str(&format!(
         "var OPUS_QUIT_PHOTOSHOP_AFTER_FINISH = {};\n",
-        if quit_photoshop_after_finish { "true" } else { "false" }
+        if quit_photoshop_after_finish {
+            "true"
+        } else {
+            "false"
+        }
     ));
     out.push_str("try {\n");
     out.push_str("  var __psver = photoshopVersion();\n");

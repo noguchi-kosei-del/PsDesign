@@ -29,7 +29,7 @@ import {
   setTxtSource,
 } from "../state.js";
 import { hideProgress, showProgress, toast, updateProgress } from "../ui-feedback.js";
-import { withProgressFlow } from "../progress-flow.js";
+import { completeProgressFlowStep, updateProgressFlow, withProgressFlow } from "../progress-flow.js";
 import { renderAllSpreads } from "../spread-view.js";
 import { rebuildLayerList } from "../text-editor.js";
 import {
@@ -331,6 +331,7 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
 //   keepProgressOpen / progressFlow : 進捗モーダル制御。
 export async function loadPsdFilesForReuse(files, {
   progressFlow = null,
+  progressFlowSteps = null,
   keepProgressOpen = false,
   extract = true,
   skipReference = false,
@@ -345,12 +346,24 @@ export async function loadPsdFilesForReuse(files, {
   setFolder(parentDir(files[0]) ?? null);
   setGuidesLocked(false);
 
-  showProgress(withProgressFlow(progressFlow, {
+  const flowForPhase = (phase) => {
+    if (!progressFlow || !progressFlowSteps) return progressFlow;
+    const id = typeof progressFlow === "string" ? progressFlow : progressFlow.id;
+    const stepId = progressFlowSteps[phase];
+    return id && stepId ? { id, stepId } : progressFlow;
+  };
+  const readFlow = flowForPhase("read");
+  const extractFlow = flowForPhase("extract");
+  const placeFlow = flowForPhase("place");
+  const viewFlow = flowForPhase("view");
+  const progressVariant = progressFlowSteps ? "place" : "load";
+
+  showProgress(withProgressFlow(readFlow, {
     title: "リサイクルを準備中…",
     detail: baseName(files[0]),
     current: 0,
     total: files.length,
-    variant: "load",
+    variant: progressVariant,
     tasks: ["ファイル確認", "PSD解析", "テキスト抽出"],
     taskIndex: 0,
     taskProgress: 0,
@@ -376,7 +389,7 @@ export async function loadPsdFilesForReuse(files, {
   let batchPages = null;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    updateProgress(withProgressFlow(progressFlow, {
+    updateProgress(withProgressFlow(readFlow, {
       detail: `Photoshop で ${files.length} ページを読み取り中…`,
       current: 0,
       total: files.length,
@@ -392,10 +405,13 @@ export async function loadPsdFilesForReuse(files, {
   } catch (e) {
     console.warn("[reuse] batch read failed, falling back to per-file:", e);
   }
+  if (progressFlowSteps) {
+    completeProgressFlowStep(readFlow, { detail: "PSD読み取り 完了" });
+  }
 
   for (let i = 0; i < files.length; i++) {
     const path = files[i];
-    updateProgress(withProgressFlow(progressFlow, {
+    updateProgress(withProgressFlow(extractFlow, {
       detail: `テキストを抽出中… (${baseName(path)})`,
       current: i,
       total: files.length,
@@ -439,17 +455,21 @@ export async function loadPsdFilesForReuse(files, {
         failures.push({ path, error: e });
       }
     }
-    updateProgress(withProgressFlow(progressFlow, {
-      detail: baseName(path),
+    updateProgress(withProgressFlow(extractFlow, {
+      detail: `テキスト抽出 完了 (${baseName(path)})`,
       current: i + 1,
       total: files.length,
       taskIndex: i + 1 >= files.length ? 2 : 1,
     }));
   }
+  if (progressFlowSteps) {
+    completeProgressFlowStep(extractFlow, { detail: "テキスト抽出 完了" });
+  }
 
   // 見本ペインに元テキスト入りの合成画像を流し込む。
   // 再開時 (skipReference) は保存済み JPG を別途読み込むのでスキップ。
   if (extract) {
+    updateProgressFlow(placeFlow, { detail: "原稿テキストを生成中…", progress: 8, showCount: false });
     const content = buildReuseTextSourceContent(reuseTextSourcePages);
     setTxtSource(content ? { name: reuseTextSourceName(files), content } : null);
     setTxtFilePath(null);
@@ -458,6 +478,7 @@ export async function loadPsdFilesForReuse(files, {
 
   if (referenceItems.length > 0 && !skipReference) {
     try {
+      updateProgressFlow(placeFlow, { detail: "見本ペインを準備中…", progress: 28, showCount: false });
       const doc = await buildReferenceDocFromCanvases(referenceItems);
       setPdf(doc, referenceItems[0].path, referenceItems.map((it) => it.path));
     } catch (e) {
@@ -473,10 +494,12 @@ export async function loadPsdFilesForReuse(files, {
   // 必ずロード後に測定する。
   if (extract && alignTargets.length > 0) {
     try {
+      updateProgressFlow(placeFlow, { detail: "フォントを読み込み中…", progress: 48, showCount: false });
       // フォントを確実にロードしてから measureText で実テキスト寸法を確定させる。
       const fonts = new Set(alignTargets.map((t) => t.font).filter(Boolean));
       await Promise.all([...fonts].map((f) => Promise.resolve(ensureFontLoaded(f)).catch(() => {})));
       // 全ページ一括で、実テキスト寸法から決定論的に中心を合わせる（DOM・ページ切替に非依存）。
+      updateProgressFlow(placeFlow, { detail: "配置中心を補正中…", progress: 72, showCount: false });
       const moved = alignReuseLayersToSourceCenters(alignTargets, getPages());
       if (moved > 0) {
         renderAllSpreads();
@@ -485,6 +508,10 @@ export async function loadPsdFilesForReuse(files, {
     } catch (e) {
       console.warn("[reuse] center align failed:", e);
     }
+  }
+  if (progressFlowSteps) {
+    completeProgressFlowStep(placeFlow, { detail: "配置調整 完了" });
+    completeProgressFlowStep(viewFlow, { detail: "表示準備 完了" });
   }
 
   const allFailed = failures.length + unsupported.length === files.length;
