@@ -899,6 +899,11 @@ export function syncPlacedLayerTextToSource(layer, nextText) {
   if (!ref || !Number.isInteger(ref.paragraphIndex)) return false;
   const source = getTxtSource();
   if (!source) return false;
+  // PSD 上のレイヤー直接編集では、空行は「同じ吹き出し内で一行空ける」
+  // 意図で使われる。原稿テキスト側は空行を段落区切りとして扱うため、
+  // ここで逆同期すると元段落が分割され、配置済みレイヤーが前半だけに
+  // 追従して文字が欠ける。原稿パネル側の分割配置は別経路で維持する。
+  if (/\n[ \t\u3000]*\n/.test(String(nextText ?? "").replace(/\r\n?/g, "\n"))) return false;
   const nextContent = replaceBlockAtIndexInContent(
     source.content,
     Number.isInteger(ref.pageNumber) ? ref.pageNumber : null,

@@ -1628,6 +1628,7 @@ export function addNewLayer({
   charRubies,
   lowExtractTextMatch,
   extractMatchScore,
+  reuseTightThick,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -1689,6 +1690,7 @@ export function addNewLayer({
     autoFontSwitchBucket: Number.isInteger(autoFontSwitchBucket) ? autoFontSwitchBucket : -1,
     lowExtractTextMatch: lowExtractTextMatch === true,
     extractMatchScore: Number.isFinite(extractMatchScore) ? extractMatchScore : null,
+    reuseTightThick: reuseTightThick === true,
     // 【v1.28.0 移植 (PsDesign-main v1.25.0)】自動配置時の元 sizePt。
     // 位置調整 mode2 / mode3 でサイズ補正を idempotent にするために保存する。
     // layer.sizePt が後から更新されても、補正は sizePtBasis × sizeCorrectionFactor で再計算。

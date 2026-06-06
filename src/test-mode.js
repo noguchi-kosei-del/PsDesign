@@ -27,6 +27,9 @@ import {
   setPdfPageIndex,
   setPdfSkipFirstBlank,
   setPdfSplitMode,
+  setTxtDirty,
+  setTxtFilePath,
+  setTxtSource,
 } from "./state.js";
 import { buildBlankPsdPage } from "./psd-loader.js";
 import { buildBlankReferenceDoc } from "./pdf-loader.js";
@@ -38,10 +41,21 @@ import { confirmDialog } from "./ui-feedback.js";
 import { runMechanicalChecks } from "./mechanical-checks.js";
 
 const PAGE_COUNT = 3;
-const PAGE_W = 1200;
-const PAGE_H = 1700;
 const PAGE_DPI = 72;
+const MM_PER_INCH = 25.4;
+const A4_WIDTH_MM = 210;
+const A4_HEIGHT_MM = 297;
+const PAGE_W = Math.round((A4_WIDTH_MM / MM_PER_INCH) * PAGE_DPI);
+const PAGE_H = Math.round((A4_HEIGHT_MM / MM_PER_INCH) * PAGE_DPI);
 const SAMPLE_TEXTS = ["あいうえお", "かきくけこ", "さしすせそ"];
+const TEST_TXT_NAME = "テスト原稿.txt";
+
+function buildTestTxtContent() {
+  return SAMPLE_TEXTS
+    .slice(0, PAGE_COUNT)
+    .map((text, i) => `<<${i + 1}Page>>\n\n${text}`)
+    .join("\n\n");
+}
 
 // テストモードを開始する。破棄キャンセル時のみ false を返す（呼び出し側はホーム解除を抑止）。
 export async function runTestMode() {
@@ -56,6 +70,9 @@ export async function runTestMode() {
 
   // --- PSD ペイン: 白紙ページ + サンプルテキスト ---
   clearPages();
+  setTxtSource({ name: TEST_TXT_NAME, content: buildTestTxtContent() });
+  setTxtFilePath(null);
+  setTxtDirty(false);
   for (let i = 0; i < PAGE_COUNT; i++) {
     const page = buildBlankPsdPage(`テストPSD ${i + 1}`, PAGE_W, PAGE_H, PAGE_DPI);
     addPage(page);
@@ -64,6 +81,7 @@ export async function runTestMode() {
       sizePt: getTextSize(),
       direction: getNewTextDirection(),
       leadingPct: getLeadingPct(),
+      reuseTightThick: true,
     };
     const { x, y } = centerTopLeft(page, opt, PAGE_W / 2, PAGE_H / 2);
     addNewLayer({
@@ -78,6 +96,8 @@ export async function runTestMode() {
       strokeWidthPx: getStrokeWidthPx(),
       fillColor: getFillColor(),
       leadingPct: opt.leadingPct,
+      sourceTxtRef: { pageNumber: i + 1, paragraphIndex: 0 },
+      reuseTightThick: opt.reuseTightThick,
     });
   }
 

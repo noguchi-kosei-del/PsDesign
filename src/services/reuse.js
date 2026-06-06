@@ -80,7 +80,7 @@ function computeAutoStyleFromMetrics(metrics, baseFont) {
     const score = Math.max(bgScore, uniScore);
     const threshold = Number(getDefault("cloudShapeScoreThreshold")) || 0.5;
     const bucket = Math.max(0, Math.min(5, Math.floor((score * 100 - 50) / 10)));
-    if (score >= threshold && bucket >= 1) {
+    if (score >= threshold) {
       out.fontPostScriptName = cloudPs;
       out.autoFontSwitched = true;
       out.autoFontSwitchBucket = bucket;
@@ -89,24 +89,71 @@ function computeAutoStyleFromMetrics(metrics, baseFont) {
   return out;
 }
 
+function reuseRegionVariantsForItem(it, dpi) {
+  const sizePt = Number(it.sizePt);
+  const fontSizePx = Number.isFinite(sizePt) && sizePt > 0 ? (sizePt * (Number(dpi) || 72)) / 72 : 24;
+  const left = Number(it.left) || 0;
+  const top = Number(it.top) || 0;
+  const right = Number(it.right) || left;
+  const bottom = Number(it.bottom) || top;
+  const width = Math.max(1, right - left);
+  const height = Math.max(1, bottom - top);
+  const base = { left, top, right, bottom, fontSizePx };
+  // PSD textItem.bounds は文字実体に近く、ウニ吹き出しの外周まで届かないことがある。
+  // 通常の OCR 自動配置は検出 bbox 周辺を見るため、リサイクルでも少し広い bbox を併用する。
+  const expand = Math.min(90, Math.max(24, fontSizePx * 1.8, Math.min(width, height) * 0.75));
+  const wideX = it.direction === "vertical" ? Math.max(expand, fontSizePx * 2.4) : expand;
+  const wideY = it.direction === "vertical" ? expand : Math.max(expand, fontSizePx * 2.0);
+  return [
+    base,
+    {
+      left: left - wideX,
+      top: top - wideY,
+      right: right + wideX,
+      bottom: bottom + wideY,
+      fontSizePx: Math.max(fontSizePx, expand),
+    },
+  ];
+}
+
+function reuseMetricScore(metric) {
+  if (!metric?.ok) return -1;
+  const whiteRatio = Number(metric.whiteRatio);
+  const minSeg = Number(metric.minSegmentEdgeChanges);
+  const bgScore = Number.isFinite(whiteRatio) ? Math.max(0, Math.min(1, 1 - whiteRatio)) : 0;
+  const uniScore = Number.isFinite(minSeg) ? Math.max(0, Math.min(1, minSeg / 6)) : 0;
+  return Math.max(bgScore, uniScore);
+}
+
+function pickReuseMetric(metrics) {
+  let best = null;
+  let bestScore = -1;
+  for (const metric of metrics) {
+    const score = reuseMetricScore(metric);
+    if (score > bestScore) {
+      best = metric;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
 // PS テキスト項目群について、背景画像で周辺解析を行い metrics 配列を返す（idx 対応）。
 async function analyzeReuseRegions(bgImagePath, psItems, dpi) {
   if (!bgImagePath || !Array.isArray(psItems) || psItems.length === 0) return null;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    const regions = psItems.map((it) => {
-      const sizePt = Number(it.sizePt);
-      const fontSizePx = Number.isFinite(sizePt) && sizePt > 0 ? (sizePt * (Number(dpi) || 72)) / 72 : 24;
-      return {
-        left: Number(it.left) || 0,
-        top: Number(it.top) || 0,
-        right: Number(it.right) || 0,
-        bottom: Number(it.bottom) || 0,
-        fontSizePx,
-      };
-    });
+    const variants = psItems.map((it) => reuseRegionVariantsForItem(it, dpi));
+    const regions = variants.flat();
     const metrics = await invoke("analyze_image_text_regions", { imagePath: bgImagePath, regions });
-    return Array.isArray(metrics) ? metrics : null;
+    if (!Array.isArray(metrics)) return null;
+    const out = [];
+    let offset = 0;
+    for (const itemVariants of variants) {
+      out.push(pickReuseMetric(metrics.slice(offset, offset + itemVariants.length)));
+      offset += itemVariants.length;
+    }
+    return out;
   } catch (e) {
     console.warn("[reuse] 周辺解析に失敗（自動白フチ/中丸ゴシックをスキップ）:", e);
     return null;
@@ -119,11 +166,30 @@ async function analyzeReuseRegions(bgImagePath, psItems, dpi) {
 // 植字後、通常写植と同じ周辺解析で「白フチ自動付与」「中丸ゴシック自動切替」を反映する。
 // fontSizeMode:
 //   "reproduce" (既定) … 元レイヤーのフォント・サイズを再現する。
-//   "select"          … 指定フォント・サイズ（unifyFont / unifySize、無ければ既定）で全テキストを統一する（位置は元のまま）。
+//   "select"          … 指定フォント・サイズをベースにしつつ、周辺解析の中丸判定と
+//                       PSD/OCR 相当の検出サイズ・色・白フチを優先して反映する。
 function roundReuseReproduceSizePt(sizePt) {
   const n = Number(sizePt);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n * 10 + 1e-8) / 10;
+}
+
+function resolveReuseFont({ unify, defaultFont, autoFont, autoFontSwitched, sourceFont }) {
+  if (autoFontSwitched && autoFont) return autoFont;
+  if (unify && defaultFont) return defaultFont;
+  return autoFont || sourceFont || defaultFont || null;
+}
+
+function resolveReuseSize({ unify, defaultSizePt, detectedSizePt }) {
+  const detected = roundReuseReproduceSizePt(detectedSizePt);
+  if (Number.isFinite(detected) && detected > 0) return detected;
+  return unify ? defaultSizePt : null;
+}
+
+function normalizeReuseFillColor(value) {
+  if (value === "white" || value === "black" || value === "default") return value;
+  if (typeof value === "string" && /^#[0-9a-fA-F]{6}$/.test(value)) return value.toLowerCase();
+  return "default";
 }
 
 function appendReuseTextSourceBlock(sourcePages, pageNumber, text) {
@@ -195,9 +261,14 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
         metricsList ? metricsList[i] : null,
         it.font || null,
       );
-      // 「統一」モードでは既定フォント・サイズで上書き（位置は元のまま中心合わせ）。
-      const layerFont = defaultFont ?? auto.fontPostScriptName;
-      const layerSize = defaultSizePt ?? roundReuseReproduceSizePt(sizePt);
+      const layerFont = resolveReuseFont({
+        unify,
+        defaultFont,
+        autoFont: auto.fontPostScriptName,
+        autoFontSwitched: auto.autoFontSwitched,
+        sourceFont: it.font || null,
+      });
+      const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: sizePt });
       const useSourceBounds = !unify && hasBounds;
       const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
       const created = addNewLayer({
@@ -210,6 +281,7 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
         direction,
         strokeColor: auto.strokeColor,
         strokeWidthPx: auto.strokeWidthPx,
+        fillColor: normalizeReuseFillColor(it.fillColor),
         leadingPct: 125,
         autoFontSwitched: auto.autoFontSwitched,
         autoFontSwitchBucket: auto.autoFontSwitchBucket,
@@ -258,9 +330,14 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
   for (const tl of layers) {
     if (!tl) continue;
     const boundsSizePt = getExistingLayerEffectiveSizePt(page, tl, null);
-    // 「統一」モードでは既定フォント・サイズで上書き（位置は元のまま中心合わせ）。
-    const layerFont = defaultFont ?? (tl.font || null);
-    const layerSize = defaultSizePt ?? roundReuseReproduceSizePt(boundsSizePt);
+    const layerFont = resolveReuseFont({
+      unify,
+      defaultFont,
+      autoFont: tl.font || null,
+      autoFontSwitched: false,
+      sourceFont: tl.font || null,
+    });
+    const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: boundsSizePt });
     const contents = String(tl.text ?? "").replace(/\r\n?/g, "\n");
     if (!contents) continue;
     const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
@@ -274,7 +351,7 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       direction: tl.direction === "vertical" ? "vertical" : "horizontal",
       strokeColor: tl.strokeColor ?? "none",
       strokeWidthPx: Number.isFinite(tl.strokeWidthPx) ? tl.strokeWidthPx : 20,
-      fillColor: tl.fillColor ?? "default",
+      fillColor: normalizeReuseFillColor(tl.fillColor),
       leadingPct: 125,
       horizontalScale: Number.isFinite(tl.horizontalScale) ? tl.horizontalScale : 100,
       verticalScale: Number.isFinite(tl.verticalScale) ? tl.verticalScale : 100,

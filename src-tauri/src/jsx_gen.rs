@@ -100,6 +100,27 @@ function jsonNum(n) {
 }
 function jsonBool(b) { return b ? 'true' : 'false'; }
 
+function fillColorNameFromTextItem(ti) {
+  try {
+    var c = ti.color;
+    var r = c.rgb.red;
+    var g = c.rgb.green;
+    var b = c.rgb.blue;
+    r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
+    g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
+    b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
+    if (r > 240 && g > 240 && b > 240) return "white";
+    if (r < 15 && g < 15 && b < 15) return "black";
+    function hx(v) {
+      var s = v.toString(16);
+      return s.length < 2 ? "0" + s : s;
+    }
+    return "#" + hx(r) + hx(g) + hx(b);
+  } catch (e) {
+    return "default";
+  }
+}
+
 function exportFlatJpg(doc, target) {
   var dup = doc.duplicate();
   try { dup.flatten(); } catch (eF) {}
@@ -154,6 +175,7 @@ function processOnePsd(psdPath, refImg, bgImg) {
     var font = "";
     var sizePt = 0;
     var dir = "horizontal";
+    var fillColor = "default";
     var visible = true;
     try { visible = L.visible; } catch (e) {}
     if (ti) {
@@ -161,6 +183,7 @@ function processOnePsd(psdPath, refImg, bgImg) {
       try { font = ti.font; } catch (e) {}
       try { sizePt = (ti.size && ti.size.as) ? ti.size.as("pt") : Number(ti.size); } catch (e) {}
       try { dir = (ti.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (e) {}
+      fillColor = fillColorNameFromTextItem(ti);
     }
     var b = null;
     try { b = L.bounds; } catch (e) {}
@@ -176,6 +199,7 @@ function processOnePsd(psdPath, refImg, bgImg) {
       + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
       + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
       + ',"direction":' + jsonStr(dir)
+      + ',"fillColor":' + jsonStr(fillColor)
       + ',"visible":' + jsonBool(visible)
       + '}'
     );
@@ -269,6 +293,27 @@ function jsonNum(n) {
 }
 function jsonBool(b) { return b ? 'true' : 'false'; }
 
+function fillColorNameFromTextItem(ti) {
+  try {
+    var c = ti.color;
+    var r = c.rgb.red;
+    var g = c.rgb.green;
+    var b = c.rgb.blue;
+    r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
+    g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
+    b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
+    if (r > 240 && g > 240 && b > 240) return "white";
+    if (r < 15 && g < 15 && b < 15) return "black";
+    function hx(v) {
+      var s = v.toString(16);
+      return s.length < 2 ? "0" + s : s;
+    }
+    return "#" + hx(r) + hx(g) + hx(b);
+  } catch (e) {
+    return "default";
+  }
+}
+
 try {
   var prevRuler = app.preferences.rulerUnits;
   var prevType = app.preferences.typeUnits;
@@ -328,6 +373,7 @@ try {
       var font = "";
       var sizePt = 0;
       var dir = "horizontal";
+      var fillColor = "default";
       var visible = true;
       try { visible = L.visible; } catch (e) {}
       if (ti) {
@@ -335,6 +381,7 @@ try {
         try { font = ti.font; } catch (e) {}
         try { sizePt = (ti.size && ti.size.as) ? ti.size.as("pt") : Number(ti.size); } catch (e) {}
         try { dir = (ti.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (e) {}
+        fillColor = fillColorNameFromTextItem(ti);
       }
       var b = null;
       try { b = L.bounds; } catch (e) {}
@@ -351,6 +398,7 @@ try {
         + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
         + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
         + ',"direction":' + jsonStr(dir)
+        + ',"fillColor":' + jsonStr(fillColor)
         + ',"visible":' + jsonBool(visible)
         + '}'
       );
@@ -4352,7 +4400,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             // PSD でも同じ位置に揃えればプレビューと完全一致する。
             var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
             var _contentsForCount = String(nl.contents || "");
-            var _lc = _contentsForCount.split(/\r?\n/).length;
+            var _lc = _contentsForCount.split(/\r\n|\r|\n/).length;
             if (_lc < 1) _lc = 1;
             var _thickSafetyEm = 0;
             var _thickBase = 1 + Math.max(0, _lc - 1) * _lpFactor;

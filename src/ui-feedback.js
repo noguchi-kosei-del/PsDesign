@@ -2370,7 +2370,7 @@ export function chooseReuseFontSizeMode() {
             </span>
             <div class="home-typeset-row-main">
               <span class="home-typeset-row-title">フォント・サイズを指定</span>
-              <span class="home-typeset-row-desc">指定したフォント・サイズで全テキストを統一します。位置は元のままです。</span>
+              <span class="home-typeset-row-desc">指定したフォント・サイズを基本に、OCR/背景判定の中丸・白フチ・サイズ感は反映します。</span>
             </div>
           </button>
         </div>
@@ -2427,8 +2427,8 @@ export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizeP
       titleEl.classList.remove("notify-title-success", "notify-title-warning", "notify-title-danger");
       titleEl.textContent = "統一するフォントとサイズ";
     }
-    msgEl.textContent = "再生成する全テキストに適用するフォントとサイズを選んでください。";
-    okBtn.textContent = "この設定で統一";
+    msgEl.textContent = "再生成するテキストの基本フォントと基本サイズを選んでください。中丸・白フチ・検出サイズは自動で反映されます。";
+    okBtn.textContent = "この設定で開始";
     cancelBtn.textContent = "キャンセル";
 
     const wrap = document.createElement("div");

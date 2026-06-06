@@ -1632,7 +1632,7 @@ export function layerRectForExisting(page, layer, edit) {
   const charSizesMap = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
   const charHorizontalScalesMap = existingCharHorizontalScales;
   const charVerticalScalesMap = existingCharVerticalScales;
-  const linesArrE = previewText.split(/\r?\n/);
+  const linesArrE = previewText.split(/\r\n|\r|\n/);
   const lineStartsE = getLineStartOffsets(previewText);
   let thickSum = 0;
   for (let i = 0; i < lineCount; i++) {
@@ -1708,7 +1708,7 @@ export function layerRectForNew(page, nl) {
   const charSizesMap = nl.charSizes ?? {};
   const charHorizontalScalesMap = nl.charHorizontalScales ?? {};
   const charVerticalScalesMap = nl.charVerticalScales ?? {};
-  const linesArrN = contents.split(/\r?\n/);
+  const linesArrN = contents.split(/\r\n|\r|\n/);
   const lineStartsN = getLineStartOffsets(contents);
   let thickSum = 0;
   for (let i = 0; i < lineCount; i++) {
@@ -2771,14 +2771,18 @@ export function cssFontFamily(psName) {
 
 function countLines(s) {
   if (!s) return 0;
-  return String(s).split(/\r?\n/).length;
+  return String(s).split(/\r\n|\r|\n/).length;
+}
+
+function countLineBreaks(s) {
+  return (String(s ?? "").match(/\r\n|\r|\n/g) ?? []).length;
 }
 
 // fullText の各行の絶対開始 index を返す（textarea selectionStart と同じインデックス系）。
 // 【v1.16.0】per-char サイズ/フォント機能で行内 i 番目の char の絶対 index を引くために使う。
 function getLineStartOffsets(fullText) {
   const offsets = [0];
-  const regex = /\r?\n/g;
+  const regex = /\r\n|\r|\n/g;
   let m;
   while ((m = regex.exec(fullText))) {
     offsets.push(m.index + m[0].length);
@@ -2953,7 +2957,7 @@ function measureMaxLineExtentEm(text, postScriptName, layerSizePt, charSizes, ch
   if (!text) return 0;
   if (!Number.isFinite(layerSizePt) || layerSizePt <= 0) return null;
   const fullText = String(text);
-  const linesArr = fullText.split(/\r?\n/);
+  const linesArr = fullText.split(/\r\n|\r|\n/);
   const lineStarts = getLineStartOffsets(fullText);
   let maxEm = 0;
   for (let li = 0; li < linesArr.length; li++) {
@@ -3029,7 +3033,7 @@ function lineHasPunctTsumeChar(s) {
 function estimateMaxLineExtentCells(text, punctTsumePct, tcyEnabled) {
   const tsumeMag = Number.isFinite(punctTsumePct) && punctTsumePct > 0 ? punctTsumePct / 100 : 0;
   let maxCells = 1;
-  for (const line of String(text ?? "").split(/\r?\n/)) {
+  for (const line of String(text ?? "").split(/\r\n|\r|\n/)) {
     let punctReduction = 0;
     if (tsumeMag > 0) {
       for (let i = 0; i < line.length; i++) {
@@ -3050,7 +3054,7 @@ function estimateMaxPositiveSpacingEm(text, trackingMille = 0, kerningMille = 0,
   const hasCharKernings = charKernings && Object.keys(charKernings).length > 0;
   const full = String(text ?? "");
   const lineStarts = getLineStartOffsets(full);
-  const lines = full.split(/\r?\n/);
+  const lines = full.split(/\r\n|\r|\n/);
   let max = 0;
   for (let li = 0; li < lines.length; li++) {
     const line = lines[li] ?? "";
@@ -3644,7 +3648,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const fullText = String(text ?? "");
   const trackingHits = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(fullText);
   const spacingHits = baseTracking !== 0 || baseKerning !== 0 || hasCharSpacings;
-  const tcyHits = isVertical && ((!!tcyOn && fullText.split(/\r?\n/).some((line) => findTcyPairs(line).length > 0)) || hasCharTateChuYokos);
+  const tcyHits = isVertical && ((!!tcyOn && fullText.split(/\r\n|\r|\n/).some((line) => findTcyPairs(line).length > 0)) || hasCharTateChuYokos);
   inner.classList.toggle("has-ruby", hasCharRubies);
   inner.classList.toggle("has-tcy", tcyHits);
   inner.classList.toggle("has-scale", hasCharScales);
@@ -3659,7 +3663,7 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
     inner.style.lineHeight = fallback;
     return;
   }
-  const lines = fullText.split(/\r?\n/);
+  const lines = fullText.split(/\r\n|\r|\n/);
   const lineStarts = getLineStartOffsets(fullText);
   inner.style.lineHeight = fallback;
   // Ruby alone must keep the newline text-node path. In vertical writing,
@@ -4142,8 +4146,8 @@ function endPan() {
 }
 
 // クリック位置がレイヤー矩形の中央になるよう top-left をオフセットする。
-export function centerTopLeft(page, { contents, sizePt, direction, leadingPct }, clickX, clickY) {
-  const r = layerRectForNew(page, { x: 0, y: 0, contents, sizePt, direction, leadingPct });
+export function centerTopLeft(page, { contents, sizePt, direction, leadingPct, ...rest }, clickX, clickY) {
+  const r = layerRectForNew(page, { x: 0, y: 0, contents, sizePt, direction, leadingPct, ...rest });
   return { x: clickX - r.width / 2, y: clickY - r.height / 2 };
 }
 
@@ -4197,7 +4201,7 @@ export function maybeApplyStickyFont() {
 const DBLCLICK_THRESHOLD_MS = 350;
 let lastLayerClickAt = 0;
 let lastLayerClickKey = null;
-const HOVER_SELECT_DELAY_MS = 700;
+const HOVER_SELECT_DELAY_MS = 400;
 let hoverSelectTimer = null;
 let hoverSelectToken = 0;
 
@@ -4304,7 +4308,7 @@ function handleRenderedRubyMouseDown(e, ctx, target) {
   rebuildLayerList();
 
   const lineIndex = lineIndexAtChar(contents, start);
-  const totalLines = (contents.match(/\n/g) ?? []).length + 1;
+  const totalLines = countLineBreaks(contents) + 1;
   setEditingContext({
     ...layerMeta,
     currentLineIndex: lineIndex,
@@ -4949,9 +4953,9 @@ function startContentEditableEdit(ctx, target, options = {}) {
 
   // 2. 開始時点のスナップショット（cancel 時の復元用）
   const startEdit = isExisting ? (getEdit(page.path, target.layer.id) ?? {}) : null;
-  const startContents = isExisting
+  const startContents = normalizedEditableText(isExisting
     ? (startEdit.contents ?? target.layer.text ?? "")
-    : (target.nl.contents ?? "");
+    : (target.nl.contents ?? ""));
   const editStrokeColor = isExisting
     ? (startEdit.strokeColor ?? target.layer.strokeColor ?? "none")
     : (target.nl.strokeColor ?? "none");
@@ -5144,7 +5148,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     };
     setLastInplaceSelection(rubySel);
     const lineIndex = lineIndexAtChar(lastContents, start);
-    const totalLines = (lastContents.match(/\n/g) ?? []).length + 1;
+    const totalLines = countLineBreaks(lastContents) + 1;
     setEditingContext({
       ...layerMeta,
       currentLineIndex: lineIndex,
@@ -5356,7 +5360,14 @@ function startContentEditableEdit(ctx, target, options = {}) {
   const countNewlinesBefore = (str, idx) => {
     let n = 0;
     const limit = Math.min(idx, str.length);
-    for (let i = 0; i < limit; i++) if (str[i] === "\n") n++;
+    for (let i = 0; i < limit; i++) {
+      if (str[i] === "\r") {
+        n++;
+        if (str[i + 1] === "\n" && i + 1 < limit) i++;
+      } else if (str[i] === "\n") {
+        n++;
+      }
+    }
     return n;
   };
 
@@ -5403,8 +5414,8 @@ function startContentEditableEdit(ctx, target, options = {}) {
     if (!map || typeof map !== "object") return {};
     const oldDeletedSegment = oldContents.slice(pos, pos + deleted);
     const newInsertedSegment = newContents.slice(pos, pos + inserted);
-    const oldNL = (oldDeletedSegment.match(/\n/g) ?? []).length;
-    const newNL = (newInsertedSegment.match(/\n/g) ?? []).length;
+    const oldNL = countLineBreaks(oldDeletedSegment);
+    const newNL = countLineBreaks(newInsertedSegment);
     const delta = newNL - oldNL;
     if (delta === 0) {
       const out = {};
@@ -5447,7 +5458,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     // が selection なしと判定し layer 全体変更に陥る現象があった。明示的なクリアは
     // finalize / ruby mousedown 経路だけに任せ、focus 移動による collapse は無視する。
     const lineIndex = countNewlinesBefore(lastContents, start);
-    const totalLines = (lastContents.match(/\n/g) ?? []).length + 1;
+    const totalLines = countLineBreaks(lastContents) + 1;
     setEditingContext({
       ...layerMeta,
       currentLineIndex: lineIndex,
@@ -5482,7 +5493,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     setEditingContext({
       ...layerMeta,
       currentLineIndex: 0,
-      totalLines: (startContents.match(/\n/g) ?? []).length + 1,
+      totalLines: countLineBreaks(startContents) + 1,
       contents: startContents,
       selectionStart: 0,
       selectionEnd: startContents.length,
