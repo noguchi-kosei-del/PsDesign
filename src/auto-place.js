@@ -156,9 +156,10 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
   const thickSafety = isVertical
     ? 0
     : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM_SCAN : TEXT_BBOX_THICK_SAFETY_EM_SCAN);
-  const longSafety = TEXT_BBOX_LONG_SAFETY_EM_SCAN;
-  const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE_SCAN;
-  const thick = Math.max(24, ptInPsdPx * (leadingFactor * lineCount + thickSafety));
+  const longSafety = isVertical ? 0 : TEXT_BBOX_LONG_SAFETY_EM_SCAN;
+  const longScale = isVertical ? 1 : TEXT_BBOX_HEURISTIC_LONG_SCALE_SCAN;
+  const thickBase = 1 + Math.max(0, lineCount - 1) * leadingFactor;
+  const thick = Math.max(24, ptInPsdPx * (thickBase + thickSafety));
   // 句読点ツメぶんを差し引いた最大行幅（em 単位）を計算
   const tsumePct = Number(getDefault("punctuationTsumePercent")) || 0;
   const tsumeMag = tsumePct > 0 ? tsumePct / 100 : 0;
@@ -172,8 +173,10 @@ function estimateLayerSize(psdPage, sizePt, contents, leadingPct, direction) {
     const effective = ln.length - punct * tsumeMag - tcyPairs;
     if (effective > maxEffectiveChars) maxEffectiveChars = effective;
   }
+  const hasContent = String(contents ?? "").length > 0;
+  const minLongPx = isVertical && hasContent ? ptInPsdPx : ptInPsdPx * 2;
   const longRaw = Math.max(
-    ptInPsdPx * 2,
+    minLongPx,
     ptInPsdPx * (longScale * maxEffectiveChars + longSafety),
   );
   const maxLong = isVertical ? psdPage.height * 0.95 : psdPage.width * 0.95;

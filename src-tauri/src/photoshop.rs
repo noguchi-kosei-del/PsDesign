@@ -1,6 +1,5 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -26,7 +25,6 @@ const PHOTOSHOP_HIDE_POLL_MS: u64 = 25;
 const SAVED_PSD_UNLOCK_TIMEOUT_MS: u64 = 5_000;
 const SAVED_PSD_UNLOCK_POLL_MS: u64 = 250;
 const PROGRESS_EVENT: &str = "photoshop_save_progress";
-static OPUS_OWNS_PHOTOSHOP_SESSION: AtomicBool = AtomicBool::new(false);
 
 #[derive(Clone, Serialize)]
 struct PhotoshopProgress {
@@ -63,12 +61,7 @@ pub fn apply_edits(
     let progress_path = progress_path_for(ts);
     let _ = std::fs::remove_file(&sentinel_path);
     let _ = std::fs::remove_file(&progress_path);
-    let photoshop_was_running = is_photoshop_process_running();
-    let quit_photoshop_after_finish =
-        OPUS_OWNS_PHOTOSHOP_SESSION.load(Ordering::SeqCst) || !photoshop_was_running;
-    if !photoshop_was_running {
-        OPUS_OWNS_PHOTOSHOP_SESSION.store(true, Ordering::SeqCst);
-    }
+    let quit_photoshop_after_finish = false;
 
     emit_progress(app, 0, payload.edits.len(), "Photoshop を起動しています...");
     let jsx = jsx_gen::generate_apply_script(
@@ -122,11 +115,7 @@ pub fn apply_edits(
             let _ = std::fs::remove_file(&sentinel_path);
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
-            if !quit_photoshop_after_finish {
-                hidden_windows.restore_hidden_photoshop_windows_minimized();
-            } else if wait_for_photoshop_exit(Duration::from_secs(8), Some(&mut hidden_windows)) {
-                OPUS_OWNS_PHOTOSHOP_SESSION.store(false, Ordering::SeqCst);
-            }
+            hidden_windows.restore_hidden_photoshop_windows_minimized();
             cleanup_adobe_crash_processors();
             let lock_warnings = release_saved_psd_locks(&saved_psd_paths);
             let trimmed = content.trim().to_string();
@@ -387,7 +376,6 @@ struct HiddenPhotoshopWindows {
 #[cfg(windows)]
 struct HiddenPhotoshopWindow {
     hwnd: isize,
-    restore_after: bool,
 }
 
 #[cfg(windows)]
@@ -398,11 +386,12 @@ impl HiddenPhotoshopWindows {
             unsafe {
                 winapi::um::winuser::ShowWindow(target.hwnd, winapi::um::winuser::SW_HIDE);
             }
+            // Anything hidden here must be restored later. Some Adobe modal
+            // windows belong to Photoshop's process but do not have Photoshop
+            // in their title/class, so filtering on restore can leave them
+            // invisible and make the single-instance Photoshop app look hung.
             if !self.windows.iter().any(|w| w.hwnd == key) {
-                self.windows.push(HiddenPhotoshopWindow {
-                    hwnd: key,
-                    restore_after: target.restore_after,
-                });
+                self.windows.push(HiddenPhotoshopWindow { hwnd: key });
             }
         }
     }
@@ -410,9 +399,6 @@ impl HiddenPhotoshopWindows {
     #[allow(dead_code)]
     fn restore_hidden_photoshop_windows(&mut self) {
         for window in self.windows.drain(..) {
-            if !window.restore_after {
-                continue;
-            }
             let hwnd = window.hwnd as winapi::shared::windef::HWND;
             unsafe {
                 winapi::um::winuser::ShowWindow(hwnd, winapi::um::winuser::SW_RESTORE);
@@ -424,9 +410,6 @@ impl HiddenPhotoshopWindows {
     #[allow(dead_code)]
     fn restore_hidden_photoshop_windows_noactivate(&mut self) {
         for window in self.windows.drain(..) {
-            if !window.restore_after {
-                continue;
-            }
             let hwnd = window.hwnd as winapi::shared::windef::HWND;
             unsafe {
                 // SW_SHOWNA (8): 現在のサイズ・位置で表示するがアクティブ化しない。
@@ -439,9 +422,6 @@ impl HiddenPhotoshopWindows {
     // ユーザーがタスクバーからクリックすれば通常通り使える（完全非表示にはしない）。
     fn restore_hidden_photoshop_windows_minimized(&mut self) {
         for window in self.windows.drain(..) {
-            if !window.restore_after {
-                continue;
-            }
             let hwnd = window.hwnd as winapi::shared::windef::HWND;
             unsafe {
                 // SW_SHOWMINNOACTIVE (7): 最小化状態で表示するがアクティブ化しない。
@@ -561,11 +541,6 @@ fn start_scratch_dialog_auto_dismiss() {
 fn start_scratch_dialog_auto_dismiss() {}
 
 #[cfg(windows)]
-fn is_photoshop_process_running() -> bool {
-    !photoshop_related_process_ids().is_empty()
-}
-
-#[cfg(windows)]
 fn photoshop_related_process_ids() -> Vec<u32> {
     use std::mem;
     use winapi::um::handleapi::{CloseHandle, INVALID_HANDLE_VALUE};
@@ -621,28 +596,6 @@ fn photoshop_related_process_ids() -> Vec<u32> {
         }
         targets
     }
-}
-
-#[cfg(not(windows))]
-fn is_photoshop_process_running() -> bool {
-    false
-}
-
-fn wait_for_photoshop_exit(
-    timeout: Duration,
-    mut hidden_windows: Option<&mut HiddenPhotoshopWindows>,
-) -> bool {
-    let deadline = Instant::now() + timeout;
-    while Instant::now() < deadline {
-        if let Some(windows) = hidden_windows.as_deref_mut() {
-            windows.hide_visible_photoshop_windows();
-        }
-        if !is_photoshop_process_running() {
-            return true;
-        }
-        std::thread::sleep(Duration::from_millis(PHOTOSHOP_HIDE_POLL_MS));
-    }
-    !is_photoshop_process_running()
 }
 
 // 【v2.x】常時バックグラウンド監視。アプリ起動時に一度だけ呼ぶ。Photoshop が
@@ -830,7 +783,6 @@ fn dismiss_known_photoshop_dialogs() -> usize {
 #[cfg(windows)]
 struct PhotoshopWindowTarget {
     hwnd: winapi::shared::windef::HWND,
-    restore_after: bool,
 }
 
 #[cfg(windows)]
@@ -859,10 +811,7 @@ fn find_visible_photoshop_windows() -> Vec<PhotoshopWindowTarget> {
         GetWindowThreadProcessId(hwnd, &mut pid);
         let is_target_process = pid != 0 && state.target_pids.contains(&pid);
         if is_target_process || class_name.contains("photoshop") || title.contains("photoshop") {
-            state.windows.push(PhotoshopWindowTarget {
-                hwnd,
-                restore_after: class_name.contains("photoshop") || title.contains("photoshop"),
-            });
+            state.windows.push(PhotoshopWindowTarget { hwnd });
         }
         1
     }

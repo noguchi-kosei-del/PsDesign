@@ -60,7 +60,9 @@ const resizeObservers = new Set();
 let toolListenerBound = false;
 const RUBY_TOWARD_PARENT_RATIO = 1.60;
 const TEXT_BBOX_THICK_SAFETY_EM = 0;
-const TEXT_BBOX_VERTICAL_THICK_SAFETY_EM = 0.22;
+// Keep vertical thick safety in sync with auto-place.js estimateLayerSize()
+// and src-tauri/src/jsx_gen.rs _thickSafetyEm. See RDD.md REQ-G4.5/G10.7.
+const TEXT_BBOX_VERTICAL_THICK_SAFETY_EM = 0;
 const TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM = 0.4;
 const TEXT_BBOX_LONG_SAFETY_EM = 0.4;
 const TEXT_BBOX_HEURISTIC_LONG_SCALE = 1.05;
@@ -1624,7 +1626,7 @@ export function layerRectForExisting(page, layer, edit) {
     ? TEXT_BBOX_VERTICAL_THICK_SAFETY_EM
     : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM);
   const LONG_SAFETY = TEXT_BBOX_LONG_SAFETY_EM;
-  const LONG_SCALE = TEXT_BBOX_HEURISTIC_LONG_SCALE;
+  const LONG_SCALE = isVertical ? 1 : TEXT_BBOX_HEURISTIC_LONG_SCALE;
   // 【v1.16.0】行ごとに leading override + per-char サイズ override を反映して厚みを合算。
   // 行 N の override = 行 N-1 と行 N の隙間（marginBlockStart）。行 0 は「前の行」がないので無視。
   // per-char サイズ override がある行はその行の最大文字サイズで line-height をスケール。
@@ -1738,13 +1740,15 @@ export function layerRectForNew(page, nl) {
   const thickSafety = nl.reuseTightThick === true
     ? 0
     : (isVertical ? TEXT_BBOX_VERTICAL_THICK_SAFETY_EM : (lineCount > 1 ? TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM : TEXT_BBOX_THICK_SAFETY_EM));
-  const longSafety = TEXT_BBOX_LONG_SAFETY_EM;
-  const longScale = TEXT_BBOX_HEURISTIC_LONG_SCALE;
+  const longSafety = isVertical ? 0 : TEXT_BBOX_LONG_SAFETY_EM;
+  const longScale = isVertical ? 1 : TEXT_BBOX_HEURISTIC_LONG_SCALE;
   const minThick = nl.reuseTightThick === true ? Math.max(1, ptInPsdPx) : 24;
   const thick = Math.max(minThick, ptInPsdPx * (thickSum + thickSafety));
   const heuristicLong = (longScale * estimateMaxLineExtentCells(contents, punctTsumePctNew, tcyEnabledNew)) + spacingEmNew;
   const longChars = Number.isFinite(measuredEm) && measuredEm > heuristicLong ? measuredEm : heuristicLong;
-  const longRaw = Math.max(ptInPsdPx * 2, ptInPsdPx * (longChars + longSafety));
+  const hasContent = String(contents ?? "").length > 0;
+  const minLongPx = isVertical && hasContent ? ptInPsdPx : ptInPsdPx * 2;
+  const longRaw = Math.max(minLongPx, ptInPsdPx * (longChars + longSafety));
   const maxLong = isVertical ? page.height * 0.95 : page.width * 0.95;
   const long = Math.min(longRaw, maxLong);
   const sourceBounds = reuseSourceBoundsForNewLayer(nl, sizePt);
@@ -2108,6 +2112,7 @@ function renderOverlay(ctx) {
   // もし内容が box を超えているなら box を伸ばす（フォント/per-char サイズ変更で
   // measureText の予測がズレた際の最終フォールバック）。
   scheduleBoxAutoFit(ctx);
+  scheduleVerticalSingleLineAnchor(ctx);
 
   // 【v1.x.0】複数選択時のバッジ重なり解決。近接する選択フレームの青バッジ同士が
   // 縦に重なるケースがあるため、後で重なりを検出して該当バッジを上向き反転する。
@@ -2731,6 +2736,50 @@ function quoteFontFamily(name) {
   }
   const escaped = String(name).replace(/["\\]/g, "\\$&");
   return `"${escaped}"`;
+}
+
+// Align Chromium's single-column vertical preview with Photoshop's
+// top-right text bounds without changing saved PSD coordinates.
+function primaryTextPreviewInner(box) {
+  return box?.querySelector?.(".new-layer-text:not(.stroke-preview-underlay), .existing-layer-text:not(.stroke-preview-underlay)") ?? null;
+}
+
+function setTextPreviewTransform(box, dxPx) {
+  const value = Math.abs(dxPx) > 0.25 ? `translateX(${dxPx.toFixed(3)}px)` : "";
+  for (const inner of box.querySelectorAll(".new-layer-text, .existing-layer-text")) {
+    inner.style.transformOrigin = value ? "top right" : "";
+    inner.style.transform = value;
+  }
+}
+
+function resetTextPreviewTransform(box) {
+  for (const inner of box.querySelectorAll(".new-layer-text, .existing-layer-text")) {
+    inner.style.transformOrigin = "";
+    inner.style.transform = "";
+  }
+}
+
+function scheduleVerticalSingleLineAnchor(ctx) {
+  if (typeof requestAnimationFrame !== "function") return;
+  if (ctx._verticalSingleLineAnchorScheduled) return;
+  ctx._verticalSingleLineAnchorScheduled = true;
+  requestAnimationFrame(() => {
+    ctx._verticalSingleLineAnchorScheduled = false;
+    if (!ctx.overlay) return;
+    for (const box of ctx.overlay.querySelectorAll('.layer-box[data-direction="vertical"]')) {
+      if (box.classList.contains("editing")) continue;
+      if (box.classList.contains("layer-box-reuse-tight")) continue;
+      if (box.style.transform && box.style.transform !== "none") continue;
+      const inner = primaryTextPreviewInner(box);
+      if (!inner) continue;
+      resetTextPreviewTransform(box);
+      if (countLines(inner.textContent ?? "") !== 1) continue;
+      const contentRect = measureInnerContentRect(inner);
+      const boxRect = box.getBoundingClientRect();
+      if (!contentRect || !boxRect || boxRect.width <= 0 || boxRect.height <= 0) continue;
+      setTextPreviewTransform(box, boxRect.right - contentRect.right);
+    }
+  });
 }
 
 function reuseSourceBoundsForNewLayer(nl, sizePt) {
@@ -3640,12 +3689,13 @@ function renderInnerText(inner, text, defaultLeadingPct, lineLeadings, dashMille
   const hasCharRubies = charRubies && Object.keys(charRubies).length > 0;
   // 【v1.26.0】親文字の `overflow: hidden`（new-layer-text / existing-layer-text 既定）が <ruby> の
   // <rt> 部分を切り取ってしまうため、ruby ある時は `.has-ruby` クラスを付けて overflow: visible に。
-  const fallback = String((defaultLeadingPct ?? 125) / 100);
+  const fullText = String(text ?? "");
+  const lineCount = Math.max(1, countLines(fullText));
+  const fallback = String(isVertical && lineCount <= 1 ? 1 : ((defaultLeadingPct ?? 125) / 100));
   const dashTrack = Number.isFinite(Number(dashMille)) ? Number(dashMille) : 0;
   const tildeTrack = Number.isFinite(Number(tildeMille)) ? Number(tildeMille) : 0;
   const baseTracking = Number.isFinite(Number(trackingMille)) ? Number(trackingMille) : 0;
   const baseKerning = Number.isFinite(Number(kerningMille)) ? Number(kerningMille) : 0;
-  const fullText = String(text ?? "");
   const trackingHits = (dashTrack !== 0 || tildeTrack !== 0) && REPEATED_TARGET_REGEX.test(fullText);
   const spacingHits = baseTracking !== 0 || baseKerning !== 0 || hasCharSpacings;
   const tcyHits = isVertical && ((!!tcyOn && fullText.split(/\r\n|\r|\n/).some((line) => findTcyPairs(line).length > 0)) || hasCharTateChuYokos);
@@ -4946,6 +4996,9 @@ function startContentEditableEdit(ctx, target, options = {}) {
   if (!box) return null;
   const inner = box.querySelector(".existing-layer-text:not(.stroke-preview-underlay), .new-layer-text:not(.stroke-preview-underlay)");
   if (!inner) return null;
+  // Preview-only vertical anchoring uses a transform on single-column text.
+  // Clear it before contenteditable starts so caret geometry is not shifted.
+  resetTextPreviewTransform(box);
   for (const underlay of Array.from(box.querySelectorAll(".stroke-preview-underlay"))) {
     underlay.remove();
   }

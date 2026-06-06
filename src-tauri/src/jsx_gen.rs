@@ -1102,11 +1102,6 @@ function purgeOpusPhotoshopCaches() {
 }
 function finishOpusPhotoshopSession() {
   try { purgeOpusPhotoshopCaches(); } catch (ePurge) {}
-  if (typeof OPUS_QUIT_PHOTOSHOP_AFTER_FINISH !== "undefined" && OPUS_QUIT_PHOTOSHOP_AFTER_FINISH) {
-    try { app.quit(); } catch (eQuit) {
-      addWarning("Photoshop quit failed: " + (eQuit && eQuit.toString ? eQuit.toString() : String(eQuit)));
-    }
-  }
 }
 
 // Photoshop バージョン判定。CS6 (v13) 未満は string ID の一部が未登録の可能性が
@@ -1475,7 +1470,7 @@ function applyLineLeadings(layer, lineLeadings, contents, fontSizePt) {
 
   var setDesc = new ActionDescriptor();
   setDesc.putReference(sID("null"), layerRef);
-  setDesc.putObject(sID("to"), sID("textKey"), newTextKey);
+  setDesc.putObject(sID("to"), sID("textLayer"), newTextKey);
   executeAction(sID("set"), setDesc, DialogModes.NO);
 }
 
@@ -4365,7 +4360,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         // で 1 列目（最右列）が box.right から始まるため、
         //   - 横書き: 配置後の bounds.top-left を (nl.x, nl.y) に揃える。
         //   - 縦書き: bounds.top-right を (nl.x + thick, nl.y) に揃える。
-        //     ここで thick = ptInPsdPx * leadingFactor * lineCount は編集側 layerRectForNew と同じ式。
+        //     ここで thick = ptInPsdPx * (1 + (lineCount - 1) * leadingFactor) は編集側 layerRectForNew と同じ式。
         try {
           var _b = layerRef.bounds;
           var _actualLeft  = _b[0].as("px");

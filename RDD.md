@@ -214,7 +214,7 @@
   `createRubyLayer` の uiOffset（measureAllRubyOffsetsSync 由来）を優先する。新規レイヤーの縦書き
   位置はアンカー差を補正する。saveAs パスは `\` を `/` に正規化する。
   - 新規レイヤー縦書きの位置補正（`nl.direction === "vertical"`）は `bounds.top-right` を
-    `nl.x + _thickCanvas` に揃える。`_thickCanvas = _ptInPx × (leadingFactor × lineCount + _thickSafetyEm)`
+    `nl.x + _thickCanvas` に揃える。`_thickCanvas = _ptInPx × (1 + (lineCount - 1) × leadingFactor + _thickSafetyEm)`
     で、この **`_thickSafetyEm` は JS 側 bbox（`layerRectForNew` の thickSafety / REQ-G4.5）と
     必ず一致**させる（縦書き = **0**）。`layerRectForNew` の thick から safety を抜いたのに JSX の
     `_thickSafetyEm` を 0.4 のまま残すと、UI（safety 無し）と PSD（safety 有り）で縦書きテキスト
@@ -228,7 +228,7 @@
   sizePt / direction / leadingPct / fillColor / strokeColor / strokeWidthPx / rotation /
   syntheticBold / syntheticItalic / lineLeadings / charSizes / charFonts / charBolds /
   charItalics / charHorizontalScales / charVerticalScales / charTrackings / charKernings /
-  charTateChuYokos / charFillColors / charRubies / sourceTxtRef）と、グローバル設定
+  charTateChuYokos / charFillColors / charRubies）と、グローバル設定
   （dashTrackingMille / tildeTrackingMille / tateChuYokoEnabled / symbolFontReplaceEnabled /
   symbolFontPostScriptName / punctuationTsumePercent / rubyLeadingPct / rubyPhotoshopOffsetEm /
   rubyPhotoshopBiasPx）が、Rust `EditPayload` / `LayerEdit` / `NewLayer` の serde フィールドと
@@ -241,6 +241,14 @@
 - **REQ-G11.3** `RubyEntry` の `offsetX` / `offsetY` / `absX` / `absY` は Option（任意）。
   measureAllRubyOffsetsSync で埋めた値が serde で渡ること。
   - 確認: ルビ位置が PSD に反映されること（REQ-G6.1 / G10.7 と併せて手動）。
+- **REQ-G11.4** `sourceTxtRef` / `autoFontSwitched` / `autoFontSwitchBucket` /
+  `lowExtractTextMatch` / `extractMatchScore` / `sizePtBasis` / `reuseTightThick` /
+  `reuseSrcLeft` / `reuseSrcTop` / `reuseSrcRight` / `reuseSrcBottom` /
+  `reuseSourceContents` / `reuseSourceSizePt` は UI 側の配置・表示制御メタデータ。
+  現状 Rust `LayerEdit` / `NewLayer` には定義せず、`deny_unknown_fields` を付けていない
+  serde の unknown field drop に任せる。将来 Photoshop 保存で使う場合は
+  `exportEdits()` と Rust struct に同時追加する。
+  - 確認: UI 専用フィールドを増やす場合は、この例外リストに追記するか、REQ-G11.1 に従って Rust 側へ追加する。
 
 ### G12. 写植再利用モード — `src/services/reuse.js` / `src/psd-loader.js` / `src-tauri/src/jsx_gen.rs`（v2.3.0）
 

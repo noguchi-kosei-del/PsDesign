@@ -1,5 +1,27 @@
 # PsDesign
 
+## 2026-06-06 変更メモ: v2.3.8 リリース
+
+v2.3.8 では、縦書きテキストの表示/PSD出力位置の再同期、Photoshop保存後にPhotoshopが見えないまま残る問題、per-line行間のPSD反映漏れを修正した。
+
+- 縦書きテキストの bbox 厚み方向 safety を `canvas-tools.js` / `auto-place.js` / `jsx_gen.rs` で 0 に再統一した。v2.3.6 で `canvas-tools.js` 側だけ 0.22em に戻っていたため、アプリ表示と PSD 出力で右端基準がずれ、PSD上では左へ寄る原因になっていた。
+- 新規縦書きレイヤーの厚み式を `1 + (lineCount - 1) * leadingFactor` に揃え、1行目に余分な行送りを掛けないようにした。自動配置の `estimateLayerSize` と JSX 側の `_thickCanvas` も同じ式にした。
+- 縦書き1行プレビューで Chromium の実描画 bounds と Photoshop の top-right bounds がずれやすいケースに対し、保存座標は変えずに表示だけ右端へ寄せる補正を追加した。編集開始時にはこの表示補正 transform を解除し、contenteditable のカーソル位置がずれないようにした。
+- 保存完了時の `app.quit()` を撤去し、Photoshop を強制終了しない方針へ戻した。これにより、Creative Cloud / フォント / 更新系モーダルが hidden 状態のまま Photoshop の single-instance 起動を塞ぐ経路を断った。
+- 保存処理中に `SW_HIDE` した Photoshop 関連ウィンドウは、タイトルや class 名に `Photoshop` が含まれない Adobe モーダルも含め、成功・エラー・タイムアウト時に必ず最小化復元するようにした。
+- per-line 行間の Action Manager 書き戻しで、`applyLineLeadings` だけ `sID("textKey")` を使っていた箇所を `sID("textLayer")` に修正した。Photoshop バージョン依存で textStyleRange が破棄され、行間 override がPSDへ反映されないケースを防ぐ。
+- `RDD.md` に payload パリティの例外として UI 専用メタデータを記録し、縦書き `_thickCanvas` の式も現在の実装に合わせて更新した。
+
+### 検証
+
+- `npm run check`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `git diff --check`
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.3.8` に更新。
+
 ## 2026-06-06 変更メモ: v2.3.7 リリース
 
 v2.3.7 では、原稿テキスト同期、テストモードの通常画面再現、リサイクル写植の OCR/背景判定反映、細かな入力 UI を調整した。
