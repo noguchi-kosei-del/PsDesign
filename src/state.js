@@ -135,7 +135,7 @@ const _normActivePane = (v) => (v === "pdf" ? "pdf" : "psd");
 // "psdOnly" モードは廃止。4 モード ("parallel" | "proofread" | "editor" | "spreadEdit") のみ受け入れ、
 // それ以外（旧 "psdOnly" 等）は "parallel" にフォールバックする。
 const _normParallelViewMode = (v) =>
-  v === "spreadEdit" ? "spreadEdit" : v === "editor" ? "editor" : v === "proofread" ? "proofread" : v === "fontBook" ? "fontBook" : "parallel";
+  v === "spreadEdit" ? "spreadEdit" : v === "editor" ? "editor" : v === "proofread" ? "proofread" : v === "fontBook" ? "fontBook" : v === "imageViewer" ? "imageViewer" : "parallel";
 // editor モード時の左側ペイン表示。"proofread" = 校正パネル / "pdf" = 見本画像（spreads-pdf-area）。
 // 校正パネルのヘッダー左端のセグメントトグルで切替、editor モード以外では参照されない。
 const _normEditorLeftPaneMode = (v) => (v === "pdf" ? "pdf" : "proofread");

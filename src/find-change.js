@@ -236,19 +236,20 @@ function createModal() {
   modal.innerHTML = `
     <div class="find-change-card" role="dialog" aria-modal="true" aria-labelledby="find-change-title">
       <div class="find-change-header">
-        <div id="find-change-title" class="find-change-title">検索・置換 / 全変換</div>
+        <div id="find-change-title" class="find-change-title">検索・置換 / 文字変換 / フォント変換</div>
       </div>
       <div class="find-change-tabs" role="tablist">
         <button id="find-change-tab-replace" class="find-change-tab active" data-tab="replace" type="button" role="tab" aria-selected="true">検索・置換</button>
-        <button id="find-change-tab-convert" class="find-change-tab" data-tab="convert" type="button" role="tab" aria-selected="false">全変換</button>
+        <button id="find-change-tab-convert" class="find-change-tab" data-tab="convert" type="button" role="tab" aria-selected="false">文字変換</button>
+        <button id="find-change-tab-font" class="find-change-tab" data-tab="font" type="button" role="tab" aria-selected="false">フォント変換</button>
       </div>
       <div class="find-change-body">
         <!-- 共有: 検索文字 + 大文字/小文字区別 -->
-        <label class="find-change-field">
+        <label id="find-change-query-field" class="find-change-field">
           <span>検索文字</span>
           <input id="find-change-query" class="find-change-input" type="text" autocomplete="off" spellcheck="false">
         </label>
-        <label class="find-change-checkrow">
+        <label id="find-change-case-row" class="find-change-checkrow">
           <input id="find-change-case" type="checkbox">
           <span>大文字 / 小文字を区別</span>
         </label>
@@ -263,8 +264,14 @@ function createModal() {
             <input id="find-change-replace" class="find-change-input" type="text" autocomplete="off" spellcheck="false">
           </label>
         </div>
-        <!-- 全変換タブ専用 -->
+        <!-- 文字変換 / フォント変換タブ専用 -->
         <div class="find-change-tab-panel" data-tab-panel="convert" hidden>
+          <div id="find-change-source-font-row" class="find-change-grid" hidden>
+            <label class="find-change-checkrow">
+              <span>変換元フォント</span>
+            </label>
+            <select id="find-change-source-font" class="find-change-input"></select>
+          </div>
           <div class="find-change-grid">
             <label class="find-change-checkrow">
               <input id="find-change-size-enabled" type="checkbox">
@@ -415,6 +422,34 @@ function populateFontSelect() {
     fontComboItems.push({ el: item, font });
   }
   if (current) syncFindChangeFontDisplay();
+}
+
+function populateSourceFontSelect() {
+  const select = $("find-change-source-font");
+  if (!select) return;
+  const current = select.value || getCurrentFont() || "";
+  select.textContent = "";
+  const empty = document.createElement("option");
+  empty.value = "";
+  empty.textContent = "（変換元フォントを選択）";
+  select.appendChild(empty);
+  const fonts = [...getFonts()].sort((a, b) => {
+    const an = (a.name || a.postScriptName || "").toLocaleLowerCase();
+    const bn = (b.name || b.postScriptName || "").toLocaleLowerCase();
+    return an.localeCompare(bn);
+  });
+  for (const font of fonts) {
+    if (!font?.postScriptName) continue;
+    const option = document.createElement("option");
+    option.value = font.postScriptName;
+    option.textContent = font.name && font.name !== font.postScriptName
+      ? `${font.name} (${font.postScriptName})`
+      : (font.name || font.postScriptName);
+    select.appendChild(option);
+  }
+  if (current && [...select.options].some((opt) => opt.value === current)) {
+    select.value = current;
+  }
 }
 
 function fontDisplayName(font) {
@@ -578,12 +613,12 @@ function syncModalStyleDefaults() {
 
 function readOptions() {
   const query = $("find-change-query")?.value ?? "";
-  // 検索置換タブのとき: replace 関連のみ動作、全変換項目 (size/font/style) は無視。
-  // 全変換タブのとき:   replace を無効化、それ以外をスタイル変換として送る。
+  // 検索置換タブのとき: replace 関連のみ動作、文字変換項目 (size/font/style) は無視。
+  // 文字変換/フォント変換タブのとき: replace を無効化、それ以外をスタイル変換として送る。
   const activeTab = getFindChangeActiveTab();
   const replaceEnabled = activeTab === "replace"
     && $("find-change-replace-enabled")?.checked === true;
-  const styleAllowed = activeTab === "convert";
+  const styleAllowed = activeTab === "convert" || activeTab === "font";
   const sizeEnabled = styleAllowed && $("find-change-size-enabled")?.checked === true;
   const fontEnabled = styleAllowed && $("find-change-font-enabled")?.checked === true;
   const sizePt = normalizeSizePt($("find-change-size")?.value);
@@ -600,6 +635,7 @@ function readOptions() {
     caseSensitive: $("find-change-case")?.checked === true,
     replaceEnabled,
     replacement: $("find-change-replace")?.value ?? "",
+    sourceFontPostScriptName: $("find-change-source-font")?.value ?? "",
     sizeEnabled,
     sizePt,
     fontEnabled,
@@ -629,6 +665,25 @@ function countMatchesAcrossLayers(needle, caseSensitive) {
 
 function wholeTextRange(text) {
   return [{ start: 0, end: String(text ?? "").length }];
+}
+
+function findFontStyleRanges(text, charFonts, defaultFont, sourceFont) {
+  if (!sourceFont) return [];
+  const len = String(text ?? "").length;
+  const fonts = charFonts && typeof charFonts === "object" ? charFonts : {};
+  const ranges = [];
+  let start = null;
+  for (let i = 0; i < len; i++) {
+    const font = fonts[String(i)] ?? defaultFont ?? "";
+    if (font === sourceFont) {
+      if (start == null) start = i;
+    } else if (start != null) {
+      ranges.push({ start, end: i });
+      start = null;
+    }
+  }
+  if (start != null) ranges.push({ start, end: len });
+  return ranges;
 }
 
 function findFallbackNeedle(options) {
@@ -752,7 +807,8 @@ function hasDialogStyleEdits(style) {
 
 function applyFindChange(options) {
   const applyWholeLayer = options.activeTab === "convert" && !options.query;
-  if (!options.query && !applyWholeLayer) {
+  const applyByFont = options.activeTab === "font";
+  if (!options.query && !applyWholeLayer && !applyByFont) {
     toast("検索文字を入力してください", { kind: "info", duration: 2200 });
     return;
   }
@@ -766,6 +822,10 @@ function applyFindChange(options) {
   }
   if (options.fontEnabled && !options.fontPostScriptName) {
     toast("変換先フォントを選択してください", { kind: "warning", duration: 2600 });
+    return;
+  }
+  if (applyByFont && !options.sourceFontPostScriptName) {
+    toast("変換元フォントを選択してください", { kind: "warning", duration: 2600 });
     return;
   }
   const s = options.dialogStyle;
@@ -786,8 +846,8 @@ function applyFindChange(options) {
     return;
   }
 
-  const queryMatchCount = applyWholeLayer ? 1 : countMatchesAcrossLayers(options.query, options.caseSensitive);
-  const fallback = !applyWholeLayer && queryMatchCount === 0 ? findFallbackNeedle(options) : null;
+  const queryMatchCount = applyWholeLayer || applyByFont ? 1 : countMatchesAcrossLayers(options.query, options.caseSensitive);
+  const fallback = !applyWholeLayer && !applyByFont && queryMatchCount === 0 ? findFallbackNeedle(options) : null;
   const activeQuery = fallback?.needle ?? options.query;
   const shouldReplaceFallback = !!fallback
     && options.replaceEnabled
@@ -804,26 +864,30 @@ function applyFindChange(options) {
     for (const page of getPages()) {
       for (const layer of page.textLayers ?? []) {
         const text = layerText(page, layer);
-        const matches = applyWholeLayer ? wholeTextRange(text) : findLiteralMatches(text, activeQuery, options.caseSensitive);
-        if (matches.length === 0) continue;
         const edit = getEdit(page.path, layer.id) ?? {};
+        const maps = {
+          charSizes: edit.charSizes ?? layer.charSizes,
+          charFonts: edit.charFonts ?? layer.charFonts,
+          charBolds: edit.charBolds ?? layer.charBolds,
+          charItalics: edit.charItalics ?? layer.charItalics,
+          charRubies: edit.charRubies ?? layer.charRubies,
+          charHorizontalScales: edit.charHorizontalScales ?? layer.charHorizontalScales,
+          charVerticalScales: edit.charVerticalScales ?? layer.charVerticalScales,
+          charTrackings: edit.charTrackings ?? layer.charTrackings,
+          charKernings: edit.charKernings ?? layer.charKernings,
+          charTateChuYokos: edit.charTateChuYokos ?? layer.charTateChuYokos,
+          charFillColors: edit.charFillColors ?? layer.charFillColors,
+        };
+        const defaultFont = edit.fontPostScriptName ?? layer.font ?? "";
+        const matches = applyByFont
+          ? findFontStyleRanges(text, maps.charFonts, defaultFont, options.sourceFontPostScriptName)
+          : applyWholeLayer ? wholeTextRange(text) : findLiteralMatches(text, activeQuery, options.caseSensitive);
+        if (matches.length === 0) continue;
         const result = transformLayer({
           ...transformOptions,
           text,
           matches,
-          maps: {
-            charSizes: edit.charSizes ?? layer.charSizes,
-            charFonts: edit.charFonts ?? layer.charFonts,
-            charBolds: edit.charBolds ?? layer.charBolds,
-            charItalics: edit.charItalics ?? layer.charItalics,
-            charRubies: edit.charRubies ?? layer.charRubies,
-            charHorizontalScales: edit.charHorizontalScales ?? layer.charHorizontalScales,
-            charVerticalScales: edit.charVerticalScales ?? layer.charVerticalScales,
-            charTrackings: edit.charTrackings ?? layer.charTrackings,
-            charKernings: edit.charKernings ?? layer.charKernings,
-            charTateChuYokos: edit.charTateChuYokos ?? layer.charTateChuYokos,
-            charFillColors: edit.charFillColors ?? layer.charFillColors,
-          },
+          maps,
         });
         if (Object.keys(result.changes).length === 0) continue;
         setEdit(page.path, layer.id, result.changes);
@@ -834,25 +898,29 @@ function applyFindChange(options) {
 
       for (const nl of getNewLayersForPsd(page.path)) {
         const text = String(nl.contents ?? "");
-        const matches = applyWholeLayer ? wholeTextRange(text) : findLiteralMatches(text, activeQuery, options.caseSensitive);
+        const maps = {
+          charSizes: nl.charSizes,
+          charFonts: nl.charFonts,
+          charBolds: nl.charBolds,
+          charItalics: nl.charItalics,
+          charRubies: nl.charRubies,
+          charHorizontalScales: nl.charHorizontalScales,
+          charVerticalScales: nl.charVerticalScales,
+          charTrackings: nl.charTrackings,
+          charKernings: nl.charKernings,
+          charTateChuYokos: nl.charTateChuYokos,
+          charFillColors: nl.charFillColors,
+        };
+        const defaultFont = nl.fontPostScriptName ?? "";
+        const matches = applyByFont
+          ? findFontStyleRanges(text, maps.charFonts, defaultFont, options.sourceFontPostScriptName)
+          : applyWholeLayer ? wholeTextRange(text) : findLiteralMatches(text, activeQuery, options.caseSensitive);
         if (matches.length === 0) continue;
         const result = transformLayer({
           ...transformOptions,
           text,
           matches,
-          maps: {
-            charSizes: nl.charSizes,
-            charFonts: nl.charFonts,
-            charBolds: nl.charBolds,
-            charItalics: nl.charItalics,
-            charRubies: nl.charRubies,
-            charHorizontalScales: nl.charHorizontalScales,
-            charVerticalScales: nl.charVerticalScales,
-            charTrackings: nl.charTrackings,
-            charKernings: nl.charKernings,
-            charTateChuYokos: nl.charTateChuYokos,
-            charFillColors: nl.charFillColors,
-          },
+          maps,
         });
         if (Object.keys(result.changes).length === 0) continue;
         if (options.sizeEnabled || options.fontEnabled) {
@@ -880,12 +948,14 @@ function applyFindChange(options) {
     lastReplacementBySearch.set(searchMemoryKey(options.query, options.caseSensitive), options.replacement);
   }
   closeModal();
-  toast(`${layerCount} レイヤー / ${matchCount} 箇所を全変換しました`, { kind: "success", duration: 2600 });
+  const actionLabel = options.activeTab === "replace" ? "置換" : options.activeTab === "font" ? "フォント変換" : "文字変換";
+  toast(`${layerCount} レイヤー / ${matchCount} 箇所を${actionLabel}しました`, { kind: "success", duration: 2600 });
 }
 
 function openModal() {
   const modal = createModal();
   populateFontSelect();
+  populateSourceFontSelect();
   if (!modalDefaultsSynced) {
     syncModalStyleDefaults();
     modalDefaultsSynced = true;
@@ -902,25 +972,42 @@ function closeModal() {
 }
 
 function getFindChangeActiveTab() {
+  if ($("find-change-tab-font")?.classList.contains("active")) return "font";
   return $("find-change-tab-replace")?.classList.contains("active") ? "replace" : "convert";
 }
 
 function setFindChangeActiveTab(tab) {
   const replaceTab = $("find-change-tab-replace");
   const convertTab = $("find-change-tab-convert");
-  if (!replaceTab || !convertTab) return;
-  const active = tab === "convert" ? "convert" : "replace";
+  const fontTab = $("find-change-tab-font");
+  if (!replaceTab || !convertTab || !fontTab) return;
+  const active = tab === "font" ? "font" : tab === "convert" ? "convert" : "replace";
   replaceTab.classList.toggle("active", active === "replace");
   convertTab.classList.toggle("active", active === "convert");
+  fontTab.classList.toggle("active", active === "font");
   replaceTab.setAttribute("aria-selected", active === "replace" ? "true" : "false");
   convertTab.setAttribute("aria-selected", active === "convert" ? "true" : "false");
+  fontTab.setAttribute("aria-selected", active === "font" ? "true" : "false");
   // パネル切替
   document.querySelectorAll(".find-change-tab-panel").forEach((p) => {
-    p.hidden = p.getAttribute("data-tab-panel") !== active;
+    const panel = p.getAttribute("data-tab-panel");
+    p.hidden = active === "font" ? panel !== "convert" : panel !== active;
   });
+  const sourceFontRow = $("find-change-source-font-row");
+  if (sourceFontRow) sourceFontRow.hidden = active !== "font";
+  const queryField = $("find-change-query-field");
+  const caseRow = $("find-change-case-row");
+  if (queryField) {
+    queryField.hidden = active === "font";
+    queryField.style.display = active === "font" ? "none" : "";
+  }
+  if (caseRow) {
+    caseRow.hidden = active === "font";
+    caseRow.style.display = active === "font" ? "none" : "";
+  }
   // 適用ボタンのラベル切替
   const applyBtn = $("find-change-apply");
-  if (applyBtn) applyBtn.textContent = active === "replace" ? "置換" : "全変換";
+  if (applyBtn) applyBtn.textContent = active === "replace" ? "置換" : active === "font" ? "フォント変換" : "文字変換";
 }
 
 function bindModalEvents() {
@@ -950,6 +1037,7 @@ function bindModalEvents() {
   // タブ切替
   $("find-change-tab-replace")?.addEventListener("click", () => setFindChangeActiveTab("replace"));
   $("find-change-tab-convert")?.addEventListener("click", () => setFindChangeActiveTab("convert"));
+  $("find-change-tab-font")?.addEventListener("click", () => setFindChangeActiveTab("font"));
   // 初期表示は「検索置換」タブ
   setFindChangeActiveTab("replace");
   $("find-change-cancel")?.addEventListener("click", closeModal);

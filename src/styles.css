@@ -1399,6 +1399,31 @@ body.home-mode .toolbar .settings-toolbar-btn {
 }
 .stroke-dot-white { background: #fff; }
 .stroke-dot-black { background: #000; }
+.white-stroke-convert-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  padding: 0;
+  border-radius: 50%;
+  background: var(--panel-hover);
+  color: var(--text);
+}
+.white-stroke-convert-btn svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.white-stroke-convert-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
 /* 「なし」は白い点線円で表示。 */
 .stroke-dot-none {
   background: transparent;
@@ -3488,6 +3513,7 @@ body.home-starting .home-screen {
   flex-direction: row-reverse;
 }
 .spreads-pdf-area,
+.spreads-viewer-area,
 .spreads-psd-area {
   flex: 1;
   min-width: 0;
@@ -3528,8 +3554,21 @@ body.home-starting .home-screen {
   border-right: 1px solid var(--border);
   gap: 12px;
 }
+.spreads-viewer-area {
+  position: relative;
+  display: none;
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  border-right: 1px solid var(--border);
+  background: var(--stage-bg, var(--panel-body));
+}
 .spreads-pdf-area[hidden] { display: none; }
 .workspace.flipped .spreads-pdf-area {
+  border-right: none;
+  border-left: 1px solid var(--border);
+}
+.workspace.flipped .spreads-viewer-area {
   border-right: none;
   border-left: 1px solid var(--border);
 }
@@ -3540,9 +3579,145 @@ body.home-starting .home-screen {
    既定 (display: none) を上書きしてしまう。明示的に [hidden] を効かせる。 */
 .spreads-psd-area[hidden] { display: none; }
 .workspace.spread-edit-mode .spreads-pdf-area,
+.workspace.spread-edit-mode .spreads-viewer-area,
 .workspace.spread-edit-mode .spreads-proofread-area,
 .workspace.spread-edit-mode .spreads-editor-area {
   display: none !important;
+}
+.workspace.image-viewer-mode .spreads-pdf-area {
+  display: none !important;
+}
+.workspace.image-viewer-mode .spreads-viewer-area {
+  display: flex;
+}
+.left-viewer-toolbar {
+  position: relative;
+  z-index: 4;
+  flex: 0 0 auto;
+  align-self: stretch;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  box-sizing: border-box;
+  height: 24px;
+  margin: -16px -16px 8px;
+  padding: 0 6px 0 10px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+}
+.left-viewer-btn {
+  height: 20px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--control-bg, var(--panel-body));
+  color: var(--text);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  line-height: 1;
+}
+.left-viewer-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.left-viewer-btn:disabled,
+.left-viewer-select-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.left-viewer-select {
+  display: inline-flex;
+  align-items: center;
+  margin-left: auto;
+  height: 20px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.left-viewer-select-btn {
+  width: 30px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+  cursor: pointer;
+}
+.left-viewer-select-btn:last-child {
+  border-right: none;
+}
+.left-viewer-select-btn:hover:not(:disabled) {
+  color: var(--text);
+}
+.left-viewer-select-btn.active {
+  background: rgba(90, 170, 160, 0.22);
+  color: var(--accent);
+}
+.left-viewer-stage {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: safe center;
+  justify-content: safe center;
+  box-sizing: border-box;
+  overflow: auto;
+  padding: 0;
+}
+.left-viewer-stack-wrap {
+  flex: 0 0 auto;
+  display: block;
+  width: auto;
+  min-width: 0;
+  max-width: none;
+}
+.left-viewer-stack {
+  position: relative;
+  display: block;
+  background:
+    linear-gradient(45deg, var(--checker-a, #f3f3f3) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--checker-a, #f3f3f3) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--checker-a, #f3f3f3) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--checker-a, #f3f3f3) 75%);
+  background-color: var(--checker-b, #fff);
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0;
+  background-size: 16px 16px;
+  box-shadow: 0 0 0 1px var(--border);
+}
+.left-viewer-canvas {
+  display: block;
+  image-rendering: auto;
+}
+.left-viewer-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  text-align: center;
+  font-size: 12px;
+  padding: 24px;
+}
+.left-viewer-empty-icon {
+  width: 46px;
+  height: 46px;
+  opacity: 0.65;
 }
 .workspace.spread-edit-mode .spreads-psd-area {
   border-left: none;
@@ -4239,6 +4414,7 @@ body.home-starting .home-screen {
 .psd-trim-frame-edge:hover { background: rgba(0, 210, 255, 0.18); }
 /* 非同期モード時のアクティブペイン強調（キーボード/ホイールの操作対象側） */
 .spreads-pdf-area.active-pane,
+.spreads-viewer-area.active-pane,
 .spreads-psd-area.active-pane {
   box-shadow: inset 0 0 0 2px var(--accent);
   transition: box-shadow 0.15s ease;
@@ -10033,7 +10209,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
     box-shadow: inset 0 0 24px rgba(var(--accent-rgb), 0);
   }
 }
-/* ===== 検索置換 / 全変換 ===== */
+/* ===== 検索置換 / 文字変換 / フォント変換 ===== */
 .find-change-modal {
   position: fixed;
   inset: 0;
@@ -10100,6 +10276,10 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
+}
+.find-change-field[hidden],
+.find-change-checkrow[hidden] {
+  display: none;
 }
 .find-change-input {
   width: 100%;
@@ -10187,7 +10367,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   color: var(--text-muted);
   font-size: 11px;
 }
-/* タブ UI: 検索置換 / 全変換 を切替える segment ボタン */
+/* タブ UI: 検索置換 / 文字変換 / フォント変換 を切替える segment ボタン */
 .find-change-tabs {
   display: flex;
   gap: 4px;
@@ -11885,6 +12065,7 @@ body.viewer-mode .toolbar {
        の累積コストだったが、rAF 合流により実害は無視できるレベルに収束）。
      - visibility / overflow は離散プロパティなのでフェード完了後に snap (delay 0.3s)。 */
 .spreads-pdf-area,
+.spreads-viewer-area,
 .spreads-proofread-area,
 .spreads-editor-area {
   transition:
@@ -11903,6 +12084,7 @@ body.viewer-mode .toolbar {
     overflow 0s linear 0.3s;
 }
 body.viewer-mode .spreads-pdf-area,
+body.viewer-mode .spreads-viewer-area,
 body.viewer-mode .spreads-proofread-area,
 body.viewer-mode .spreads-editor-area {
   opacity: 0 !important;
@@ -11919,6 +12101,7 @@ body.viewer-mode .spreads-editor-area {
    サイドが伸びる動きが visually 同期して逆再生される）。
    visibility / overflow は離散プロパティなので即座に元に戻す（delay 0s）。 */
 body:not(.viewer-mode) .spreads-pdf-area,
+body:not(.viewer-mode) .spreads-viewer-area,
 body:not(.viewer-mode) .spreads-proofread-area,
 body:not(.viewer-mode) .spreads-editor-area {
   transition:

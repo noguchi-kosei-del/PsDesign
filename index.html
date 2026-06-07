@@ -103,6 +103,15 @@
               </svg>
               <span class="view-mode-menu-label">フォント帳 / PSD</span>
             </button>
+            <button id="view-image-viewer-btn" class="view-mode-menu-item" type="button" role="menuitemradio" aria-checked="false" data-view="imageViewer">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <rect x="3" y="5" width="14" height="14" rx="1.5"/>
+                <path d="m6.5 15 3-3 2.2 2.2 1.4-1.4 3.4 3.4"/>
+                <path d="M15 3h4a2 2 0 0 1 2 2v4"/>
+                <path d="M19 7v10a2 2 0 0 1-2 2H7"/>
+              </svg>
+              <span class="view-mode-menu-label">ビューアー / PSD</span>
+            </button>
             <div class="view-mode-menu-divider" role="separator"></div>
             <button id="view-editor-btn" class="view-mode-menu-item" type="button" role="menuitemradio" aria-checked="false" data-view="editor">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -130,11 +139,13 @@
             </button>
           </div>
         </div>
-        <button id="find-change-btn" class="icon-btn header-find-change-btn" type="button" title="検索・置換 / 全変換" aria-label="検索・置換 / 全変換">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="M15.7 14.7 21 20"/>
-            <path d="M19 8.7a7.3 7.3 0 1 1-2.1-5.1"/>
-            <path d="m6.5 9.7 3.1 3.2 7-7.1"/>
+        <button id="find-change-btn" class="icon-btn header-find-change-btn" type="button" title="検索・置換 / 文字変換 / フォント変換" aria-label="検索・置換 / 文字変換 / フォント変換">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3.2 6h5.5l3 4.1"/>
+            <path d="M3.2 18h5.2L15 6h3.3"/>
+            <path d="M13.4 14.2 15.7 18h2.6"/>
+            <path d="M18 3.2 21.6 6 18 8.8z" fill="currentColor" stroke="none"/>
+            <path d="M18 15.2l3.6 2.8L18 20.8z" fill="currentColor" stroke="none"/>
           </svg>
         </button>
         <div class="toolbar-history" role="group" aria-label="履歴">
@@ -350,6 +361,27 @@
                 </div>
                 <div id="pdf-font-book-list-header" class="pdf-font-book-list-header"></div>
                 <div id="pdf-font-book-list" class="font-book-list pdf-font-book-list"></div>
+              </div>
+            </div>
+            <div class="spreads-viewer-area" id="spreads-viewer-area">
+              <div class="left-viewer-toolbar">
+                <button id="left-viewer-load-a-btn" class="left-viewer-btn" type="button" title="現在の見本画像をAに反映">Aを更新</button>
+                <button id="left-viewer-load-b-btn" class="left-viewer-btn" type="button">Bを開く</button>
+                <div class="left-viewer-select" role="group" aria-label="表示ファイル">
+                  <button id="left-viewer-show-a-btn" class="left-viewer-select-btn active" type="button" aria-pressed="true">A</button>
+                  <button id="left-viewer-show-b-btn" class="left-viewer-select-btn" type="button" aria-pressed="false">B</button>
+                </div>
+              </div>
+              <div id="left-viewer-stage" class="left-viewer-stage">
+                <div class="left-viewer-empty">
+                  <svg class="left-viewer-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                    <rect x="3" y="5" width="14" height="14" rx="1.5"/>
+                    <path d="m6.5 15 3-3 2.2 2.2 1.4-1.4 3.4 3.4"/>
+                    <path d="M15 3h4a2 2 0 0 1 2 2v4"/>
+                    <path d="M19 7v10a2 2 0 0 1-2 2H7"/>
+                  </svg>
+                  <div>JPG / PNG / PDF / PSD を A/B に読み込めます</div>
+                </div>
               </div>
             </div>
             <div class="spreads-proofread-area" id="spreads-proofread-area">
@@ -775,6 +807,14 @@
                     <button id="stroke-none-btn" class="stroke-dot stroke-dot-none" type="button" data-stroke="none" title="境界線なし" aria-label="境界線なし"></button>
                     <button id="stroke-white-btn" class="stroke-dot stroke-dot-white" type="button" data-stroke="white" title="白フチ" aria-label="白フチ"></button>
                     <button id="stroke-black-btn" class="stroke-dot stroke-dot-black" type="button" data-stroke="black" title="黒フチ" aria-label="黒フチ"></button>
+                    <button id="convert-white-stroke-btn" class="white-stroke-convert-btn" type="button" title="全レイヤーを現在のフチ仕様に変換" aria-label="全レイヤーを現在のフチ仕様に変換">
+                      <svg viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M19.2 7.8A7.4 7.4 0 0 0 6.6 5.6L4.5 7.7"/>
+                        <path d="M4.5 3.5v4.2h4.2"/>
+                        <path d="M4.8 16.2a7.4 7.4 0 0 0 12.6 2.2l2.1-2.1"/>
+                        <path d="M19.5 20.5v-4.2h-4.2"/>
+                      </svg>
+                    </button>
                   </div>
                   <div class="stroke-width-group" role="group" aria-label="フチ太さ">
                     <button id="stroke-width-inc-btn" class="size-btn" type="button" title="太く" aria-label="太く">＋</button>

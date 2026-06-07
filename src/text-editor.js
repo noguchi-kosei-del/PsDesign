@@ -84,6 +84,7 @@ const verticalHalfToFullSelectEl = () => document.getElementById("vertical-half-
 const strokeNoneBtnEl = () => document.getElementById("stroke-none-btn");
 const strokeWhiteBtnEl = () => document.getElementById("stroke-white-btn");
 const strokeBlackBtnEl = () => document.getElementById("stroke-black-btn");
+const convertWhiteStrokeBtnEl = () => document.getElementById("convert-white-stroke-btn");
 const strokeWidthInputEl = () => document.getElementById("stroke-width-input");
 const fillCustomBtnEl = () => document.getElementById("fill-custom-swatch");
 const fillColorPickerEl = () => document.getElementById("fill-color-picker");
@@ -2065,6 +2066,12 @@ export function bindEditorEvents() {
   bindStrokeButton(strokeNoneBtnEl(), "none");
   bindStrokeButton(strokeWhiteBtnEl(), "white");
   bindStrokeButton(strokeBlackBtnEl(), "black");
+  const convertWhiteStrokeBtn = convertWhiteStrokeBtnEl();
+  if (convertWhiteStrokeBtn) {
+    convertWhiteStrokeBtn.addEventListener("click", () => {
+      convertAllLayersToCurrentStrokeSpec();
+    });
+  }
 
   // スウォッチ再クリックで「そのまま（default）」に戻せる：
   // アクティブ中の色を再押下すると default（色を触らない）状態に復帰する。
@@ -2423,11 +2430,71 @@ function commitStrokeFields(colorOrNull, widthOrNull) {
   refreshAllOverlays();
 }
 
-// 【v1.26.0 移植 (PsDesign-main v1.24.0)】
-// レイヤーの bbox 中心を取得 (PSD 座標)。フォント・サイズ・行間変更で bbox サイズが変わるため、
-// 変更前の中心を保持して変更後に再配置するための ヘルパー。
-// existing は addEditOffset で蓄積された dx/dy も含めた現在位置を返す。
-// new は nl.x/nl.y が top-left なので width/2, height/2 を加算。
+// Converts stroke-bearing text layers to the currently selected Photoshop-compatible stroke payload.
+async function convertAllLayersToCurrentStrokeSpec() {
+  const pages = getPages();
+  if (pages.length === 0) {
+    toast("PSDを開いてからフチ仕様に変換してください", { kind: "info", duration: 2400 });
+    return;
+  }
+  const color = getStrokeColor();
+  const width = getBulkStrokeWidth();
+  if (!Number.isFinite(width)) {
+    toast("フチ太さを 0〜999 px で指定してください", { kind: "warning", duration: 2600 });
+    return;
+  }
+  const specLabel = strokeSpecLabel(color, width);
+  const layerCount = countStrokeBearingLayers(pages);
+  if (layerCount === 0) {
+    toast("フチが付いているテキストレイヤーがありません", { kind: "info", duration: 2400 });
+    return;
+  }
+
+  const ok = await confirmDialog({
+    title: "フチ仕様に一括変換",
+    message: `フチが付いているテキストレイヤー (${layerCount} 件) を ${specLabel} に変換します。対象レイヤーの現在のフチ設定は上書きされます。`,
+    confirmLabel: "変換",
+  });
+  if (!ok) return;
+
+  const changed = withHistoryTransient(() => {
+    let count = 0;
+    for (const page of pages) {
+      for (const layer of page.textLayers ?? []) {
+        const edit = getEdit(page.path, layer.id) ?? {};
+        const currentColor = edit.strokeColor ?? layer.strokeColor ?? "none";
+        const currentWidth = edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20;
+        if (!hasVisibleStroke(currentColor, currentWidth)) continue;
+        if (currentColor === color && currentWidth === width) continue;
+        setEdit(page.path, layer.id, { strokeColor: color, strokeWidthPx: width });
+        count++;
+      }
+      for (const nl of getNewLayersForPsd(page.path)) {
+        const currentColor = nl.strokeColor ?? "none";
+        const currentWidth = nl.strokeWidthPx ?? 20;
+        if (!hasVisibleStroke(currentColor, currentWidth)) continue;
+        if (currentColor === color && currentWidth === width) continue;
+        updateNewLayer(nl.tempId, { strokeColor: color, strokeWidthPx: width });
+        count++;
+      }
+    }
+    return count > 0 ? count : false;
+  });
+
+  if (!changed) {
+    toast("すでに現在のフチ仕様に揃っています", { kind: "info", duration: 2400 });
+    return;
+  }
+  setStrokeColor(color);
+  setStrokeWidthPx(width);
+  syncStrokeToggle(color);
+  syncStrokeWidthInput(width);
+  rebuildLayerList();
+  refreshAllOverlays();
+  toast(`${changed} 件を ${specLabel} に変換しました`, { kind: "success", duration: 2600 });
+}
+
+// Returns the current center point of a layer, including pending edit offsets.
 export function getLayerCenter(ref) {
   if (ref.kind === "existing") {
     const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
@@ -2777,6 +2844,44 @@ function computeCommonTextSpacing(selections, field) {
     else if (common !== v) return null;
   }
   return common ?? 0;
+}
+
+function hasVisibleStroke(color, width) {
+  return (color === "white" || color === "black") && Number(width) > 0;
+}
+
+function countStrokeBearingLayers(pages) {
+  let count = 0;
+  for (const page of pages) {
+    for (const layer of page.textLayers ?? []) {
+      const edit = getEdit(page.path, layer.id) ?? {};
+      const color = edit.strokeColor ?? layer.strokeColor ?? "none";
+      const width = edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20;
+      if (hasVisibleStroke(color, width)) count++;
+    }
+    for (const nl of getNewLayersForPsd(page.path)) {
+      if (hasVisibleStroke(nl.strokeColor ?? "none", nl.strokeWidthPx ?? 20)) count++;
+    }
+  }
+  return count;
+}
+
+function strokeSpecLabel(color, width) {
+  if (color === "white") return `白フチ ${width}px`;
+  if (color === "black") return `黒フチ ${width}px`;
+  return "フチなし";
+}
+
+function getBulkStrokeWidth() {
+  const input = strokeWidthInputEl();
+  if (input && input.value !== "") {
+    const n = Number(input.value);
+    if (Number.isFinite(n)) return Math.max(0, Math.min(999, Math.round(n * 10) / 10));
+  }
+  const current = getStrokeWidthPx();
+  if (Number.isFinite(current)) return current;
+  const fallback = Number(getDefault("strokeWidthPx"));
+  return Number.isFinite(fallback) ? Math.max(0, Math.min(999, Math.round(fallback * 10) / 10)) : 20;
 }
 
 function currentWidthForCommit() {

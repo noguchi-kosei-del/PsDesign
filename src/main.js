@@ -63,6 +63,7 @@ import { initHamburgerMenu } from "./hamburger-menu.js";
 import { bindStylePalette } from "./style-palette.js";
 import { bindFindChangeMode } from "./find-change.js";
 import { initFontBookPanel, setPdfFontBookVisible } from "./font-book.js";
+import { initLeftViewerPanel } from "./left-viewer.js";
 import {
   confirmDialog,
   hideModalAnimated,
@@ -1048,12 +1049,15 @@ function bindParallelSync() {
 
 function bindActivePaneTracking() {
   const pdfArea = document.getElementById("spreads-pdf-area");
+  const viewerArea = document.getElementById("spreads-viewer-area");
   const psdArea = document.getElementById("spreads-psd-area");
   pdfArea?.addEventListener("mousedown", () => setActivePane("pdf"), true);
+  viewerArea?.addEventListener("mousedown", () => setActivePane("pdf"), true);
   psdArea?.addEventListener("mousedown", () => setActivePane("psd"), true);
   const apply = () => {
     const asyncMode = !getParallelSyncMode();
     pdfArea?.classList.toggle("active-pane", asyncMode && getActivePane() === "pdf");
+    viewerArea?.classList.toggle("active-pane", asyncMode && getActivePane() === "pdf");
     psdArea?.classList.toggle("active-pane", asyncMode && getActivePane() === "psd");
   };
   onParallelSyncModeChange(apply);
@@ -1073,6 +1077,7 @@ function bindParallelViewMode() {
   const parallelBtn = document.getElementById("view-parallel-btn");
   const proofreadBtn = document.getElementById("view-proofread-btn");
   const fontBookBtn = document.getElementById("view-font-book-btn");
+  const imageViewerBtn = document.getElementById("view-image-viewer-btn");
   const spreadEditBtn = document.getElementById("view-spread-edit-btn");
   const editorBtn = document.getElementById("view-editor-btn");
   const fullscreenItem = document.getElementById("view-fullscreen-psd-btn");
@@ -1081,9 +1086,9 @@ function bindParallelViewMode() {
   const proofreadPanel = document.getElementById("proofread-panel");
   const leftProofreadBtn = document.getElementById("editor-left-proofread-btn");
   const leftPdfBtn = document.getElementById("editor-left-pdf-btn");
-  if (!parallelBtn || !proofreadBtn || !fontBookBtn || !spreadEditBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
+  if (!parallelBtn || !proofreadBtn || !fontBookBtn || !imageViewerBtn || !spreadEditBtn || !editorBtn || !proofreadArea || !editorArea || !proofreadPanel) return;
 
-  const psdEditViewModes = new Set(["parallel", "proofread", "fontBook", "spreadEdit"]);
+  const psdEditViewModes = new Set(["parallel", "proofread", "fontBook", "imageViewer", "spreadEdit"]);
   const isTranscribeMode = () => getAppMode() === "transcribe";
   const isPsdEditViewLocked = (mode) => isTranscribeMode() && psdEditViewModes.has(mode);
   const setViewItemDisabled = (item, disabled) => {
@@ -1096,13 +1101,14 @@ function bindParallelViewMode() {
     setViewItemDisabled(parallelBtn, locked);
     setViewItemDisabled(proofreadBtn, locked);
     setViewItemDisabled(fontBookBtn, locked);
+    setViewItemDisabled(imageViewerBtn, locked);
     setViewItemDisabled(spreadEditBtn, locked);
     setViewItemDisabled(fullscreenItem, locked);
   };
 
   try {
     const saved = localStorage.getItem(VIEW_MODE_LS_KEY);
-    if (saved === "parallel" || saved === "proofread" || saved === "fontBook" || saved === "editor" || saved === "spreadEdit") {
+    if (saved === "parallel" || saved === "proofread" || saved === "fontBook" || saved === "imageViewer" || saved === "editor" || saved === "spreadEdit") {
       setParallelViewMode(saved);
     }
   } catch {}
@@ -1142,6 +1148,7 @@ function bindParallelViewMode() {
   parallelBtn.addEventListener("click", () => switchViewMode("parallel"));
   proofreadBtn.addEventListener("click", () => switchViewMode("proofread"));
   fontBookBtn.addEventListener("click", () => switchViewMode("fontBook"));
+  imageViewerBtn.addEventListener("click", () => switchViewMode("imageViewer"));
   spreadEditBtn.addEventListener("click", () => switchViewMode("spreadEdit"));
   editorBtn.addEventListener("click", () => switchViewMode("editor"));
   if (leftProofreadBtn) {
@@ -1170,11 +1177,13 @@ function bindParallelViewMode() {
     const showEditor = mode === "editor";
     const showProofread = mode === "proofread";
     const showFontBook = mode === "fontBook";
+    const showImageViewer = mode === "imageViewer";
     const showSpreadEdit = mode === "spreadEdit";
     if (workspace) {
       workspace.classList.toggle("editor-mode", showEditor);
       workspace.classList.toggle("proofread-mode", showProofread);
       workspace.classList.toggle("font-book-mode", showFontBook);
+      workspace.classList.toggle("image-viewer-mode", showImageViewer);
       workspace.classList.toggle("spread-edit-mode", showSpreadEdit);
     }
     if (stage) {
@@ -1184,11 +1193,13 @@ function bindParallelViewMode() {
     parallelBtn.classList.toggle("active", mode === "parallel");
     proofreadBtn.classList.toggle("active", mode === "proofread");
     fontBookBtn.classList.toggle("active", mode === "fontBook");
+    imageViewerBtn.classList.toggle("active", mode === "imageViewer");
     spreadEditBtn.classList.toggle("active", mode === "spreadEdit");
     editorBtn.classList.toggle("active", mode === "editor");
     parallelBtn.setAttribute("aria-checked", mode === "parallel" ? "true" : "false");
     proofreadBtn.setAttribute("aria-checked", mode === "proofread" ? "true" : "false");
     fontBookBtn.setAttribute("aria-checked", mode === "fontBook" ? "true" : "false");
+    imageViewerBtn.setAttribute("aria-checked", mode === "imageViewer" ? "true" : "false");
     spreadEditBtn.setAttribute("aria-checked", mode === "spreadEdit" ? "true" : "false");
     editorBtn.setAttribute("aria-checked", mode === "editor" ? "true" : "false");
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
@@ -5015,6 +5026,7 @@ function init() {
   bindStylePalette();
   bindFindChangeMode();
   initFontBookPanel();
+  initLeftViewerPanel();
   bindEditorEvents();
   bindWindowControls();
   bindHomeScreen();
