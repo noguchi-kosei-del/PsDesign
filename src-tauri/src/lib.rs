@@ -255,6 +255,9 @@ pub struct EditPayload {
     // 同じ値で、デフォルト 150。未指定（旧 payload）のとき 150 として扱う。
     #[serde(rename = "rubyLeadingPct", default = "default_ruby_leading_pct")]
     pub ruby_leading_pct: f64,
+    // ルビレイヤーの既定フォント。未指定なら従来どおり親文字フォントを使う。
+    #[serde(rename = "rubyFontPostScriptName", default)]
+    pub ruby_font_post_script_name: Option<String>,
     // 【v1.29.x】ルビ位置 Photoshop 微調整: 親 fontSize 単位で親側に追加シフト
     #[serde(
         rename = "rubyPhotoshopOffsetEm",
@@ -1534,6 +1537,13 @@ async fn close_splash(window: tauri::Window) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(main_window) = app.get_webview_window("main") {
+                let _ = main_window.unminimize();
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_updater::Builder::new().build())

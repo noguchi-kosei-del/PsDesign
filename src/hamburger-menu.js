@@ -25,6 +25,7 @@ import { clearAllGuides, setGuidesLocked } from "./rulers.js";
 import { resetAutoPlaceState } from "./auto-place.js";
 import { resetStylePaletteState } from "./style-palette.js";
 import { runTestMode } from "./test-mode.js";
+import { clearLeftViewer } from "./left-viewer.js";
 
 const FLIPPED_KEY = "psdesign_layout_flipped";
 const HOME_RETURN_ANIMATION_MS = 360;
@@ -94,7 +95,7 @@ function toggleMenu() {
 async function goHome() {
   const ok = await confirmDialog({
     title: "ホームに戻る",
-    message: "読み込んだpsd、テキスト、PDFがリセットされます。よろしいですか？",
+    message: "読み込んだpsd、テキスト、PDF、ビューアー画像がリセットされます。よろしいですか？",
     confirmLabel: "戻る",
   });
   if (!ok) return;
@@ -109,6 +110,7 @@ async function goHome() {
   clearAllGuides();
   resetAutoPlaceState();
   resetStylePaletteState();
+  clearLeftViewer();
   clearPdf();
   setPdfRotation(0);
   setPsdRotation(0);

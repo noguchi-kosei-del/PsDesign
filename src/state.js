@@ -1496,6 +1496,7 @@ export function exportEdits() {
     ? Number(getDefault("rubyPhotoshopOffsetEm")) : 0;
   const rubyPhotoshopBiasPx = Number.isFinite(Number(getDefault("rubyPhotoshopBiasPx")))
     ? Number(getDefault("rubyPhotoshopBiasPx")) : 0;
+  const rubyFontPostScriptName = String(getDefault("fontPostScriptName") || "");
 
   return {
     dashTrackingMille,
@@ -1505,6 +1506,7 @@ export function exportEdits() {
     symbolFontPostScriptName,
     punctuationTsumePercent,
     rubyLeadingPct,
+    rubyFontPostScriptName,
     rubyPhotoshopOffsetEm,
     rubyPhotoshopBiasPx,
     // 写植再利用モード: 保存時に「元から PSD にあるテキストレイヤーを全て非表示」にする。

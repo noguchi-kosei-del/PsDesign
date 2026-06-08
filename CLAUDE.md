@@ -1,5 +1,28 @@
 # PsDesign
 
+## 2026-06-08 変更メモ: v2.4.1 リリース
+
+v2.4.1 では、左ビューアーを A/B 切替方式から複数ページ対応の「見本ビューアー」へ再設計しページ連動させ、検索・置換の文字変換に変換元フォント指定を追加し、ルビ文字へ既定フォントを適用、リサイクル「写植見本を再現」での自動スタイル混入を停止し、多重起動防止を導入した。
+
+- **左ビューアー（見本ビューアー）の再設計**: A/B の 2 ファイル切替方式を廃止し、単一の「見本ビューアー」へ統合した。ツールバーを写植見本/PSD と同じ `stage-label-bar` 形式に変更し、前/次ページのナビゲーションボタン + ページラベル + 「見本を開く」ボタンを配置（「Aを更新」「A/B トグル」を撤去）。JPG / PNG / PDF / PSD を複数ページ対応で読み込み、PDF/PSD は全ページを展開して保持する。ビューアーへの直接ドラッグ＆ドロップに対応し（`isLeftViewerDropPayload` / `handleLeftViewerDrop` / `setLeftViewerDropHighlight`）、ドロップ時はメイン D&D オーバーレイではなくビューアー専用ハイライトを出す。読み込み中はビューアー専用の進捗オーバーレイ（ファイル読込 → 展開 → 表示準備）を表示し、ページ表示は overscroll margin + 中央寄せで PSD/PDF ペインと同じスクロール表示に揃えた。空状態は `pdf-empty` 互換にし「JPG / PNG / PDF / PSD をここにドロップ、またはボタンから開けます」に変更した。
+- **見本ビューアーと PSD/PDF/原稿テキストのページ連動**: View メニューの「ビューアー / PSD」(imageViewer モード) で、見本ビューアーのページと PSD/PDF/TXT の現在ページを相互同期するようにした。`linkedPageSourceForLeftViewer` で連動元（PSD → PDF → TXT の優先順、非同期モード時は activePane の PDF）を解決し、`syncLeftViewerFromLinkedPage` / `syncLinkedPageFromLeftViewer` で双方向同期する（`leftViewerPageSyncBusy` フラグで再入防止）。`psdesign:left-viewer-page-change` イベントで、ロード時はメインページに合わせ、手動ページ移動時はメイン側を追従させる。`advancePage` / `jumpToEdge` / `updatePageNav` / `activePageSource` が viewer ソースを扱えるようにし、PSD/PDF/TXT が無いとき見本ビューアー単体でもページ送りできる。「ホームに戻る」で `clearLeftViewer` を呼び、確認ダイアログ文言にも「ビューアー画像」を追加した。
+- **検索・置換「文字変換」タブに変換元フォント指定を追加**: 変換元フォント選択を `<select>` からフォント検索コンボボックス（検索フィルタ + キーボード操作 + 一覧トグル）に変更した。「文字変換」タブに「変換元フォントを指定」チェックボックスを追加し、検索文字での一致範囲と「指定フォントを使っている範囲」の積（`intersectRanges` / `findConvertRanges`）に対してだけ変換を適用できるようにした。「フォント変換」タブは従来どおり変換元フォント必須。コンボボックスは `position: fixed` + body 直下配置でモーダル内クリッピングを回避する。
+- **ルビ文字に既定フォントを適用**: ルビ（ふりがな）テキストを親文字フォントではなく、環境設定の既定フォント (`fontPostScriptName`) で表示・保存するようにした。プレビュー側 ([src/canvas-tools.js](src/canvas-tools.js)) は `applyDefaultRubyFont` / `effectiveRubyFontForChar` / `rubyFontForParentSlice` / `rubyFontForAbsRange` で per-char のルビフォントを解決する（手動 per-char フォント > 記号フォント > 既定フォント）。Photoshop 保存側は `exportEdits` payload に `rubyFontPostScriptName` を追加し、`EditPayload` / `applyToPsd` / `applyRubies` まで伝達してルビレイヤーに既定フォントを当てる（未指定なら従来どおり親文字フォント）。
+- **リサイクル「写植見本を再現」で OCR/背景判定の混入を停止**: リサイクル写植の「写植見本を再現」モードでは周辺解析（白率 / ウニ吹き出し判定）を実行せず、元 PSD のフォント・サイズ・フチ・文字色をそのまま使うようにした ([src/services/reuse.js](src/services/reuse.js))。周辺解析由来の白フチ自動付与・中丸ゴシック自動切替・自動カラーは「指定フォント・サイズ」モードだけで動かす。
+- **多重起動の防止 (single instance)**: `tauri-plugin-single-instance` を導入し、OPUS が既に起動している状態で再度起動した場合は新しいプロセスを立てず、既存ウィンドウを最小化解除・表示・フォーカスするようにした ([src-tauri/src/lib.rs](src-tauri/src/lib.rs) / [src-tauri/Cargo.toml](src-tauri/Cargo.toml))。
+- **細かな修正**: ファイル選択ダイアログ ([src/file-picker.js](src/file-picker.js)) の複数選択モードで、修飾キーなしのクリックでも選択をトグルできるようにした。スタイルパレットのフォルダブラウザは、最後に JSON を読み込んだフォルダ (`lastBrowserJsonDir`) を起点に開くようにした。View メニューのドロップダウンを開いている間は、ツールバーの `data-tauri-drag-region` を一時解除し、メニュー上のクリックがウィンドウドラッグに吸われないようにした。
+
+### 検証
+
+- `npm run check:encoding`
+- `npm run lint`
+- `npm run build`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.4.1` に更新。
+
 ## 2026-06-07 変更メモ: v2.3.9 リリース
 
 v2.3.9 では、フチ仕様の一括変換、検索・置換ダイアログの文字変換/フォント変換分離、左パネルの A/B ビューアーを追加した。

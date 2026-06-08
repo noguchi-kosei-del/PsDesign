@@ -230,8 +230,9 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
   const defaultSizePt = unify && Number.isFinite(sizeRaw) && sizeRaw > 0 ? sizeRaw : null;
   const psItems = Array.isArray(page?.reusePsTextItems) ? page.reusePsTextItems : null;
   if (psItems && psItems.length > 0) {
-    // 周辺解析（テキスト非表示の背景画像で白率 / ウニを計測）。
-    const metricsList = await analyzeReuseRegions(page.reuseBgImagePath, psItems, page.dpi);
+    // 周辺解析は「指定フォント・サイズ」モードだけで使う。
+    // 「写植見本を再現」は元 PSD の値をそのまま優先し、OCR/背景判定の色付けを混ぜない。
+    const metricsList = unify ? await analyzeReuseRegions(page.reuseBgImagePath, psItems, page.dpi) : null;
     let count = 0;
     for (let i = 0; i < psItems.length; i++) {
       const it = psItems[i];
@@ -256,11 +257,15 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
         );
         if (Number.isFinite(boundsSize) && boundsSize > 0) sizePt = boundsSize;
       }
-      // 周辺解析から白フチ / 中丸ゴシックを判定（元フォントをベースに上書き）。
-      const auto = computeAutoStyleFromMetrics(
-        metricsList ? metricsList[i] : null,
-        it.font || null,
-      );
+      const auto = unify
+        ? computeAutoStyleFromMetrics(metricsList ? metricsList[i] : null, it.font || null)
+        : {
+            strokeColor: it.strokeColor ?? "none",
+            strokeWidthPx: Number.isFinite(it.strokeWidthPx) ? it.strokeWidthPx : 20,
+            fontPostScriptName: it.font || null,
+            autoFontSwitched: false,
+            autoFontSwitchBucket: -1,
+          };
       const layerFont = resolveReuseFont({
         unify,
         defaultFont,

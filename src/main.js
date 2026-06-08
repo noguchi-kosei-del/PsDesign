@@ -63,7 +63,15 @@ import { initHamburgerMenu } from "./hamburger-menu.js";
 import { bindStylePalette } from "./style-palette.js";
 import { bindFindChangeMode } from "./find-change.js";
 import { initFontBookPanel, setPdfFontBookVisible } from "./font-book.js";
-import { initLeftViewerPanel } from "./left-viewer.js";
+import {
+  getLeftViewerPageCount,
+  getLeftViewerPageIndex,
+  handleLeftViewerDrop,
+  initLeftViewerPanel,
+  isLeftViewerDropPayload,
+  setLeftViewerPageIndex,
+  setLeftViewerDropHighlight,
+} from "./left-viewer.js";
 import {
   confirmDialog,
   hideModalAnimated,
@@ -717,23 +725,89 @@ function schedulePageRender() {
   });
 }
 
+let leftViewerPageSyncBusy = false;
+
+function linkedPageSourceForLeftViewer() {
+  if (getParallelViewMode() !== "imageViewer") return null;
+  const psdCount = getPages().length;
+  const pdfCount = getPdfVirtualPageCount();
+  const txtCount = getTxtPageCount();
+  if (!getParallelSyncMode() && getActivePane() === "pdf" && pdfCount > 0) {
+    return { source: "pdf", total: pdfCount, current: getPdfPageIndex() };
+  }
+  if (psdCount > 0) return { source: "psd", total: psdCount, current: getCurrentPageIndex() };
+  if (pdfCount > 0) return { source: "pdf", total: pdfCount, current: getPdfPageIndex() };
+  if (txtCount > 0) return { source: "txt", total: txtCount, current: getPdfPageIndex() };
+  return null;
+}
+
+function syncLeftViewerFromLinkedPage() {
+  if (leftViewerPageSyncBusy) return;
+  const source = linkedPageSourceForLeftViewer();
+  const viewerCount = getLeftViewerPageCount();
+  if (!source || viewerCount <= 0) return;
+  const next = Math.max(0, Math.min(viewerCount - 1, source.current));
+  if (getLeftViewerPageIndex() === next) return;
+  leftViewerPageSyncBusy = true;
+  try { setLeftViewerPageIndex(next); } finally { leftViewerPageSyncBusy = false; }
+}
+
+function syncLinkedPageFromLeftViewer() {
+  if (leftViewerPageSyncBusy) return;
+  const source = linkedPageSourceForLeftViewer();
+  if (!source) return;
+  const next = Math.max(0, Math.min(source.total - 1, getLeftViewerPageIndex()));
+  if (source.current === next) return;
+  leftViewerPageSyncBusy = true;
+  try { setActivePageIndex(source.source, next); } finally { leftViewerPageSyncBusy = false; }
+}
+
 function bindPageChange() {
   onPageIndexChange(() => {
     schedulePageRender();
     updatePageNav();
+    syncLeftViewerFromLinkedPage();
   });
-  onPdfPageIndexChange(() => updatePageNav());
-  onPdfChange(() => updatePageNav());
-  onPdfSplitModeChange(() => updatePageNav());
-  onPdfSkipFirstBlankChange(() => updatePageNav());
-  onParallelSyncModeChange(() => updatePageNav());
-  onActivePaneChange(() => updatePageNav());
+  onPdfPageIndexChange(() => {
+    updatePageNav();
+    syncLeftViewerFromLinkedPage();
+  });
+  onPdfChange(() => {
+    updatePageNav();
+    syncLeftViewerFromLinkedPage();
+  });
+  onPdfSplitModeChange(() => {
+    updatePageNav();
+    syncLeftViewerFromLinkedPage();
+  });
+  onPdfSkipFirstBlankChange(() => {
+    updatePageNav();
+    syncLeftViewerFromLinkedPage();
+  });
+  onParallelSyncModeChange(() => {
+    updatePageNav();
+    syncLeftViewerFromLinkedPage();
+  });
+  onParallelViewModeChange(() => {
+    updatePageNav();
+    syncLeftViewerFromLinkedPage();
+  });
+  onActivePaneChange(() => {
+    updatePageNav();
+    syncLeftViewerFromLinkedPage();
+  });
+  window.addEventListener("psdesign:left-viewer-page-change", (e) => {
+    if (e.detail?.reason === "load") syncLeftViewerFromLinkedPage();
+    else syncLinkedPageFromLeftViewer();
+    updatePageNav();
+  });
   onTxtSourceChange(() => {
     if (getPages().length === 0 && getPdfVirtualPageCount() === 0) {
       const total = getTxtPageCount();
       if (total > 0 && getPdfPageIndex() > total - 1) setPdfPageIndex(0);
     }
     updatePageNav();
+    syncLeftViewerFromLinkedPage();
   });
 }
 
@@ -901,6 +975,7 @@ function updatePageNav() {
   const next = document.getElementById("page-next-btn");
   const psdCount = getPages().length;
   const pdfCount = getPdfVirtualPageCount();
+  const viewerCount = getLeftViewerPageCount();
   const txtCount = getTxtPageCount();
   let total = 0;
   let current = 0;
@@ -917,6 +992,8 @@ function updatePageNav() {
     source = "pdf"; total = pdfCount; current = getPdfPageIndex();
   } else if (txtCount > 0) {
     source = "txt"; total = txtCount; current = getPdfPageIndex();
+  } else if (getParallelViewMode() === "imageViewer" && viewerCount > 0) {
+    source = "viewer"; total = viewerCount; current = getLeftViewerPageIndex();
   }
   if (label) {
     label.textContent = total > 0 ? `${current + 1} / ${total}` : "- / -";
@@ -942,11 +1019,16 @@ export function activePageSource() {
   if (pdf > 0) return { source: "pdf", total: pdf, current: getPdfPageIndex() };
   const txt = getTxtPageCount();
   if (txt > 0) return { source: "txt", total: txt, current: getPdfPageIndex() };
+  if (getParallelViewMode() === "imageViewer") {
+    const viewer = getLeftViewerPageCount();
+    if (viewer > 0) return { source: "viewer", total: viewer, current: getLeftViewerPageIndex() };
+  }
   return null;
 }
 
 function setActivePageIndex(source, idx) {
   if (source === "psd") setCurrentPageIndex(idx);
+  else if (source === "viewer") setLeftViewerPageIndex(idx);
   else setPdfPageIndex(idx);
 }
 
@@ -960,7 +1042,14 @@ export function advancePage(delta) {
   }
   if (getActivePane() === "pdf") {
     const vcount = getPdfVirtualPageCount();
-    setPdfPageIndex(nextPageIndexForTurn("pdf", getPdfPageIndex(), vcount, delta));
+    if (vcount > 0) {
+      setPdfPageIndex(nextPageIndexForTurn("pdf", getPdfPageIndex(), vcount, delta));
+    } else {
+      const info = activePageSource();
+      if (!info) return;
+      const next = nextPageIndexForTurn(info.source, info.current, info.total, delta);
+      setActivePageIndex(info.source, next);
+    }
   } else if (getPages().length > 0) {
     setCurrentPageIndex(nextPageIndexForTurn("psd", getCurrentPageIndex(), getPages().length, delta));
   } else {
@@ -980,8 +1069,13 @@ function jumpToEdge(where) {
   }
   if (getActivePane() === "pdf") {
     const vcount = getPdfVirtualPageCount();
-    if (vcount === 0) return;
-    setPdfPageIndex(where === "first" ? 0 : vcount - 1);
+    if (vcount > 0) {
+      setPdfPageIndex(where === "first" ? 0 : vcount - 1);
+    } else {
+      const info = activePageSource();
+      if (!info) return;
+      setActivePageIndex(info.source, where === "first" ? 0 : info.total - 1);
+    }
   } else if (getPages().length > 0) {
     const total = getPages().length;
     setCurrentPageIndex(where === "first" ? 0 : total - 1);
@@ -1227,13 +1321,19 @@ function bindParallelViewMode() {
   const dropdownTrigger = document.getElementById("view-mode-trigger");
   const dropdownMenu = document.getElementById("view-mode-menu");
   if (dropdownTrigger && dropdownMenu) {
+    const toolbar = document.querySelector(".toolbar");
+    const toolbarWasDragRegion = toolbar?.hasAttribute("data-tauri-drag-region") === true;
     const closeDropdown = () => {
       dropdownMenu.hidden = true;
       dropdownTrigger.setAttribute("aria-expanded", "false");
+      toolbar?.classList.remove("view-mode-menu-open");
+      if (toolbar && toolbarWasDragRegion) toolbar.setAttribute("data-tauri-drag-region", "");
     };
     const openDropdown = () => {
       dropdownMenu.hidden = false;
       dropdownTrigger.setAttribute("aria-expanded", "true");
+      toolbar?.classList.add("view-mode-menu-open");
+      toolbar?.removeAttribute("data-tauri-drag-region");
     };
     dropdownTrigger.addEventListener("click", (e) => {
       e.stopPropagation();
@@ -3341,12 +3441,19 @@ async function setupTauriDragDrop() {
     const showOverlay = (payload) => {
       if (homeTypesetDragOverHandler?.(payload) === true) return;
       if (homeTypesetDropHandler) return;
+      if (isLeftViewerDropPayload(payload)) {
+        overlay?.classList.remove("active");
+        setLeftViewerDropHighlight(true);
+        return;
+      }
+      setLeftViewerDropHighlight(false);
       if (!overlay) return;
       overlay.classList.remove("flash");
       overlay.classList.add("active");
     };
     const hideOverlay = () => {
       homeTypesetDragLeaveHandler?.();
+      setLeftViewerDropHighlight(false);
       overlay?.classList.remove("active");
     };
     const flashOverlay = () => {
@@ -3373,6 +3480,16 @@ async function setupTauriDragDrop() {
       const paths = Array.isArray(payload.paths) ? payload.paths : [];
       if (homeTypesetDropHandler?.(paths, payload) === true) {
         hideOverlay();
+        return;
+      }
+      if (isLeftViewerDropPayload(payload)) {
+        hideOverlay();
+        handleLeftViewerDrop(paths, payload)
+          .then((handled) => {
+            if (!handled) return handleDroppedPaths(paths);
+            return null;
+          })
+          .catch((err) => console.error(err));
         return;
       }
       flashOverlay();

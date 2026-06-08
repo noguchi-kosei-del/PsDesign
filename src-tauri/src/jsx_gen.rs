@@ -793,6 +793,12 @@ pub fn generate_apply_script(
             } else {
                 String::from("\"\"")
             };
+        let ruby_font_ps_js = payload
+            .ruby_font_post_script_name
+            .as_deref()
+            .filter(|s| !s.is_empty())
+            .map(js_string)
+            .unwrap_or_else(|| String::from("\"\""));
         let page_width = psd
             .page_width
             .filter(|v| v.is_finite() && *v > 0.0)
@@ -811,7 +817,7 @@ pub fn generate_apply_script(
                 .join(",")
         );
         out.push_str(&format!(
-            "], {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {});\n",
+            "], {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {});\n",
             js_string(&save_path),
             payload.dash_tracking_mille,
             payload.tilde_tracking_mille,
@@ -826,6 +832,7 @@ pub fn generate_apply_script(
             // autoLeadingAmount として設定するために使う (useAutoLeading=true、ジャスティ
             // フィケーションのみ rubyLeadingPct)。
             payload.ruby_leading_pct,
+            ruby_font_ps_js,
             // 【v1.29.x】ルビ位置 Photoshop 微調整: 親寄せ em (親 fontSize 単位)、親離し px
             payload.ruby_photoshop_offset_em,
             payload.ruby_photoshop_bias_px,
@@ -4016,7 +4023,7 @@ function reapplyManualTextSpacingForPayload(doc, edits, newLayers) {
   }
 }
 
-function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent, rubyLeadingPct, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx, uiPageWidth, uiPageHeight, hideLayerIds, reuseHideOriginalText) {
+function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent, rubyLeadingPct, rubyFontPostScriptName, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx, uiPageWidth, uiPageHeight, hideLayerIds, reuseHideOriginalText) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[OPUS] skip missing: " + psdPath); return; }
   var prevUnits = app.preferences.rulerUnits;
@@ -4223,6 +4230,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var __dirR = (typeof e.direction === "string") ? e.direction
                        : (ti.direction === Direction.VERTICAL ? "vertical" : "horizontal");
           var __fontR = (typeof e.font === "string" && e.font.length > 0) ? e.font : ti.font;
+          var __rubyFontR = (typeof rubyFontPostScriptName === "string" && rubyFontPostScriptName.length > 0)
+                            ? rubyFontPostScriptName : __fontR;
           var __colR = null;
           try { __colR = ti.color; } catch (eCol0) {}
           // 【v1.29.x 修正】parentTopLeftOverride は null で渡す。autoLeadingPercentage で
@@ -4230,7 +4239,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           // ことで、親-ルビ間の相対距離 (ビューアーで見ていた値) が維持される。
           // override を渡すとシフト分ルビが前の行寄りに離れすぎる事故が起きる。
           var __rubiesScaled = scaleRubyAbsoluteCoords(e.charRubies, __rubyAbsScaleX, __rubyAbsScaleY);
-          applyRubies(layer, ti.contents, __rubiesScaled, __szR, __dirR, __fontR, __colR, null,
+          applyRubies(layer, ti.contents, __rubiesScaled, __szR, __dirR, __rubyFontR, __colR, null,
                       rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
         } catch (eRuby) {
           addWarning("ルビの適用に失敗 (layer " + e.id + "): " + eRuby);
@@ -4508,13 +4517,15 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             var __szRN = nti.size.value;
             var __dirRN = nl.direction || "vertical";
             var __fontRN = (typeof nl.font === "string" && nl.font.length > 0) ? nl.font : nti.font;
+            var __rubyFontRN = (typeof rubyFontPostScriptName === "string" && rubyFontPostScriptName.length > 0)
+                               ? rubyFontPostScriptName : __fontRN;
             var __colRN = null;
             try { __colRN = nti.color; } catch (eCol1) {}
             // 【v1.29.x 修正】parentTopLeftOverride は null。autoLeadingPercentage で親が
             // シフトしても、ルビは「現在の親 bounds + uiOffsetX/Y」基準で配置することで、
             // ビューアー上で見ていた「親-ルビの相対位置」を維持する。
             var __rubiesScaledN = scaleRubyAbsoluteCoords(nl.charRubies, __rubyAbsScaleX, __rubyAbsScaleY);
-            var __rl = applyRubies(layerRef, nti.contents, __rubiesScaledN, __szRN, __dirRN, __fontRN, __colRN, null,
+            var __rl = applyRubies(layerRef, nti.contents, __rubiesScaledN, __szRN, __dirRN, __rubyFontRN, __colRN, null,
                         rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
             if (__rl && __rl.length) __rubyLayersNL = __rl;
           } catch (eRubyN) {

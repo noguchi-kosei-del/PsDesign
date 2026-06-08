@@ -646,6 +646,17 @@ export function applyEditModeStyleToRange(start, end, styleProps) {
   }
 
   // 選択を span 全体に再設定（連続して別 styleProp を当てたいときの利便性）
+  for (const rt of Array.from(inner.querySelectorAll(".ruby-text"))) {
+    const rubyStart = Number(rt.dataset.rubyStart);
+    const rubyEnd = Number(rt.dataset.rubyEnd);
+    if (!Number.isFinite(rubyStart) || !Number.isFinite(rubyEnd)) continue;
+    if (rubyStart >= end || rubyEnd <= start) continue;
+    for (const [k, v] of Object.entries(styleProps)) {
+      if (v == null || v === "" || k === "fontSize") continue;
+      rt.style[k] = v;
+    }
+  }
+
   const sel = window.getSelection();
   sel.removeAllRanges();
   const newRange = document.createRange();
@@ -696,6 +707,13 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
     });
   };
   const isSpecialRubyText = (value) => isNakaguroRubyText(value) || isDakutenRubyText(value);
+  const applyDefaultRubyFont = (el) => {
+    const ps = String(getDefault("fontPostScriptName") || "");
+    if (!ps) return;
+    const fam = cssFontFamily(ps);
+    if (fam) el.style.fontFamily = fam;
+    ensureFontLoaded(ps);
+  };
   const rubyTextMatches = (value, target) => {
     if (typeof value !== "string" || typeof target !== "string" || !target) return false;
     if (value === target) return true;
@@ -754,6 +772,7 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
     rt.textContent = text;
     rt.style.setProperty("--ruby-scale", `${((Number(scale) || 50) / 100)}em`);
     rt.style.setProperty("--ruby-stack-index", String(stackIndex));
+    applyDefaultRubyFont(rt);
     positionOverlayWithinWrap(rt, host, from, to);
     host.appendChild(rt);
     return rt;
@@ -876,6 +895,7 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
   rt.dataset.rubyText = rubyText;
   rt.dataset.rubyOverlay = "false";
   rt.textContent = rubyText;
+  applyDefaultRubyFont(rt);
   wrap.appendChild(rt);
   try {
     range.insertNode(wrap);
@@ -3460,6 +3480,37 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
       && typeof overlay.text === "string"
       && overlay.text.length > 0;
   };
+  const effectiveRubyFontForChar = (absIdx, ch) => {
+    const explicit = hasCharFonts ? charFonts?.[absIdx] : undefined;
+    if (typeof explicit === "string" && explicit.length > 0) return explicit;
+    if (typeof symbolFontPS === "string" && symbolFontPS.length > 0 && SYMBOL_CHAR_CODES.has(ch.charCodeAt(0))) {
+      return symbolFontPS;
+    }
+    const defaultRubyFontPS = String(getDefault("fontPostScriptName") || "");
+    return defaultRubyFontPS || null;
+  };
+  const rubyFontForParentSlice = (segText, segLocalStart) => {
+    for (let i = 0; i < segText.length; i++) {
+      const ps = effectiveRubyFontForChar(lineStartIdx + segLocalStart + i, segText[i]);
+      if (ps) return ps;
+    }
+    return null;
+  };
+  const rubyFontForAbsRange = (from, to) => {
+    for (let i = 0; i < parentText.length; i++) {
+      const absIdx = absRubyStart + i;
+      if (absIdx < from || absIdx >= to) continue;
+      const ps = effectiveRubyFontForChar(absIdx, parentText[i]);
+      if (ps) return ps;
+    }
+    return rubyFontForParentSlice(parentText, parentLocalStart);
+  };
+  const applyRubyFont = (el, ps) => {
+    if (typeof ps !== "string" || ps.length === 0) return;
+    const fam = cssFontFamily(ps);
+    if (fam) el.style.fontFamily = fam;
+    ensureFontLoaded(ps);
+  };
   const appendOverlayRubyText = (host, overlay, index, from, to) => {
     const overlayRt = document.createElement("span");
     overlayRt.className = `ruby-text ruby-text-overlay${isNakaguroRubyText(overlay.text) ? " ruby-text-nakaguro" : ""}${isSpecialRubyText(overlay.text) ? " ruby-text-overlay-same-position" : ""}`;
@@ -3473,6 +3524,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     overlayRt.textContent = overlay.text;
     overlayRt.style.setProperty("--ruby-scale", `${((Number(overlay.scale) || scale) / 100)}em`);
     overlayRt.style.setProperty("--ruby-stack-index", String(index + 1));
+    applyRubyFont(overlayRt, rubyFontForAbsRange(Number(overlay.start), Number(overlay.end)));
     positionRubyTextWithinPair(overlayRt, Number(overlay.start), Number(overlay.end), from, to);
     host.appendChild(overlayRt);
   };
@@ -3502,6 +3554,7 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     rt.dataset.rubyText = entry.text;
     rt.dataset.rubyOverlay = "false";
     rt.textContent = rubyText;
+    applyRubyFont(rt, rubyFontForParentSlice(segText, segLocalStart));
     wrap.appendChild(rt);
     entryOverlays
       .filter((overlay) => overlayOverlaps(overlay, absStartForThisPair, absEndForThisPair))

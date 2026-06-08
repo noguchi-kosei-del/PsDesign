@@ -375,6 +375,10 @@ function onRowClick(ev, index, entry) {
     if (selectedPaths.has(entry.path)) selectedPaths.delete(entry.path);
     else selectedPaths.add(entry.path);
     lastClickIndex = index;
+  } else if (multi) {
+    if (selectedPaths.has(entry.path)) selectedPaths.delete(entry.path);
+    else selectedPaths.add(entry.path);
+    lastClickIndex = index;
   } else {
     selectedPaths.clear();
     selectedPaths.add(entry.path);

@@ -82,6 +82,7 @@ const DEFAULT_TEMPLATE_KEYWORD = "汎用統一表記テンプレ";
 let browserCurrentPath = "";
 let browserNavStack = [];
 let browserForwardStack = [];
+let lastBrowserJsonDir = null;
 
 const $ = (id) => document.getElementById(id);
 
@@ -89,6 +90,11 @@ function basename(path) {
   if (!path) return "";
   const m = String(path).split(/[\\/]/);
   return m[m.length - 1] || "";
+}
+
+function dirname(path) {
+  if (!path) return "";
+  return String(path).replace(/[\\/][^\\/]*$/, "");
 }
 
 function updateFilenameDisplay(path) {
@@ -352,6 +358,9 @@ async function loadJsonFromPath(path, { source = "browser" } = {}) {
   selectedPresetIndex = -1;
   activeSource = source;
   lastLoadedJsonPath = path;
+  if (source === "browser") {
+    lastBrowserJsonDir = dirname(path) || null;
+  }
   updateFilenameDisplay(path);
   renderList();
   return true;
@@ -523,9 +532,7 @@ async function openBrowser() {
   const modal = $("style-palette-browser-modal");
   if (!modal) return;
   // 直前の場所があればそこから開く、無ければルート。
-  const startPath = lastLoadedJsonPath
-    ? lastLoadedJsonPath.replace(/[\\/][^\\/]+$/, "")
-    : STYLE_PALETTE_ROOT_PATH;
+  const startPath = lastBrowserJsonDir || STYLE_PALETTE_ROOT_PATH;
   browserCurrentPath = startPath;
   browserNavStack = [];
   browserForwardStack = [];
