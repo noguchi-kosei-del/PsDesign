@@ -532,12 +532,17 @@ fn make_temp_volume(
 #[tauri::command]
 pub async fn run_ai_ocr(
     app: AppHandle,
+    allowed: tauri::State<'_, crate::path_access::AllowedPaths>,
     files: Vec<String>,
     force_cpu: Option<bool>,
     excluded_pages: Option<Vec<u32>>,
 ) -> Result<MokuroDocument, String> {
     if files.is_empty() {
         return Err("ファイルが選択されていません".to_string());
+    }
+    // 画像スキャン対象は、ユーザーが選択 / D&D した既許可ファイルに限定する。
+    for f in &files {
+        crate::path_access::ensure_allowed(&allowed, f)?;
     }
     let mokuro_path = resolve_mokuro_exe(&app)?;
 
@@ -913,8 +918,13 @@ fn analyze_doc_in_place(doc: &mut MokuroDocument, parent_dir: &Path) {
 }
 
 #[tauri::command]
-pub fn export_ai_text(content: String, output_path: String) -> Result<(), String> {
-    std::fs::write(&output_path, content).map_err(|e| format!("書き込み失敗: {}", e))?;
+pub fn export_ai_text(
+    allowed: tauri::State<'_, crate::path_access::AllowedPaths>,
+    content: String,
+    output_path: String,
+) -> Result<(), String> {
+    let real = crate::path_access::ensure_allowed_for_write(&allowed, &output_path)?;
+    std::fs::write(&real, content).map_err(|e| format!("書き込み失敗: {}", e))?;
     Ok(())
 }
 
@@ -945,11 +955,13 @@ pub struct RegionMetrics {
 
 #[tauri::command]
 pub fn analyze_image_text_regions(
+    allowed: tauri::State<'_, crate::path_access::AllowedPaths>,
     image_path: String,
     regions: Vec<AnalyzeRegion>,
 ) -> Result<Vec<RegionMetrics>, String> {
+    let real = crate::path_access::ensure_allowed(&allowed, &image_path)?;
     let image =
-        image::open(&image_path).map_err(|e| format!("画像読込失敗 ({}): {}", image_path, e))?;
+        image::open(&real).map_err(|e| format!("画像読込失敗 ({}): {}", image_path, e))?;
     let mut out = Vec::with_capacity(regions.len());
     for r in &regions {
         let bb = [r.left, r.top, r.right, r.bottom];

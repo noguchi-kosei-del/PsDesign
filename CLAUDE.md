@@ -1,5 +1,52 @@
 # PsDesign
 
+## 2026-06-09 変更メモ: v2.4.4 リリース（ローカルファイルアクセス・セキュリティ強化 / ファイル選択UI調整）
+
+v2.4.4 では、セキュリティ標準設計ガイドラインに準拠して、ローカルファイルアクセスを **Phase 1 + Phase 2 + Phase 3-lite** まで一括強化した。あわせてアプリ内ファイル選択 UI を調整し、参照先を OneDrive リダイレクト先ではなくユーザーデータ直下（ローカル）に統一した。
+
+### セキュリティ強化（Phase 1: 止血）
+
+- **CSP**: `src-tauri/tauri.conf.json` の `app.security.csp` を `null` から実 CSP（`script-src 'self'` / `object-src 'none'` / `base-uri 'self'` / `form-action 'self'` 他、Google Fonts・asset protocol・worker-src blob: 対応）へ変更。[index.html](index.html) にも dev モード用 `<meta http-equiv="Content-Security-Policy">` を追加し、`npm run tauri dev` でも外部スクリプト遮断を検証できるようにした。
+- 本番配布ビルドに devtools feature を同梱していないこと、`assetProtocol.scope` に `"**"` が無いことを確認。
+
+### セキュリティ強化（Phase 2: 最小特権 / 必須完了ライン）
+
+- **新規 [src-tauri/src/path_access.rs](src-tauri/src/path_access.rs)**: セッション中の許可リスト `AllowedPaths`（`std::fs::canonicalize` で実体パス解決、登録パスとその配下のみ許可）と、`ensure_allowed()` / `ensure_allowed_for_write()` を実装。
+  - `ensure_allowed_for_write()` は対象ファイル / 親フォルダが未作成でも、**実在する最も近い祖先を canonicalize して許可ルート配下か判定**する（プロジェクト保存が projectDir/PSD 等を書き込み時に create_dir_all する設計に対応。`..` / シンボリックリンクは canonicalize が実体解決するため迂回不可）。
+- **利用系コマンドの入口で `ensure_allowed()` を通す**: `read_binary_file` / `read_text_file` / `write_text_file` / `write_binary_file` / `copy_file`（src+dst）/ `list_psd_files` / `list_directory_entries` / `path_info` / `read_font_face_bytes` / `read_psd_text_layers(_batch)` / `apply_edits_via_photoshop` / `launch_progen_with_text` / `ocr::run_ai_ocr` / `export_ai_text` / `analyze_image_text_regions` / `tachimi::launch_tachimi_with_files` / `kenban::launch_kenban_psd_pdf` / `alignment::compute_alignment`。未登録パスは保護フォルダかどうかに関係なく `forbidden path`。`path_info` も未登録パスでは存在有無 / サイズを返さない（File System Oracle 防止）。
+- **token 方式の picker（独自ファイル選択 UI）**: `open_picker` / `close_picker` / `browse_directory_entries` / `browse_path_info` / `confirm_file_picker_selection` / `confirm_file_picker_save_path` を追加。`browse_*` は許可起点配下のみ列挙し、子要素の実パスは返さず token のみを返す。renderer は実パス文字列を登録に使わず、確定時に Rust 側が token から実パスを解決・canonical 再検証してから許可リストへ登録する。`authorize_user_paths` のような任意パス登録 API は公開しない。
+- **許可リストへの登録は信頼できる入口のみ**: ①picker の token 確定、②実 D&D（[src-tauri/src/lib.rs](src-tauri/src/lib.rs) の `on_window_event` の `WindowEvent::DragDrop(Drop)` で Rust が直接登録）、③起動引数（`startup_args`）、④起動時シードの固定業務フォルダ（`Desktop\Script_Output` は起動時に create_dir_all してから登録、共有ドライブ業務サブフォルダ、フォントディレクトリ）、⑤`list_fonts` が列挙したフォント実体。
+- **[src/file-picker.js](src/file-picker.js)** を token 方式へ書き換え（`open_picker`→`browse_*`→`confirm_*`、確定はパス文字列ではなく token）。proofread.js / style-palette.js / font-book.js は共有ドライブ業務フォルダを起動時シードで素通しするため変更不要。
+
+### セキュリティ強化（Phase 3-lite: ハードニング）
+
+- picker token は OS 乱数（`getrandom`）由来の予測不能値（連番 token は不使用）。
+- `open_picker` の単一セッション化（有効セッション中の 2 回目は `forbidden path: picker already open`）+ 15 分 TTL、UI 側でも二重起動防止。
+- `browse_*` に **10 秒 50 回**のレートリミット。
+- `confirm_file_picker_save_path` の `fileName` 厳格検証（空 / `.` / `..` / 末尾ドット・スペース / 制御文字 / `\ / : * ? " < > |` / Windows 予約名 CON・PRN・AUX・NUL・COM1-9・LPT1-9 / 180 文字超）。
+- **回帰チェック [scripts/check-security-regression.mjs](scripts/check-security-regression.mjs)** と `npm run check:security`（21 項目）を追加し、`npm run check` にも組み込み。
+
+### ファイル選択 UI 調整 / OneDrive 回避
+
+- ファイル選択ダイアログ上部の drives / フォルダ ボタン行（`#file-picker-drives`）を撤去。起点へは「上へ」でユーザーデータ直下まで戻って選ぶ運用に。
+- 参照先を OneDrive リダイレクト先（`dirs::document_dir()` 等）ではなく、**`%USERPROFILE%\<フォルダ名>` のローカル実体**（home_dir 基準）へ統一。デスクトップ / ドキュメント / ダウンロード / ピクチャ / ビデオ / ミュージック / お気に入り / リンク / 検索 / 保存したゲーム / アドレス帳。
+- browse は既知フォルダ + 業務フォルダ配下のみ。**ユーザーデータ直下（`C:\Users\<user>`）へは移動できるが、そこでは既知フォルダ以外（.ssh / AppData 等）を一覧に出さない**（仮想ルート扱い）。直下より上（`C:\Users` / `C:\`）へは移動させない（UI の「上へ」抑止 + Rust `is_under_browse_root`）。
+- `Script_Output` は `dirs::desktop_dir()`（OneDrive の場合あり）とローカル `home\Desktop` の両方をシード / create_dir_all して、保存先のズレで `forbidden path` にならないようにした。
+
+### 検証
+
+- `npm run check`（`check:encoding` + `check:security` 21 項目 + `lint` + `build`）成功。
+- `cargo check` 成功。
+- `npm run tauri dev -- --no-dev-server` で起動確認、Ctrl+S（プロジェクト保存）の動作をユーザー確認済み。
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.4.4` に更新。
+
+### 注意
+
+- 独自ブラウザ型 picker を token 方式へ作り替えたため、D&D / 画像スキャン・自動配置 / Photoshop 保存 / 校正・フォント帳・スタイルパレットの JSON 読込 / Tachimi・ProGen・KENBAN 連携など、ファイルパスを扱う各経路は実機での通し確認を推奨。`forbidden path` が出た場合は対象パスを許可起点 / 登録入口に追加して調整する。
+
 ## 2026-06-09 変更メモ: v2.4.3 リリース
 
 v2.4.3 では、フォント検索コンボボックスを共通部品化し、サイドバー・検索置換・写植再利用モーダル・ホーム写植設定で入力体験を揃えた。あわせて、写植再利用の「フォント・サイズを指定」で入力欄にカーソルが入らずリストが優先される問題を解消し、パス処理の重複実装を小さく整理、ホーム画面の開始カード位置を divider 基準で調整した。

@@ -1,13 +1,14 @@
 {
   "name": "opus",
   "private": true,
-  "version": "2.4.3",
+  "version": "2.4.4",
   "type": "module",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "check": "npm run check:encoding && npm run lint && npm run build",
+    "check": "npm run check:encoding && npm run check:security && npm run lint && npm run build",
     "check:encoding": "node scripts/check-source-integrity.mjs",
+    "check:security": "node scripts/check-security-regression.mjs",
     "version:patch": "node scripts/bump-version.mjs patch",
     "lint": "eslint src/**/*.js scripts/**/*.mjs vite.config.js",
     "preview": "vite preview",

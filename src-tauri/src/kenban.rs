@@ -93,6 +93,7 @@ fn existing_files(paths: Vec<String>) -> Vec<String> {
 
 #[tauri::command]
 pub async fn launch_kenban_psd_pdf(
+    allowed: tauri::State<'_, crate::path_access::AllowedPaths>,
     exe_path: String,
     psd_folder: String,
     psd_paths: Vec<String>,
@@ -103,12 +104,19 @@ pub async fn launch_kenban_psd_pdf(
         return Err(format!("KENBAN.exe が見つかりません: {}", exe_path));
     }
 
-    let valid_psds = existing_files(psd_paths);
+    // 連携で渡す PSD / 見本は既許可（選択 / D&D 済み）に限定する。
+    let valid_psds: Vec<String> = existing_files(psd_paths)
+        .into_iter()
+        .filter(|p| crate::path_access::ensure_allowed(&allowed, p).is_ok())
+        .collect();
     if valid_psds.is_empty() {
         return Err("KENBAN に渡せる PSD が見つかりません。".to_string());
     }
 
-    let valid_refs = existing_files(reference_paths);
+    let valid_refs: Vec<String> = existing_files(reference_paths)
+        .into_iter()
+        .filter(|p| crate::path_access::ensure_allowed(&allowed, p).is_ok())
+        .collect();
     if valid_refs.is_empty() {
         return Err("KENBAN に渡せる見本 PDF / 画像が見つかりません。".to_string());
     }

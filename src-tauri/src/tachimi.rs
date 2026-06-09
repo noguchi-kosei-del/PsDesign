@@ -122,6 +122,7 @@ fn cleanup_old_staging(staging_dir: &Path) {
 /// 戻り値: 実際にステージングに成功したファイル数。
 #[tauri::command]
 pub async fn launch_tachimi_with_files(
+    allowed: tauri::State<'_, crate::path_access::AllowedPaths>,
     exe_path: String,
     file_paths: Vec<String>,
 ) -> Result<usize, String> {
@@ -137,10 +138,10 @@ pub async fn launch_tachimi_with_files(
         return Err("渡すファイルがありません。".to_string());
     }
 
-    // 存在するファイルだけを抽出（壊れた参照は無視して残りで起動する）
+    // 連携で渡すファイルは既許可（保存済み PSD 等）に限定し、存在するものだけ抽出する。
     let valid: Vec<String> = file_paths
         .into_iter()
-        .filter(|p| Path::new(p).exists())
+        .filter(|p| crate::path_access::ensure_allowed(&allowed, p).is_ok())
         .collect();
 
     if valid.is_empty() {

@@ -3,8 +3,11 @@ mod fonts;
 mod jsx_gen;
 mod kenban;
 mod ocr;
+mod path_access;
 mod photoshop;
 mod tachimi;
+
+use path_access::{ensure_allowed, ensure_allowed_for_write, AllowedPaths};
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -305,13 +308,22 @@ pub struct FontEntry {
 #[tauri::command]
 async fn apply_edits_via_photoshop(
     app: tauri::AppHandle,
+    allowed: tauri::State<'_, AllowedPaths>,
     payload: EditPayload,
 ) -> Result<String, String> {
+    // 編集対象 PSD は、ユーザーが選択 / D&D / 起動引数で登録した既許可パスに限定する。
+    for edit in &payload.edits {
+        ensure_allowed(&allowed, &edit.psd_path)?;
+    }
     if payload.save_mode.as_deref() == Some("saveAs") {
         if let Some(dir) = payload.target_dir.as_deref() {
             if !dir.is_empty() {
+                // 保存先は親が許可済み（業務フォルダ配下）であることを確認してから作成する。
+                ensure_allowed_for_write(&allowed, dir)?;
                 std::fs::create_dir_all(dir)
                     .map_err(|e| format!("保存先フォルダの作成に失敗: {}: {}", dir, e))?;
+                // 作成後の実フォルダを許可リストへ登録（配下の PSD 書き出しを許可）。
+                let _ = allowed.register_real(dir);
             }
         }
     }
@@ -322,7 +334,12 @@ async fn apply_edits_via_photoshop(
 // (JPG) を書き出す。戻り値は JSX が生成した JSON 文字列（{docWidth,docHeight,dpi,
 // bgImage,textLayers:[...]}）。フロント側で parse して再利用フローに使う。
 #[tauri::command]
-async fn read_psd_text_layers(app: tauri::AppHandle, psd_path: String) -> Result<String, String> {
+async fn read_psd_text_layers(
+    app: tauri::AppHandle,
+    allowed: tauri::State<'_, AllowedPaths>,
+    psd_path: String,
+) -> Result<String, String> {
+    ensure_allowed(&allowed, &psd_path)?;
     photoshop::read_text_layers(&psd_path, &app).map_err(|e| e.to_string())
 }
 
@@ -331,24 +348,46 @@ async fn read_psd_text_layers(app: tauri::AppHandle, psd_path: String) -> Result
 #[tauri::command]
 async fn read_psd_text_layers_batch(
     app: tauri::AppHandle,
+    allowed: tauri::State<'_, AllowedPaths>,
     psd_paths: Vec<String>,
 ) -> Result<String, String> {
+    for p in &psd_paths {
+        ensure_allowed(&allowed, p)?;
+    }
     photoshop::read_text_layers_batch(&psd_paths, &app).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-async fn list_fonts() -> Result<Vec<FontEntry>, String> {
-    fonts::list_fonts().map_err(|e| e.to_string())
+async fn list_fonts(
+    allowed: tauri::State<'_, AllowedPaths>,
+) -> Result<Vec<FontEntry>, String> {
+    let list = fonts::list_fonts().map_err(|e| e.to_string())?;
+    // Rust 側で列挙したフォント実体（信頼できる入口）を許可リストへ登録し、
+    // 後続の read_font_face_bytes が ensure_allowed を通過できるようにする。
+    for f in &list {
+        if let Some(p) = &f.path {
+            let _ = allowed.register_real(p);
+        }
+    }
+    Ok(list)
 }
 
 #[tauri::command]
-async fn read_binary_file(path: String) -> Result<Vec<u8>, String> {
-    std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))
+async fn read_binary_file(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+) -> Result<Vec<u8>, String> {
+    let real = ensure_allowed(&allowed, &path)?;
+    std::fs::read(&real).map_err(|e| format!("{}: {}", path, e))
 }
 
 #[tauri::command]
-async fn read_text_file(path: String) -> Result<String, String> {
-    std::fs::read_to_string(&path).map_err(|e| format!("{}: {}", path, e))
+async fn read_text_file(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+) -> Result<String, String> {
+    let real = ensure_allowed(&allowed, &path)?;
+    std::fs::read_to_string(&real).map_err(|e| format!("{}: {}", path, e))
 }
 
 fn is_windows_shortcut(path: &Path) -> bool {
@@ -425,8 +464,12 @@ fn resolve_shortcut_path(path: &Path) -> PathBuf {
 }
 
 #[tauri::command]
-async fn write_text_file(path: String, content: String) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
+async fn write_text_file(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+    content: String,
+) -> Result<(), String> {
+    let path_buf = ensure_allowed_for_write(&allowed, &path)?;
     if let Some(parent) = path_buf.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
@@ -441,8 +484,12 @@ async fn write_text_file(path: String, content: String) -> Result<(), String> {
 // 合成画像）を JPG にエンコードしてプロジェクトフォルダへ保存するために使う。
 // フロント側は canvas.toBlob("image/jpeg") → ArrayBuffer → number[] で渡す。
 #[tauri::command]
-async fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
-    let path_buf = PathBuf::from(&path);
+async fn write_binary_file(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    let path_buf = ensure_allowed_for_write(&allowed, &path)?;
     if let Some(parent) = path_buf.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
@@ -454,9 +501,13 @@ async fn write_binary_file(path: String, data: Vec<u8>) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn copy_file(source: String, dest: String) -> Result<u64, String> {
-    let source_path = PathBuf::from(&source);
-    let dest_path = PathBuf::from(&dest);
+async fn copy_file(
+    allowed: tauri::State<'_, AllowedPaths>,
+    source: String,
+    dest: String,
+) -> Result<u64, String> {
+    let source_path = ensure_allowed(&allowed, &source)?;
+    let dest_path = ensure_allowed_for_write(&allowed, &dest)?;
     if let Some(parent) = dest_path.parent() {
         if !parent.as_os_str().is_empty() {
             fs::create_dir_all(parent)
@@ -719,7 +770,12 @@ fn find_progen_launcher() -> Option<PathBuf> {
 }
 
 #[tauri::command]
-async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
+async fn launch_progen_with_text(
+    allowed: tauri::State<'_, AllowedPaths>,
+    text_path: String,
+) -> Result<String, String> {
+    // 連携で渡すテキストは Script_Output 配下の保存済みファイル（既許可）に限定する。
+    ensure_allowed(&allowed, &text_path)?;
     let text_path = PathBuf::from(text_path);
     write_progen_handoff(&text_path)?;
     let launcher = find_progen_launcher().ok_or_else(|| {
@@ -792,7 +848,13 @@ async fn launch_progen_with_text(text_path: String) -> Result<String, String> {
 // CSS で参照できなくなる。日本語環境では游ゴシック M/B/D など多くのフォントが TTC に
 // 同居しているため、この変換が無いと「フォント一覧に出るのに UI に反映されない」状態になる。
 #[tauri::command]
-async fn read_font_face_bytes(path: String, face_index: u32) -> Result<Vec<u8>, String> {
+async fn read_font_face_bytes(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+    face_index: u32,
+) -> Result<Vec<u8>, String> {
+    let real = ensure_allowed(&allowed, &path)?;
+    let path = real.to_string_lossy().to_string();
     let bytes = std::fs::read(&path).map_err(|e| format!("{}: {}", path, e))?;
     // Extract every TTC/OTC face, including face 0, into standalone SFNT bytes.
     // Some WebView2 builds fail to load older Japanese TTC files through FontFace.
@@ -1123,8 +1185,12 @@ fn pad4(n: usize) -> usize {
 }
 
 #[tauri::command]
-async fn list_psd_files(folder: String) -> Result<Vec<String>, String> {
+async fn list_psd_files(
+    allowed: tauri::State<'_, AllowedPaths>,
+    folder: String,
+) -> Result<Vec<String>, String> {
     let folder_path = resolve_shortcut_path(Path::new(&folder));
+    ensure_allowed(&allowed, &folder_path.to_string_lossy())?;
     let entries =
         std::fs::read_dir(&folder_path).map_err(|e| format!("{}: {}", folder_path.display(), e))?;
     let mut files: Vec<String> = entries
@@ -1446,8 +1512,12 @@ async fn get_photoshop_scratch_free_space() -> Result<DriveFreeSpace, String> {
 // 校正パネルのカスタムフォルダブラウザ用に、ディレクトリの中身（フォルダ + ファイル）を返す。
 // 隠しファイル / シンボリックリンクの type 解決失敗は無視。サブツリー走査はしない（1 階層のみ）。
 #[tauri::command]
-async fn list_directory_entries(path: String) -> Result<Vec<DirEntry>, String> {
+async fn list_directory_entries(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+) -> Result<Vec<DirEntry>, String> {
     let dir_path = resolve_shortcut_path(Path::new(&path));
+    ensure_allowed(&allowed, &dir_path.to_string_lossy())?;
     let entries = std::fs::read_dir(&dir_path)
         .map_err(|e| format!("ディレクトリ読み取り失敗 {}: {}", dir_path.display(), e))?;
     let mut out: Vec<DirEntry> = Vec::new();
@@ -1523,8 +1593,8 @@ async fn open_folder_in_explorer(path: String) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn startup_args() -> Vec<String> {
-    std::env::args()
+async fn startup_args(allowed: tauri::State<'_, AllowedPaths>) -> Result<Vec<String>, String> {
+    let args: Vec<String> = std::env::args()
         .skip(1)
         .map(|arg| {
             let path = PathBuf::from(&arg);
@@ -1535,13 +1605,24 @@ async fn startup_args() -> Vec<String> {
                 arg
             }
         })
-        .collect()
+        .collect();
+    // OS がアプリへ渡した起動引数（ファイル関連付け / ショートカット）は信頼できる入口。
+    // 実体として存在するパスのみ許可リストへ登録する。
+    for a in &args {
+        let _ = allowed.register_real(a);
+    }
+    Ok(args)
 }
 
 #[tauri::command]
-async fn path_info(path: String) -> Result<PathInfo, String> {
+async fn path_info(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+) -> Result<PathInfo, String> {
     let input_path = PathBuf::from(&path);
     let p = resolve_shortcut_path(&input_path);
+    // 未登録パスは存在有無 / サイズを返さない（File System Oracle 防止）。
+    ensure_allowed(&allowed, &p.to_string_lossy())?;
     let meta = std::fs::metadata(&p)
         .map_err(|e| format!("パスを確認できません: {}: {}", p.display(), e))?;
     let name = p
@@ -1609,7 +1690,23 @@ async fn close_splash(window: tauri::Window) -> Result<(), String> {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // セッション中の許可リスト。起動時に固定業務フォルダ / フォントディレクトリをシードする。
+    let allowed_paths = AllowedPaths::default();
+    path_access::seed_allowed(&allowed_paths);
+
     tauri::Builder::default()
+        .manage(allowed_paths)
+        .manage(path_access::PickerState::default())
+        // 実 Drag & Drop（OS → メインプロセス）で受領したパスを許可リストへ登録する。
+        // renderer 経由の任意パス登録 API は作らず、ここ（信頼できる入口）で登録する。
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
+                let allowed = window.state::<AllowedPaths>();
+                for p in paths {
+                    let _ = allowed.register_path(p);
+                }
+            }
+        })
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.unminimize();
@@ -1677,6 +1774,13 @@ pub fn run() {
             read_font_face_bytes,
             list_psd_files,
             list_directory_entries,
+            path_access::open_picker,
+            path_access::close_picker,
+            path_access::picker_roots,
+            path_access::browse_directory_entries,
+            path_access::browse_path_info,
+            path_access::confirm_file_picker_selection,
+            path_access::confirm_file_picker_save_path,
             open_folder_in_explorer,
             startup_args,
             path_info,

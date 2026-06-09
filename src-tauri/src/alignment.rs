@@ -93,6 +93,7 @@ fn is_pdf_path(path: &str) -> bool {
 #[allow(clippy::too_many_arguments)]
 pub async fn compute_alignment(
     app: AppHandle,
+    allowed: tauri::State<'_, crate::path_access::AllowedPaths>,
     reference_path: String,
     reference_pdf_page_index: Option<u16>,
     reference_image_data_base64: Option<String>,
@@ -119,10 +120,13 @@ pub async fn compute_alignment(
             base64_decode(ref_base64).map_err(|e| format!("見本 base64 デコード失敗: {}", e))?;
         image::load_from_memory(&ref_bytes).map_err(|e| format!("見本画像デコード失敗: {:?}", e))?
     } else if is_pdf_path(&reference_path) {
+        // ファイル実体を読む経路は既許可パスに限定する（base64 直渡しは対象外）。
+        crate::path_access::ensure_allowed(&allowed, &reference_path)?;
         let p = Path::new(&reference_path);
         let pi = reference_pdf_page_index.unwrap_or(0);
         render_pdf_page_for_alignment(&app, p, pi)?
     } else {
+        crate::path_access::ensure_allowed(&allowed, &reference_path)?;
         image::open(&reference_path)
             .map_err(|e| format!("見本画像読込失敗 {}: {:?}", reference_path, e))?
     };

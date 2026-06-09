@@ -32,6 +32,20 @@ let selectedPaths = new Set();
 let lastClickIndex = -1;
 let drives = [];
 let isBusy = false;
+// 【セキュリティ Phase 2】Rust 側 picker セッション ID（open_picker で発行）。
+// browse_* / confirm_* はこの ID を必須とする。renderer は実パス文字列を登録に使わず、
+// browse で得た token を confirm に渡して Rust 側に実パスを解決・登録させる。
+let pickerSessionId = null;
+// 表示パス → Rust 候補 token のマップ（現在表示中フォルダの entries 分のみ保持）。
+let pathToToken = new Map();
+// ユーザーデータ直下（%USERPROFILE%）。ここより上へは移動させない（上ボタン抑止に使う）。
+let userHomePath = null;
+
+function samePathLoose(a, b) {
+  if (!a || !b) return false;
+  const norm = (s) => String(s).replace(/[\\/]+$/, "").replace(/\//g, "\\").toLowerCase();
+  return norm(a) === norm(b);
+}
 // outside-click を mousedown→click 経路で見ると一連で誤発火することがあるので、
 // 開いた直後の同一イベントループ中の click を無視するフラグ。
 let backdropClickArmed = false;
@@ -90,25 +104,80 @@ async function getInitialPath(opts) {
   }
 }
 
-async function fetchDrives() {
+async function getInvoke() {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke;
+}
+
+// Rust 側 picker セッションを開く（二重起動は Rust 側で picker already open 拒否）。
+async function openPickerSession() {
+  const invoke = await getInvoke();
+  const tryOpen = async () => {
+    const res = await invoke("open_picker");
+    pickerSessionId = (res && res.pickerSessionId) || (typeof res === "string" ? res : null);
+  };
   try {
-    const { invoke } = await import("@tauri-apps/api/core");
-    const list = await invoke("list_drives");
-    return Array.isArray(list) ? list : [];
+    await tryOpen();
   } catch (e) {
-    console.error("[file-picker] list_drives failed:", e);
-    return [];
+    // 万一前のセッションが残っていれば閉じてから再試行する。
+    if (pickerSessionId) {
+      try { await invoke("close_picker", { pickerSessionId }); } catch {}
+    }
+    try {
+      await tryOpen();
+    } catch (e2) {
+      console.error("[file-picker] open_picker failed:", e2);
+      pickerSessionId = null;
+    }
   }
 }
 
+async function closePickerSession() {
+  const id = pickerSessionId;
+  pickerSessionId = null;
+  pathToToken = new Map();
+  if (!id) return;
+  try {
+    const invoke = await getInvoke();
+    await invoke("close_picker", { pickerSessionId: id });
+  } catch {}
+}
+
+// 上部のドライブ/フォルダ ボタン行は撤去済み（#file-picker-drives なし）。
+// 起点フォルダへは「上へ」ボタンでユーザーデータ直下まで戻り、そこから選ぶ運用にする。
+async function fetchDrives() {
+  return [];
+}
+
 async function fetchEntries(dirPath) {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke("list_directory_entries", { path: dirPath });
+  if (!pickerSessionId) throw new Error("picker session not open");
+  const invoke = await getInvoke();
+  // フォルダ列挙のたびに候補 token を作り直す。
+  pathToToken = new Map();
+  const raw = await invoke("browse_directory_entries", { pickerSessionId, path: dirPath });
+  const list = Array.isArray(raw) ? raw : [];
+  // 子要素の実パスは返らないので、表示用パスを dir + name で局所再構成する
+  // （ナビゲーション/表示用。確定は token 経由で Rust 側が実パスを解決・登録する）。
+  return list.map((e) => {
+    const path = joinPathForSave(dirPath, e.name);
+    if (e.token) pathToToken.set(path, e.token);
+    return {
+      name: e.name,
+      isDirectory: !!e.isDirectory,
+      isFile: !!e.isFile,
+      token: e.token,
+      path,
+    };
+  });
 }
 
 async function fetchPathInfo(path) {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke("path_info", { path });
+  if (!pickerSessionId) throw new Error("picker session not open");
+  const invoke = await getInvoke();
+  const info = await invoke("browse_path_info", { pickerSessionId, path });
+  if (info && info.token) pathToToken.set(path, info.token);
+  // 互換のため path も補完（呼び出し側が info.path / info.name を参照する箇所のため）。
+  return { ...(info || {}), path };
 }
 
 function normalizePathInput(raw) {
@@ -246,7 +315,8 @@ function renderPath() {
   const up = $("file-picker-up-btn");
   if (back) back.disabled = navStack.length === 0;
   if (fwd) fwd.disabled = forwardStack.length === 0;
-  if (up) up.disabled = isPathRoot(currentPath);
+  // ユーザーデータ直下（%USERPROFILE%）が上限。これより上へは移動させない。
+  if (up) up.disabled = isPathRoot(currentPath) || samePathLoose(currentPath, userHomePath);
 }
 
 function renderList() {
@@ -525,6 +595,8 @@ async function goForward() {
 async function goUp() {
   if (isBusy) return;
   if (isPathRoot(currentPath)) return;
+  // ユーザーデータ直下より上へは行かせない。
+  if (samePathLoose(currentPath, userHomePath)) return;
   const parent = parentDir(currentPath);
   if (!parent) return;
   // ドライブ直下に来た場合は "C:" を "C:\\" に整える
@@ -552,43 +624,74 @@ function joinPathForSave(dir, name) {
   return `${dir}${useBack ? "\\" : "/"}${name}`;
 }
 
-async function resolveOpenPath(path) {
-  if (!isWindowsShortcutPath(path)) return path;
-  try {
-    const info = await fetchPathInfo(path);
-    return info?.path || path;
-  } catch (_) {
-    return path;
-  }
-}
-
+// 【セキュリティ Phase 2】確定は token 経由のみ。renderer から実パス文字列を登録に送らない。
+// Rust 側が session 内 token から実パスを解決・canonical 検証してから許可リストへ登録する。
 async function confirm() {
   if (!resolveCurrent || !currentOpts) return;
   const mode = currentOpts.mode;
   let result = null;
+  const invoke = await getInvoke();
 
-  if (mode === "open") {
-    if (selectedPaths.size === 0) return;
-    const arr = await Promise.all([...selectedPaths].map(resolveOpenPath));
-    result = currentOpts.multiple ? arr : arr[0];
-    // 親ディレクトリを記憶
-    const parent = parentDir(arr[0]);
-    if (parent) writeLastPath(currentOpts.rememberKey, parent);
-  } else if (mode === "save") {
-    const input = $("file-picker-name-input");
-    const raw = input ? input.value.trim() : "";
-    if (!raw) return;
-    const name = ensureExtension(raw, currentOpts.filters);
-    result = joinPathForSave(currentPath, name);
-    writeLastPath(currentOpts.rememberKey, currentPath);
-  } else if (mode === "openFolder") {
-    // フォルダ行が選ばれていればそれ、無ければ現在パス
-    if (selectedPaths.size > 0) {
-      result = [...selectedPaths][0];
-    } else {
-      result = currentPath;
+  try {
+    if (mode === "open") {
+      if (selectedPaths.size === 0) return;
+      const tokens = [...selectedPaths]
+        .map((p) => pathToToken.get(p))
+        .filter(Boolean);
+      if (tokens.length === 0) return;
+      const reals = await invoke("confirm_file_picker_selection", {
+        pickerSessionId,
+        tokens,
+      });
+      const arr = Array.isArray(reals) ? reals : [reals];
+      result = currentOpts.multiple ? arr : arr[0];
+      const parent = parentDir(arr[0]);
+      if (parent) writeLastPath(currentOpts.rememberKey, parent);
+    } else if (mode === "save") {
+      const input = $("file-picker-name-input");
+      const raw = input ? input.value.trim() : "";
+      if (!raw) return;
+      const name = ensureExtension(raw, currentOpts.filters);
+      // 現在フォルダの directory token を取得してから保存先を確定する。
+      const dirInfo = await invoke("browse_path_info", {
+        pickerSessionId,
+        path: currentPath,
+      });
+      const directoryToken = dirInfo && dirInfo.token;
+      if (!directoryToken) throw new Error("保存先フォルダを確定できません");
+      result = await invoke("confirm_file_picker_save_path", {
+        pickerSessionId,
+        directoryToken,
+        fileName: name,
+      });
+      writeLastPath(currentOpts.rememberKey, currentPath);
+    } else if (mode === "openFolder") {
+      let token = null;
+      if (selectedPaths.size > 0) {
+        token = pathToToken.get([...selectedPaths][0]);
+      }
+      if (!token && currentPath) {
+        const info = await invoke("browse_path_info", {
+          pickerSessionId,
+          path: currentPath,
+        });
+        token = info && info.token;
+      }
+      if (!token) return;
+      const reals = await invoke("confirm_file_picker_selection", {
+        pickerSessionId,
+        tokens: [token],
+      });
+      result = Array.isArray(reals) ? reals[0] : reals;
+      if (result) writeLastPath(currentOpts.rememberKey, result);
     }
-    if (result) writeLastPath(currentOpts.rememberKey, result);
+  } catch (e) {
+    console.error("[file-picker] confirm failed:", e);
+    const list = $("file-picker-list");
+    if (list) {
+      list.innerHTML = `<div class="file-picker-error">確定に失敗しました：${escapeHtml(String(e?.message ?? e))}</div>`;
+    }
+    return;
   }
 
   closeAndResolve(result);
@@ -604,6 +707,8 @@ const ANIMATE_MS = 220;
 function closeAndResolve(value) {
   const modal = $("file-picker-modal");
   removeKeyListener();
+  // picker セッションを破棄（候補 token も Rust 側で破棄される）。
+  void closePickerSession();
   const r = resolveCurrent;
   resolveCurrent = null;
   // 内部状態は即時リセット（次回の openFileDialog をブロックしないため）。
@@ -814,17 +919,27 @@ export async function openFileDialog(opts) {
   selectedPaths.clear();
   lastClickIndex = -1;
   entries = [];
+  pathToToken = new Map();
+  // Rust 側 picker セッションを開いてから browse/confirm を行う。
+  await openPickerSession();
   drives = await fetchDrives();
   renderDrives();
+
+  // ユーザーデータ直下（%USERPROFILE%）を控える（上へボタンの上限 + 起点フォールバック）。
+  try {
+    userHomePath = await (await getInvoke())("home_dir");
+  } catch {
+    userHomePath = null;
+  }
 
   // 起点ディレクトリを解決して読込
   const initial = await getInitialPath(merged);
   let startPath = initial;
   if (!startPath || !(await pathLooksReadable(startPath))) {
-    // ホームも取れなければ最初のドライブへ
-    startPath = drives.length > 0 ? drives[0].path : (initial || "C:\\");
+    // 読めなければユーザーデータ直下へ（既知フォルダのみ表示）。
+    startPath = userHomePath || initial || null;
   }
-  await loadFolder(startPath);
+  if (startPath) await loadFolder(startPath);
 
   // フォーカス管理
   if (mode === "save" && input) {

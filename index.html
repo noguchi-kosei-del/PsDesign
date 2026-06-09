@@ -3,6 +3,14 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 【#14 CSP】devモード用 meta CSP。tauri.conf.json の csp は dev では HTTP ヘッダとして
+         効かないため、ここでも同等のポリシーを宣言して外部スクリプト遮断を dev でも検証可能にする。
+         本番では tauri.conf.json のヘッダ CSP と meta が交差適用される。dev の Vite HMR 用に
+         ws://localhost / http://localhost を connect-src へ追加（本番ヘッダ側には無いので本番では無効）。 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; img-src 'self' asset: http://asset.localhost https://asset.localhost data: blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://localhost:1430 ws://localhost:1431 http://localhost:1430 http://localhost:1431 https://fonts.googleapis.com https://fonts.gstatic.com; worker-src 'self' blob:; child-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'"
+    />
     <title>OPUS</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -1576,7 +1584,6 @@
           <h2 id="file-picker-title" class="file-picker-title"></h2>
         </div>
         <div class="file-picker-toolbar">
-          <div id="file-picker-drives" class="file-picker-drives"></div>
           <div class="file-picker-nav">
             <button id="file-picker-back-btn" class="file-picker-nav-btn" type="button" data-action="back" disabled aria-label="戻る" title="戻る">←</button>
             <button id="file-picker-forward-btn" class="file-picker-nav-btn" type="button" data-action="forward" disabled aria-label="進む" title="進む">→</button>
