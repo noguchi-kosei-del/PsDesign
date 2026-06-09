@@ -42,6 +42,7 @@ import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
+import { baseName } from "./utils/path.js";
 
 const $ = (id) => document.getElementById(id);
 const SOURCE_DOC_KEY = "mo" + "kuro";
@@ -983,10 +984,6 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtPages, defaults, opti
   const alignmentByPath = options.alignmentByPath instanceof Map ? options.alignmentByPath : null;
   const N = Math.min(psdPages.length, referenceScanDoc.pages.length);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
-  const baseName = (p) => {
-    const m = p && p.match(/[\\/]([^\\/]+)$/);
-    return m ? m[1] : (p || "");
-  };
   for (let i = 0; i < N; i++) {
     const psd = psdPages[i];
     const referenceScan = referenceScanDoc.pages[i];

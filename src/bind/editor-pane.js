@@ -36,6 +36,7 @@ import {
   appendTextWithStyleMarkers,
   getStyleOverrideRangesForTxtRef,
 } from "../text-style-markers.js";
+import { baseName } from "../utils/path.js";
 
 const $ = (id) => document.getElementById(id);
 const EDITOR_PAGE_MODE_KEY = "psdesign_editor_page_mode";
@@ -71,12 +72,6 @@ function getEls() {
     pageModeAll: $("editor-page-mode-all"),
     pageModeSingle: $("editor-page-mode-single"),
   };
-}
-
-function baseName(p) {
-  if (!p) return "";
-  const m = p.match(/[\\/]([^\\/]+)$/);
-  return m ? m[1] : p;
 }
 
 function pageNumLabel(n) {

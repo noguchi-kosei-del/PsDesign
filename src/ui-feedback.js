@@ -1,3 +1,9 @@
+import {
+  createFontCombobox,
+  fontSearchHaystack,
+  resolveFontFromInput as resolveComboboxFontFromInput,
+} from "./font-combobox.js";
+
 const $ = (id) => document.getElementById(id);
 
 // CSS の transition と一致させる。閉じるアニメーション完了後に hidden=true とする。
@@ -2330,7 +2336,7 @@ export function promptDialog({
 }
 
 // 【写植再利用】「既定で統一」用：フォント種類とサイズを選ぶダイアログ。
-// confirm-modal を流用し、メッセージ直下にフォント <select> とサイズ <input number> を挿入する。
+// confirm-modal を流用し、メッセージ直下に検索可能なフォント入力とサイズ <input number> を挿入する。
 // fonts: [{ postScriptName, label }]。OK で { fontPostScriptName, sizePt } を resolve、
 // キャンセル / Esc / 背景クリックで null を resolve。
 export function chooseReuseFontSizeMode() {
@@ -2437,23 +2443,110 @@ export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizeP
     const fontLabel = document.createElement("label");
     fontLabel.className = "reuse-fontsize-label";
     fontLabel.textContent = "フォント";
-    const fontSel = document.createElement("select");
-    fontSel.className = "prompt-modal-input reuse-fontsize-select";
-    if (!fonts.length) {
-      const opt = document.createElement("option");
-      opt.value = defaultFontPs || "";
-      opt.textContent = defaultFontPs || "(既定)";
-      opt.selected = true;
-      fontSel.appendChild(opt);
+    const fontCombo = document.createElement("div");
+    fontCombo.className = "font-combobox reuse-fontsize-combo";
+    const fontInput = document.createElement("input");
+    fontInput.type = "text";
+    fontInput.autocomplete = "off";
+    fontInput.spellcheck = false;
+    fontInput.placeholder = "フォント名で検索...";
+    fontInput.className = "font-input prompt-modal-input reuse-fontsize-font-input";
+    fontInput.setAttribute("aria-label", "フォントを検索");
+    const fontToggle = document.createElement("button");
+    fontToggle.type = "button";
+    fontToggle.className = "font-combobox-toggle reuse-fontsize-font-toggle";
+    fontToggle.setAttribute("aria-label", "フォント一覧を開く");
+    fontToggle.tabIndex = -1;
+    fontToggle.textContent = "▾";
+    const fontList = document.createElement("ul");
+    fontList.className = "font-combobox-list reuse-fontsize-font-list";
+    fontList.hidden = true;
+    fontList.setAttribute("role", "listbox");
+    fontCombo.appendChild(fontInput);
+    fontCombo.appendChild(fontToggle);
+    fontCombo.appendChild(fontList);
+
+    const fontChoices = fonts
+      .filter((f) => f && f.postScriptName)
+      .map((f) => ({
+        postScriptName: String(f.postScriptName),
+        label: String(f.label || f.postScriptName),
+      }));
+    if (defaultFontPs && !fontChoices.some((f) => f.postScriptName === defaultFontPs)) {
+      fontChoices.unshift({ postScriptName: String(defaultFontPs), label: String(defaultFontPs) });
     }
-    for (const f of fonts) {
-      if (!f || !f.postScriptName) continue;
-      const opt = document.createElement("option");
-      opt.value = f.postScriptName;
-      opt.textContent = f.label || f.postScriptName;
-      if (f.postScriptName === defaultFontPs) opt.selected = true;
-      fontSel.appendChild(opt);
-    }
+    let selectedFontPs = defaultFontPs || fontChoices[0]?.postScriptName || "";
+    let fontSearchCleared = false;
+    let fontSearchDirty = false;
+    let fontSearchRestoreValue = "";
+    const displayFontName = (ps) => {
+      const found = fontChoices.find((f) => f.postScriptName === ps);
+      return found?.label || ps || "";
+    };
+    const normalizeFontQuery = (value) => String(value ?? "").normalize("NFKC").toLocaleLowerCase("ja");
+    const syncFontInput = () => {
+      fontInput.dataset.ps = selectedFontPs;
+      fontInput.value = displayFontName(selectedFontPs);
+    };
+    const reuseFontCombo = createFontCombobox({
+      input: fontInput,
+      list: fontList,
+      combo: fontCombo,
+      getFonts: () => fontChoices,
+      getCurrentPostScriptName: () => selectedFontPs,
+      onCommit: (font) => {
+        selectedFontPs = font.postScriptName;
+        syncFontInput();
+      },
+      itemClassName: "reuse-fontsize-font-item",
+      emptyClassName: "reuse-fontsize-font-empty",
+      emptyText: fontChoices.length ? "該当するフォントがありません" : "フォント一覧を読み込み中です",
+    });
+    reuseFontCombo.rebuild();
+    const openFontCombo = (query = fontInput.value) => {
+      reuseFontCombo.open({ query, rebuild: false });
+    };
+    const closeFontCombo = () => {
+      reuseFontCombo.close();
+    };
+    const resetFontSearchForTyping = () => {
+      if (fontSearchCleared) return;
+      fontSearchRestoreValue = fontInput.value || "";
+      fontSearchCleared = true;
+      fontSearchDirty = false;
+      fontInput.value = "";
+      if (reuseFontCombo.isOpen()) reuseFontCombo.filter("");
+    };
+    const putCaretInFontInput = () => {
+      requestAnimationFrame(() => {
+        fontInput.focus({ preventScroll: true });
+        const len = fontInput.value.length;
+        try { fontInput.setSelectionRange(len, len); } catch (_) { /* noop */ }
+      });
+    };
+    const enterFontSearchMode = () => {
+      resetFontSearchForTyping();
+      openFontCombo("");
+      putCaretInFontInput();
+    };
+    const resolveFontInput = () => {
+      const raw = String(fontInput.value ?? "").trim();
+      if (!raw) return selectedFontPs;
+      const exact = resolveComboboxFontFromInput(fontChoices, raw);
+      if (exact) return exact.postScriptName;
+      const lower = normalizeFontQuery(raw);
+      const partial = fontChoices.find((font) => fontSearchHaystack(font).includes(lower));
+      return partial?.postScriptName || selectedFontPs;
+    };
+    const commitFontInput = () => {
+      const committed = reuseFontCombo.commit({ fallbackValue: fontInput.value, blur: false });
+      if (!committed) {
+        selectedFontPs = resolveFontInput();
+        syncFontInput();
+        closeFontCombo();
+      }
+    };
+    syncFontInput();
 
     const sizeLabel = document.createElement("label");
     sizeLabel.className = "reuse-fontsize-label";
@@ -2467,7 +2560,7 @@ export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizeP
     sizeInput.value = String(Number.isFinite(defaultSizePt) && defaultSizePt > 0 ? defaultSizePt : 12);
 
     wrap.appendChild(fontLabel);
-    wrap.appendChild(fontSel);
+    wrap.appendChild(fontCombo);
     wrap.appendChild(sizeLabel);
     wrap.appendChild(sizeInput);
     msgEl.parentNode.insertBefore(wrap, msgEl.nextSibling);
@@ -2481,12 +2574,14 @@ export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizeP
       setTimeout(() => { if (wrap.parentNode) wrap.parentNode.removeChild(wrap); }, MODAL_ANIM_MS);
       okBtn.removeEventListener("click", onOk);
       cancelBtn.removeEventListener("click", onCancel);
-      modal.removeEventListener("mousedown", onOverlay);
+      modal.removeEventListener("mousedown", onModalMouseDown);
       document.removeEventListener("keydown", onKey);
       resolve(result);
     };
     const onOk = () => {
-      const ps = fontSel.value || null;
+      selectedFontPs = resolveFontInput();
+      syncFontInput();
+      const ps = selectedFontPs || null;
       const sz = parseFloat(sizeInput.value);
       cleanup({
         fontPostScriptName: ps,
@@ -2495,15 +2590,78 @@ export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizeP
     };
     const onCancel = () => cleanup(null);
     const onOverlay = (e) => { if (e.target === modal) cleanup(null); };
+    const onModalMouseDown = (e) => {
+      if (!fontCombo.contains(e.target)) closeFontCombo();
+      onOverlay(e);
+    };
     const onKey = (e) => {
       if (e.key === "Escape") { e.preventDefault(); cleanup(null); }
       else if (e.key === "Enter") { e.preventDefault(); onOk(); }
     };
+    fontInput.addEventListener("focus", () => {
+      enterFontSearchMode();
+    });
+    fontInput.addEventListener("mousedown", () => {
+      if (document.activeElement === fontInput) resetFontSearchForTyping();
+    });
+    fontInput.addEventListener("click", () => {
+      if (!fontSearchDirty) enterFontSearchMode();
+    });
+    fontInput.addEventListener("input", () => {
+      fontSearchDirty = true;
+      openFontCombo(fontInput.value);
+    });
+    fontInput.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!reuseFontCombo.isOpen()) openFontCombo(fontInput.value);
+        else reuseFontCombo.moveHighlight(+1);
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        e.stopPropagation();
+        if (!reuseFontCombo.isOpen()) openFontCombo(fontInput.value);
+        else reuseFontCombo.moveHighlight(-1);
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        commitFontInput();
+      } else if (e.key === "Escape") {
+        if (reuseFontCombo.isOpen()) {
+          e.preventDefault();
+          e.stopPropagation();
+          syncFontInput();
+          closeFontCombo();
+        }
+      }
+    });
+    fontInput.addEventListener("blur", () => {
+      window.setTimeout(() => {
+        if (!fontCombo.contains(document.activeElement)) closeFontCombo();
+        if (
+          document.activeElement !== fontInput
+          && fontSearchCleared
+          && !fontSearchDirty
+          && fontInput.value === ""
+        ) {
+          fontInput.value = fontSearchRestoreValue || "";
+        }
+        fontSearchCleared = false;
+        fontSearchDirty = false;
+      }, 120);
+    });
+    fontToggle.addEventListener("mousedown", (e) => {
+      e.preventDefault();
+      if (reuseFontCombo.isOpen()) closeFontCombo();
+      else {
+        fontInput.focus({ preventScroll: true });
+        openFontCombo("");
+      }
+    });
     okBtn.addEventListener("click", onOk);
     cancelBtn.addEventListener("click", onCancel);
-    modal.addEventListener("mousedown", onOverlay);
+    modal.addEventListener("mousedown", onModalMouseDown);
     document.addEventListener("keydown", onKey);
-    requestAnimationFrame(() => fontSel.focus());
   });
 }
 

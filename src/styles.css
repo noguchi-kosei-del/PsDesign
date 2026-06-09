@@ -1615,6 +1615,8 @@ body.home-returning .workspace {
   }
 }
 .home-screen {
+  --home-divider-y: calc(clamp(282px, 47vh, 470px) + 26px);
+  --home-start-grid-gap-from-divider: 52px;
   display: none;
   position: relative;
   min-height: 0;
@@ -1640,7 +1642,7 @@ body.home-returning .workspace {
      Ver の直下に並ぶように top を +24px して align。 */
   position: absolute;
   z-index: 6;
-  top: calc(clamp(282px, 47vh, 470px) + 26px);
+  top: var(--home-divider-y);
   left: 50%;
   transform: translateX(-50%);
   width: 112px;
@@ -1818,15 +1820,18 @@ body.home-starting .home-screen {
   text-shadow: 0 0 6px rgba(0, 0, 0, 0.45);
 }
 .home-start-grid {
+  position: absolute;
+  z-index: 7;
+  top: calc(var(--home-divider-y) + var(--home-start-grid-gap-from-divider));
+  left: 50%;
+  transform: translateX(-50%);
   display: grid;
   /* 4 cards (書き起こし / 写植 / リサイクル / プロジェクト) in a single row. */
   grid-template-columns: repeat(4, minmax(220px, 276px));
   justify-content: center;
   gap: 28px;
   width: min(1188px, calc(100vw - 120px));
-  /* v2.2.x: Ver + 光の横線が hero グラデ境界に絶対配置。カード grid は divider より
-     下に来るよう margin-top を確保しつつ、下げ過ぎないバランス値に。 */
-  margin-top: clamp(120px, 22vh, 240px);
+  margin-top: 0;
 }
 .home-scan-engine-warning {
   position: absolute;
@@ -3028,6 +3033,10 @@ body.home-starting .home-screen {
 }
 
 @media (max-width: 840px) {
+  .home-screen {
+    --home-divider-y: calc(clamp(228px, 42vh, 330px) + 20px);
+    --home-start-grid-gap-from-divider: 36px;
+  }
   .home-typeset-list {
     grid-template-columns: 1fr;
     gap: 18px;
@@ -3063,11 +3072,14 @@ body.home-starting .home-screen {
     grid-template-columns: 1fr;
     gap: 16px;
     width: min(620px, calc(100vw - 64px));
-    margin-top: clamp(48px, 10vh, 96px);
   }
   .home-start-card { min-height: 150px; }
 }
 @media (max-height: 760px) and (min-width: 841px) {
+  .home-screen {
+    --home-divider-y: calc(clamp(246px, 45vh, 340px) + 22px);
+    --home-start-grid-gap-from-divider: 40px;
+  }
   .home-screen-inner {
     padding-bottom: 36px;
   }
@@ -3086,9 +3098,6 @@ body.home-starting .home-screen {
   }
   .home-divider {
     margin-top: 8px;
-  }
-  .home-start-grid {
-    margin-top: clamp(128px, 20vh, 160px);
   }
   .home-start-card {
     min-height: 176px;
@@ -4210,6 +4219,69 @@ body.home-starting .home-screen {
 }
 .reuse-fontsize-fields .prompt-modal-input {
   margin: 2px 0 0;
+}
+.reuse-fontsize-combo {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+}
+.reuse-fontsize-font-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding-right: 32px;
+}
+.reuse-fontsize-font-toggle {
+  position: absolute;
+  right: 1px;
+  top: 3px;
+  width: 30px;
+  height: calc(100% - 6px);
+  border: 0;
+  border-left: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+}
+.reuse-fontsize-font-toggle:hover {
+  color: var(--text);
+}
+.reuse-fontsize-combo .reuse-fontsize-font-list {
+  position: absolute;
+  z-index: 540;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+.reuse-fontsize-font-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(120px, auto);
+  gap: 10px;
+  align-items: baseline;
+  padding: 7px 10px;
+  color: var(--text);
+  cursor: pointer;
+}
+.reuse-fontsize-font-item:hover,
+.reuse-fontsize-font-item.highlight {
+  background: var(--panel-hover);
+}
+.reuse-fontsize-font-empty {
+  padding: 8px 10px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 .reuse-fontsize-mode-modal {
   z-index: 520;
@@ -12757,6 +12829,20 @@ button.home-scan-engine-install-btn:hover:not(:disabled) {
 .home-typeset-modal .home-typeset-font-toggle {
   background: rgba(255, 255, 255, 0.04);
   border-color: rgba(255, 255, 255, 0.18);
+}
+.home-typeset-modal .home-typeset-font-list .home-typeset-font-item {
+  padding: 7px 9px;
+  border-radius: 7px;
+  color: var(--home-text);
+  font-size: 13px;
+}
+.home-typeset-modal .home-typeset-font-list .font-combobox-sub {
+  color: var(--home-muted);
+}
+.home-typeset-modal .home-typeset-font-list .home-typeset-font-item:hover,
+.home-typeset-modal .home-typeset-font-list .home-typeset-font-item.highlight,
+.home-typeset-modal .home-typeset-font-list .home-typeset-font-item[aria-selected="true"] {
+  background: color-mix(in srgb, var(--accent) 26%, transparent);
 }
 /* actions の余分な背景を撤去してダイアログ下部に自然に並べる */
 .home-typeset-modal .home-typeset-actions {

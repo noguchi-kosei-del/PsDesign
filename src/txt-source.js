@@ -46,6 +46,7 @@ import {
   getStyleOverrideRangesForTxtRef,
 } from "./text-style-markers.js";
 import { getDefault } from "./settings.js";
+import { baseName } from "./utils/path.js";
 
 const $ = (id) => document.getElementById(id);
 const RUNTIME_TOKEN = "a" + "i";
@@ -1511,11 +1512,6 @@ async function readTxtFromPath(path) {
   const { invoke } = await import("@tauri-apps/api/core");
   const bytes = await invoke("read_binary_file", { path });
   return decodeBytes(new Uint8Array(bytes));
-}
-
-function baseName(p) {
-  const m = p && p.match(/[\\/]([^\\/]+)$/);
-  return m ? m[1] : p;
 }
 
 async function handleOpenBtn() {

@@ -31,6 +31,10 @@ import {
   removeEditModeRubyTextFromRange,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
+import {
+  createFontCombobox,
+  resolveFontFromInput as resolveComboboxFontFromInput,
+} from "./font-combobox.js";
 import { capturePsdViewportCenter, PSD_FIT_BASE_SCALE, PSD_FIT_ZOOM, renderAllSpreads, resetPsdViewportToStart, schedulePsdStageLayoutRefresh, setNextPsdZoomAnchorFromClientPoint } from "./spread-view.js";
 import {
   bindEditorEvents,
@@ -4130,29 +4134,19 @@ function openReferenceHiddenPicker(paths, selectedPages = new Set()) {
   });
 }
 
-function homeTypesetFontSearchText(font) {
-  const aliases = Array.isArray(font?.aliases) ? font.aliases : [];
-  return [
-    font?.name,
-    font?.postScriptName,
-    ...aliases,
-  ].filter(Boolean).join(" ").toLowerCase();
-}
-
 function homeTypesetDisplayFontName(psName) {
   return getFontDisplayName(psName) || psName || "";
 }
 
+function homeTypesetFonts() {
+  return getFonts().map((font) => ({
+    ...font,
+    name: homeTypesetDisplayFontName(font.postScriptName) || font.name || font.postScriptName,
+  }));
+}
+
 function resolveHomeTypesetFont(value) {
-  const text = String(value ?? "").trim();
-  if (!text) return null;
-  const lower = text.toLowerCase();
-  return getFonts().find((font) => font.postScriptName === text)
-    ?? getFonts().find((font) => font.name === text)
-    ?? getFonts().find((font) => homeTypesetDisplayFontName(font.postScriptName).toLowerCase() === lower)
-    ?? getFonts().find((font) => (font.postScriptName ?? "").toLowerCase() === lower)
-    ?? getFonts().find((font) => (font.name ?? "").toLowerCase() === lower)
-    ?? null;
+  return resolveComboboxFontFromInput(homeTypesetFonts(), value);
 }
 
 function openHomeTypesetDialog() {
@@ -4170,7 +4164,6 @@ function openHomeTypesetDialog() {
     let psdPreflightSerial = 0;
     let baseTextSize = clampSize(getDefault("textSize") ?? getTextSize());
     let baseFontPs = String(getDefault("fontPostScriptName") || getCurrentFont() || "");
-    let fontComboOpen = false;
     const modal = document.createElement("div");
     modal.className = "home-typeset-modal";
     modal.hidden = true;
@@ -4307,61 +4300,38 @@ function openHomeTypesetDialog() {
       const font = getFonts().find((f) => f.postScriptName === baseFontPs);
       fontInput.style.fontFamily = font ? fontFamilyFor(font) : "";
     };
-    const renderFontOptions = (query = "") => {
-      if (!fontList) return;
-      fontList.innerHTML = "";
-      const q = String(query ?? "").trim().toLowerCase();
-      const fonts = getFonts();
-      const matches = fonts
-        .filter((font) => !q || homeTypesetFontSearchText(font).includes(q) || homeTypesetDisplayFontName(font.postScriptName).toLowerCase().includes(q))
-        .slice(0, 80);
-      if (!matches.length) {
-        const empty = document.createElement("li");
-        empty.className = "home-typeset-font-empty";
-        empty.textContent = fonts.length ? "該当するフォントがありません" : "フォント一覧を読み込み中です";
-        fontList.appendChild(empty);
-        return;
-      }
-      for (const font of matches) {
-        const li = document.createElement("li");
-        li.className = "home-typeset-font-item";
-        li.dataset.ps = font.postScriptName || "";
-        li.style.fontFamily = fontFamilyFor(font);
-        li.textContent = homeTypesetDisplayFontName(font.postScriptName) || font.name || font.postScriptName || "";
-        li.title = font.postScriptName || li.textContent;
-        li.setAttribute("aria-selected", font.postScriptName === baseFontPs ? "true" : "false");
-        li.addEventListener("mousedown", (e) => e.preventDefault());
-        li.addEventListener("click", () => {
-          if (!font.postScriptName) return;
-          baseFontPs = font.postScriptName;
-          ensureFontLoaded(baseFontPs);
-          syncFontInput();
-          closeFontCombo();
-        });
-        fontList.appendChild(li);
-      }
-    };
+    const homeFontCombo = createFontCombobox({
+      input: fontInput,
+      list: fontList,
+      combo: fontCombo,
+      getFonts: homeTypesetFonts,
+      getCurrentPostScriptName: () => baseFontPs,
+      onCommit: (font) => {
+        if (!font?.postScriptName) return;
+        baseFontPs = font.postScriptName;
+        ensureFontLoaded(baseFontPs);
+        syncFontInput();
+      },
+      onBuilt: (items) => {
+        for (const { el, font } of items) {
+          el.style.fontFamily = fontFamilyFor(font);
+          el.title = font.postScriptName || el.textContent || "";
+        }
+      },
+      itemClassName: "home-typeset-font-item",
+      emptyClassName: "home-typeset-font-empty",
+      emptyText: getFonts().length ? "該当するフォントがありません" : "フォント一覧を読み込み中です",
+    });
+    homeFontCombo.rebuild();
     const openFontCombo = (query = "") => {
-      if (!fontList) return;
-      fontComboOpen = true;
-      renderFontOptions(query);
-      fontList.hidden = false;
-      fontCombo?.classList.add("open");
+      homeFontCombo.open({ query, rebuild: true });
     };
     const closeFontCombo = () => {
-      fontComboOpen = false;
-      if (fontList) fontList.hidden = true;
-      fontCombo?.classList.remove("open");
+      homeFontCombo.close();
     };
     const commitFontInput = () => {
       if (!fontInput) return;
-      const font = resolveHomeTypesetFont(fontInput.value);
-      if (font?.postScriptName) {
-        baseFontPs = font.postScriptName;
-        ensureFontLoaded(baseFontPs);
-      }
-      syncFontInput();
-      closeFontCombo();
+      homeFontCombo.commit({ fallbackValue: fontInput.value, blur: false }) || syncFontInput();
     };
     const applyTypesetDefaults = () => {
       baseTextSize = clampSize(sizeInput?.value ?? baseTextSize);
@@ -4378,8 +4348,9 @@ function openHomeTypesetDialog() {
       syncFontInput();
     };
     const onFontsLoadedForTypeset = () => {
+      homeFontCombo.rebuild();
       syncFontInput();
-      if (fontComboOpen) renderFontOptions(fontInput?.value ?? "");
+      if (homeFontCombo.isOpen()) openFontCombo(fontInput?.value ?? "");
     };
     syncSizeInput();
     syncFontInput();
@@ -4395,10 +4366,16 @@ function openHomeTypesetDialog() {
     fontInput?.addEventListener("focus", () => openFontCombo(""));
     fontInput?.addEventListener("input", () => openFontCombo(fontInput.value));
     fontInput?.addEventListener("keydown", (e) => {
-      if (e.key === "Enter") {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        homeFontCombo.moveHighlight(+1, { showAll: true });
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        homeFontCombo.moveHighlight(-1, { showAll: true });
+      } else if (e.key === "Enter") {
         e.preventDefault();
         commitFontInput();
-      } else if (e.key === "Escape" && fontComboOpen) {
+      } else if (e.key === "Escape" && homeFontCombo.isOpen()) {
         e.preventDefault();
         syncFontInput();
         closeFontCombo();
@@ -4410,7 +4387,7 @@ function openHomeTypesetDialog() {
       }, 0);
     });
     fontToggle?.addEventListener("click", () => {
-      if (fontComboOpen) closeFontCombo();
+      if (homeFontCombo.isOpen()) closeFontCombo();
       else {
         fontInput?.focus();
         openFontCombo("");
@@ -4649,7 +4626,7 @@ function openHomeTypesetDialog() {
     };
     const onKeyDown = (e) => {
       if (pickingFile) return;
-      if (e.key === "Escape" && fontComboOpen) {
+      if (e.key === "Escape" && homeFontCombo.isOpen()) {
         e.preventDefault();
         syncFontInput();
         closeFontCombo();

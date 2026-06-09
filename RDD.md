@@ -283,6 +283,49 @@
   **Phase B の最後**に実行する（記号フォント/manual spacing 再適用の後）。
   - 確認: 写植再利用で `!! / !? / ‼ / ⁉` 等が保存後の PSD で縦中横になる（通常写植と同じ）。
 
+### G13. フォント検索コンボ — `src/font-combobox.js` / `src/main.js` / `src/text-editor.js` / `src/find-change.js` / `src/ui-feedback.js`
+
+フォント検索 UI はサイドバー、検索置換モーダル、写植再利用の「フォント・サイズを指定」モーダルで
+同じ入力体験を維持する。実装は `src/font-combobox.js` を共通部品とし、各画面固有の「選択後に何を更新するか」
+のみ callback で差し込む。
+
+- **REQ-G13.1 入力欄優先**: フォント欄は `<input type="text">` として振る舞い、クリック/フォーカス時に
+  テキストカーソルが入る。リスト項目の hover/highlight が入力欄クリックより優先されてはならない。
+  写植再利用のフォント指定モーダルは、表示直後に自動でフォントリストを開かない（ユーザーが欄をクリック、
+  入力、またはトグルを押したときに開く）。
+  - 確認: `pickReuseFontSize` を開く → 初期表示でフォントリストが開いていない → フォント欄クリックで
+    入力欄が空になり caret が入る → 入力で絞り込める。
+- **REQ-G13.2 検索対象**: 検索は表示名（`name` / `label`）・PostScript 名・aliases（存在する場合）を
+  `NFKC` 正規化 + 日本語 locale lowercase で照合する。トグルボタン（▾/▼）から開いた場合は入力欄の
+  現在値を無視して全フォントを表示する。
+  - 確認: サイドバー / 検索置換 / 写植再利用モーダルの各フォント欄で、表示名または PostScript 名の
+    一部入力により候補が絞られる。トグルでは全件が見える。
+- **REQ-G13.3 キーボード操作**: ArrowDown / ArrowUp は表示中候補の highlight を循環し、Enter は
+  highlight 中の候補を優先して確定する。highlight が無い場合は入力値と完全一致する表示名または
+  PostScript 名を解決して確定する。Escape はリストを閉じ、必要に応じて元の表示値へ戻す。
+  - 確認: 各フォント欄で上下キー → Enter 確定、Escape で閉じる。検索置換では hidden input と有効化
+    checkbox が従来どおり更新される。
+- **REQ-G13.4 blur / click 外処理**: 候補 item は `mousedown.preventDefault()` で blur による早期 close を防ぎ、
+  外側クリックや blur ではリストを閉じる。サイドバーで未入力のまま blur した場合はクリック前の表示値を復元する。
+  - 確認: 候補クリックで確定できる。欄外クリックで閉じる。サイドバーは空検索のまま離脱しても表示値が消えない。
+- **REQ-G13.5 フォントプレビュー**: サイドバーの候補名は従来どおり IntersectionObserver で可視範囲に入った
+  item だけ実フォント表示し、`ensureFontLoaded(postScriptName)` を fire-and-forget する。検索置換と
+  写植再利用モーダルは共通 DOM class を使うが、重いプレビュー読み込みを必須にしない。
+  - 確認: サイドバーのフォントリストを開くと候補名が実フォントで表示され、スクロールしても UI が固まらない。
+
+### G14. パス処理ユーティリティ — `src/utils/path.js`
+
+ファイル名・親フォルダ・結合パスの文字列処理は、原則 `src/utils/path.js` の `baseName` /
+`parentDir` / `joinPath` を使う。Windows (`\`) と POSIX (`/`) の両区切りを受ける。
+
+- **REQ-G14.1 重複実装の抑制**: モジュール内に UI 固有でない `baseName` / `parentDir` / `joinPath`
+  相当のローカル関数を増やさない。既存の単純なファイル名抽出は `utils/path.js` へ寄せる。
+  - 確認: `rg -n "function baseName|const baseName|function parentDir|function joinPath" src` で、
+    残るローカル実装が UI 固有または複数引数対応などの別用途であること。
+- **REQ-G14.2 挙動維持**: `baseName("")` は空文字、`baseName(null)` は null 相当、`parentDir` は親が
+  取れない場合 null を返す。TXT 読込・エディタ保存名・スキャン抽出の表示名はリファクタ前と同じ。
+  - 確認: TXT 読込後のファイル名表示、エディタ保存の既定名、スキャン抽出の進捗詳細にファイル名が出る。
+
 ---
 
 ## 3. 移植機能の要件（PORT_NOTES_2026-05-29）
@@ -370,6 +413,8 @@ GitHub に push する前に、以下を上から順に実施する。
      `_thickSafetyEm` を同値に揃えたか（不一致だと縦書きテキストが UI↔PSD でズレる）。
    - REQ-G12.4: 写植再利用の `reuseSrcCx/Cy` を JS→Rust→JSX の3層に渡したか。
    - REQ-G12.6: 縦中横は半角化を作成時に1回＋`reapplyTateChuYoko` を Phase B 最後で再適用したか。
+   - REQ-G13: フォント検索コンボのクリック入力・検索・上下キー/Enter/Escape・blur 復元が各画面で壊れていないか。
+   - REQ-G14: パス処理の共通化で表示ファイル名・保存既定名が変わっていないか。
 3. **[最低限の手動スモークテスト]**（`npm run tauri dev` 実機、テストモード可）:
    1. ルビを適用 → 保存 → 再オープンしてルビが保持される。
    2. 本文の前方を編集しても per-char 属性（サイズ/フォント/太字/ルビ）が正しい文字に残る。

@@ -19,34 +19,21 @@ import {
   showModalAnimated,
   toast,
 } from "./ui-feedback.js";
+import {
+  createFontCombobox,
+  resolveFontFromInput as resolveComboboxFontFromInput,
+} from "./font-combobox.js";
 
 const MODAL_ID = "find-change-modal";
 const lastReplacementBySearch = new Map();
 let modalDefaultsSynced = false;
-let fontComboItems = [];
-let fontComboHighlighted = -1;
-let fontComboOpen = false;
-let sourceFontComboItems = [];
-let sourceFontComboHighlighted = -1;
-let sourceFontComboOpen = false;
+let fontCombo = null;
+let sourceFontCombo = null;
 
 function $(id) { return document.getElementById(id); }
 
 function searchMemoryKey(query, caseSensitive) {
   return `${caseSensitive ? "case" : "nocase"}\u0000${query}`;
-}
-
-function normalizeFontSearchText(value) {
-  return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ja");
-}
-
-function fontSearchHaystack(font) {
-  const aliases = Array.isArray(font?.aliases) ? font.aliases : [];
-  return normalizeFontSearchText([
-    font?.name,
-    font?.postScriptName,
-    ...aliases,
-  ].filter(Boolean).join("\n"));
 }
 
 function cloneMap(map) {
@@ -391,88 +378,66 @@ function createModal() {
   return modal;
 }
 
-function populateFontSelect() {
-  const list = $("find-change-font-list");
-  if (!list) return;
-  const current = $("find-change-font")?.value ?? "";
-  list.textContent = "";
-  fontComboItems = [];
-  fontComboHighlighted = -1;
-  const fonts = [...getFonts()].sort((a, b) => {
+function sortedFonts() {
+  return [...getFonts()].sort((a, b) => {
     const an = (a.name || a.postScriptName || "").toLocaleLowerCase();
     const bn = (b.name || b.postScriptName || "").toLocaleLowerCase();
     return an.localeCompare(bn);
   });
-  for (const font of fonts) {
-    if (!font?.postScriptName) continue;
-    const item = document.createElement("li");
-    item.className = "font-combobox-item";
-    item.setAttribute("role", "option");
+}
 
-    const name = document.createElement("span");
-    name.className = "font-combobox-name";
-    name.textContent = font.name || font.postScriptName;
-    item.appendChild(name);
+function getFontCombo() {
+  const input = $("find-change-font-search");
+  const list = $("find-change-font-list");
+  const combo = $("find-change-font-combobox");
+  if (!input || !list || !combo) return null;
+  if (fontCombo) return fontCombo;
+  fontCombo = createFontCombobox({
+    input,
+    list,
+    combo,
+    getFonts: sortedFonts,
+    getCurrentPostScriptName: () => $("find-change-font")?.value ?? "",
+    onOpen: () => closeSourceFontCombo(),
+    onCommit: (font) => setFindChangeFont(font, { enable: true }),
+    positionMode: "fixed",
+    appendToBody: true,
+    blurOnCommit: true,
+  });
+  return fontCombo;
+}
 
-    if (font.name && font.name !== font.postScriptName) {
-      const sub = document.createElement("span");
-      sub.className = "font-combobox-sub";
-      sub.textContent = font.postScriptName;
-      item.appendChild(sub);
-    }
+function getSourceFontCombo() {
+  const input = $("find-change-source-font-search");
+  const list = $("find-change-source-font-list");
+  const combo = $("find-change-source-font-combobox");
+  if (!input || !list || !combo) return null;
+  if (sourceFontCombo) return sourceFontCombo;
+  sourceFontCombo = createFontCombobox({
+    input,
+    list,
+    combo,
+    getFonts: sortedFonts,
+    getCurrentPostScriptName: () => $("find-change-source-font")?.value ?? "",
+    onOpen: () => closeFontCombo(),
+    onCommit: (font) => setFindChangeSourceFont(font, { enable: getFindChangeActiveTab() === "convert" }),
+    positionMode: "fixed",
+    appendToBody: true,
+    blurOnCommit: true,
+  });
+  return sourceFontCombo;
+}
 
-    item.addEventListener("mousedown", (e) => e.preventDefault());
-    item.addEventListener("click", () => {
-      setFindChangeFont(font, { enable: true });
-      closeFontCombo();
-      $("find-change-font-search")?.blur();
-    });
-    list.appendChild(item);
-    fontComboItems.push({ el: item, font });
-  }
+function populateFontSelect() {
+  const current = $("find-change-font")?.value ?? "";
+  getFontCombo()?.rebuild();
   if (current) syncFindChangeFontDisplay();
 }
 
 function populateSourceFontSelect() {
-  const list = $("find-change-source-font-list");
-  if (!list) return;
   const typed = $("find-change-source-font-search")?.value ?? "";
   const current = $("find-change-source-font")?.value || (!typed ? getCurrentFont() || "" : "");
-  list.textContent = "";
-  sourceFontComboItems = [];
-  sourceFontComboHighlighted = -1;
-  const fonts = [...getFonts()].sort((a, b) => {
-    const an = (a.name || a.postScriptName || "").toLocaleLowerCase();
-    const bn = (b.name || b.postScriptName || "").toLocaleLowerCase();
-    return an.localeCompare(bn);
-  });
-  for (const font of fonts) {
-    if (!font?.postScriptName) continue;
-    const item = document.createElement("li");
-    item.className = "font-combobox-item";
-    item.setAttribute("role", "option");
-
-    const name = document.createElement("span");
-    name.className = "font-combobox-name";
-    name.textContent = font.name || font.postScriptName;
-    item.appendChild(name);
-
-    if (font.name && font.name !== font.postScriptName) {
-      const sub = document.createElement("span");
-      sub.className = "font-combobox-sub";
-      sub.textContent = font.postScriptName;
-      item.appendChild(sub);
-    }
-
-    item.addEventListener("mousedown", (e) => e.preventDefault());
-    item.addEventListener("click", () => {
-      setFindChangeSourceFont(font, { enable: getFindChangeActiveTab() === "convert" });
-      closeSourceFontCombo();
-      $("find-change-source-font-search")?.blur();
-    });
-    list.appendChild(item);
-    sourceFontComboItems.push({ el: item, font });
-  }
+  getSourceFontCombo()?.rebuild();
   if (current) setFindChangeSourceFont(current);
 }
 
@@ -486,17 +451,7 @@ function findFontByPostScriptName(ps) {
 }
 
 function resolveFindChangeFontFromInput(value) {
-  const typed = String(value ?? "").trim();
-  if (!typed) return null;
-  const fonts = getFonts();
-  const exactName = fonts.find((font) => (font.name ?? "") === typed);
-  if (exactName) return exactName;
-  const exactPs = fonts.find((font) => (font.postScriptName ?? "") === typed);
-  if (exactPs) return exactPs;
-  const lower = typed.toLocaleLowerCase("ja");
-  return fonts.find((font) => (font.name ?? "").toLocaleLowerCase("ja") === lower)
-    ?? fonts.find((font) => (font.postScriptName ?? "").toLocaleLowerCase("ja") === lower)
-    ?? null;
+  return resolveComboboxFontFromInput(getFonts(), value);
 }
 
 function setFindChangeFont(fontOrPs, { enable = false } = {}) {
@@ -544,154 +499,44 @@ function syncFindChangeSourceFontDisplay() {
   setFindChangeSourceFont(hidden.value);
 }
 
-function setFontComboHighlight(idx) {
-  if (fontComboHighlighted >= 0 && fontComboItems[fontComboHighlighted]) {
-    fontComboItems[fontComboHighlighted].el.classList.remove("highlight");
-  }
-  fontComboHighlighted = idx;
-  if (idx >= 0 && fontComboItems[idx]) {
-    const el = fontComboItems[idx].el;
-    el.classList.add("highlight");
-    el.scrollIntoView({ block: "nearest" });
-  }
-}
-
 function filterFontCombo(query) {
-  const q = normalizeFontSearchText(query).trim();
-  let firstVisible = -1;
-  for (let i = 0; i < fontComboItems.length; i++) {
-    const { el, font } = fontComboItems[i];
-    const match = q === "" || fontSearchHaystack(font).includes(q);
-    el.style.display = match ? "" : "none";
-    if (match && firstVisible < 0) firstVisible = i;
-  }
-  setFontComboHighlight(firstVisible);
+  getFontCombo()?.filter(query);
 }
 
 function positionFontCombo() {
-  const list = $("find-change-font-list");
-  const combo = $("find-change-font-combobox");
-  if (!list || !combo) return;
-  if (list.parentElement !== document.body) document.body.appendChild(list);
-  const r = combo.getBoundingClientRect();
-  list.style.top = `${r.bottom + 2}px`;
-  list.style.left = `${r.left}px`;
-  list.style.width = `${r.width}px`;
+  getFontCombo()?.position();
 }
 
 function openFontCombo(showAll = false) {
-  closeSourceFontCombo();
-  populateFontSelect();
-  const list = $("find-change-font-list");
-  const input = $("find-change-font-search");
-  if (!list || !input || !fontComboItems.length) return;
-  list.hidden = false;
-  fontComboOpen = true;
-  positionFontCombo();
-  filterFontCombo(showAll ? "" : input.value);
-  const current = $("find-change-font")?.value ?? "";
-  if (current) {
-    const idx = fontComboItems.findIndex(({ el, font }) =>
-      el.style.display !== "none" && font.postScriptName === current);
-    if (idx >= 0) setFontComboHighlight(idx);
-  }
+  getFontCombo()?.open({ showAll, rebuild: true });
 }
 
 function closeFontCombo() {
-  const list = $("find-change-font-list");
-  if (list) list.hidden = true;
-  fontComboOpen = false;
+  getFontCombo()?.close();
 }
 
 function moveFontComboHighlight(delta) {
-  if (!fontComboItems.length) return;
-  const visible = fontComboItems
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.el.style.display !== "none");
-  if (!visible.length) {
-    setFontComboHighlight(-1);
-    return;
-  }
-  const currentVisibleIndex = visible.findIndex(({ index }) => index === fontComboHighlighted);
-  const next = currentVisibleIndex < 0
-    ? visible[0].index
-    : visible[(currentVisibleIndex + delta + visible.length) % visible.length].index;
-  setFontComboHighlight(next);
-}
-
-function setSourceFontComboHighlight(idx) {
-  if (sourceFontComboHighlighted >= 0 && sourceFontComboItems[sourceFontComboHighlighted]) {
-    sourceFontComboItems[sourceFontComboHighlighted].el.classList.remove("highlight");
-  }
-  sourceFontComboHighlighted = idx;
-  if (idx >= 0 && sourceFontComboItems[idx]) {
-    const el = sourceFontComboItems[idx].el;
-    el.classList.add("highlight");
-    el.scrollIntoView({ block: "nearest" });
-  }
+  getFontCombo()?.moveHighlight(delta, { showAll: true });
 }
 
 function filterSourceFontCombo(query) {
-  const q = normalizeFontSearchText(query).trim();
-  let firstVisible = -1;
-  for (let i = 0; i < sourceFontComboItems.length; i++) {
-    const { el, font } = sourceFontComboItems[i];
-    const match = q === "" || fontSearchHaystack(font).includes(q);
-    el.style.display = match ? "" : "none";
-    if (match && firstVisible < 0) firstVisible = i;
-  }
-  setSourceFontComboHighlight(firstVisible);
+  getSourceFontCombo()?.filter(query);
 }
 
 function positionSourceFontCombo() {
-  const list = $("find-change-source-font-list");
-  const combo = $("find-change-source-font-combobox");
-  if (!list || !combo) return;
-  if (list.parentElement !== document.body) document.body.appendChild(list);
-  const r = combo.getBoundingClientRect();
-  list.style.top = `${r.bottom + 2}px`;
-  list.style.left = `${r.left}px`;
-  list.style.width = `${r.width}px`;
+  getSourceFontCombo()?.position();
 }
 
 function openSourceFontCombo(showAll = false) {
-  closeFontCombo();
-  populateSourceFontSelect();
-  const list = $("find-change-source-font-list");
-  const input = $("find-change-source-font-search");
-  if (!list || !input || !sourceFontComboItems.length || input.disabled) return;
-  list.hidden = false;
-  sourceFontComboOpen = true;
-  positionSourceFontCombo();
-  filterSourceFontCombo(showAll ? "" : input.value);
-  const current = $("find-change-source-font")?.value ?? "";
-  if (current) {
-    const idx = sourceFontComboItems.findIndex(({ el, font }) =>
-      el.style.display !== "none" && font.postScriptName === current);
-    if (idx >= 0) setSourceFontComboHighlight(idx);
-  }
+  getSourceFontCombo()?.open({ showAll, rebuild: true });
 }
 
 function closeSourceFontCombo() {
-  const list = $("find-change-source-font-list");
-  if (list) list.hidden = true;
-  sourceFontComboOpen = false;
+  getSourceFontCombo()?.close();
 }
 
 function moveSourceFontComboHighlight(delta) {
-  if (!sourceFontComboItems.length) return;
-  const visible = sourceFontComboItems
-    .map((item, index) => ({ item, index }))
-    .filter(({ item }) => item.el.style.display !== "none");
-  if (!visible.length) {
-    setSourceFontComboHighlight(-1);
-    return;
-  }
-  const currentVisibleIndex = visible.findIndex(({ index }) => index === sourceFontComboHighlighted);
-  const next = currentVisibleIndex < 0
-    ? visible[0].index
-    : visible[(currentVisibleIndex + delta + visible.length) % visible.length].index;
-  setSourceFontComboHighlight(next);
+  getSourceFontCombo()?.moveHighlight(delta, { showAll: true });
 }
 
 function syncModalStyleDefaults() {
@@ -1146,23 +991,13 @@ function syncSourceFontControls(activeTab = getFindChangeActiveTab()) {
   if (sourceFontInput) sourceFontInput.disabled = disabled;
   if (sourceFontToggle) sourceFontToggle.disabled = disabled;
   if (disabled) closeSourceFontCombo();
-  else if (sourceFontComboOpen) positionSourceFontCombo();
+  else if (getSourceFontCombo()?.isOpen()) positionSourceFontCombo();
 }
 
 function commitSourceFontInput({ blur = true } = {}) {
   const input = $("find-change-source-font-search");
   if (!input) return;
-  if (sourceFontComboOpen && sourceFontComboHighlighted >= 0) {
-    setFindChangeSourceFont(sourceFontComboItems[sourceFontComboHighlighted].font, {
-      enable: getFindChangeActiveTab() === "convert",
-    });
-    closeSourceFontCombo();
-  } else {
-    const font = resolveFindChangeFontFromInput(input.value);
-    if (font) {
-      setFindChangeSourceFont(font, { enable: getFindChangeActiveTab() === "convert" });
-    }
-  }
+  getSourceFontCombo()?.commit({ fallbackValue: input.value, blur });
   if (blur) input.blur();
 }
 
@@ -1257,17 +1092,17 @@ function bindModalEvents() {
     enableSourceFontSearchFromInput();
     const hidden = $("find-change-source-font");
     if (hidden) hidden.value = "";
-    if (!sourceFontComboOpen) openSourceFontCombo();
+    if (!getSourceFontCombo()?.isOpen()) openSourceFontCombo();
     else filterSourceFontCombo(sourceFontInput.value);
   });
   sourceFontInput?.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (!sourceFontComboOpen) openSourceFontCombo(true);
+      if (!getSourceFontCombo()?.isOpen()) openSourceFontCombo(true);
       else moveSourceFontComboHighlight(+1);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (!sourceFontComboOpen) openSourceFontCombo(true);
+      if (!getSourceFontCombo()?.isOpen()) openSourceFontCombo(true);
       else moveSourceFontComboHighlight(-1);
     } else if (e.key === "Enter") {
       e.preventDefault();
@@ -1290,7 +1125,7 @@ function bindModalEvents() {
   sourceFontToggle?.addEventListener("mousedown", (e) => {
     e.preventDefault();
     if (sourceFontToggle.disabled) return;
-    if (sourceFontComboOpen) closeSourceFontCombo();
+    if (getSourceFontCombo()?.isOpen()) closeSourceFontCombo();
     else {
       sourceFontInput?.focus();
       openSourceFontCombo(true);
@@ -1302,27 +1137,21 @@ function bindModalEvents() {
     if (fontEnabled) fontEnabled.checked = true;
     const hidden = $("find-change-font");
     if (hidden) hidden.value = "";
-    if (!fontComboOpen) openFontCombo();
+    if (!getFontCombo()?.isOpen()) openFontCombo();
     else filterFontCombo(fontInput.value);
   });
   fontInput?.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") {
       e.preventDefault();
-      if (!fontComboOpen) openFontCombo(true);
+      if (!getFontCombo()?.isOpen()) openFontCombo(true);
       else moveFontComboHighlight(+1);
     } else if (e.key === "ArrowUp") {
       e.preventDefault();
-      if (!fontComboOpen) openFontCombo(true);
+      if (!getFontCombo()?.isOpen()) openFontCombo(true);
       else moveFontComboHighlight(-1);
     } else if (e.key === "Enter") {
       e.preventDefault();
-      if (fontComboOpen && fontComboHighlighted >= 0) {
-        setFindChangeFont(fontComboItems[fontComboHighlighted].font, { enable: true });
-        closeFontCombo();
-      } else {
-        const font = resolveFindChangeFontFromInput(fontInput.value);
-        if (font) setFindChangeFont(font, { enable: true });
-      }
+      getFontCombo()?.commit({ fallbackValue: fontInput.value, blur: true });
       fontInput.blur();
     } else if (e.key === "Escape") {
       e.preventDefault();
@@ -1341,7 +1170,7 @@ function bindModalEvents() {
   });
   fontToggle?.addEventListener("mousedown", (e) => {
     e.preventDefault();
-    if (fontComboOpen) closeFontCombo();
+    if (getFontCombo()?.isOpen()) closeFontCombo();
     else {
       fontInput?.focus();
       openFontCombo(true);
@@ -1365,8 +1194,8 @@ function bindModalEvents() {
     control.addEventListener("change", enable);
   });
   modal.addEventListener("mousedown", (e) => {
-    if (fontComboOpen && !$("find-change-font-combobox")?.contains(e.target)) closeFontCombo();
-    if (sourceFontComboOpen && !$("find-change-source-font-combobox")?.contains(e.target)) closeSourceFontCombo();
+    if (getFontCombo()?.isOpen() && !$("find-change-font-combobox")?.contains(e.target)) closeFontCombo();
+    if (getSourceFontCombo()?.isOpen() && !$("find-change-source-font-combobox")?.contains(e.target)) closeSourceFontCombo();
     if (e.target === modal) closeModal();
   });
   modal.addEventListener("keydown", (e) => {
@@ -1380,8 +1209,8 @@ function bindModalEvents() {
     }
   });
   const repositionFontList = () => {
-    if (fontComboOpen) positionFontCombo();
-    if (sourceFontComboOpen) positionSourceFontCombo();
+    if (getFontCombo()?.isOpen()) positionFontCombo();
+    if (getSourceFontCombo()?.isOpen()) positionSourceFontCombo();
   };
   modal.querySelector(".find-change-body")?.addEventListener("scroll", repositionFontList);
   window.addEventListener("resize", repositionFontList);

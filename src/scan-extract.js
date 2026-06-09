@@ -31,6 +31,7 @@ import { withProgressFlow } from "./progress-flow.js";
 import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.js";
 import { checkScanModelsStatus } from "./scan-install.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
+import { baseName } from "./utils/path.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -46,11 +47,6 @@ const SCAN_ACTION_BUTTON_IDS = [
   "scan-adjust-menu-btn",
 ];
 const SCAN_ENGINE_LOCK_TITLE = "画像スキャンエンジンが未インストールです。左下メニューの「スキャンエンジンインストール」からインストールしてください。";
-
-function baseName(p) {
-  const m = p && p.match(/[\\/]([^\\/]+)$/);
-  return m ? m[1] : p;
-}
 
 function stripExt(s) {
   return (s || "").replace(/\.[^.]+$/, "");

@@ -61,6 +61,10 @@ import {
   setSelectionAdornmentsVisible,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
+import {
+  createFontCombobox,
+  resolveFontFromInput as resolveComboboxFontFromInput,
+} from "./font-combobox.js";
 import { getDefault, onSettingsChange, setDefault } from "./settings.js";
 import { formatTextSizePt, getTextSizeUnit } from "./text-size-unit.js";
 import { confirmDialog, toast } from "./ui-feedback.js";
@@ -142,19 +146,6 @@ function syncCustomFillSwatch(color) {
 
 function displayFontName(psName) {
   return getFontDisplayName(psName) ?? psName ?? "";
-}
-
-function normalizeFontSearchText(value) {
-  return String(value ?? "").normalize("NFKC").toLocaleLowerCase("ja");
-}
-
-function fontSearchHaystack(font) {
-  const aliases = Array.isArray(font?.aliases) ? font.aliases : [];
-  return normalizeFontSearchText([
-    font?.name,
-    font?.postScriptName,
-    ...aliases,
-  ].filter(Boolean).join("\n"));
 }
 
 function layerDefaultFont(ref) {
@@ -893,9 +884,7 @@ function syncItalicToggle(value) {
 // ========== フォント検索コンボボックス ==========
 // editor-tabs-section の上に配置されたインストール済み全フォント検索 UI。
 // スタイルパレットは社内 curated プリセット用で、こちらは検索代替経路。
-let comboItems = [];
-let comboHighlighted = -1;
-let comboOpen = false;
+let sidebarFontCombo = null;
 let fontPreviewObserver = null;
 let comboSuppressAutoOpenUntil = 0;
 
@@ -907,35 +896,32 @@ function shouldSuppressComboAutoOpen() {
   return performance.now() < comboSuppressAutoOpenUntil;
 }
 
-function ensureComboBuilt() {
+function getSidebarFontCombo() {
+  const input = fontEl();
   const list = fontListEl();
-  if (!list || comboItems.length) return;
-  const fonts = getFonts();
-  if (!fonts.length) return;
-  list.innerHTML = "";
-  comboItems = fonts.map((font) => {
-    const li = document.createElement("li");
-    li.className = "font-combobox-item";
-    li.setAttribute("role", "option");
-    const main = document.createElement("span");
-    main.className = "font-combobox-name";
-    main.textContent = font.name || font.postScriptName;
-    li.appendChild(main);
-    if (font.name && font.postScriptName && font.name !== font.postScriptName) {
-      const sub = document.createElement("span");
-      sub.className = "font-combobox-sub";
-      sub.textContent = font.postScriptName;
-      li.appendChild(sub);
-    }
-    li.addEventListener("mousedown", (e) => e.preventDefault());
-    li.addEventListener("click", () => commitFont(font));
-    list.appendChild(li);
-    return { el: li, font, main, styled: false };
+  const combo = fontComboboxEl();
+  if (!input || !list || !combo) return null;
+  if (sidebarFontCombo) return sidebarFontCombo;
+  sidebarFontCombo = createFontCombobox({
+    input,
+    list,
+    combo,
+    getFonts,
+    getCurrentPostScriptName: () => fontEl()?.dataset.ps || "",
+    onCommit: commitFont,
+    onBuilt: (items, listElForObserver) => attachFontPreviewObserver(listElForObserver, items),
+    positionMode: "fixed",
   });
-  attachFontPreviewObserver(list);
+  return sidebarFontCombo;
 }
 
-function attachFontPreviewObserver(list) {
+function ensureComboBuilt() {
+  const combo = getSidebarFontCombo();
+  if (!combo || combo.getItems().length) return;
+  combo.rebuild();
+}
+
+function attachFontPreviewObserver(list, items = []) {
   if (fontPreviewObserver) {
     fontPreviewObserver.disconnect();
     fontPreviewObserver = null;
@@ -944,10 +930,10 @@ function attachFontPreviewObserver(list) {
   fontPreviewObserver = new IntersectionObserver((entries) => {
     for (const entry of entries) {
       if (!entry.isIntersecting) continue;
-      const item = comboItems.find((c) => c.el === entry.target);
+      const item = items.find((c) => c.el === entry.target);
       if (!item || item.styled) continue;
       item.styled = true;
-      const { font, main } = item;
+      const { font, name: main } = item;
       const parts = [];
       const add = (name) => {
         const trimmed = String(name ?? "").trim();
@@ -965,52 +951,30 @@ function attachFontPreviewObserver(list) {
       fontPreviewObserver.unobserve(entry.target);
     }
   }, { root: list, rootMargin: "80px 0px" });
-  for (const { el } of comboItems) {
+  for (const { el } of items) {
     fontPreviewObserver.observe(el);
   }
 }
 
 function filterCombo(query) {
-  const q = normalizeFontSearchText(query).trim();
-  let firstVisible = -1;
-  for (let i = 0; i < comboItems.length; i++) {
-    const { el, font } = comboItems[i];
-    const hay = fontSearchHaystack(font);
-    const match = q === "" || hay.includes(q);
-    el.style.display = match ? "" : "none";
-    if (match && firstVisible < 0) firstVisible = i;
-  }
-  setComboHighlight(firstVisible);
+  getSidebarFontCombo()?.filter(query);
 }
 
 function setComboHighlight(idx) {
-  if (comboHighlighted >= 0 && comboItems[comboHighlighted]) {
-    comboItems[comboHighlighted].el.classList.remove("highlight");
-  }
-  comboHighlighted = idx;
-  if (idx >= 0 && comboItems[idx]) {
-    comboItems[idx].el.classList.add("highlight");
-    comboItems[idx].el.scrollIntoView({ block: "nearest" });
-  }
+  getSidebarFontCombo()?.setHighlight(idx);
 }
 
 // position: fixed なので親 (.panel-section の overflow: hidden) に左右されず、
 // input の直下に絶対座標で表示。スクロール / リサイズで openCombo 中の場合は再計算。
 function positionCombo() {
-  const list = fontListEl();
-  const combo = fontComboboxEl();
-  if (!list || !combo) return;
-  const r = combo.getBoundingClientRect();
-  list.style.top = `${r.bottom + 2}px`;
-  list.style.left = `${r.left}px`;
-  list.style.width = `${r.width}px`;
+  getSidebarFontCombo()?.position();
 }
 
 let comboReposBound = false;
 function bindComboRepositionWhileOpen() {
   if (comboReposBound) return;
   comboReposBound = true;
-  const repos = () => { if (comboOpen) positionCombo(); };
+  const repos = () => { if (getSidebarFontCombo()?.isOpen()) positionCombo(); };
   window.addEventListener("scroll", repos, true);
   window.addEventListener("resize", repos);
 }
@@ -1019,26 +983,14 @@ function bindComboRepositionWhileOpen() {
 // 通常 (focus / input イベント) は入力欄の値で絞り込む。
 function openCombo(showAll = false, options = {}) {
   if (!options.force && shouldSuppressComboAutoOpen()) return;
-  ensureComboBuilt();
-  const list = fontListEl();
-  if (!list || !comboItems.length) return;
-  list.hidden = false;
-  comboOpen = true;
-  positionCombo();
+  const combo = getSidebarFontCombo();
+  if (!combo) return;
   bindComboRepositionWhileOpen();
-  filterCombo(showAll ? "" : fontEl().value);
-  const currentPs = fontEl().dataset.ps || "";
-  if (currentPs) {
-    const idx = comboItems.findIndex(({ font, el }) =>
-      el.style.display !== "none" && font.postScriptName === currentPs);
-    if (idx >= 0) setComboHighlight(idx);
-  }
+  combo.open({ showAll });
 }
 
 function closeCombo() {
-  const list = fontListEl();
-  if (list) list.hidden = true;
-  comboOpen = false;
+  getSidebarFontCombo()?.close();
 }
 
 let layerFontPanel = null;
@@ -1471,16 +1423,7 @@ export function openLayerStrokePanel(anchor) {
 }
 
 function moveComboHighlight(dir) {
-  if (!comboOpen) { openCombo(); return; }
-  const visible = [];
-  for (let i = 0; i < comboItems.length; i++) {
-    if (comboItems[i].el.style.display !== "none") visible.push(i);
-  }
-  if (!visible.length) return;
-  let pos = visible.indexOf(comboHighlighted);
-  if (pos < 0) pos = 0;
-  else pos = (pos + dir + visible.length) % visible.length;
-  setComboHighlight(visible[pos]);
+  getSidebarFontCombo()?.moveHighlight(dir);
 }
 
 // 【v1.16.0】フォント変更 — 選択範囲があれば per-char、無ければ layer 全体に適用。
@@ -1619,19 +1562,7 @@ function rebuildWeightSelector() {
 }
 
 function resolveFontFromInput(typed) {
-  const trimmed = (typed ?? "").trim();
-  if (!trimmed) return null;
-  const fonts = getFonts();
-  const exactDisplay = fonts.find((f) => (f.name ?? "") === trimmed);
-  if (exactDisplay) return exactDisplay;
-  const exactPs = fonts.find((f) => (f.postScriptName ?? "") === trimmed);
-  if (exactPs) return exactPs;
-  const lower = trimmed.toLowerCase();
-  const ciDisplay = fonts.find((f) => (f.name ?? "").toLowerCase() === lower);
-  if (ciDisplay) return ciDisplay;
-  const ciPs = fonts.find((f) => (f.postScriptName ?? "").toLowerCase() === lower);
-  if (ciPs) return ciPs;
-  return null;
+  return resolveComboboxFontFromInput(getFonts(), typed);
 }
 
 function rebuildFontOptions(currentValue, options = {}) {
@@ -1894,7 +1825,7 @@ export function bindEditorEvents() {
       input.dataset.fontSearchCleared = "true";
       input.dataset.fontSearchDirty = "false";
       input.value = "";
-      if (comboOpen) filterCombo("");
+      if (getSidebarFontCombo()?.isOpen()) filterCombo("");
     };
     input.addEventListener("focus", () => {
       if (shouldSuppressComboAutoOpen()) {
@@ -1910,7 +1841,7 @@ export function bindEditorEvents() {
     });
     input.addEventListener("input", () => {
       input.dataset.fontSearchDirty = "true";
-      if (!comboOpen) openCombo();
+      if (!getSidebarFontCombo()?.isOpen()) openCombo();
       else filterCombo(input.value);
     });
     input.addEventListener("keydown", (e) => {
@@ -1922,8 +1853,9 @@ export function bindEditorEvents() {
         moveComboHighlight(-1);
       } else if (e.key === "Enter") {
         e.preventDefault();
-        if (comboOpen && comboHighlighted >= 0) {
-          commitFont(comboItems[comboHighlighted].font);
+        const highlightedFont = getSidebarFontCombo()?.getHighlightedFont();
+        if (getSidebarFontCombo()?.isOpen() && highlightedFont) {
+          commitFont(highlightedFont);
         } else {
           const font = resolveFontFromInput(input.value);
           if (font) commitFont(font);
@@ -1955,7 +1887,7 @@ export function bindEditorEvents() {
     if (toggleBtn) {
       toggleBtn.addEventListener("mousedown", (e) => {
         e.preventDefault();
-        if (comboOpen) {
+        if (getSidebarFontCombo()?.isOpen()) {
           closeCombo();
         } else {
           // ▾ トグル経由は入力欄のフィルタを無視してインストール済み全フォントを一覧表示。
@@ -1966,7 +1898,7 @@ export function bindEditorEvents() {
       });
     }
     document.addEventListener("mousedown", (e) => {
-      if (!comboOpen) return;
+      if (!getSidebarFontCombo()?.isOpen()) return;
       if (!fontComboboxEl()?.contains(e.target)) closeCombo();
     });
 
@@ -1980,6 +1912,7 @@ export function bindEditorEvents() {
       if (getSelectedLayers().length === 0) syncFontInputFromState();
     });
     window.addEventListener("psdesign:fonts-loaded", () => {
+      getSidebarFontCombo()?.rebuild();
       if (getSelectedLayers().length === 0) syncFontInputFromState();
       else rebuildFontOptions(fontEl()?.dataset.ps || "");
     });
