@@ -124,7 +124,18 @@ function decodeBytes(bytes) {
   }
 }
 
-const PAGE_MARKER_RE = /<<\s*([0-9０-９]+)\s*Page\s*>>/gi;
+// 見開きマーカー (例 <<2,3Page>>) も認識するため、先頭の数字に続けてカンマ/全角カンマ/
+// 読点/空白で区切られた数字列をまとめて捕捉する。単一ページ <<5Page>> は従来どおり。
+const PAGE_MARKER_RE = /<<\s*([0-9０-９][0-9０-９,，、\s]*?)\s*Page\s*>>/gi;
+
+// マーカー捕捉文字列から数字リストを取り出す。"2,3" -> [2,3] / "1" -> [1] / "１０，１１" -> [10,11]。
+// 見開きの「代表ページ番号(key)」は常に先頭要素 (toHalfWidthInt も先頭数字を返すため一致する)。
+function parsePageMarkerNumbers(raw) {
+  return String(raw ?? "")
+    .split(/[,，、\s]+/)
+    .map((s) => toHalfWidthInt(s))
+    .filter((n) => Number.isInteger(n) && n > 0);
+}
 
 export function splitBlocksRaw(s) {
   return s
@@ -188,36 +199,50 @@ function toHalfWidthInt(s) {
   return Number.isFinite(n) ? n : null;
 }
 
+// 見開きマーカー対応。返り値:
+//   byPage   : Map<spreadKey, blocks[]>  （見開きは代表ページ番号 = 先頭ページだけをキーに持つ）
+//   groups   : [{ key, pageNumbers:[..], blocks:[..] }]  （自動配置の見開きグルーピング用）
+//   pageToKey: Map<pageNumber, spreadKey> （構成ページ → 見開きキー。例 3 -> 2）
+// sourceTxtRef.pageNumber は常に spreadKey に正規化する設計のため、byPage/cascade/sync は
+// すべて key で引ける。toHalfWidthInt("2,3") は先頭の 2 を返すので、既存のセクション検索
+// （num === pageNumber）も key を渡せば無改修で一致する。
 export function parsePages(content) {
   const normalized = (content ?? "").replace(/\r\n?/g, "\n");
   const re = new RegExp(PAGE_MARKER_RE.source, "gi");
   const byPage = new Map();
+  const groups = [];
+  const pageToKey = new Map();
   let lastIndex = 0;
-  let currentPage = null;
+  let currentPages = null;
   let match;
   let hasMarkers = false;
 
-  const pushBlocks = (page, text) => {
-    if (page == null) return;
+  const flush = (pages, text) => {
+    if (!pages || pages.length === 0) return;
     const blocks = splitBlocksRaw(text);
     if (!blocks.length) return;
-    if (!byPage.has(page)) byPage.set(page, []);
-    const arr = byPage.get(page);
-    for (const b of blocks) arr.push(b);
+    const key = pages[0];
+    let group = groups.find((g) => g.key === key);
+    if (!group) {
+      group = { key, pageNumbers: pages.slice(), blocks: [] };
+      groups.push(group);
+      byPage.set(key, group.blocks);
+      for (const p of pages) pageToKey.set(p, key);
+    }
+    for (const b of blocks) group.blocks.push(b);
   };
 
   while ((match = re.exec(normalized)) !== null) {
     hasMarkers = true;
-    const before = normalized.slice(lastIndex, match.index);
-    pushBlocks(currentPage, before);
-    currentPage = toHalfWidthInt(match[1]);
+    flush(currentPages, normalized.slice(lastIndex, match.index));
+    currentPages = parsePageMarkerNumbers(match[1]);
     lastIndex = match.index + match[0].length;
   }
   if (hasMarkers) {
-    pushBlocks(currentPage, normalized.slice(lastIndex));
-    return { hasMarkers: true, all: [], byPage };
+    flush(currentPages, normalized.slice(lastIndex));
+    return { hasMarkers: true, all: [], byPage, groups, pageToKey };
   }
-  return { hasMarkers: false, all: splitBlocksRaw(normalized), byPage };
+  return { hasMarkers: false, all: splitBlocksRaw(normalized), byPage, groups, pageToKey };
 }
 
 // 現在ページ番号 (1-indexed) を返す。
@@ -237,9 +262,11 @@ export function getTxtPageCount() {
   if (!source) return 0;
   const parsed = parsePages(source.content);
   if (!parsed.hasMarkers || parsed.byPage.size === 0) return 0;
+  // byPage は見開きキーのみ持つため、構成ページを含む pageToKey から真の最大ページを取る
+  // （例 <<36,37Page>> なら 37。byPage.keys() だと key=36 で 1 ページ少なくなる）。
   let max = 0;
-  for (const k of parsed.byPage.keys()) {
-    if (k > max) max = k;
+  for (const p of parsed.pageToKey.keys()) {
+    if (p > max) max = p;
   }
   return max;
 }
@@ -250,11 +277,14 @@ function getBlocksForSource(source) {
   if (!parsed.hasMarkers) {
     return { blocks: parsed.all, hasMarkers: false, pageNumber: null };
   }
-  const pageNumber = getActivePageNumber();
+  // 現在の閲覧ページを見開きキーに正規化（例: 見開き 2,3 の P3 を見ていても key=2）。
+  // これにより sidebar 表示・選択同期で sourceTxtRef.pageNumber(=key) と一致する。
+  const active = getActivePageNumber();
+  const key = parsed.pageToKey.get(active) ?? active;
   return {
-    blocks: parsed.byPage.get(pageNumber) ?? [],
+    blocks: parsed.byPage.get(key) ?? [],
     hasMarkers: true,
-    pageNumber,
+    pageNumber: key,
   };
 }
 
@@ -1197,7 +1227,14 @@ export function commitNewTxtInput({ inputEl } = {}) {
   const psdPage = hasPsd ? pages[pageIdx] : null;
   // 原稿側のページ番号: PSD ありなら 1-based の現在ページ、PSD 未読込なら
   // getActivePageNumber() で PDF/TXT 由来のページ番号を取得（無ければ null）。
-  const pageNumber = hasPsd ? (pageIdx + 1) : getActivePageNumber();
+  const rawPageNumber = hasPsd ? (pageIdx + 1) : getActivePageNumber();
+  // 見開きマーカー (例 <<2,3Page>>) のページは代表ページ番号 (key=先頭) に正規化し、
+  // 自動配置レイヤー / cascade と sourceTxtRef.pageNumber を一致させる。
+  const pageNumber = (() => {
+    if (!Number.isInteger(rawPageNumber)) return rawPageNumber;
+    const parsed = parsePages(getTxtSource()?.content ?? "");
+    return parsed.pageToKey.get(rawPageNumber) ?? rawPageNumber;
+  })();
 
   let placementCoords = null;
   if (psdPage) {
@@ -1279,6 +1316,11 @@ export function splitTxtBlockAndPlace(offset, original, parts, splitIndex, pageN
   // （commitNewTxtInput と同じ算出。markered=数値ページ, markerless=現在ページ基準）。
   const pages = getPages();
   const hasPsd = pages.length > 0;
+  // 見開きマーカーのページは代表ページ番号 (key=先頭) に正規化する。
+  if (Number.isInteger(pageNumber) && pageNumber > 0) {
+    const parsedForKey = parsePages(content);
+    pageNumber = parsedForKey.pageToKey.get(pageNumber) ?? pageNumber;
+  }
   const markered = Number.isInteger(pageNumber) && pageNumber > 0;
   let placePage = null;
   let refPageNumber = null;

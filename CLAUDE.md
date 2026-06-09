@@ -1,5 +1,39 @@
 # PsDesign
 
+## 2026-06-09 変更メモ: v2.4.7 リリース（見開きページマーカー `<<2,3Page>>` 対応 / 単ページPSDへの自動配置振り分け）
+
+v2.4.7 では、原稿テキストが見開き単位（`<<2,3Page>>` のようにカンマ区切りで複数ページをまとめたマーカー）で区切られている場合に、見本・PSD が単ページずつでも自動配置が正しく振り分けられるようにした。従来は `<<2,3Page>>` がマーカーとして認識されず（正規表現が連続数字のみ）、それ以降の全テキストが 1 ページ目に混入していた。
+
+### 見開きマーカーの解析（[src/txt-source.js](src/txt-source.js)）
+
+- `PAGE_MARKER_RE` を `<<\s*([0-9０-９][0-9０-９,，、\s]*?)\s*Page\s*>>/gi` に拡張し、カンマ / 全角カンマ / 読点区切りの複数ページ番号を捕捉。`parsePageMarkerNumbers()` で `"2,3"` → `[2,3]` に分解。
+- `parsePages()` の返り値に **`groups`**（`[{ key, pageNumbers:[..], blocks:[..] }]`、自動配置の見開きグルーピング用）と **`pageToKey`**（構成ページ→代表ページ番号 key の Map、例 3→2）を追加。`byPage` は見開きキー（先頭ページ番号）のみをキーに持つ。
+- `sourceTxtRef.pageNumber` は常に **見開きキー（先頭ページ番号）に正規化**する設計に統一。これで sync（`syncPlacedFromTxt`）・削除カスケード・選択同期・cascade がすべて key で一貫して引ける。`toHalfWidthInt("2,3")` は先頭の 2 を返すため、既存のセクション検索（`num === pageNumber`）は key を渡せば無改修で一致する。
+- `getBlocksForSource()` は現在の閲覧ページを `pageToKey` で見開きキーに正規化して blocks を返す（見開き P3 を見ていても key=2 のテキストを表示。サイドバー表示・選択同期が sourceTxtRef.pageNumber と一致）。
+- `getTxtPageCount()` は `pageToKey` の全構成ページから真の最大ページ（例 `<<36,37Page>>` なら 37）を返すよう修正。
+- `commitNewTxtInput()` / `splitTxtBlockAndPlace()` は入力ページ番号を見開きキーに正規化してから sourceTxtRef を作る。
+- 単一ページマーカー（`<<5Page>>`）・マーカー無しは「key = ページ番号、pageNumbers=[その1ページ]、pageToKey は恒等写像」となり、従来と完全に同じ挙動に縮退する（後方互換）。editor-pane.js の `buildPageModel` も `toHalfWidthInt` で先頭番号に集約されるため無改修で動く。
+
+### 自動配置の見開きグルーピング（[src/auto-place.js](src/auto-place.js)）
+
+- `buildTxtPagesForPlacement()` を **`buildPlacementGroups()`** に置換（`parsed.groups` をそのまま使用 / マーカー無しは `[{key:1,pageNumbers:[1],blocks:all}]`）。
+- `buildPlacementPlan()` を **見開き単位グルーピング**に全面改修：
+  - 見開き「2,3」なら構成する単ページ PSD（P2・P3）の OCR 吹き出しを 1 つに**結合**し、その見開きのテキストプールを `assignBlocksToTxt`（内容類似度マッチ）で割り当て。
+  - 各レイヤーは bubble が属する**所属単ページ PSD の行へ振り分け**る。これにより「どの段落が P2 か P3 か」をテキストに書かなくても、OCR の吹き出し検出＋内容マッチで自動的に正しい単ページへ載る（score 1.00 の完全一致は確実）。
+  - `sourceTxtRef.pageNumber` は見開きキーに統一。
+  - 吹き出しにマッチしなかった余り段落（段落数 > 検出吹き出し数のとき）は、読み順で前半→先頭ページ / 後半→次ページに振り分け、中央に完全に重なって見えなくなるのを防ぐため**ページごとに段組みオフセット**でずらして配置する（旧仕様は全部ページ中央に重ね配置で「消えたように見える」問題があった）。
+- `buildTxtPageMapForSync()` は変更不要（`parsed.byPage` を返す。ref.pageNumber=key → byPage.get(key) で見開き blocks を取得）。
+
+### 検証
+
+- `npm run check`（`check:encoding` + `check:security` + `lint` + `build`）
+- 解析ロジックを実ファイル（`5話_export.txt`、`<<1Page>>` + `<<2,3Page>>`〜`<<36,37Page>>`）で単体検証：18 見開きグループ、`3→2` / `5→4` の正規化、最大ページ 37、単一ページ・マーカー無し・全角数字いずれも従来どおり。
+- 実機で見本・PSD が単ページずつ + 見開きテキストの自動配置を確認（score 1.00 完全一致で正しいページへ振り分け）。
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.4.7` に更新。
+
 ## 2026-06-09 変更メモ: v2.4.6 リリース（巨大PSDの読み込みクラッシュ修正 / ページ絵柄の黒飛び対策）
 
 v2.4.6 では、200MB 超級の巨大 PSD を写植機能で読み込むとクラッシュする問題と、読み込めても作業画面でページ絵柄が真っ黒になる問題を修正した。

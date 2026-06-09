@@ -961,114 +961,152 @@ function assignBlocksToTxt(txtBlocks, sortedBlocks) {
   return assigned;
 }
 
-function buildTxtPagesForPlacement(parsed) {
+// 配置用の「見開きグループ」を返す。各 group = { key, pageNumbers:[..], blocks:[..] }。
+//   - マーカー無し: 全文を 1 グループ (pageNumbers:[1]) にまとめる（旧仕様＝1 ページ目扱い）。
+//   - 単一ページマーカー <<5Page>>: pageNumbers:[5] の単独グループ。
+//   - 見開きマーカー <<2,3Page>>: pageNumbers:[2,3] の 1 グループ（構成単ページ PSD をまとめて扱う）。
+function buildPlacementGroups(parsed) {
   if (!parsed?.hasMarkers) {
-    return [{ pageNumber: 1, blocks: parsed?.all ?? [] }];
+    return [{ key: 1, pageNumbers: [1], blocks: parsed?.all ?? [] }];
   }
-  let maxPage = 0;
-  for (const pageNumber of parsed.byPage.keys()) {
-    if (Number.isInteger(pageNumber) && pageNumber > maxPage) maxPage = pageNumber;
-  }
-  const pages = [];
-  for (let pageNumber = 1; pageNumber <= maxPage; pageNumber += 1) {
-    pages.push({ pageNumber, blocks: parsed.byPage.get(pageNumber) ?? [] });
-  }
-  return pages;
+  return Array.isArray(parsed.groups) ? parsed.groups : [];
 }
 
 function buildTxtPageMapForSync(parsed) {
   return parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 }
 
-function buildPlacementPlan(referenceScanDoc, psdPages, txtPages, defaults, options = {}) {
+// 【見開きマーカー対応】txtGroups (= buildPlacementGroups) を「見開き単位」で処理する。
+// 見開き <<2,3Page>> は構成する単ページ PSD (P2・P3) の吹き出しを 1 つに結合し、
+// その見開きのテキストプールを内容マッチで割り当てる。各レイヤーは所属する単ページ PSD の
+// 行へ振り分ける。これにより「どの段落が P2 か P3 か」をテキストに書かなくても、OCR の
+// 吹き出し検出＋内容マッチで自動的に正しい単ページへ載る。
+// sourceTxtRef.pageNumber は常に見開きキー (= 先頭ページ番号) に統一する（byPage/cascade/sync 整合）。
+function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, options = {}) {
   const alignmentByPath = options.alignmentByPath instanceof Map ? options.alignmentByPath : null;
-  const N = Math.min(psdPages.length, referenceScanDoc.pages.length);
+  const M = psdPages.length;
+  const R = referenceScanDoc.pages.length;
+  const N = Math.min(M, R);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
-  for (let i = 0; i < N; i++) {
-    const psd = psdPages[i];
-    const referenceScan = referenceScanDoc.pages[i];
-    const alignment = psd?.path && alignmentByPath ? alignmentByPath.get(psd.path) : null;
-    const txtPage = txtPages[i] ?? { pageNumber: i + 1, blocks: [] };
-    const txt = txtPage.blocks ?? [];
-    const sorted = sortBlocksMangaOrder(referenceScan.blocks ?? []);
-    // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
-    // 連結グループ判定 (ひょうたん型フキダシ検出)。Union-Find で 3 条件 (vertical 一致 +
-    // font_size 近 + bbox 重なり/近接) を満たすペアが同グループになる。
-    // 連結グループに属する block は mapBlockToNewLayer 内でサイズを defaults.sizePt に統一。
-    const groups = groupConnectedBlocks(sorted, ` page ${i + 1}`);
-    const layers = [];
-    if (txt.length === 0) {
-      out.pages.push({
-        pageIndex: i + 1,
-        psdPath: psd.path,
-        psdName: baseName(psd.path),
-        bubbleCount: sorted.length,
-        txtCount: 0,
-        placedCount: 0,
-        status: sorted.length === 0 ? "ok" : "skip-empty-txt",
-        layers,
-        leftoverTxt: [],
-        leftoverBubbles: [],
-      });
-      continue;
-    }
-    // 全 TXT 段落を配置: sorted[j] があれば吹き出し中央、無ければ PSD ページ中央。
-    // 旧仕様は placedCount = min(txt, sorted) で余り TXT を捨てていたが、ユーザーが
-    // 入力欄から追加した段落も自動配置で拾うために全件処理に変更。
-    const assignedBlocks = assignBlocksToTxt(txt, sorted);
-    for (let j = 0; j < txt.length; j++) {
-      const assigned = assignedBlocks[j];
-      const block = assigned?.block;
-      const blockIndex = Number.isInteger(assigned?.index) ? assigned.index : j;
-      const matchScore = Number.isFinite(assigned?.score) ? assigned.score : 0;
-      const sourceTxtRef = { pageNumber: txtPage.pageNumber, paragraphIndex: j, extractBlockIndex: blockIndex, extractMatchScore: matchScore };
-      if (block) {
-        const layer = mapBlockToNewLayer(block, referenceScan, psd, txt[j], defaults, sourceTxtRef, groups[blockIndex], alignment);
-        layer.lowExtractTextMatch = assigned?.lowConfidence === true;
-        layer.extractMatchScore = matchScore;
-        layers.push(layer);
-      } else {
-        // 余り TXT: PSD ページ中央に配置
-        layers.push(mapTxtToPageCenter(psd, txt[j], defaults, sourceTxtRef));
+
+  // PSD ページごとの行。各見開きグループの配置結果を、bubble が属する単ページ PSD の行へ溜める。
+  const rows = psdPages.map((psd, i) => ({
+    pageIndex: i + 1,
+    psd,
+    psdPath: psd?.path ?? null,
+    psdName: baseName(psd?.path ?? ""),
+    referenceScan: i < R ? referenceScanDoc.pages[i] : null,
+    sorted: null,
+    layers: [],
+    placedCount: 0,
+    txtCount: 0,
+    usedLocal: new Set(),
+    centeredCount: 0,
+  }));
+
+  for (const group of txtGroups) {
+    const txt = group.blocks ?? [];
+    const pageNumbers = Array.isArray(group.pageNumbers) && group.pageNumbers.length
+      ? group.pageNumbers
+      : [group.key];
+    // この見開きに属する単ページ PSD のうち、OCR 結果がある index を集める。
+    const memberIdx = pageNumbers
+      .map((n) => n - 1)
+      .filter((i) => i >= 0 && i < N && rows[i] && rows[i].referenceScan);
+    // 構成ページの吹き出しを結合（各 bubble に所属行 + 連結グループ情報を記録）。
+    const combined = [];
+    const meta = [];
+    for (const i of memberIdx) {
+      const row = rows[i];
+      const sorted = sortBlocksMangaOrder(row.referenceScan.blocks ?? []);
+      row.sorted = sorted;
+      // 【v1.26.0 移植】連結グループ判定 (ひょうたん型) はページ単位で算出。
+      const connected = groupConnectedBlocks(sorted, ` page ${i + 1}`);
+      for (let k = 0; k < sorted.length; k++) {
+        meta.push({ rowIdx: i, localIdx: k, connected: connected[k] });
+        combined.push(sorted[k]);
       }
     }
-    const placedCount = txt.length;
-    // leftoverTxt は実質ゼロになるが、互換のため空配列で保持する
-    const leftoverTxt = [];
-    const usedBlockIndices = new Set(assignedBlocks.filter(Boolean).map((a) => a.index));
-    const leftoverBubbles = sorted.filter((_, idx) => !usedBlockIndices.has(idx)).map((b) =>
-      Array.isArray(b.lines) ? b.lines.join(" ") : ""
-    );
-    let status = "ok";
-    if (sorted.length === 0 && txt.length === 0) status = "ok";
-    else if (sorted.length === 0) status = "warn-empty-bubble";
-    else if (txt.length === 0) status = "warn-empty-txt";
-    // 旧 "warn-txt-extra" は廃止: 余り TXT は PSD 中央配置に変わったので警告不要。
-    else if (sorted.length > txt.length) status = "warn-bubble-extra";
+    if (txt.length === 0) continue;
+    // 全 TXT 段落を配置: 結合バブルに内容マッチすれば所属単ページの吹き出し中央へ。
+    // マッチしなかった段落（＝吹き出しが検出されない / 段落数 > 吹き出し数）は、
+    // 読み順で見開きの構成ページへ振り分け、中央に重なって見えなくなるのを防ぐため段組みでずらす。
+    const assigned = assignBlocksToTxt(txt, combined);
+    for (let j = 0; j < txt.length; j++) {
+      const a = assigned[j];
+      const m = a && Number.isInteger(a.index) ? meta[a.index] : null;
+      const sourceTxtRef = {
+        pageNumber: group.key,
+        paragraphIndex: j,
+        extractBlockIndex: m ? m.localIdx : j,
+        extractMatchScore: Number.isFinite(a?.score) ? a.score : 0,
+      };
+      if (a && m) {
+        const row = rows[m.rowIdx];
+        const alignment = row.psdPath && alignmentByPath ? alignmentByPath.get(row.psdPath) : null;
+        const layer = mapBlockToNewLayer(a.block, row.referenceScan, row.psd, txt[j], defaults, sourceTxtRef, m.connected, alignment);
+        layer.lowExtractTextMatch = a.lowConfidence === true;
+        layer.extractMatchScore = sourceTxtRef.extractMatchScore;
+        row.layers.push(layer);
+        row.usedLocal.add(m.localIdx);
+        row.placedCount += 1;
+        row.txtCount += 1;
+      } else {
+        // 余り TXT: 読み順で前半→先頭ページ / 後半→次ページに振り分け。
+        let tgtIdx;
+        if (memberIdx.length >= 1) {
+          const frac = txt.length > 1 ? j / txt.length : 0;
+          tgtIdx = memberIdx[Math.min(memberIdx.length - 1, Math.floor(frac * memberIdx.length))];
+        } else {
+          tgtIdx = group.key - 1;
+        }
+        const row = rows[tgtIdx];
+        if (row && row.psd) {
+          const layer = mapTxtToPageCenter(row.psd, txt[j], defaults, sourceTxtRef);
+          // 重なり回避: このページで中央配置した通し番号ぶん、右下方向へ少しずつずらす。
+          const n = row.centeredCount;
+          row.centeredCount += 1;
+          const step = (defaults.sizePt ?? 24) * (row.psd.dpi ?? 72) / 72 * 1.6;
+          layer.x = (layer.x ?? 0) + n * step * 0.35;
+          layer.y = (layer.y ?? 0) + n * step;
+          row.layers.push(layer);
+          row.placedCount += 1;
+          row.txtCount += 1;
+        }
+      }
+    }
+  }
 
+  // 行 → out.pages（PSD ページ単位の結果）。
+  for (const row of rows) {
+    const sorted = row.sorted ?? sortBlocksMangaOrder(row.referenceScan?.blocks ?? []);
+    const bubbleCount = sorted.length;
+    const leftoverBubbles = sorted
+      .filter((_, idx) => !row.usedLocal.has(idx))
+      .map((b) => (Array.isArray(b.lines) ? b.lines.join(" ") : ""));
+    let status = "ok";
+    if (bubbleCount === 0 && row.txtCount === 0) status = "ok";
+    else if (bubbleCount === 0) status = "warn-empty-bubble";
+    else if (row.txtCount === 0) status = sorted.length === 0 ? "ok" : "skip-empty-txt";
+    else if (bubbleCount > row.txtCount) status = "warn-bubble-extra";
     out.pages.push({
-      pageIndex: i + 1,
-      psdPath: psd.path,
-      psdName: baseName(psd.path),
-      bubbleCount: sorted.length,
-      txtCount: txt.length,
-      placedCount,
+      pageIndex: row.pageIndex,
+      psdPath: row.psdPath,
+      psdName: row.psdName,
+      bubbleCount,
+      txtCount: row.txtCount,
+      placedCount: row.placedCount,
       status,
-      layers,
-      leftoverTxt,
+      layers: row.layers,
+      leftoverTxt: [],
       leftoverBubbles,
     });
-    out.totals.placed += placedCount;
-    out.totals.leftoverTxt += leftoverTxt.length;
+    out.totals.placed += row.placedCount;
     out.totals.leftoverBubbles += leftoverBubbles.length;
   }
   // PSD 数 / 画像スキャン ページ数の不一致を末尾に warning として記録
-  if (psdPages.length > N) {
-    out.unmappedPsdCount = psdPages.length - N;
-  }
-  if (referenceScanDoc.pages.length > N) {
-    out.unmappedReferenceScanCount = referenceScanDoc.pages.length - N;
-  }
+  if (M > N) out.unmappedPsdCount = M - N;
+  if (R > N) out.unmappedReferenceScanCount = R - N;
   return out;
 }
 
@@ -1298,7 +1336,7 @@ export async function runAutoPlace({
       return;
     }
     const parsed = parsePages(txtSrc.content);
-    const txtPages = buildTxtPagesForPlacement(parsed);
+    const txtGroups = buildPlacementGroups(parsed);
 
     // 3. プラン構築
     // 【v1.26.0 移植 (PsDesign-main v1.24.0)】
@@ -1344,7 +1382,7 @@ export async function runAutoPlace({
     if (placeProgressFlow) {
       updateProgressFlow(placeProgressFlow, { detail: "配置プランを作成中…", progress: 18, showCount: false });
     }
-    const plan = buildPlacementPlan(placementDoc, psdPages, txtPages, defaults, { alignmentByPath });
+    const plan = buildPlacementPlan(placementDoc, psdPages, txtGroups, defaults, { alignmentByPath });
 
     if (plan.totals.placed === 0) {
       await closeAutoPlaceProgress();
