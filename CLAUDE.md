@@ -1,5 +1,34 @@
 # PsDesign
 
+## 2026-06-09 変更メモ: v2.4.6 リリース（巨大PSDの読み込みクラッシュ修正 / ページ絵柄の黒飛び対策）
+
+v2.4.6 では、200MB 超級の巨大 PSD を写植機能で読み込むとクラッシュする問題と、読み込めても作業画面でページ絵柄が真っ黒になる問題を修正した。
+
+### 巨大 PSD 読み込み時のクラッシュ修正（`read_binary_file` の生バイト返却）
+
+- `read_binary_file` ([src-tauri/src/lib.rs](src-tauri/src/lib.rs)) の戻り値を `Vec<u8>` から **`tauri::ipc::Response`** に変更。
+- 旧実装は `Vec<u8>` を serde_json でシリアライズしていたため、200MB の PSD が「数値配列の JSON 文字列」（約 1GB の文字列 + 2 億超要素の JS 配列）に膨張し、`STATUS_BREAKPOINT` で WebView がクラッシュしていた。`tauri::ipc::Response` で生バイトを ArrayBuffer として渡すことで、メモリ消費を実ファイルサイズ相当まで抑える。
+- フロント側は各所で `new Uint8Array(bytes)` して受けており、ArrayBuffer でも透過的に動くため JS 側は無変更。
+
+### 作業画面でページ絵柄が真っ黒になる問題の対策（巨大 PSD のプレビュー縮小）
+
+- Chromium はシステム RAM とは別にレンダラあたりの canvas メモリ上限を持ち、5000x8000 級のページを多数フル解像度で保持すると上限超過で古いページの canvas バッキングストアが破棄され、絵柄が透明（= 背景 `--page-bg: #2a2a2a` が透けて真っ黒）に飛んでいた（写植テキストは DOM オーバーレイなので残る）。
+- 低メモリモードとは別に、**通常メモリでも寸法が大きい PSD は表示用ラスターだけを縮小**する仕組みを追加。
+  - [src/memory-mode.js](src/memory-mode.js): `LARGE_PSD_PREVIEW_MAX_SIDE = 3000` / `LARGE_PSD_PREVIEW_MAX_PIXELS = 8_000_000` を追加し、`getPreviewScaleForSize` が低メモリ時だけでなく常にこの上限を適用（低メモリ時はより強い制限を min で重ねる）。`getLargePsdPreviewLimits()` を export。
+  - [src/psd-loader.js](src/psd-loader.js): worker に通常時も上限を渡す（`lowMemory: false` フラグ付き）。
+  - [src/psd-parse-worker.js](src/psd-parse-worker.js): `preview` を「縮小指示（常に適用）」と「低メモリ挙動（`lowMemory: true` のときのみ skipLayerImageData 等）」に分離。通常メモリ時はフルパース + 非表示マスキング合成を従来どおり行い、最後に `finalizeCanvasForPreview` で表示ラスターだけ縮小する。
+- 論理寸法（`page.width/height`）は不変なので、写植テキスト位置・自動配置・PSD 保存位置・alignment・機械的チェックには影響しない（描画は論理サイズ枠に `drawImage` で拡大表示）。トレードオフは PSD ペインの表示解像度がやや下がること（見本ペインと最終出力 PSD は不変）。
+
+### 検証
+
+- `npm run check`（`check:encoding` + `check:security` + `lint` + `build`）
+- `cargo check`
+- 実機で 234MB PSD（5000x8000 級・19 ページ超）の読み込み・自動配置・作業画面でのページ絵柄表示をユーザー確認済み。
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.4.6` に更新。
+
 ## 2026-06-09 変更メモ: v2.4.5 リリース（カット&ペースト / 保存対象 / 多重起動 / 原稿エディタ段落移動）
 
 v2.4.5 では、PSD 上のテキスト操作と原稿テキスト連携、保存対象の扱い、OPUS プロジェクトファイルの多重起動連携、テキストエディタ内の段落並べ替えを中心に修正した。

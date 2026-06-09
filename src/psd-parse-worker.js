@@ -478,7 +478,11 @@ function rebuildCanvasMaskingHidden(psd) {
 }
 
 function parsePsd(buffer, preview) {
-  const lowPreview = !!preview;
+  // preview には常に縮小上限 (previewMaxSide/previewMaxPixels) が入るが、
+  // レイヤー画像スキップ等のパース挙動を変えるのは lowMemory:true のときだけ。
+  // 通常メモリ時 (lowMemory:false) は従来どおりフルパース + 非表示マスキング合成し、
+  // 最後に finalizeCanvasForPreview で表示ラスターだけ縮小する。
+  const lowPreview = preview?.lowMemory === true;
   const criticalLowPreview = lowPreview && preview?.critical === true;
   const preserveLayerImages = !lowPreview || shouldPreserveLayerImagesForLowMemory(buffer, preview);
   const skipLayerImageData = lowPreview && !preserveLayerImages;

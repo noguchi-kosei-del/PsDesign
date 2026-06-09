@@ -374,13 +374,20 @@ async fn list_fonts(
     Ok(list)
 }
 
+// 戻り値を Vec<u8> にすると Tauri が serde_json でシリアライズし、
+// 「数値配列の JSON 文字列」になってメインプロセス/レンダラのメモリを爆発させる
+// （200MB の PSD で約 1GB の文字列 + 2億超要素の JS 配列 → STATUS_BREAKPOINT で
+// WebView がクラッシュ）。tauri::ipc::Response で生バイトを返すと JSON を経由せず
+// ArrayBuffer としてフロントへ渡るため、メモリ消費を実ファイルサイズ相当まで抑えられる。
+// フロント側は各所で new Uint8Array(bytes) して受けており、ArrayBuffer でも透過的に動く。
 #[tauri::command]
 async fn read_binary_file(
     allowed: tauri::State<'_, AllowedPaths>,
     path: String,
-) -> Result<Vec<u8>, String> {
+) -> Result<tauri::ipc::Response, String> {
     let real = ensure_allowed(&allowed, &path)?;
-    std::fs::read(&real).map_err(|e| format!("{}: {}", path, e))
+    let bytes = std::fs::read(&real).map_err(|e| format!("{}: {}", path, e))?;
+    Ok(tauri::ipc::Response::new(bytes))
 }
 
 #[tauri::command]

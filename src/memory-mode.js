@@ -5,6 +5,15 @@ const FALLBACK_AVAILABLE_THRESHOLD_BYTES = 4 * GIB;
 const FALLBACK_TOTAL_THRESHOLD_BYTES = 8 * GIB;
 const FALLBACK_LOAD_THRESHOLD_PERCENT = 85;
 
+// 低メモリモードとは別に、通常メモリでも適用する「巨大 PSD のプレビュー上限」。
+// Chromium はシステム RAM とは別にレンダラあたりの canvas メモリ上限を持ち、
+// 5000x8000 級のページを多数フル解像度で保持すると上限を超えて古いページの
+// canvas バッキングストアが破棄され、絵柄が真っ黒に飛ぶ。そこで寸法が大きい
+// PSD は表示用ラスターだけを縮小して総 canvas メモリを上限以下に抑える
+// （論理寸法 page.width/height は不変なので座標・植字・保存位置には影響しない）。
+const LARGE_PSD_PREVIEW_MAX_SIDE = 3000;
+const LARGE_PSD_PREVIEW_MAX_PIXELS = 8_000_000;
+
 const DEFAULT_LOW_MEMORY_LIMITS = {
   dprCap: 1,
   previewMaxSide: 2400,
@@ -171,11 +180,28 @@ export function getMemoryRenderKey() {
   ].join(":");
 }
 
+// worker に渡す「通常メモリ時の巨大 PSD 上限」。低メモリ時は getRasterMemoryLimits()
+// 側のより強い制限を使う（parsePsdWithWorker 参照）。
+export function getLargePsdPreviewLimits() {
+  return {
+    previewMaxSide: LARGE_PSD_PREVIEW_MAX_SIDE,
+    previewMaxPixels: LARGE_PSD_PREVIEW_MAX_PIXELS,
+  };
+}
+
 export function getPreviewScaleForSize(width, height) {
   const w = Number(width);
   const h = Number(height);
-  if (!isLowMemoryMode() || !(w > 0) || !(h > 0)) return 1;
-  const { previewMaxSide, previewMaxPixels } = getRasterMemoryLimits();
+  if (!(w > 0) || !(h > 0)) return 1;
+  // 通常メモリでも巨大 PSD は縮小（黒飛び対策）。基準は LARGE_PSD_PREVIEW_*。
+  let previewMaxSide = LARGE_PSD_PREVIEW_MAX_SIDE;
+  let previewMaxPixels = LARGE_PSD_PREVIEW_MAX_PIXELS;
+  // 低メモリモード時はさらに強い制限を min で重ねる。
+  if (isLowMemoryMode()) {
+    const limits = getRasterMemoryLimits();
+    previewMaxSide = Math.min(previewMaxSide, limits.previewMaxSide);
+    previewMaxPixels = Math.min(previewMaxPixels, limits.previewMaxPixels);
+  }
   const bySide = previewMaxSide / Math.max(w, h);
   const byPixels = Math.sqrt(previewMaxPixels / Math.max(1, w * h));
   const scale = Math.min(1, bySide, byPixels);

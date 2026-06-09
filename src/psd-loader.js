@@ -1,5 +1,6 @@
 import { readPsd } from "ag-psd";
 import {
+  getLargePsdPreviewLimits,
   getPreviewScaleForSize,
   getRasterMemoryLimits,
   isCriticalLowMemoryMode,
@@ -226,9 +227,12 @@ function getPsdParseWorker() {
 function parsePsdWithWorker(bytes) {
   if (!canUsePsdParseWorker()) return Promise.reject(new Error("PSD parse worker is not available"));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  // 低メモリ時は強い制限 + lowMemory フラグ（レイヤー画像スキップ等のパース挙動を変える）。
+  // 通常メモリ時も巨大 PSD 縮小のため上限は渡すが、lowMemory:false なのでパース挙動
+  // （マスキング合成・レイヤー画像保持）は従来どおりで、表示ラスターだけが縮小される。
   const limits = isLowMemoryMode()
-    ? { ...getRasterMemoryLimits(), critical: isCriticalLowMemoryMode() }
-    : null;
+    ? { ...getRasterMemoryLimits(), critical: isCriticalLowMemoryMode(), lowMemory: true }
+    : { ...getLargePsdPreviewLimits(), lowMemory: false };
   const id = psdParseWorkerSeq++;
   return new Promise((resolve, reject) => {
     psdParseWorkerPending.set(id, { resolve, reject });
