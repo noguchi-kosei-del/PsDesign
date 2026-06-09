@@ -283,6 +283,95 @@ function createBlankCanvas(width, height) {
   return canvas;
 }
 
+function previewScaleForSize(width, height, preview) {
+  if (!preview || !Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    return 1;
+  }
+  const maxSide = Number(preview.previewMaxSide);
+  const maxPixels = Number(preview.previewMaxPixels);
+  const bySide = Number.isFinite(maxSide) && maxSide > 0
+    ? maxSide / Math.max(width, height)
+    : 1;
+  const byPixels = Number.isFinite(maxPixels) && maxPixels > 0
+    ? Math.sqrt(maxPixels / Math.max(1, width * height))
+    : 1;
+  const scale = Math.min(1, bySide, byPixels);
+  return Math.max(0.05, Math.min(1, scale));
+}
+
+function readPsdHeaderSize(buffer) {
+  try {
+    const view = new DataView(buffer);
+    if (view.byteLength < 26) return null;
+    const sig = String.fromCharCode(
+      view.getUint8(0),
+      view.getUint8(1),
+      view.getUint8(2),
+      view.getUint8(3),
+    );
+    if (sig !== "8BPS") return null;
+    const height = view.getUint32(14, false);
+    const width = view.getUint32(18, false);
+    if (!(width > 0 && height > 0)) return null;
+    return { width, height, pixels: width * height };
+  } catch {
+    return null;
+  }
+}
+
+function shouldPreserveLayerImagesForLowMemory(buffer, preview) {
+  if (!preview) return true;
+  const maxPixels = Number(preview.highFidelityMaskingMaxPixels);
+  if (!(maxPixels > 0)) return false;
+  const size = readPsdHeaderSize(buffer);
+  return !!size && size.pixels <= maxPixels;
+}
+
+function finalizeCanvasForPreview(canvas, width, height, preview) {
+  const scale = previewScaleForSize(width, height, preview);
+  if (!canvas || scale >= 0.999) return { canvas, previewScale: 1 };
+  const targetW = Math.max(1, Math.round(width * scale));
+  const targetH = Math.max(1, Math.round(height * scale));
+  const out = new OffscreenCanvas(targetW, targetH);
+  const ctx = out.getContext("2d");
+  if (!ctx) return { canvas, previewScale: 1 };
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(canvas, 0, 0, targetW, targetH);
+  return { canvas: out, previewScale: scale };
+}
+
+function buildVisibleNonTextPreviewCanvas(psd, preview) {
+  const scale = previewScaleForSize(psd?.width, psd?.height, preview);
+  const width = Math.max(1, Math.round(psd.width * scale));
+  const height = Math.max(1, Math.round(psd.height * scale));
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { canvas: null, previewScale: 1 };
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.fillStyle = "#ffffff";
+  ctx.fillRect(0, 0, width, height);
+  ctx.save();
+  ctx.scale(scale, scale);
+  const visibleLayers = [];
+  if (Array.isArray(psd.children)) {
+    for (const child of psd.children) {
+      collectVisibleNonTextLayers(child, true, visibleLayers);
+    }
+  }
+  for (const layer of visibleLayers.reverse()) {
+    const lc = layer.canvas;
+    if (!lc || lc.width === 0 || lc.height === 0) continue;
+    const op = typeof layer.opacity === "number" ? layer.opacity / 255 : 1;
+    ctx.globalAlpha = Math.max(0, Math.min(1, op));
+    ctx.drawImage(lc, layer.left ?? 0, layer.top ?? 0);
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
+  return { canvas, previewScale: scale };
+}
+
 function isRectMostlyWhite(ctx, sx, sy, w, h) {
   try {
     const samples = [
@@ -388,9 +477,16 @@ function rebuildCanvasMaskingHidden(psd) {
   return canvas;
 }
 
-function parsePsd(buffer) {
+function parsePsd(buffer, preview) {
+  const lowPreview = !!preview;
+  const criticalLowPreview = lowPreview && preview?.critical === true;
+  const preserveLayerImages = !lowPreview || shouldPreserveLayerImagesForLowMemory(buffer, preview);
+  const skipLayerImageData = lowPreview && !preserveLayerImages;
+  const skipCompositeImageData = criticalLowPreview && preserveLayerImages;
   const psd = readPsd(buffer, {
-    skipLayerImageData: false,
+    skipLayerImageData,
+    skipCompositeImageData,
+    skipLinkedFilesData: lowPreview,
     skipThumbnail: true,
     useImageData: false,
   });
@@ -404,23 +500,31 @@ function parsePsd(buffer) {
   if (Array.isArray(psd.children)) {
     for (const child of psd.children) collectTextLayers(child, textLayers, true);
   }
-  const canvas = Array.isArray(psd.children)
-    ? rebuildCanvasMaskingHidden(psd)
-    : psd.canvas ?? createBlankCanvas(psd.width, psd.height);
-  const bitmap = canvas?.transferToImageBitmap ? canvas.transferToImageBitmap() : null;
+  const finalCanvas = criticalLowPreview && preserveLayerImages && Array.isArray(psd.children)
+    ? buildVisibleNonTextPreviewCanvas(psd, preview)
+    : finalizeCanvasForPreview(
+        Array.isArray(psd.children) && !skipLayerImageData
+          ? rebuildCanvasMaskingHidden(psd)
+          : psd.canvas ?? createBlankCanvas(psd.width, psd.height),
+        psd.width,
+        psd.height,
+        preview,
+      );
+  const bitmap = finalCanvas.canvas?.transferToImageBitmap ? finalCanvas.canvas.transferToImageBitmap() : null;
   return {
     width: psd.width,
     height: psd.height,
     dpi: psd.imageResources?.resolutionInfo?.horizontalResolution ?? 72,
     textLayers,
     bitmap,
+    previewScale: finalCanvas.previewScale,
   };
 }
 
 globalThis.onmessage = (event) => {
-  const { id, buffer } = event.data ?? {};
+  const { id, buffer, preview } = event.data ?? {};
   try {
-    const parsed = parsePsd(buffer);
+    const parsed = parsePsd(buffer, preview);
     const transfer = parsed.bitmap ? [parsed.bitmap] : [];
     globalThis.postMessage({ id, ok: true, parsed }, transfer);
   } catch (error) {

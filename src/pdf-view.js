@@ -33,6 +33,7 @@ import {
   restoreViewportCenter,
   restoreViewportPoint,
 } from "./overscroll.js";
+import { getCanvasDprCap } from "./memory-mode.js";
 
 const MAX_CANVAS_SIDE = 16384;
 export const PDF_FIT_BASE_SCALE = 1.1;
@@ -272,7 +273,7 @@ export function resetPdfViewportToStart() {
   setTimeout(run, 80);
 }
 
-export function refreshPdfStageLayout({ recenter = true, viewportCenter = null } = {}) {
+function refreshPdfStageLayout({ recenter = true, viewportCenter = null } = {}) {
   if (isEditorPdfSampleMode()) {
     centerCurrentPdfPageInStage();
     return;
@@ -301,6 +302,10 @@ function schedule() {
     pendingRaf = 0;
     redraw().catch((e) => console.error("pdf redraw:", e));
   });
+}
+
+export function refreshPdfView() {
+  schedule();
 }
 
 // ResizeObserver 用の trailing debounce 版 schedule。
@@ -456,7 +461,7 @@ async function redraw() {
   }
   const fitToPane = isEditorPdfSampleMode();
 
-  let dpr = window.devicePixelRatio || 1;
+  let dpr = Math.min(window.devicePixelRatio || 1, getCanvasDprCap());
   const maxSideCss = side === "full" ? cssW : cssW * 2;
   const maxDpr = Math.min(
     MAX_CANVAS_SIDE / Math.max(1, maxSideCss),

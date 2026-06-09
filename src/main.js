@@ -1,7 +1,7 @@
 import { buildReferencePageCards, rejectLargeReferencePdfFiles, loadReferenceFiles, pickReferenceFiles } from "./pdf-loader.js";
 import { getVersion } from "@tauri-apps/api/app";
 import packageInfo from "../package.json";
-import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, resetPdfViewportToStart, schedulePdfStageLayoutRefresh, setNextPdfZoomAnchorFromClientPoint } from "./pdf-view.js";
+import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, refreshPdfView, resetPdfViewportToStart, schedulePdfStageLayoutRefresh, setNextPdfZoomAnchorFromClientPoint } from "./pdf-view.js";
 import {
   clearTemporaryMultiSelectionAdornments,
   deleteSelectedLayers,
@@ -60,6 +60,7 @@ import { bindViewerMode, toggleViewerMode } from "./viewer-mode.js";
 import { bindAutoUpdater } from "./auto-updater.js";
 import { bindProofreadUi, openProofread } from "./proofread.js";
 import { initHamburgerMenu } from "./hamburger-menu.js";
+import { getMemoryRenderKey, getMemoryStatus, initMemoryMode, onMemoryStatusChange } from "./memory-mode.js";
 import { bindStylePalette } from "./style-palette.js";
 import { bindFindChangeMode } from "./find-change.js";
 import { initFontBookPanel, setPdfFontBookVisible } from "./font-book.js";
@@ -101,6 +102,7 @@ import {
   pickPsdFiles,
 } from "./services/psd-load.js";
 import { loadPsdFilesForReuse } from "./services/reuse.js";
+import { downscaleLoadedPageForCurrentMemory } from "./psd-loader.js";
 import { bindSaveMenu, handleSave } from "./bind/save.js";
 import { bindProjectButtons, openProject, openProjectFromPath, saveProject } from "./services/project.js";
 import {
@@ -137,6 +139,7 @@ import {
   clearScanExtractDoc,
   getActivePane,
   getAppMode,
+  getAllReuseInfo,
   getCurrentPageIndex,
   getEdit,
   getNewLayersForPsd,
@@ -5121,6 +5124,24 @@ async function closeStartupSplash() {
   }
 }
 
+function downscaleLoadedPagesForLowMemory() {
+  if (getMemoryStatus().low !== true) return false;
+  const reuseInfo = getAllReuseInfo();
+  let changed = false;
+  for (const page of getPages()) {
+    if (!downscaleLoadedPageForCurrentMemory(page)) continue;
+    changed = true;
+    const info = reuseInfo.get(page.path);
+    if (info && page.reuseReferenceCanvas) {
+      info.referenceCanvas = page.reuseReferenceCanvas;
+    }
+  }
+  if (changed) {
+    console.info("[memory-mode] loaded PSD canvases were downscaled for low-memory mode");
+  }
+  return changed;
+}
+
 function init() {
   // init の途中で例外が出てもスプラッシュは必ず閉じる（finally）。これがないと
   // bind 系のどれか 1 つが throw しただけで起動前画面が残り、メインが表示されない。
@@ -5131,6 +5152,7 @@ function init() {
   bindSaveMenu();
   bindHistoryButtons();
   initHamburgerMenu();
+  void initMemoryMode();
   bindTools();
   bindTextSizeUnitSwitch();
   bindSizeTool();
@@ -5165,6 +5187,15 @@ function init() {
   bindPsdRotate();
   updatePsdRotateVisibility();
   mountPdfView();
+  let memoryRenderKey = getMemoryRenderKey();
+  onMemoryStatusChange(() => {
+    const nextMemoryRenderKey = getMemoryRenderKey();
+    if (nextMemoryRenderKey === memoryRenderKey) return;
+    memoryRenderKey = nextMemoryRenderKey;
+    downscaleLoadedPagesForLowMemory();
+    renderAllSpreads();
+    refreshPdfView();
+  });
   setupTauriDragDrop();
   bindParallelSync();
   bindWheelPageNav();

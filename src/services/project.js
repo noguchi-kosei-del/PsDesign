@@ -436,6 +436,22 @@ function canvasToJpegBytes(canvas, quality = 0.92) {
   });
 }
 
+async function tryCopyReuseReferenceSource(invoke, sourcePath, dest) {
+  if (!sourcePath) return false;
+  await invoke("copy_file", { source: sourcePath, dest });
+  return true;
+}
+
+async function tryRegenerateReuseReferenceJpg(invoke, psdPath, dest) {
+  if (!psdPath) return false;
+  const json = await invoke("read_psd_text_layers", { psdPath });
+  const psData = JSON.parse(json);
+  const refImage = typeof psData?.refImage === "string" ? psData.refImage : "";
+  if (!refImage) return false;
+  await invoke("copy_file", { source: refImage, dest });
+  return true;
+}
+
 // 【写植再利用】reuseInfo の referenceCanvas (元テキスト入りの合成画像) を JPG として
 // プロジェクトの見本フォルダへ書き出す。戻り値: { copied: string[] }（ページ順の JPG パス）。
 async function writeReuseReferenceJpgs(destDir) {
@@ -449,13 +465,33 @@ async function writeReuseReferenceJpgs(destDir) {
     idx += 1;
     const info = reuseInfo.get(page.path);
     const canvas = info?.referenceCanvas;
-    if (!canvas) continue;
+    const sourcePath = typeof info?.referenceImagePath === "string" ? info.referenceImagePath : "";
+    const canRegenerate = typeof page.path === "string" && !!page.path;
+    if (!canvas && !sourcePath && !canRegenerate) continue;
     const stem = (baseName(page.path) || `page-${idx}`).replace(/\.psd$/i, "");
     const name = uniqueName(`${String(idx).padStart(2, "0")}_${stem}.jpg`, used);
     const dest = joinPath(destDir, name);
     try {
-      const bytes = await canvasToJpegBytes(canvas, 0.92);
-      await invoke("write_binary_file", { path: dest, data: bytes });
+      let copiedSource = false;
+      if (sourcePath) {
+        try {
+          copiedSource = await tryCopyReuseReferenceSource(invoke, sourcePath, dest);
+        } catch (copyError) {
+          console.warn("[project] reuse reference source copy failed, trying to regenerate:", sourcePath, copyError);
+        }
+      }
+      if (!copiedSource) {
+        try {
+          copiedSource = await tryRegenerateReuseReferenceJpg(invoke, page.path, dest);
+        } catch (regenError) {
+          if (!canvas) throw regenError;
+          console.warn("[project] reuse reference regeneration failed, falling back to canvas:", page.path, regenError);
+        }
+      }
+      if (!copiedSource) {
+        const bytes = await canvasToJpegBytes(canvas, 0.92);
+        await invoke("write_binary_file", { path: dest, data: bytes });
+      }
       copied.push(dest);
     } catch (e) {
       console.warn("[project] reuse reference JPG write failed:", page.path, e);

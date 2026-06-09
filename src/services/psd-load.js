@@ -14,12 +14,12 @@ import { rebuildLayerList } from "../text-editor.js";
 import { UnsupportedBitmapPsdError, loadPsdFromPath } from "../psd-loader.js";
 import { baseName, parentDir } from "../utils/path.js";
 import { setGuidesLocked } from "../rulers.js";
+import { refreshMemoryStatus } from "../memory-mode.js";
 
 function isUnsupportedBitmapPsdError(error) {
   return error instanceof UnsupportedBitmapPsdError || error?.code === "UNSUPPORTED_BITMAP_PSD";
 }
-
-export function formatUnsupportedBitmapMessage(paths) {
+function formatUnsupportedBitmapMessage(paths) {
   if (paths.length === 1) {
     return `「${baseName(paths[0])}」はモノクロ2階調のPSDのため読み込めません。RGBカラーまたはグレースケールに変換してから開いてください。`;
   }
@@ -27,7 +27,6 @@ export function formatUnsupportedBitmapMessage(paths) {
   const rest = paths.length > 10 ? `\nほか ${paths.length - 10} 件` : "";
   return `以下のPSDはモノクロ2階調のため読み込めません。\n\n${shown}${rest}\n\nRGBカラーまたはグレースケールに変換してから開いてください。`;
 }
-
 function isBitmapPsdHeader(bytes) {
   if (!bytes || bytes.length < 26) return false;
   const sig =
@@ -40,7 +39,6 @@ function isBitmapPsdHeader(bytes) {
   const colorMode = (bytes[24] << 8) | bytes[25];
   return colorMode === 0 || (colorMode === 1 && depth === 1);
 }
-
 async function isUnsupportedBitmapPsdPath(path) {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -52,7 +50,6 @@ async function isUnsupportedBitmapPsdPath(path) {
     return false;
   }
 }
-
 export async function findUnsupportedBitmapPsdFiles(files) {
   const list = Array.isArray(files) ? files : [];
   const unsupported = [];
@@ -106,6 +103,7 @@ export async function loadPsdFilesByPaths(files, {
   progressFlow = null,
 } = {}) {
   if (!files || files.length === 0) return;
+  await refreshMemoryStatus();
   // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
   // のいずれもページ番号順 (page1 → page2 → page10) で先頭から並ぶようにする。
   // Rust 側の list_psd_files は字句順なので "page10" が "page2" より先に来てしまう。
@@ -205,10 +203,4 @@ export async function loadPsdFilesByPaths(files, {
         : `読込失敗 ${failures.length} 件（${baseName(first.path)} 他）`;
     toast(msg, { kind: "error", duration: 5000 });
   }
-}
-
-export async function handleOpenFiles() {
-  const files = await pickPsdFiles();
-  if (!files.length) return;
-  await loadPsdFilesByPaths(files);
 }

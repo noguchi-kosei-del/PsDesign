@@ -26,6 +26,7 @@ import { resetAutoPlaceState } from "./auto-place.js";
 import { resetStylePaletteState } from "./style-palette.js";
 import { runTestMode } from "./test-mode.js";
 import { clearLeftViewer } from "./left-viewer.js";
+import { describeMemoryStatus, getMemoryStatus, onMemoryStatusChange } from "./memory-mode.js";
 
 const FLIPPED_KEY = "psdesign_layout_flipped";
 const HOME_RETURN_ANIMATION_MS = 360;
@@ -92,6 +93,18 @@ function toggleMenu() {
   else openMenu();
 }
 
+function bindLowMemoryIndicator() {
+  const btn = $("low-memory-indicator");
+  if (!btn) return;
+  const apply = (status = getMemoryStatus()) => {
+    btn.hidden = status.low !== true;
+    btn.title = describeMemoryStatus(status);
+    btn.setAttribute("aria-label", describeMemoryStatus(status));
+  };
+  onMemoryStatusChange(apply);
+  apply();
+}
+
 async function goHome() {
   const ok = await confirmDialog({
     title: "ホームに戻る",
@@ -144,6 +157,8 @@ export function initHamburgerMenu() {
   const settings = $("settings-btn");
   const home = $("home-btn");
   const testMode = $("test-mode-btn");
+
+  bindLowMemoryIndicator();
 
   if (trigger) trigger.addEventListener("click", toggleMenu);
   if (closeBtn) closeBtn.addEventListener("click", closeMenu);

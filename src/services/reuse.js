@@ -37,6 +37,7 @@ import {
   loadPsdForReuse,
   buildReusePageFromPsData,
 } from "../psd-loader.js";
+import { refreshMemoryStatus } from "../memory-mode.js";
 import { buildReferenceDocFromCanvases } from "../pdf-loader.js";
 import {
   getExistingLayerEffectiveSizePt,
@@ -422,6 +423,7 @@ export async function loadPsdFilesForReuse(files, {
   unifySize = null,
 } = {}) {
   if (!files || files.length === 0) return;
+  await refreshMemoryStatus();
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   files = [...files].sort((a, b) => collator.compare(baseName(a), baseName(b)));
 
@@ -522,6 +524,7 @@ export async function loadPsdFilesForReuse(files, {
       setReuseInfo(page.path, {
         hideLayerIds: page.reuseTextLayerIds || [],
         referenceCanvas: page.reuseReferenceCanvas || null,
+        referenceImagePath: page.reuseReferenceImagePath || null,
       });
       if (page.reuseReferenceCanvas) {
         referenceItems.push({ canvas: page.reuseReferenceCanvas, path: page.path });

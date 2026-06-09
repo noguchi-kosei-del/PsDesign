@@ -18,6 +18,7 @@ import {
   restoreViewportCenter,
   restoreViewportPoint,
 } from "./overscroll.js";
+import { getCanvasDprCap } from "./memory-mode.js";
 
 const container = () => document.getElementById("psd-stage");
 const pageResizeObservers = new Set();
@@ -72,7 +73,7 @@ export function setNextPsdZoomAnchorFromClientPoint(clientX, clientY) {
   zoomTransitionAnchor = captureViewportPointFraction(root, viewportTarget(root), clientX, clientY);
 }
 
-export function refreshPsdStageLayout({ recenter = true, viewportCenter = null } = {}) {
+function refreshPsdStageLayout({ recenter = true, viewportCenter = null } = {}) {
   for (const fn of pageRedraws) fn();
   if (viewportCenter) restoreCurrentPageCenter(viewportCenter);
   else if (recenter) centerCurrentPageInStage();
@@ -235,10 +236,6 @@ function truncateLabel(text) {
   return chars.slice(0, LABEL_MAX_CHARS - 1).join("") + "…";
 }
 
-export function refreshOverlays() {
-  refreshAllOverlays();
-}
-
 export function getCurrentPsdPageDisplaySize() {
   const root = container();
   const pages = getPages();
@@ -289,7 +286,7 @@ function computePageMetrics(page, root, fitSlots = 1) {
   const cssW = rotated90 ? visualH : visualW;
   const cssH = rotated90 ? visualW : visualH;
 
-  let dpr = window.devicePixelRatio || 1;
+  let dpr = Math.min(window.devicePixelRatio || 1, getCanvasDprCap());
   const maxDpr = Math.min(
     MAX_CANVAS_SIDE / Math.max(1, cssW),
     MAX_CANVAS_SIDE / Math.max(1, cssH),

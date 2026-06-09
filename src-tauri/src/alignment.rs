@@ -99,8 +99,8 @@ pub async fn compute_alignment(
     psd_image_data_base64: String,
     reference_text_bboxes: Vec<BboxF64>,
     psd_text_bboxes: Vec<BboxF64>,
-    _psd_width: f64,
-    _psd_height: f64,
+    psd_width: f64,
+    psd_height: f64,
     // 【v1.25.x】"mode1" (PSDに余分) / "mode2" (見本に余分)。未指定は mode1 扱い。
     // 数式は両モード共通だが、期待サイズ大小関係チェックでログに警告を出す。
     mode: Option<String>,
@@ -150,18 +150,36 @@ pub async fn compute_alignment(
     let ref_small = ref_img.resize_exact(ref_w, ref_h, image::imageops::FilterType::Triangle);
     let psd_small = psd_img.resize_exact(psd_w, psd_h, image::imageops::FilterType::Triangle);
 
-    // 4. grayscale + テキスト mask 化して u8 配列を作る
-    let ref_gray = make_masked_grayscale(&ref_small, &reference_text_bboxes, ref_scale);
-    let psd_gray = make_masked_grayscale(&psd_small, &psd_text_bboxes, psd_scale);
+    // 4. grayscale + text mask. Bboxes are in logical document coordinates.
+    let ref_w_f = mokuro_img_width.unwrap_or(ref_w_full as f64);
+    let ref_h_f = mokuro_img_height.unwrap_or(ref_h_full as f64);
+    let psd_w_f = if psd_width.is_finite() && psd_width > 0.0 {
+        psd_width
+    } else {
+        psd_w_full as f64
+    };
+    let psd_h_f = if psd_height.is_finite() && psd_height > 0.0 {
+        psd_height
+    } else {
+        psd_h_full as f64
+    };
+    let ref_gray = make_masked_grayscale(
+        &ref_small,
+        &reference_text_bboxes,
+        (ref_w as f64) / ref_w_f.max(1.0),
+        (ref_h as f64) / ref_h_f.max(1.0),
+    );
+    let psd_gray = make_masked_grayscale(
+        &psd_small,
+        &psd_text_bboxes,
+        (psd_w as f64) / psd_w_f.max(1.0),
+        (psd_h as f64) / psd_h_f.max(1.0),
+    );
 
     // 5. 【v1.24.x / v1.25.x】mode 別 alignment 計算
     // 【v1.25.x 重要】ref_w_f を「mokuro OCR の img_width」と一致させる
     // (alignment.rs の見本ラスタライズ解像度と mokuro の OCR 入力解像度が違うため)。
     // これでフロント側で `alignment.offset` と `mokuroPage.img_width` の単位整合が取れる。
-    let ref_w_f = mokuro_img_width.unwrap_or(ref_w_full as f64);
-    let ref_h_f = mokuro_img_height.unwrap_or(ref_h_full as f64);
-    let psd_w_f = psd_w_full as f64;
-    let psd_h_f = psd_h_full as f64;
     let mode_str = mode.as_deref().unwrap_or("mode1");
 
     if mode_str == "mode2" {
@@ -387,7 +405,8 @@ pub async fn compute_alignment(
 fn make_masked_grayscale(
     img: &image::DynamicImage,
     text_bboxes_full: &[BboxF64],
-    img_to_full_scale: f64,
+    logical_to_img_scale_x: f64,
+    logical_to_img_scale_y: f64,
 ) -> Vec<u8> {
     let (w, h) = img.dimensions();
     let mut buf = Vec::with_capacity((w * h) as usize);
@@ -402,10 +421,10 @@ fn make_masked_grayscale(
     // テキスト bbox を中性灰 (128) で塗りつぶし (= 比較対象から外す)
     // text_bboxes_full は元画像 px 座標なので、img_to_full_scale で縮小座標に変換
     for bbox in text_bboxes_full {
-        let x1 = (bbox.left * img_to_full_scale).max(0.0).min(w as f64) as u32;
-        let y1 = (bbox.top * img_to_full_scale).max(0.0).min(h as f64) as u32;
-        let x2 = (bbox.right * img_to_full_scale).max(0.0).min(w as f64) as u32;
-        let y2 = (bbox.bottom * img_to_full_scale).max(0.0).min(h as f64) as u32;
+        let x1 = (bbox.left * logical_to_img_scale_x).max(0.0).min(w as f64) as u32;
+        let y1 = (bbox.top * logical_to_img_scale_y).max(0.0).min(h as f64) as u32;
+        let x2 = (bbox.right * logical_to_img_scale_x).max(0.0).min(w as f64) as u32;
+        let y2 = (bbox.bottom * logical_to_img_scale_y).max(0.0).min(h as f64) as u32;
         for y in y1..y2 {
             let row_start = (y * w) as usize;
             for x in x1..x2 {

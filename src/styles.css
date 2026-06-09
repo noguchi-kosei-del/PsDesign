@@ -3197,6 +3197,22 @@ body.home-starting .home-screen {
   background: var(--accent);
   color: #fff;
 }
+.low-memory-indicator,
+.low-memory-indicator:disabled {
+  color: #28d875;
+  background: rgba(40, 216, 117, 0.14);
+  border: 1px solid rgba(40, 216, 117, 0.45);
+  cursor: default;
+  opacity: 1;
+}
+.low-memory-indicator:hover,
+.low-memory-indicator:disabled:hover {
+  color: #28d875;
+  background: rgba(40, 216, 117, 0.18);
+}
+.low-memory-indicator[hidden] {
+  display: none;
+}
 .side-toolbar {
   width: 44px;
   display: flex;

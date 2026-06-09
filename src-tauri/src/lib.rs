@@ -1321,6 +1321,79 @@ struct DriveFreeSpace {
 
 const PHOTOSHOP_SCRATCH_LOW_THRESHOLD_BYTES: u64 = 100u64 * 1024 * 1024 * 1024; // 100 GB
 
+#[derive(Debug, Serialize)]
+struct SystemMemoryStatus {
+    total_physical_bytes: u64,
+    available_physical_bytes: u64,
+    memory_load_percent: u32,
+    low: bool,
+    reason: String,
+    threshold_available_bytes: u64,
+    threshold_total_bytes: u64,
+    threshold_memory_load_percent: u32,
+}
+
+const LOW_MEMORY_AVAILABLE_THRESHOLD_BYTES: u64 = 4u64 * 1024 * 1024 * 1024; // 4 GiB
+const LOW_MEMORY_TOTAL_THRESHOLD_BYTES: u64 = 8u64 * 1024 * 1024 * 1024; // 8 GiB
+const HIGH_MEMORY_LOAD_THRESHOLD_PERCENT: u32 = 85;
+
+#[tauri::command]
+async fn get_system_memory_status() -> Result<SystemMemoryStatus, String> {
+    #[cfg(target_os = "windows")]
+    {
+        use std::mem;
+        use winapi::um::sysinfoapi::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+
+        let mut status: MEMORYSTATUSEX = unsafe { mem::zeroed() };
+        status.dwLength = mem::size_of::<MEMORYSTATUSEX>() as u32;
+        let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+        if ok == 0 {
+            return Err("GlobalMemoryStatusEx failed".to_string());
+        }
+
+        let total = status.ullTotalPhys as u64;
+        let available = status.ullAvailPhys as u64;
+        let load = status.dwMemoryLoad as u32;
+        let low_available = available < LOW_MEMORY_AVAILABLE_THRESHOLD_BYTES;
+        let low_total = total > 0 && total <= LOW_MEMORY_TOTAL_THRESHOLD_BYTES;
+        let high_load = load >= HIGH_MEMORY_LOAD_THRESHOLD_PERCENT;
+        let low = low_available || low_total || high_load;
+        let reason = if low_available {
+            "available".to_string()
+        } else if low_total {
+            "total".to_string()
+        } else if high_load {
+            "load".to_string()
+        } else {
+            "normal".to_string()
+        };
+
+        Ok(SystemMemoryStatus {
+            total_physical_bytes: total,
+            available_physical_bytes: available,
+            memory_load_percent: load,
+            low,
+            reason,
+            threshold_available_bytes: LOW_MEMORY_AVAILABLE_THRESHOLD_BYTES,
+            threshold_total_bytes: LOW_MEMORY_TOTAL_THRESHOLD_BYTES,
+            threshold_memory_load_percent: HIGH_MEMORY_LOAD_THRESHOLD_PERCENT,
+        })
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        Ok(SystemMemoryStatus {
+            total_physical_bytes: 0,
+            available_physical_bytes: 0,
+            memory_load_percent: 0,
+            low: false,
+            reason: "unsupported".to_string(),
+            threshold_available_bytes: LOW_MEMORY_AVAILABLE_THRESHOLD_BYTES,
+            threshold_total_bytes: LOW_MEMORY_TOTAL_THRESHOLD_BYTES,
+            threshold_memory_load_percent: HIGH_MEMORY_LOAD_THRESHOLD_PERCENT,
+        })
+    }
+}
+
 #[tauri::command]
 async fn get_photoshop_scratch_free_space() -> Result<DriveFreeSpace, String> {
     #[cfg(target_os = "windows")]
@@ -1610,6 +1683,7 @@ pub fn run() {
             list_drives,
             home_dir,
             desktop_dir,
+            get_system_memory_status,
             get_photoshop_scratch_free_space,
             ocr::check_ai_models,
             ocr::install_ai_models,

@@ -1155,6 +1155,10 @@ function txtSourceEqual(a, b) {
   return a.name === b.name && a.content === b.content;
 }
 
+function normalizeTxtSourceContent(content) {
+  return String(content ?? "").replace(/\u301c/g, "\uff5e");
+}
+
 function restoreSnapshot(snap) {
   state.edits = new Map(snap.edits.map(([k, v]) => [k, { ...v }]));
   state.newLayers = snap.newLayers.map((l) => ({ ...l }));
@@ -1168,7 +1172,9 @@ function restoreSnapshot(snap) {
   });
   // txtSource を復元。古いスナップショット（フィールド未保存）は素通し。
   if (Object.prototype.hasOwnProperty.call(snap, "txtSource")) {
-    const restored = snap.txtSource ? { ...snap.txtSource } : null;
+    const restored = snap.txtSource
+      ? { ...snap.txtSource, content: normalizeTxtSourceContent(snap.txtSource.content) }
+      : null;
     if (!txtSourceEqual(state.txtSource, restored)) {
       state.txtSource = restored;
       // 復元先と現在で内容が変わるため、選択は無効になり得る。安全側に倒してクリア。
@@ -1293,7 +1299,7 @@ export function applyProjectSnapshot(snapshot, options = {}) {
   if (Object.prototype.hasOwnProperty.call(snapshot || {}, "txtSource")) {
     const restored = snapshot.txtSource ? {
       name: String(snapshot.txtSource.name || "untitled.txt"),
-      content: String(snapshot.txtSource.content || ""),
+      content: normalizeTxtSourceContent(snapshot.txtSource.content),
     } : null;
     const changed = !txtSourceEqual(state.txtSource, restored);
     state.txtSource = restored;
@@ -1723,7 +1729,7 @@ export function getNewLayersForPsd(psdPath) {
 }
 
 export function setTxtSource(source) {
-  const next = source ? { name: source.name, content: source.content } : null;
+  const next = source ? { name: source.name, content: normalizeTxtSourceContent(source.content) } : null;
   const same = txtSourceEqual(state.txtSource, next);
   state.txtSource = next;
   state.txtSelection = "";
@@ -1881,6 +1887,7 @@ export function setReuseInfo(psdPath, info) {
   state.reuseInfo.set(psdPath, {
     hideLayerIds: Array.isArray(info?.hideLayerIds) ? [...info.hideLayerIds] : [],
     referenceCanvas: info?.referenceCanvas ?? null,
+    referenceImagePath: typeof info?.referenceImagePath === "string" ? info.referenceImagePath : null,
   });
 }
 export function getReuseInfo(psdPath) {

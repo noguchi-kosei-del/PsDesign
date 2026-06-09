@@ -1,5 +1,29 @@
 # PsDesign
 
+## 2026-06-09 変更メモ: v2.4.2 リリース
+
+v2.4.2 では、PC のメモリ空き容量に応じた低メモリモードを追加し、PSD/PDF/見本ビューアーの表示メモリ使用量を抑えるようにした。あわせて低メモリ時の表示品質・プロジェクト保存・読込済み PSD の保持メモリに関するリスクを対処し、原稿テキストの環境依存文字正規化とデッドコード整理を行った。
+
+- **低メモリモードの追加**: Rust 側に `get_system_memory_status` コマンドを追加し、Windows の `GlobalMemoryStatusEx` から物理メモリ総量・空き容量・使用率を取得するようにした。空き 4 GiB 未満、総メモリ 8 GiB 以下、またはメモリ使用率 85% 以上で低メモリモードに入る。フロント側は `src/memory-mode.js` で状態を管理し、PSD 読込前・リサイクル読込前・起動後の定期チェックで現在のメモリ状態を反映する。
+- **低メモリ時の表示軽量化**: PSD パース worker に低メモリ用 preview 制限を渡し、通常時は従来のフル品質、低メモリ時は canvas の最大辺・最大ピクセル数・DPR を制限するようにした。PSD/PDF の描画 DPR は `getCanvasDprCap()` で 1 に抑え、巨大 PSD は合成済み canvas を優先してレイヤー画像保持を避ける。左の見本ビューアーも低メモリ用 PSD preview をフルサイズへ再拡大しないようにし、論理サイズと表示 canvas を分離して扱う。
+- **低メモリ時の表示品質リスク対策**: 低メモリでも小さめの PSD は `highFidelityMaskingMaxPixels` の範囲内でレイヤー画像を保持し、通常モードと同じ非表示レイヤー焼き込み補正へ寄せる。巨大 PSD や critical low memory ではメモリ保護を優先する。worker 失敗後の main thread fallback も同じ判定を使い、低メモリ時に不用意に全レイヤー画像を読みに戻らないようにした。
+- **読込済み PSD のメモリ低下対応**: 起動後にメモリ状態が低下した場合、既に読み込まれている PSD / リサイクル見本 canvas を現在の低メモリ preview 制限に合わせて縮小し、保持メモリを下げるようにした。編集情報・ページ構成・保存 payload には触れず、表示用ラスタだけを差し替える。
+- **リサイクル見本 JPG 保存の堅牢化**: プロジェクト保存時の写植見本 JPG は、まず Photoshop が生成した元 JPG をコピーする。コピー元が消えている場合は `read_psd_text_layers` で見本 JPG を再生成してコピーし、それも失敗した場合だけ表示 canvas 由来の JPEG へフォールバックする。低メモリ preview の縮小が保存用見本に混ざりにくい構造へ変更した。
+- **低メモリ表示の UI**: ハンバーガーメニュー内に緑色の低メモリアイコンを追加し、低メモリモード中だけ表示する。ツールチップ / aria-label には現在のメモリ状態（空き容量・総容量・使用率・判定理由）を表示する。
+- **自動配置 / 位置調整の previewScale 対応**: 低メモリ時に PSD canvas が縮小されていても、Rust 側の画像解析へ渡す PSD 論理サイズと表示画像サイズの対応が崩れないよう `alignment.rs` の座標計算を調整した。機械的チェックも低メモリ preview の縮小 canvas を許容する。
+- **原稿テキストの文字正規化**: 読み込んだ原稿テキストに `〜` (U+301C) が含まれる場合、`～` (U+FF5E) へ自動置換するようにした。通常の TXT 読込だけでなく、プロジェクト復元・undo/redo 復元・プログラム生成テキストの `setTxtSource` 経路でも同じ正規化が入る。
+- **デッドコード整理**: 参照されていなかった `stopMemoryModePolling` / `moveLeftViewerPage` / `handleOpenFiles` / `refreshOverlays` を削除し、内部利用のみの関数（`loadLeftViewerExtraFromPaths` / `formatUnsupportedBitmapMessage` / `refreshPdfStageLayout` / `refreshPsdStageLayout`）から不要な `export` を外した。
+
+### 検証
+
+- `npm run check`
+- `cargo check --manifest-path src-tauri/Cargo.toml`
+- `git diff --check`
+
+### Version
+
+`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` を `2.4.2` に更新。
+
 ## 2026-06-08 変更メモ: v2.4.1 リリース
 
 v2.4.1 では、左ビューアーを A/B 切替方式から複数ページ対応の「見本ビューアー」へ再設計しページ連動させ、検索・置換の文字変換に変換元フォント指定を追加し、ルビ文字へ既定フォントを適用、リサイクル「写植見本を再現」での自動スタイル混入を停止し、多重起動防止を導入した。

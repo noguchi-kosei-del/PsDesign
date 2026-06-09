@@ -1,8 +1,21 @@
 import { readPsd } from "ag-psd";
+import {
+  getPreviewScaleForSize,
+  getRasterMemoryLimits,
+  isCriticalLowMemoryMode,
+  isLowMemoryMode,
+} from "./memory-mode.js";
 
 let psdParseWorker = null;
 let psdParseWorkerSeq = 1;
 const psdParseWorkerPending = new Map();
+
+function maybeReleasePsdParseWorkerForMemory() {
+  if (!isLowMemoryMode()) return;
+  if (!psdParseWorker || psdParseWorkerPending.size > 0) return;
+  psdParseWorker.terminate();
+  psdParseWorker = null;
+}
 
 function waitForNextFrame() {
   if (typeof requestAnimationFrame !== "function") return Promise.resolve();
@@ -32,21 +45,152 @@ function createBlankCanvas(width, height) {
   return canvas;
 }
 
+function scaledSize(width, height, scale) {
+  return {
+    width: Math.max(1, Math.round(width * scale)),
+    height: Math.max(1, Math.round(height * scale)),
+  };
+}
+
+function createFinalPageCanvas(source, logicalWidth, logicalHeight) {
+  const scale = getPreviewScaleForSize(logicalWidth, logicalHeight);
+  const size = scaledSize(logicalWidth, logicalHeight, scale);
+  if (
+    source &&
+    scale >= 0.999 &&
+    source.width === size.width &&
+    source.height === size.height
+  ) {
+    return { canvas: source, previewScale: 1 };
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = size.width;
+  canvas.height = size.height;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return { canvas: source ?? null, previewScale: source ? 1 : scale };
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  if (source) {
+    ctx.drawImage(source, 0, 0, size.width, size.height);
+  } else {
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, size.width, size.height);
+  }
+  return { canvas, previewScale: scale };
+}
+
+function pageCanvasScale(canvas, logicalWidth, logicalHeight) {
+  if (!canvas || !(logicalWidth > 0) || !(logicalHeight > 0)) return 1;
+  const sx = canvas.width / logicalWidth;
+  const sy = canvas.height / logicalHeight;
+  const scale = Math.min(sx, sy);
+  return Number.isFinite(scale) && scale > 0 ? scale : 1;
+}
+
+function downscaleCanvasForPage(canvas, logicalWidth, logicalHeight, targetScale) {
+  if (!canvas || !(logicalWidth > 0) || !(logicalHeight > 0) || !(targetScale > 0)) return canvas;
+  const currentScale = pageCanvasScale(canvas, logicalWidth, logicalHeight);
+  if (currentScale <= targetScale + 0.001) return canvas;
+  const size = scaledSize(logicalWidth, logicalHeight, targetScale);
+  const out = document.createElement("canvas");
+  out.width = size.width;
+  out.height = size.height;
+  const ctx = out.getContext("2d");
+  if (!ctx) return canvas;
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
+  ctx.drawImage(canvas, 0, 0, size.width, size.height);
+  return out;
+}
+
+export function downscaleLoadedPageForCurrentMemory(page) {
+  if (!page || !(page.width > 0) || !(page.height > 0) || !isLowMemoryMode()) return false;
+  const targetScale = getPreviewScaleForSize(page.width, page.height);
+  if (!(targetScale > 0) || targetScale >= 0.999) return false;
+  let changed = false;
+  const nextCanvas = downscaleCanvasForPage(page.canvas, page.width, page.height, targetScale);
+  if (nextCanvas && nextCanvas !== page.canvas) {
+    page.canvas = nextCanvas;
+    changed = true;
+  }
+  if (page.reuseReferenceCanvas) {
+    const nextReference = downscaleCanvasForPage(page.reuseReferenceCanvas, page.width, page.height, targetScale);
+    if (nextReference && nextReference !== page.reuseReferenceCanvas) {
+      page.reuseReferenceCanvas = nextReference;
+      changed = true;
+    }
+  }
+  if (changed) {
+    page.previewScale = targetScale;
+    page.lowMemoryPreview = true;
+  }
+  return changed;
+}
+
+function withPreviewMetadata(page, previewScale = 1) {
+  const scale = Number.isFinite(previewScale) && previewScale > 0 ? previewScale : 1;
+  return {
+    ...page,
+    previewScale: scale,
+    lowMemoryPreview: scale < 0.999,
+  };
+}
+
+function expectedPreviewSize(width, height, scale) {
+  return scaledSize(width, height, Number.isFinite(scale) && scale > 0 ? scale : 1);
+}
+
+function canvasMatchesPreviewSize(canvas, width, height, scale) {
+  if (!canvas) return false;
+  const size = expectedPreviewSize(width, height, scale);
+  return canvas.width === size.width && canvas.height === size.height;
+}
+
 // テストモード用: 実 PSD を読まずに白紙ページオブジェクトを生成する。
 // 戻り値は loadPsdFromPath と同じ形 ({path,width,height,canvas,textLayers,dpi})。
 export function buildBlankPsdPage(path, width, height, dpi = 72) {
-  return {
+  const preview = createFinalPageCanvas(null, width, height);
+  return withPreviewMetadata({
     path,
     width,
     height,
-    canvas: createBlankCanvas(width, height),
+    canvas: preview.canvas,
     textLayers: [],
     dpi,
-  };
+  }, preview.previewScale);
 }
 
 function canUsePsdParseWorker() {
   return typeof Worker === "function" && typeof OffscreenCanvas === "function";
+}
+
+function readPsdHeaderSize(bytes) {
+  try {
+    const view = bytes instanceof Uint8Array
+      ? new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : new DataView(bytes);
+    if (view.byteLength < 26) return null;
+    const sig = String.fromCharCode(
+      view.getUint8(0),
+      view.getUint8(1),
+      view.getUint8(2),
+      view.getUint8(3),
+    );
+    if (sig !== "8BPS") return null;
+    const height = view.getUint32(14, false);
+    const width = view.getUint32(18, false);
+    if (!(width > 0 && height > 0)) return null;
+    return { width, height, pixels: width * height };
+  } catch {
+    return null;
+  }
+}
+
+function shouldPreserveLayerImagesForLowMemory(bytes) {
+  const maxPixels = Number(getRasterMemoryLimits().highFidelityMaskingMaxPixels);
+  if (!(maxPixels > 0)) return false;
+  const size = readPsdHeaderSize(bytes);
+  return !!size && size.pixels <= maxPixels;
 }
 
 function getPsdParseWorker() {
@@ -65,6 +209,7 @@ function getPsdParseWorker() {
       err.code = error?.code ?? null;
       pending.reject(err);
     }
+    maybeReleasePsdParseWorkerForMemory();
   };
   psdParseWorker.onerror = (event) => {
     const error = new Error(event?.message ?? "PSD worker failed");
@@ -81,10 +226,13 @@ function getPsdParseWorker() {
 function parsePsdWithWorker(bytes) {
   if (!canUsePsdParseWorker()) return Promise.reject(new Error("PSD parse worker is not available"));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
+  const limits = isLowMemoryMode()
+    ? { ...getRasterMemoryLimits(), critical: isCriticalLowMemoryMode() }
+    : null;
   const id = psdParseWorkerSeq++;
   return new Promise((resolve, reject) => {
     psdParseWorkerPending.set(id, { resolve, reject });
-    getPsdParseWorker().postMessage({ id, buffer }, [buffer]);
+    getPsdParseWorker().postMessage({ id, buffer, preview: limits }, [buffer]);
   });
 }
 
@@ -761,9 +909,11 @@ async function jpgFileToCanvas(imgPath, width, height) {
   const bitmap = await createImageBitmap(new Blob([bytes]));
   const w = width > 0 ? width : bitmap.width;
   const h = height > 0 ? height : bitmap.height;
-  const canvas = createBlankCanvas(w, h);
+  const scale = getPreviewScaleForSize(w, h);
+  const size = scaledSize(w, h, scale);
+  const canvas = createBlankCanvas(size.width, size.height);
   const ctx = canvas.getContext("2d");
-  if (ctx) ctx.drawImage(bitmap, 0, 0, w, h);
+  if (ctx) ctx.drawImage(bitmap, 0, 0, size.width, size.height);
   try { bitmap.close?.(); } catch (_) {}
   return canvas;
 }
@@ -795,7 +945,8 @@ export async function buildReusePageFromPsData(path, psData) {
   if (!(width > 0 && height > 0 && psData.refImage && psData.bgImage)) return null;
   const reuseReferenceCanvas = await jpgFileToCanvas(psData.refImage, width, height);
   const editCanvas = await jpgFileToCanvas(psData.bgImage, width, height);
-  return {
+  const previewScale = getPreviewScaleForSize(width, height);
+  return withPreviewMetadata({
     path,
     width,
     height,
@@ -803,12 +954,13 @@ export async function buildReusePageFromPsData(path, psData) {
     canvas: editCanvas,
     textLayers: [],
     reuseReferenceCanvas,
+    reuseReferenceImagePath: psData.refImage || null,
     reusePsTextItems: Array.isArray(psData.textLayers) ? psData.textLayers : [],
     // テキスト非表示の背景 JPG パス（自動白フチ / 中丸ゴシック判定の周辺解析に使う）。
     reuseBgImagePath: psData.bgImage || null,
     reuseTextLayers: [],
     reuseTextLayerIds: [],
-  };
+  }, previewScale);
 }
 
 export async function loadPsdForReuse(path) {
@@ -827,8 +979,11 @@ export async function loadPsdForReuse(path) {
   // --- フォールバック: ag-psd（ライブテキストが解析できる PSD 向け） ---
   const bytes = await readFileBytes(path);
   await waitForNextFrame();
+  const preserveLayerImages = !isLowMemoryMode() || shouldPreserveLayerImagesForLowMemory(bytes);
+  const skipLayerImageData = isLowMemoryMode() && !preserveLayerImages;
   const psd = readPsd(bytes, {
-    skipLayerImageData: false,
+    skipLayerImageData,
+    skipLinkedFilesData: isLowMemoryMode(),
     skipThumbnail: true,
     useImageData: false,
   });
@@ -866,18 +1021,21 @@ export async function loadPsdForReuse(path) {
     editCanvas = createBlankCanvas(psd.width, psd.height);
   }
 
-  return {
+  const preview = createFinalPageCanvas(editCanvas, psd.width, psd.height);
+  const referencePreview = createFinalPageCanvas(reuseReferenceCanvas, psd.width, psd.height);
+  return withPreviewMetadata({
     path,
     width: psd.width,
     height: psd.height,
-    canvas: editCanvas,
+    canvas: preview.canvas,
     textLayers: [],
     dpi,
-    reuseReferenceCanvas,
+    reuseReferenceCanvas: referencePreview.canvas,
+    reuseReferenceImagePath: null,
     reusePsTextItems: null,
     reuseTextLayers: textLayers,
     reuseTextLayerIds,
-  };
+  }, preview.previewScale);
 }
 
 export async function loadPsdFromPath(path) {
@@ -886,25 +1044,31 @@ export async function loadPsdFromPath(path) {
     try {
       const parsed = await parsePsdWithWorker(bytes);
       let canvas = imageBitmapToCanvas(parsed.bitmap);
+      let previewScale = Number.isFinite(parsed.previewScale) && parsed.previewScale > 0
+        ? parsed.previewScale
+        : getPreviewScaleForSize(parsed.width, parsed.height);
       // canvas のサイズが PSD 寸法と不整合なら異常 (描画が PSD 領域外に出る or 中央に縮小描画されてしまう)。
       // 仕上がりチェック / メインステージで page.canvas をフル領域に drawImage するため、不整合だと
       // ページが完全に崩れる。空白 canvas へフォールバックすれば最低限テキスト overlay は読める。
-      if (canvas && (canvas.width !== parsed.width || canvas.height !== parsed.height)) {
+      if (canvas && !canvasMatchesPreviewSize(canvas, parsed.width, parsed.height, previewScale)) {
+        const expected = expectedPreviewSize(parsed.width, parsed.height, previewScale);
         console.warn(
           `[psd-loader] worker canvas size mismatch | path=${path} | `
-          + `canvas=${canvas.width}x${canvas.height} expected=${parsed.width}x${parsed.height}`,
+          + `canvas=${canvas.width}x${canvas.height} expected=${expected.width}x${expected.height}`,
         );
-        canvas = createBlankCanvas(parsed.width, parsed.height);
+        const fallback = createFinalPageCanvas(null, parsed.width, parsed.height);
+        canvas = fallback.canvas;
+        previewScale = fallback.previewScale;
       }
       if (canvas) {
-        return {
+        return withPreviewMetadata({
           path,
           width: parsed.width,
           height: parsed.height,
           canvas,
           textLayers: parsed.textLayers ?? [],
           dpi: parsed.dpi ?? 72,
-        };
+        }, previewScale);
       }
     } catch (error) {
       if (error?.code === "UNSUPPORTED_BITMAP_PSD") {
@@ -916,8 +1080,11 @@ export async function loadPsdFromPath(path) {
 
   await waitForNextFrame();
 
+  const preserveLayerImages = !isLowMemoryMode() || shouldPreserveLayerImagesForLowMemory(bytes);
+  const skipLayerImageData = isLowMemoryMode() && !preserveLayerImages;
   const psd = readPsd(bytes, {
-    skipLayerImageData: false,
+    skipLayerImageData,
+    skipLinkedFilesData: isLowMemoryMode(),
     skipThumbnail: true,
     useImageData: false,
   });
@@ -937,7 +1104,7 @@ export async function loadPsdFromPath(path) {
   // 置き換えるので、現状の見た目を維持しつつ非表示テキストの焼き付きが消える。
   // 旧 maskHiddenLayersOnComposite (案 A 白フィル) は frameFX 白フチが残る欠点があった。
   let canvas = psd.canvas;
-  if (Array.isArray(psd.children)) {
+  if (Array.isArray(psd.children) && !skipLayerImageData) {
     const rebuilt = await rebuildCanvasMaskingHidden(psd);
     if (rebuilt) {
       canvas = rebuilt;
@@ -956,14 +1123,15 @@ export async function loadPsdFromPath(path) {
     canvas = createBlankCanvas(psd.width, psd.height);
   }
 
-  return {
+  const preview = createFinalPageCanvas(canvas, psd.width, psd.height);
+  return withPreviewMetadata({
     path,
     width: psd.width,
     height: psd.height,
-    canvas,
+    canvas: preview.canvas,
     textLayers,
     dpi,
-  };
+  }, preview.previewScale);
 }
 
 async function readFileBytes(path) {

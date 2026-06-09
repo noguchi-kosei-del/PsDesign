@@ -1,6 +1,6 @@
 [package]
 name = "opus"
-version = "2.4.1"
+version = "2.4.2"
 description = "PSD spread editor with Photoshop apply-back, text extraction, and auto-placement"
 edition = "2021"
 rust-version = "1.77"
@@ -30,7 +30,7 @@ base64 = "0.22"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"
-winapi = { version = "0.3", features = ["fileapi", "handleapi", "tlhelp32", "winuser"] }
+winapi = { version = "0.3", features = ["fileapi", "handleapi", "sysinfoapi", "tlhelp32", "winuser"] }
 
 [profile.dev.package.pdfium-render]
 opt-level = 3

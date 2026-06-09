@@ -241,16 +241,21 @@ async function loadPdfPages(path, onProgress = () => {}) {
   }
 }
 
-async function loadPsdCanvas(path, onProgress = () => {}) {
+async function loadPsdViewerPage(path, onProgress = () => {}) {
   onProgress(18, "PSDを解析中");
   const page = await loadPsdFromPath(path);
   onProgress(82, "表示を準備中");
-  const canvas = makeCanvas(page?.width || page?.canvas?.width || 1, page?.height || page?.canvas?.height || 1);
-  const ctx = canvas.getContext("2d");
-  ctx.imageSmoothingEnabled = true;
-  ctx.imageSmoothingQuality = "high";
-  if (page?.canvas) ctx.drawImage(page.canvas, 0, 0, canvas.width, canvas.height);
-  return canvas;
+  const canvas = page?.canvas || makeCanvas(1, 1);
+  return {
+    kind: "psd",
+    path,
+    name: basename(path),
+    canvas,
+    width: page?.width || canvas.width,
+    height: page?.height || canvas.height,
+    lowMemoryPreview: page?.lowMemoryPreview === true,
+    previewScale: page?.previewScale ?? 1,
+  };
 }
 
 async function loadViewerPagesForPath(path, onProgress = () => {}) {
@@ -270,16 +275,8 @@ async function loadViewerPagesForPath(path, onProgress = () => {}) {
   }
   if (PDF_RE.test(path)) return loadPdfPages(path, onProgress);
   if (PSD_RE.test(path)) {
-    const canvas = await loadPsdCanvas(path, onProgress);
     return {
-      pages: [{
-        kind: "psd",
-        path,
-        name: basename(path),
-        canvas,
-        width: canvas.width,
-        height: canvas.height,
-      }],
+      pages: [await loadPsdViewerPage(path, onProgress)],
       docs: [],
     };
   }
@@ -358,10 +355,6 @@ export function getLeftViewerPageIndex() {
 
 export function setLeftViewerPageIndex(index) {
   setViewerPageIndex(index);
-}
-
-export function moveLeftViewerPage(delta) {
-  moveViewerPage(delta);
 }
 
 export function clearLeftViewer() {
@@ -710,7 +703,7 @@ export function isLeftViewerDropPayload(payload) {
   return pointsFromDropPayload(payload).some(pointHitsViewer);
 }
 
-export async function loadLeftViewerExtraFromPaths(paths, { notify = true } = {}) {
+async function loadLeftViewerExtraFromPaths(paths, { notify = true } = {}) {
   return loadViewerPaths(paths, { notify });
 }
 

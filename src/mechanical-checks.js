@@ -224,13 +224,26 @@ export async function runMechanicalChecks({
       return fail(`${pages.length} pages loaded, expected ${expected.psdPages}`);
     }
     if (pages.length === 0) return skip("no PSD pages loaded");
-    const bad = pages.find((page) =>
-      !isFinitePositive(page.width) ||
-      !isFinitePositive(page.height) ||
-      !isFinitePositive(page.dpi) ||
-      !page.canvas ||
-      Number(page.canvas.width) !== Number(page.width) ||
-      Number(page.canvas.height) !== Number(page.height));
+    const bad = pages.find((page) => {
+      if (
+        !isFinitePositive(page.width) ||
+        !isFinitePositive(page.height) ||
+        !isFinitePositive(page.dpi) ||
+        !page.canvas
+      ) {
+        return true;
+      }
+      if (page.lowMemoryPreview === true) {
+        const scale = Number(page.previewScale);
+        const expectedW = Math.max(1, Math.round(Number(page.width) * scale));
+        const expectedH = Math.max(1, Math.round(Number(page.height) * scale));
+        return !(scale > 0 && scale <= 1) ||
+          Number(page.canvas.width) !== expectedW ||
+          Number(page.canvas.height) !== expectedH;
+      }
+      return Number(page.canvas.width) !== Number(page.width) ||
+        Number(page.canvas.height) !== Number(page.height);
+    });
     return bad ? fail(`invalid page geometry: ${bad.path ?? "(unknown)"}`) : pass(`${pages.length} pages`);
   });
 
