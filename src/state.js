@@ -1462,6 +1462,12 @@ export function exportEdits() {
     return byPsd.get(psdPath);
   };
 
+  // Save/export operates on every loaded PSD, even when a file has no text layers
+  // or no edits. Otherwise blank/non-text PSDs are skipped by the Photoshop loop.
+  for (const page of state.pages) {
+    if (typeof page?.path === "string" && page.path) ensure(page.path);
+  }
+
   for (const entry of state.edits.values()) {
     const { psdPath, layerId, ...rest } = entry;
     const page = state.pages.find((p) => p.path === psdPath) ?? null;

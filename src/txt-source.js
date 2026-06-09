@@ -623,6 +623,189 @@ export function deleteBlockFromContent(content, pageNumber, idx) {
   return norm.slice(0, sectionStart) + newSection + norm.slice(sectionEnd);
 }
 
+function moveBlockArray(parts, fromIdx, toIdx) {
+  if (!Number.isInteger(fromIdx) || !Number.isInteger(toIdx)) return null;
+  if (fromIdx < 0 || toIdx < 0 || fromIdx >= parts.length || toIdx >= parts.length) return null;
+  const next = parts.slice();
+  const [item] = next.splice(fromIdx, 1);
+  next.splice(toIdx, 0, item);
+  return next;
+}
+
+function moveBlockInContent(content, pageNumber, fromIdx, toIdx) {
+  const norm = (content ?? "").replace(/\r\n?/g, "\n");
+  if (fromIdx === toIdx) return norm;
+
+  if (pageNumber == null) {
+    const parts = splitBlocksRaw(norm);
+    const moved = moveBlockArray(parts, fromIdx, toIdx);
+    if (!moved) return null;
+    return moved.join("\n\n");
+  }
+
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let sectionStart = -1;
+  let sectionEnd = norm.length;
+  let inTargetPage = false;
+  let m;
+  while ((m = re.exec(norm)) !== null) {
+    const num = toHalfWidthInt(m[1]);
+    if (inTargetPage) { sectionEnd = m.index; break; }
+    if (num === pageNumber) {
+      inTargetPage = true;
+      sectionStart = m.index + m[0].length;
+    }
+  }
+  if (!inTargetPage) return null;
+
+  const parts = splitBlocksRaw(norm.slice(sectionStart, sectionEnd));
+  const moved = moveBlockArray(parts, fromIdx, toIdx);
+  if (!moved) return null;
+  const newSection = moved.length === 0 ? "\n" : `\n${moved.join("\n\n")}\n`;
+  return norm.slice(0, sectionStart) + newSection + norm.slice(sectionEnd);
+}
+
+function findMarkedPageSection(norm, pageNumber) {
+  if (!Number.isInteger(pageNumber) || pageNumber <= 0) return null;
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let sectionStart = -1;
+  let sectionEnd = norm.length;
+  let inTargetPage = false;
+  let m;
+  while ((m = re.exec(norm)) !== null) {
+    const num = toHalfWidthInt(m[1]);
+    if (inTargetPage) {
+      sectionEnd = m.index;
+      break;
+    }
+    if (num === pageNumber) {
+      inTargetPage = true;
+      sectionStart = m.index + m[0].length;
+    }
+  }
+  if (!inTargetPage) return null;
+  return { pageNumber, sectionStart, sectionEnd, blocks: splitBlocksRaw(norm.slice(sectionStart, sectionEnd)) };
+}
+
+function sectionTextFromBlocks(blocks) {
+  return blocks.length === 0 ? "\n" : `\n${blocks.join("\n\n")}\n`;
+}
+
+function replaceMarkedPageSections(norm, replacements) {
+  const sections = Array.from(replacements.values())
+    .sort((a, b) => b.sectionStart - a.sectionStart);
+  let next = norm;
+  for (const section of sections) {
+    next = next.slice(0, section.sectionStart)
+      + sectionTextFromBlocks(section.blocks)
+      + next.slice(section.sectionEnd);
+  }
+  return next;
+}
+
+function moveBlockBetweenPagesInContent(content, fromPageNumber, fromIdx, toPageNumber, toIdx) {
+  const norm = (content ?? "").replace(/\r\n?/g, "\n");
+  if (fromPageNumber == null || toPageNumber == null) return null;
+  if (fromPageNumber === toPageNumber) return moveBlockInContent(norm, fromPageNumber, fromIdx, toIdx);
+
+  const fromSection = findMarkedPageSection(norm, fromPageNumber);
+  const toSection = findMarkedPageSection(norm, toPageNumber);
+  if (!fromSection || !toSection) return null;
+  if (fromIdx < 0 || fromIdx >= fromSection.blocks.length) return null;
+  if (toIdx < 0 || toIdx > toSection.blocks.length) return null;
+
+  const fromBlocks = fromSection.blocks.slice();
+  const toBlocks = toSection.blocks.slice();
+  const [moved] = fromBlocks.splice(fromIdx, 1);
+  toBlocks.splice(toIdx, 0, moved);
+
+  return replaceMarkedPageSections(norm, new Map([
+    [fromPageNumber, { ...fromSection, blocks: fromBlocks }],
+    [toPageNumber, { ...toSection, blocks: toBlocks }],
+  ]));
+}
+
+function paragraphIndexAfterMove(idx, fromIdx, toIdx) {
+  if (idx === fromIdx) return toIdx;
+  if (fromIdx < toIdx && idx > fromIdx && idx <= toIdx) return idx - 1;
+  if (fromIdx > toIdx && idx >= toIdx && idx < fromIdx) return idx + 1;
+  return idx;
+}
+
+function psdPathForTxtPageNumber(pageNumber) {
+  if (!Number.isInteger(pageNumber) || pageNumber <= 0) return null;
+  return getPages()[pageNumber - 1]?.path ?? null;
+}
+
+export function moveTxtBlockByIndex(pageNumber, fromIdx, toIdx, toPageNumber = pageNumber) {
+  const source = getTxtSource();
+  if (!source) return false;
+  if (!Number.isInteger(fromIdx) || !Number.isInteger(toIdx)) return false;
+  if (fromIdx < 0 || toIdx < 0) return false;
+
+  const fromPage = pageNumber ?? null;
+  const targetPage = toPageNumber ?? null;
+  const samePage = fromPage === targetPage;
+  if (samePage && fromIdx === toIdx) return false;
+  const newContent = samePage
+    ? moveBlockInContent(source.content, fromPage, fromIdx, toIdx)
+    : moveBlockBetweenPagesInContent(source.content, fromPage, fromIdx, targetPage, toIdx);
+  if (newContent == null) return false;
+  const targetPsdPath = samePage ? null : psdPathForTxtPageNumber(targetPage);
+
+  let refChanged = false;
+  withHistoryTransient(() => {
+    for (const layer of getNewLayers().slice()) {
+      const ref = layer?.sourceTxtRef;
+      if (!ref || !Number.isInteger(ref.paragraphIndex)) continue;
+      const refPage = ref.pageNumber == null ? null : Number(ref.pageNumber);
+      if (samePage) {
+        if (refPage !== fromPage) continue;
+        const nextIndex = paragraphIndexAfterMove(ref.paragraphIndex, fromIdx, toIdx);
+        if (nextIndex !== ref.paragraphIndex) {
+          updateNewLayer(layer.tempId, {
+            sourceTxtRef: { ...ref, paragraphIndex: nextIndex },
+          });
+          refChanged = true;
+        }
+        continue;
+      }
+
+      if (refPage === fromPage && ref.paragraphIndex === fromIdx) {
+        const changes = {
+          sourceTxtRef: { ...ref, pageNumber: targetPage, paragraphIndex: toIdx },
+        };
+        if (targetPsdPath) changes.psdPath = targetPsdPath;
+        updateNewLayer(layer.tempId, {
+          ...changes,
+        });
+        refChanged = true;
+      } else if (refPage === fromPage && ref.paragraphIndex > fromIdx) {
+        updateNewLayer(layer.tempId, {
+          sourceTxtRef: { ...ref, paragraphIndex: ref.paragraphIndex - 1 },
+        });
+        refChanged = true;
+      } else if (refPage === targetPage && ref.paragraphIndex >= toIdx) {
+        updateNewLayer(layer.tempId, {
+          sourceTxtRef: { ...ref, paragraphIndex: ref.paragraphIndex + 1 },
+        });
+        refChanged = true;
+      }
+    }
+    if (newContent !== source.content) {
+      setTxtSource({ name: source.name, content: newContent });
+      setTxtDirty(true);
+    }
+  });
+
+  if (newContent !== source.content || refChanged) {
+    try { refreshAllOverlays(); } catch (_) {}
+    try { rebuildLayerList(); } catch (_) {}
+    return true;
+  }
+  return false;
+}
+
 // 選択中の TXT ブロックを 1 件削除する。削除に成功すれば true。
 // (キーボード Delete/Backspace ハンドラから呼ぶ)
 //

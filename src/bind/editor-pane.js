@@ -27,6 +27,7 @@ import {
   getActivePageNumber,
   getTxtPageCount,
   isQuickAddTextShortcut,
+  moveTxtBlockByIndex,
   shouldHandleBlurredQuickAddShortcut,
   splitTxtBlockAndPlace,
   syncNewInputAvailabilityFor,
@@ -47,6 +48,7 @@ let editingBlock = false;
 let lastEditorBlockSelection = null;
 let editorRubyMode = "auto";
 let editorQuickAddShortcutBound = false;
+let editorParagraphDrag = null;
 const editorTextMappings = new WeakMap();
 
 function getEls() {
@@ -539,6 +541,158 @@ function getCurrentActivePageNumber() {
   return getActivePageNumber();
 }
 
+function editorDragPageNumberFrom(el) {
+  const n = Number(el?.dataset?.pageNumber);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+function editorParagraphsForPage(pageNumber) {
+  const viewer = $("editor-pages-viewer");
+  if (!viewer) return [];
+  const pageKey = pageNumber == null ? "0" : String(pageNumber);
+  return Array.from(viewer.querySelectorAll(`.editor-page-paragraph[data-page-number="${pageKey}"]`));
+}
+
+function clearEditorParagraphDropIndicators() {
+  document.querySelectorAll(
+    ".editor-page-paragraph-drop-before, .editor-page-paragraph-drop-after, .editor-page-section-drop-empty",
+  ).forEach((el) => {
+    el.classList.remove(
+      "editor-page-paragraph-drop-before",
+      "editor-page-paragraph-drop-after",
+      "editor-page-section-drop-empty",
+    );
+  });
+}
+
+function resetEditorParagraphDrag() {
+  clearEditorParagraphDropIndicators();
+  document.querySelectorAll(".editor-page-paragraph-dragging").forEach((el) => {
+    el.classList.remove("editor-page-paragraph-dragging");
+  });
+  document.body.classList.remove("editor-paragraph-reordering");
+  document.removeEventListener("pointermove", handleEditorParagraphPointerMove, true);
+  document.removeEventListener("pointerup", handleEditorParagraphPointerUp, true);
+  document.removeEventListener("pointercancel", handleEditorParagraphPointerCancel, true);
+  editorParagraphDrag = null;
+}
+
+function paragraphDropTargetFor(el, e) {
+  if (!editorParagraphDrag) return null;
+  const toPageNumber = editorDragPageNumberFrom(el);
+  const samePage = toPageNumber === editorParagraphDrag.pageNumber;
+  const paragraphs = editorParagraphsForPage(toPageNumber);
+  if (paragraphs.length === 0) return null;
+
+  const targetIndex = Number(el.dataset.paragraphIndex);
+  if (!Number.isInteger(targetIndex)) return null;
+  const rect = el.getBoundingClientRect();
+  const after = e.clientY >= rect.top + rect.height / 2;
+  let toIndex = targetIndex + (after ? 1 : 0);
+  if (samePage && toIndex > editorParagraphDrag.fromIndex) toIndex -= 1;
+  const maxIndex = samePage ? paragraphs.length - 1 : paragraphs.length;
+  toIndex = Math.max(0, Math.min(maxIndex, toIndex));
+  if (samePage && toIndex === editorParagraphDrag.fromIndex) return null;
+  return {
+    toPageNumber,
+    toIndex,
+    indicatorEl: el,
+    indicatorClass: after ? "editor-page-paragraph-drop-after" : "editor-page-paragraph-drop-before",
+  };
+}
+
+function sectionDropTargetFor(section, e) {
+  if (!editorParagraphDrag || !section) return null;
+  const toPageNumber = editorDragPageNumberFrom(section);
+  const samePage = toPageNumber === editorParagraphDrag.pageNumber;
+  const paragraphs = editorParagraphsForPage(toPageNumber);
+  if (paragraphs.length === 0) {
+    if (samePage) return null;
+    return {
+      toPageNumber,
+      toIndex: 0,
+      indicatorEl: section,
+      indicatorClass: "editor-page-section-drop-empty",
+    };
+  }
+
+  const firstRect = paragraphs[0].getBoundingClientRect();
+  const lastRect = paragraphs[paragraphs.length - 1].getBoundingClientRect();
+  if (e.clientY < firstRect.top) return paragraphDropTargetFor(paragraphs[0], { clientY: firstRect.top - 1 });
+  if (e.clientY > lastRect.bottom) return paragraphDropTargetFor(paragraphs[paragraphs.length - 1], { clientY: lastRect.bottom + 1 });
+  return null;
+}
+
+function editorDropTargetFromPoint(e) {
+  const hit = document.elementFromPoint(e.clientX, e.clientY);
+  const paragraph = hit?.closest?.(".editor-page-paragraph") ?? null;
+  if (paragraph) return paragraphDropTargetFor(paragraph, e);
+  return sectionDropTargetFor(hit?.closest?.(".editor-page-section") ?? null, e);
+}
+
+function updateEditorParagraphDropTarget(e) {
+  const target = editorDropTargetFromPoint(e);
+  clearEditorParagraphDropIndicators();
+  if (editorParagraphDrag) {
+    editorParagraphDrag.toPageNumber = target?.toPageNumber ?? null;
+    editorParagraphDrag.toIndex = target?.toIndex ?? null;
+  }
+  if (!target) return null;
+  target.indicatorEl.classList.add(target.indicatorClass);
+  return target;
+}
+
+function handleEditorParagraphPointerMove(e) {
+  if (!editorParagraphDrag) return;
+  e.preventDefault();
+  e.stopPropagation();
+  updateEditorParagraphDropTarget(e);
+}
+
+function handleEditorParagraphPointerUp(e) {
+  if (!editorParagraphDrag) return;
+  e.preventDefault();
+  e.stopPropagation();
+  updateEditorParagraphDropTarget(e);
+
+  const { pageNumber, fromIndex, toPageNumber, toIndex } = editorParagraphDrag;
+  resetEditorParagraphDrag();
+  if (Number.isInteger(toIndex)) {
+    moveTxtBlockByIndex(pageNumber, fromIndex, toIndex, toPageNumber);
+  }
+}
+
+function handleEditorParagraphPointerCancel(e) {
+  if (!editorParagraphDrag) return;
+  e.preventDefault();
+  e.stopPropagation();
+  resetEditorParagraphDrag();
+}
+
+function startEditorParagraphDrag(e, el, pageNumber, paragraphIndex) {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  e.stopPropagation();
+
+  const activeText = document.activeElement?.closest?.(".editor-page-paragraph-text");
+  if (activeText) activeText.blur();
+  editingBlock = false;
+
+  const pageKey = pageNumber == null ? "0" : String(pageNumber);
+  const latestEl = $("editor-pages-viewer")?.querySelector(
+    `.editor-page-paragraph[data-page-number="${pageKey}"][data-paragraph-index="${paragraphIndex}"]`,
+  );
+  const sourceEl = latestEl || el;
+  if (!sourceEl?.isConnected) return;
+
+  editorParagraphDrag = { pageNumber, fromIndex: paragraphIndex, toPageNumber: pageNumber, toIndex: null };
+  sourceEl.classList.add("editor-page-paragraph-dragging");
+  document.body.classList.add("editor-paragraph-reordering");
+  document.addEventListener("pointermove", handleEditorParagraphPointerMove, true);
+  document.addEventListener("pointerup", handleEditorParagraphPointerUp, true);
+  document.addEventListener("pointercancel", handleEditorParagraphPointerCancel, true);
+}
+
 function buildSection(pageNumber, blocks, activeNum, options = {}) {
   const { markerless = false, showHeader = true } = options;
   const sec = document.createElement("section");
@@ -586,6 +740,20 @@ function buildSection(pageNumber, blocks, activeNum, options = {}) {
         deleteTxtBlockByIndex(markerless ? null : pageNumber, idx);
       });
       el.appendChild(delBtn);
+
+      const dragBtn = document.createElement("button");
+      dragBtn.type = "button";
+      dragBtn.className = "editor-page-paragraph-drag-btn";
+      dragBtn.tabIndex = -1;
+      dragBtn.setAttribute("aria-label", "段落を移動");
+      dragBtn.title = "段落を移動";
+      dragBtn.innerHTML = '<svg viewBox="0 0 16 16" width="12" height="12" fill="currentColor" aria-hidden="true"><circle cx="5" cy="3.5" r="1.2"/><circle cx="11" cy="3.5" r="1.2"/><circle cx="5" cy="8" r="1.2"/><circle cx="11" cy="8" r="1.2"/><circle cx="5" cy="12.5" r="1.2"/><circle cx="11" cy="12.5" r="1.2"/></svg>';
+      dragBtn.addEventListener("pointerdown", (e) => startEditorParagraphDrag(e, el, markerless ? null : pageNumber, idx));
+      dragBtn.addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+      });
+      el.appendChild(dragBtn);
 
       const textEl = document.createElement("div");
       textEl.className = "editor-page-paragraph-text";

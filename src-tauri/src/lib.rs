@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use tauri::webview::PageLoadEvent;
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
 #[cfg(windows)]
 fn hide_console_window(cmd: &mut Command) {
@@ -78,6 +78,8 @@ pub struct LayerEdit {
     pub layer_id: i64,
     #[serde(default)]
     pub contents: Option<String>,
+    #[serde(default)]
+    pub deleted: Option<bool>,
     #[serde(rename = "fontPostScriptName", default)]
     pub font_post_script_name: Option<String>,
     #[serde(rename = "sizePt", default)]
@@ -1594,8 +1596,20 @@ async fn open_folder_in_explorer(path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn startup_args(allowed: tauri::State<'_, AllowedPaths>) -> Result<Vec<String>, String> {
-    let args: Vec<String> = std::env::args()
-        .skip(1)
+    let args = normalize_launch_args(std::env::args().skip(1));
+    // OS がアプリへ渡した起動引数（ファイル関連付け / ショートカット）は信頼できる入口。
+    // 実体として存在するパスのみ許可リストへ登録する。
+    for a in &args {
+        let _ = allowed.register_real(a);
+    }
+    Ok(args)
+}
+
+fn normalize_launch_args<I>(args: I) -> Vec<String>
+where
+    I: IntoIterator<Item = String>,
+{
+    args.into_iter()
         .map(|arg| {
             let path = PathBuf::from(&arg);
             let resolved = resolve_shortcut_path(&path);
@@ -1605,13 +1619,7 @@ async fn startup_args(allowed: tauri::State<'_, AllowedPaths>) -> Result<Vec<Str
                 arg
             }
         })
-        .collect();
-    // OS がアプリへ渡した起動引数（ファイル関連付け / ショートカット）は信頼できる入口。
-    // 実体として存在するパスのみ許可リストへ登録する。
-    for a in &args {
-        let _ = allowed.register_real(a);
-    }
-    Ok(args)
+        .collect()
 }
 
 #[tauri::command]
@@ -1707,11 +1715,19 @@ pub fn run() {
                 }
             }
         })
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            let args = normalize_launch_args(args);
+            {
+                let allowed = app.state::<AllowedPaths>();
+                for a in &args {
+                    let _ = allowed.register_real(a);
+                }
+            }
             if let Some(main_window) = app.get_webview_window("main") {
                 let _ = main_window.unminimize();
                 let _ = main_window.show();
                 let _ = main_window.set_focus();
+                let _ = main_window.emit("second-instance-args", args);
             }
         }))
         .plugin(tauri_plugin_dialog::init())

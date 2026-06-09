@@ -9,7 +9,6 @@ import {
   getPages,
   getPdfPaths,
   getProjectSaveDirty,
-  hasEdits,
   markProjectSaveClean,
   markPsdSaveClean,
 } from "../state.js";
@@ -190,8 +189,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     return;
   }
   flushActiveSidebarInputBeforeSave();
-  if (!hasEdits()) {
-    toast("編集内容がありません", { kind: "info" });
+  if (getPages().length === 0) {
     return;
   }
   // Photoshop 起動時のスクラッチディスク容量警告を事前にチェック。

@@ -321,6 +321,7 @@ function getTcyContext(sel = getLastInplaceSelection()) {
   const layer = page.textLayers?.find((l) => l.id === targetId);
   if (!layer) return null;
   const edit = getEdit(page.path, targetId) ?? {};
+  if (edit.deleted === true) return null;
   return {
     sel,
     targetId,
@@ -556,11 +557,12 @@ export function rebuildLayerList() {
   ul.appendChild(header);
 
   for (const layer of page.textLayers) {
+    const edit = getEdit(page.path, layer.id);
+    if (edit?.deleted === true) continue;
     const li = document.createElement("li");
     li.dataset.pageIndex = String(pageIndex);
     li.dataset.layerId = String(layer.id);
     li.dataset.layerKind = "existing";
-    const edit = getEdit(page.path, layer.id);
     const displayText = edit?.contents ?? layer.text;
     const movedMark = edit && (edit.dx || edit.dy) ? "・移動" : "";
     const editedMark = edit ? `• 編集済${movedMark}` : "";
@@ -659,6 +661,8 @@ function resolveSelection() {
   }
   const layer = page.textLayers.find((l) => l.id === sel.layerId);
   if (!layer) return null;
+  const edit = getEdit(page.path, layer.id) ?? {};
+  if (edit.deleted === true) return null;
   return { kind: "existing", page, layer };
 }
 
@@ -731,6 +735,8 @@ function resolveLayerRef(sel) {
   }
   const layer = page.textLayers.find((l) => l.id === sel.layerId);
   if (!layer) return null;
+  const edit = getEdit(page.path, layer.id) ?? {};
+  if (edit.deleted === true) return null;
   return { kind: "existing", page, layer };
 }
 

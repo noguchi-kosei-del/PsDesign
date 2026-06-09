@@ -1415,6 +1415,212 @@ export function deleteSelectedLayers() {
   return true;
 }
 
+let layerClipboard = [];
+
+function cloneMap(value) {
+  if (!value || typeof value !== "object") return {};
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch (_) {
+    return { ...value };
+  }
+}
+
+function selectedLayerToClipboardItem(sel) {
+  const page = getPages()[sel.pageIndex];
+  if (!page) return null;
+
+  if (typeof sel.layerId === "string") {
+    const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+    if (!nl) return null;
+    return {
+      x: nl.x,
+      y: nl.y,
+      contents: nl.contents ?? "",
+      fontPostScriptName: nl.fontPostScriptName ?? null,
+      sizePt: nl.sizePt ?? null,
+      direction: nl.direction ?? "vertical",
+      strokeColor: nl.strokeColor ?? "none",
+      strokeWidthPx: nl.strokeWidthPx ?? 20,
+      fillColor: nl.fillColor ?? "default",
+      rotation: nl.rotation ?? 0,
+      leadingPct: nl.leadingPct ?? 125,
+      horizontalScale: nl.horizontalScale ?? 100,
+      verticalScale: nl.verticalScale ?? 100,
+      trackingMille: nl.trackingMille ?? 0,
+      kerningMille: nl.kerningMille ?? 0,
+      syntheticBold: nl.syntheticBold === true,
+      syntheticItalic: nl.syntheticItalic === true,
+      lineLeadings: cloneMap(nl.lineLeadings),
+      charRubies: cloneMap(nl.charRubies),
+      charSizes: cloneMap(nl.charSizes),
+      charFonts: cloneMap(nl.charFonts),
+      charBolds: cloneMap(nl.charBolds),
+      charItalics: cloneMap(nl.charItalics),
+      charHorizontalScales: cloneMap(nl.charHorizontalScales),
+      charVerticalScales: cloneMap(nl.charVerticalScales),
+      charTrackings: cloneMap(nl.charTrackings),
+      charKernings: cloneMap(nl.charKernings),
+      charTateChuYokos: cloneMap(nl.charTateChuYokos),
+      charFillColors: cloneMap(nl.charFillColors),
+      autoFontSwitched: nl.autoFontSwitched === true,
+      autoFontSwitchBucket: Number.isInteger(nl.autoFontSwitchBucket) ? nl.autoFontSwitchBucket : -1,
+      lowExtractTextMatch: nl.lowExtractTextMatch === true,
+      extractMatchScore: Number.isFinite(nl.extractMatchScore) ? nl.extractMatchScore : null,
+      reuseTightThick: nl.reuseTightThick === true,
+    };
+  }
+
+  const layer = page.textLayers.find((l) => l.id === sel.layerId);
+  if (!layer) return null;
+  const edit = getEdit(page.path, sel.layerId) ?? {};
+  if (edit.deleted === true) return null;
+  return {
+    x: (layer.left ?? 0) + (edit.dx ?? 0),
+    y: (layer.top ?? 0) + (edit.dy ?? 0),
+    contents: edit.contents ?? layer.text ?? "",
+    fontPostScriptName: edit.fontPostScriptName ?? layer.font ?? null,
+    sizePt: edit.sizePt ?? layer.fontSize ?? null,
+    direction: edit.direction ?? layer.direction ?? "horizontal",
+    strokeColor: edit.strokeColor ?? layer.strokeColor ?? "none",
+    strokeWidthPx: edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
+    fillColor: edit.fillColor ?? layer.fillColor ?? "default",
+    rotation: edit.rotation ?? 0,
+    leadingPct: edit.leadingPct ?? 125,
+    horizontalScale: edit.horizontalScale ?? layer.horizontalScale ?? 100,
+    verticalScale: edit.verticalScale ?? layer.verticalScale ?? 100,
+    trackingMille: edit.trackingMille ?? layer.trackingMille ?? 0,
+    kerningMille: edit.kerningMille ?? layer.kerningMille ?? 0,
+    syntheticBold: edit.syntheticBold === true,
+    syntheticItalic: edit.syntheticItalic === true,
+    lineLeadings: cloneMap(edit.lineLeadings),
+    charRubies: cloneMap(edit.charRubies),
+    charSizes: { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) },
+    charFonts: { ...(layer.charFonts ?? {}), ...(edit.charFonts ?? {}) },
+    charBolds: cloneMap(edit.charBolds),
+    charItalics: cloneMap(edit.charItalics),
+    charHorizontalScales: { ...(layer.charHorizontalScales ?? {}), ...(edit.charHorizontalScales ?? {}) },
+    charVerticalScales: { ...(layer.charVerticalScales ?? {}), ...(edit.charVerticalScales ?? {}) },
+    charTrackings: { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
+    charKernings: { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
+    charTateChuYokos: { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
+    charFillColors: { ...(layer.charFillColors ?? {}), ...(edit.charFillColors ?? {}) },
+  };
+}
+
+function addClipboardItemToPage(item, page, sourceTxtRef = null) {
+  const created = addNewLayer({
+    psdPath: page.path,
+    x: item.x,
+    y: item.y,
+    contents: item.contents,
+    fontPostScriptName: item.fontPostScriptName,
+    sizePt: item.sizePt,
+    direction: item.direction,
+    strokeColor: item.strokeColor,
+    strokeWidthPx: item.strokeWidthPx,
+    fillColor: item.fillColor,
+    rotation: item.rotation ?? 0,
+    leadingPct: item.leadingPct ?? 125,
+    horizontalScale: item.horizontalScale ?? 100,
+    verticalScale: item.verticalScale ?? 100,
+    trackingMille: item.trackingMille ?? 0,
+    kerningMille: item.kerningMille ?? 0,
+    syntheticBold: item.syntheticBold === true,
+    syntheticItalic: item.syntheticItalic === true,
+    lineLeadings: item.lineLeadings,
+    charRubies: item.charRubies,
+    sourceTxtRef,
+    autoFontSwitched: item.autoFontSwitched,
+    autoFontSwitchBucket: item.autoFontSwitchBucket,
+    lowExtractTextMatch: item.lowExtractTextMatch,
+    extractMatchScore: item.extractMatchScore,
+    reuseTightThick: item.reuseTightThick,
+  });
+  updateNewLayer(created.tempId, {
+    charSizes: cloneMap(item.charSizes),
+    charFonts: cloneMap(item.charFonts),
+    charBolds: cloneMap(item.charBolds),
+    charItalics: cloneMap(item.charItalics),
+    charHorizontalScales: cloneMap(item.charHorizontalScales),
+    charVerticalScales: cloneMap(item.charVerticalScales),
+    charTrackings: cloneMap(item.charTrackings),
+    charKernings: cloneMap(item.charKernings),
+    charTateChuYokos: cloneMap(item.charTateChuYokos),
+    charFillColors: cloneMap(item.charFillColors),
+  });
+  return created;
+}
+
+export function cutSelectedLayersToClipboard() {
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+  const items = selections.map(selectedLayerToClipboardItem).filter(Boolean);
+  if (items.length === 0) return false;
+
+  layerClipboard = items.map((item) => ({ ...item }));
+  const tempIds = [];
+  const hiddenExisting = [];
+  const deletedLayerSnapshots = [];
+  for (const sel of selections) {
+    const page = getPages()[sel.pageIndex];
+    if (!page) continue;
+    if (typeof sel.layerId === "string") {
+      const nl = getNewLayersForPsd(page.path).find((l) => l.tempId === sel.layerId);
+      if (!nl) continue;
+      tempIds.push(sel.layerId);
+      deletedLayerSnapshots.push(nl);
+    } else {
+      const layer = page.textLayers.find((l) => l.id === sel.layerId);
+      if (!layer) continue;
+      hiddenExisting.push({ page, layerId: sel.layerId });
+    }
+  }
+  if (tempIds.length === 0 && hiddenExisting.length === 0) return false;
+
+  withHistoryTransient(() => {
+    for (const id of tempIds) removeNewLayer(id);
+    for (const { page, layerId } of hiddenExisting) setEdit(page.path, layerId, { deleted: true });
+    cascadeRemoveTxtForLayers(deletedLayerSnapshots, new Set(tempIds));
+  });
+  setSelectedLayers([]);
+  refreshAllOverlays();
+  rebuildLayerList();
+  return true;
+}
+
+export function pasteClipboardLayersToCurrentPage() {
+  if (layerClipboard.length === 0) return false;
+  const pageIndex = getCurrentPageIndex();
+  const page = getPages()[pageIndex];
+  if (!page) return false;
+
+  let created = [];
+  withHistoryTransient(() => {
+    const pageNumber = pageIndex + 1;
+    let source = getTxtSource() ?? { name: "new-text.txt", content: "" };
+    created = [];
+    for (const item of layerClipboard) {
+      let sourceTxtRef = null;
+      const appended = appendBlockToCurrentPageContent(source.content, pageNumber, item.contents);
+      if (Number.isInteger(appended?.paragraphIndex) && appended.paragraphIndex >= 0) {
+        source = { name: source.name, content: appended.content };
+        sourceTxtRef = { pageNumber, paragraphIndex: appended.paragraphIndex };
+      }
+      const layer = addClipboardItemToPage(item, page, sourceTxtRef);
+      if (layer) created.push(layer);
+    }
+    if (created.length > 0) setTxtSource(source);
+    return created.length > 0;
+  });
+  if (created.length === 0) return false;
+  setSelectedLayers(created.map((layer) => ({ pageIndex, layerId: layer.tempId })));
+  refreshAllOverlays();
+  rebuildLayerList();
+  renderTxtSourceViewer();
+  return true;
+}
+
 function clampSizePt(v) {
   const rounded = Math.round(v * 100) / 100;
   return Math.max(6, Math.min(999, rounded));
@@ -1907,6 +2113,7 @@ function renderOverlay(ctx) {
     // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
     if (editingExistingId !== null && layer.id === editingExistingId) continue;
     const edit = getEdit(page.path, layer.id) ?? {};
+    if (edit.deleted === true) continue;
     const rect = layerRectForExisting(page, layer, edit);
     const rotation = edit.rotation ?? 0;
     const box = createBox(page, rect.left, rect.top, rect.width, rect.height, "existing");
@@ -4920,6 +5127,7 @@ function collectLayerHits(ctx, selRect) {
   const hits = [];
   for (const layer of page.textLayers) {
     const edit = getEdit(page.path, layer.id) ?? {};
+    if (edit.deleted === true) continue;
     const lrect = layerRectForExisting(page, layer, edit);
     if (rectsIntersect(selRect, lrect)) hits.push({ pageIndex, layerId: layer.id });
   }
@@ -4946,6 +5154,7 @@ function findSwapTarget(ctx, draggedKey, centerXPsd, centerYPsd) {
   for (const layer of ctx.page.textLayers) {
     if (draggedKey.kind === "existing" && layer.id === draggedKey.id) continue;
     const edit = getEdit(ctx.page.path, layer.id) ?? {};
+    if (edit.deleted === true) continue;
     const lrect = layerRectForExisting(ctx.page, layer, edit);
     if (rectsIntersect(tinyRect, lrect)) return { kind: "existing", layer };
   }

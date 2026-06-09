@@ -521,6 +521,9 @@ pub fn generate_apply_script(
             if let Some(ref c) = layer.contents {
                 out.push_str(&format!(", contents: {}", js_string(c)));
             }
+            if layer.deleted == Some(true) {
+                out.push_str(", deleted: true");
+            }
             if let Some(ref f) = layer.font_post_script_name {
                 out.push_str(&format!(", font: {}", js_string(f)));
             }
@@ -4089,6 +4092,12 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       var layer = findLayerById(doc, e.id);
       if (!layer) { $.writeln("[OPUS] layer " + e.id + " not found in " + psdPath); continue; }
       if (layer.kind !== LayerKind.TEXT) { $.writeln("[OPUS] layer " + e.id + " is not text"); continue; }
+      if (e.deleted === true) {
+        try { layer.visible = false; } catch (eDeleteHide) {
+          addWarning("cut layer hide failed (layer " + e.id + "): " + eDeleteHide);
+        }
+        continue;
+      }
       var ti = layer.textItem;
       if (typeof e.direction === "string") {
         try {
@@ -4687,6 +4696,16 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     if (tateChuYokoEnabled) {
       try { reapplyTateChuYokoForAllLayers(doc, tateChuYokoEnabled); }
       catch (eRTcy) { addWarning("縦中横の再適用に失敗: " + eRTcy); }
+    }
+    for (var __delI = 0; __delI < edits.length; __delI++) {
+      if (edits[__delI] && edits[__delI].deleted === true) {
+        try {
+          var __deletedLayer = findLayerById(doc, edits[__delI].id);
+          if (__deletedLayer) __deletedLayer.visible = false;
+        } catch (eDeletedHideFinal) {
+          addWarning("cut layer final hide failed (layer " + edits[__delI].id + "): " + eDeletedHideFinal);
+        }
+      }
     }
     // 写植再利用モード: 抽出テキストは newLayers として作成済みなので、元のテキスト
     // レイヤーを非表示にして二重表示を防ぐ。id で探して visible=false にするだけ。

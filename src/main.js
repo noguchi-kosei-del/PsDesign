@@ -4,6 +4,7 @@ import packageInfo from "../package.json";
 import { capturePdfViewportCenter, mountPdfView, PDF_FIT_BASE_SCALE, PDF_FIT_ZOOM, refreshPdfView, resetPdfViewportToStart, schedulePdfStageLayoutRefresh, setNextPdfZoomAnchorFromClientPoint } from "./pdf-view.js";
 import {
   clearTemporaryMultiSelectionAdornments,
+  cutSelectedLayersToClipboard,
   deleteSelectedLayers,
   commitActiveInPlaceEdit,
   nudgeSelectedLayers,
@@ -29,6 +30,7 @@ import {
   applyEditModeRubyToRange,
   removeEditModeRubyFromRange,
   removeEditModeRubyTextFromRange,
+  pasteClipboardLayersToCurrentPage,
 } from "./canvas-tools.js";
 import { ensureFontLoaded, onFontsRegistered } from "./font-loader.js";
 import {
@@ -481,6 +483,8 @@ function bindTools() {
     const page = pages[idx];
     const selections = [];
     for (const layer of page.textLayers ?? []) {
+      const edit = getEdit(page.path, layer.id) ?? {};
+      if (edit.deleted === true) continue;
       selections.push({ pageIndex: idx, layerId: layer.id });
     }
     for (const nl of getNewLayersForPsd(page.path)) {
@@ -667,6 +671,20 @@ function bindTools() {
         e.preventDefault();
         handleClearAllEdits();
         return;
+      }
+      if (!isTextInput && k === "x" && !e.shiftKey) {
+        if (cutSelectedLayersToClipboard()) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
+      }
+      if (!isTextInput && k === "v" && !e.shiftKey) {
+        if (pasteClipboardLayersToCurrentPage()) {
+          e.preventDefault();
+          e.stopPropagation();
+          return;
+        }
       }
       if (k === "a" && !e.shiftKey) {
         const t = e.target;
@@ -3441,6 +3459,22 @@ async function openStartupFilesFromArgs() {
   }
 }
 
+async function setupSecondInstanceFileOpen() {
+  try {
+    const { listen } = await import("@tauri-apps/api/event");
+    await listen("second-instance-args", async (event) => {
+      const args = Array.isArray(event?.payload) ? event.payload : [];
+      const paths = args
+        .map(normalizeStartupProjectPath)
+        .filter(isStartupLoadablePath);
+      if (paths.length === 0) return;
+      await handleDroppedPaths(paths);
+    });
+  } catch (e) {
+    console.warn("second-instance file listener failed:", e);
+  }
+}
+
 async function setupTauriDragDrop() {
   try {
     const { getCurrentWindow } = await import("@tauri-apps/api/window");
@@ -5180,6 +5214,7 @@ function init() {
   bindViewModeControls();
   bindEditorPane();
   bindParallelViewMode();
+  void setupSecondInstanceFileOpen();
   initSettingsUi();
   applyToolDefaults();
   const applyRubyCssVars = () => {
