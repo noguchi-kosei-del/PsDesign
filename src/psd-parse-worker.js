@@ -1,4 +1,5 @@
 import { initializeCanvas, readPsd } from "ag-psd";
+import { extractPsdGuides } from "./utils/psd-guides.js";
 
 initializeCanvas(
   (width, height) => new OffscreenCanvas(width, height),
@@ -522,6 +523,7 @@ function parsePsd(buffer, preview) {
     textLayers,
     bitmap,
     previewScale: finalCanvas.previewScale,
+    guides: extractPsdGuides(psd),
   };
 }
 

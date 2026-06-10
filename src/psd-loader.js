@@ -1,4 +1,5 @@
 import { readPsd } from "ag-psd";
+import { extractPsdGuides } from "./utils/psd-guides.js";
 import {
   getLargePsdPreviewLimits,
   getPreviewScaleForSize,
@@ -1072,6 +1073,7 @@ export async function loadPsdFromPath(path) {
           canvas,
           textLayers: parsed.textLayers ?? [],
           dpi: parsed.dpi ?? 72,
+          psdGuides: parsed.guides ?? { h: [], v: [] },
         }, previewScale);
       }
     } catch (error) {
@@ -1135,6 +1137,7 @@ export async function loadPsdFromPath(path) {
     canvas: preview.canvas,
     textLayers,
     dpi,
+    psdGuides: extractPsdGuides(psd),
   }, preview.previewScale);
 }
 

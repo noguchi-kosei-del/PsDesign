@@ -82,7 +82,7 @@ export function onRulersVisibleChange(fn) {
 // 表示自体は継続（Photoshop / InDesign の "ガイドをロック" と同じ挙動）。
 export function getGuidesLocked() { return guidesLocked; }
 
-export function setGuidesLocked(on) {
+export function setGuidesLocked(on, opts = {}) {
   const v = !!on;
   if (guidesLocked === v) return;
   guidesLocked = v;
@@ -91,7 +91,9 @@ export function setGuidesLocked(on) {
   requestRulerRedraw();
   // ロック確定（false→true）時に、現在ページのトリミング枠ガイドを全ページへコピー反映。
   // 自動ロック（addGuide）・フチ手動ロック（renderTrimFrame のトグル）の両経路がここを通る。
-  if (v) {
+  // ただし opts.skipApply=true（PSD 埋め込みガイドのロード時ロック）のときはコピーしない。
+  // 各ページが PSD 由来の固有ガイドを持つため、現在ページのガイドで上書きしてはならない。
+  if (v && !opts.skipApply) {
     const cur = getGuidesObj(getCurrentPsdPath());
     if (cur.h.length >= 2 && cur.v.length >= 2) {
       applyGuidesToPaths(getPages().map((p) => p.path));
@@ -178,11 +180,11 @@ export function clearAllGuides() {
   requestRulerRedraw();
 }
 
-// 現在ページのガイド配列（h/v の両方）を、指定 PSD パス群にコピーして上書き反映する。
-// マージではなく完全置き換え。自分自身（現ページ）を targetPaths に含めても無視。
+// コピー元（既定: 現在ページ）のガイド配列（h/v の両方）を、指定 PSD パス群にコピーして上書き反映する。
+// マージではなく完全置き換え。コピー元自身を targetPaths に含めても無視。
+// srcPath を明示すると、現在ページ以外（例: PSD 埋め込みガイドが入っていたページ）を起点にできる。
 // 戻り値は実際に書き込んだページ数。
-export function applyGuidesToPaths(targetPaths) {
-  const srcPath = getCurrentPsdPath();
+export function applyGuidesToPaths(targetPaths, srcPath = getCurrentPsdPath()) {
   if (!srcPath) return 0;
   const src = guidesByPsd.get(srcPath);
   if (!src) return 0;
@@ -198,6 +200,20 @@ export function applyGuidesToPaths(targetPaths) {
   }
   if (count > 0) requestRulerRedraw();
   return count;
+}
+
+// PSD 読み込み時、ファイルに埋め込まれたガイド（トンボ/塗り足し枠）を流し込む。
+// guides = { h: number[], v: number[] }（PSD pixel）。フレッシュロード前提で完全置き換え。
+// addGuide の自動ロック副作用を避けるため guidesByPsd.set で直接書く（applyGuidesToPaths と同方式）。
+export function setGuidesFromPsd(psdPath, guides) {
+  if (!psdPath || !guides) return;
+  const round = (n) => Math.round(n * 100) / 100;
+  const h = (Array.isArray(guides.h) ? guides.h : []).filter(Number.isFinite).map(round);
+  const v = (Array.isArray(guides.v) ? guides.v : []).filter(Number.isFinite).map(round);
+  if (h.length === 0 && v.length === 0) return;
+  guidesByPsd.set(psdPath, { h, v });
+  emitGuidesChange(psdPath);
+  requestRulerRedraw();
 }
 
 // ===== Mount =====

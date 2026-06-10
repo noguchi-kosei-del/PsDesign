@@ -13,7 +13,7 @@ import { renderAllSpreads } from "../spread-view.js";
 import { rebuildLayerList } from "../text-editor.js";
 import { UnsupportedBitmapPsdError, loadPsdFromPath } from "../psd-loader.js";
 import { baseName, parentDir } from "../utils/path.js";
-import { setGuidesLocked } from "../rulers.js";
+import { setGuidesLocked, setGuidesFromPsd, setRulersVisible, applyGuidesToPaths } from "../rulers.js";
 import { refreshMemoryStatus } from "../memory-mode.js";
 
 function isUnsupportedBitmapPsdError(error) {
@@ -156,6 +156,11 @@ export async function loadPsdFilesByPaths(files, {
 
   const failures = [];
   const unsupportedBitmapFiles = [];
+  // 読み込めた PSD のパス一覧。塗り足し枠を全ページへ展開する際のコピー先に使う。
+  const loadedPaths = [];
+  // PSD 埋め込みガイドが塗り足し枠（縦2+横2）を成す最初のページのパス。
+  // 1 ページでも塗り足し枠が入っていれば、それを全ページへ適用する（コピー元）。
+  let sourceFramePath = null;
   for (let i = 0; i < files.length; i++) {
     const path = files[i];
     updateProgress(withProgressFlow(progressFlow, {
@@ -167,6 +172,15 @@ export async function loadPsdFilesByPaths(files, {
     try {
       const page = await loadPsdFromPath(path);
       addPage(page);
+      loadedPaths.push(page.path);
+      // PSD に埋め込まれたガイド（トンボ/塗り足し枠）を定規へ流し込む。
+      if (page.psdGuides && (page.psdGuides.h.length || page.psdGuides.v.length)) {
+        setGuidesFromPsd(page.path, page.psdGuides);
+        // 最初に塗り足し枠（縦2+横2）が揃ったページをコピー元として記録。
+        if (!sourceFramePath && page.psdGuides.h.length >= 2 && page.psdGuides.v.length >= 2) {
+          sourceFramePath = page.path;
+        }
+      }
       renderAllSpreads();
       rebuildLayerList();
       window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
@@ -186,6 +200,15 @@ export async function loadPsdFilesByPaths(files, {
     }));
   }
 
+  // 1 ページでも塗り足し枠が入っていれば、そのガイドを全ページへコピーして統一する。
+  // その後、定規を自動表示してロック（枠外ディム = 塗り足し表示）。
+  // setRulersVisible を先に呼ぶ（requestRulerRedraw が rulersVisible を見るため）。
+  // 既に全ページへ展開済みなので setGuidesLocked は skipApply: true（再コピー不要）。
+  if (sourceFramePath) {
+    applyGuidesToPaths(loadedPaths, sourceFramePath);
+    setRulersVisible(true);
+    setGuidesLocked(true, { skipApply: true });
+  }
   window.dispatchEvent(new CustomEvent("psdesign:psd-loaded"));
   // 全件失敗のときは緑チェック演出をスキップ。1 件でも成功していれば success 表示。
   const allFailed = failures.length + unsupportedBitmapFiles.length === files.length;

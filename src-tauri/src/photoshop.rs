@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::Emitter;
 use thiserror::Error;
 
-use crate::{jsx_gen, EditPayload};
+use crate::{jsx_gen, path_access::AllowedPaths, EditPayload};
 
 #[cfg(windows)]
 fn hide_console_window(cmd: &mut Command) {
@@ -176,7 +176,11 @@ pub fn apply_edits(
 // 【写植再利用】Photoshop で PSD のテキストレイヤーを列挙し、テキスト非表示の合成画像
 // (JPG) を書き出す。戻り値は JSX が書いた JSON 文字列（フロントが parse して使う）。
 // PSD は保存しない。
-pub fn read_text_layers(psd_path: &str, app: &tauri::AppHandle) -> Result<String, PhotoshopError> {
+pub fn read_text_layers(
+    psd_path: &str,
+    app: &tauri::AppHandle,
+    allowed: &AllowedPaths,
+) -> Result<String, PhotoshopError> {
     let ps_path = find_photoshop_executable().ok_or(PhotoshopError::NotFound)?;
     let ts = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -240,6 +244,11 @@ pub fn read_text_layers(psd_path: &str, app: &tauri::AppHandle) -> Result<String
                     PhotoshopError::ScriptFailed(format!("結果JSONの読込に失敗: {}", e))
                 })?;
                 let _ = std::fs::remove_file(&out_json_path);
+                // Photoshop が書き出した一時 JPG（見本 / 背景）を許可リストへ登録する。
+                // これらは後続の read_binary_file / analyze_image_text_regions が
+                // ensure_allowed を通過できるようにする（list_fonts と同じ信頼入口での登録）。
+                let _ = allowed.register_path(&ref_img_path);
+                let _ = allowed.register_path(&bg_img_path);
                 return Ok(json);
             }
             let msg = trimmed
@@ -264,6 +273,7 @@ pub fn read_text_layers(psd_path: &str, app: &tauri::AppHandle) -> Result<String
 pub fn read_text_layers_batch(
     psd_paths: &[String],
     app: &tauri::AppHandle,
+    allowed: &AllowedPaths,
 ) -> Result<String, PhotoshopError> {
     if psd_paths.is_empty() {
         return Ok("{\"pages\":[]}".to_string());
@@ -349,6 +359,11 @@ pub fn read_text_layers_batch(
                     PhotoshopError::ScriptFailed(format!("結果JSONの読込に失敗: {}", e))
                 })?;
                 let _ = std::fs::remove_file(&out_json_path);
+                // Photoshop が書き出した全ページ分の一時 JPG（見本 / 背景）を許可リストへ登録。
+                // 実在しないパス（書き出し失敗ページ）は register_path 側で無害スキップされる。
+                for p in &temp_imgs {
+                    let _ = allowed.register_path(p);
+                }
                 return Ok(json);
             }
             let msg = trimmed

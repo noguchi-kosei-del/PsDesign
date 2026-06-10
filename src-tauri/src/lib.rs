@@ -342,7 +342,7 @@ async fn read_psd_text_layers(
     psd_path: String,
 ) -> Result<String, String> {
     ensure_allowed(&allowed, &psd_path)?;
-    photoshop::read_text_layers(&psd_path, &app).map_err(|e| e.to_string())
+    photoshop::read_text_layers(&psd_path, &app, &allowed).map_err(|e| e.to_string())
 }
 
 // 【写植再利用・一括】複数 PSD を 1 回の Photoshop セッションで読み取る。戻り値は
@@ -356,7 +356,7 @@ async fn read_psd_text_layers_batch(
     for p in &psd_paths {
         ensure_allowed(&allowed, p)?;
     }
-    photoshop::read_text_layers_batch(&psd_paths, &app).map_err(|e| e.to_string())
+    photoshop::read_text_layers_batch(&psd_paths, &app, &allowed).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

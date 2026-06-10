@@ -4808,6 +4808,38 @@ body.editor-paragraph-reordering * {
   outline: 2px dashed #4fc3f7;
   outline-offset: 0;
 }
+.page-overlay.selection-center-only .layer-box.selected,
+.page-overlay.selection-center-only .layer-box-new.selected,
+.page-overlay.selection-center-only .layer-box.multi-selected,
+.page-overlay.selection-center-only .layer-box-new.multi-selected {
+  outline: none;
+}
+.page-overlay.selection-center-only .layer-box.selected:not(.editing)::after,
+.page-overlay.selection-center-only .layer-box.multi-selected:not(.editing)::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 11px;
+  height: 11px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 8;
+}
+.page-overlay.selection-center-only .layer-box.selected:not(.editing) > .new-layer-text,
+.page-overlay.selection-center-only .layer-box.selected:not(.editing) > .existing-layer-text,
+.page-overlay.selection-center-only .layer-box.multi-selected:not(.editing) > .new-layer-text,
+.page-overlay.selection-center-only .layer-box.multi-selected:not(.editing) > .existing-layer-text,
+.page-overlay.selection-center-only .layer-box.selected:not(.editing) > .stroke-preview-underlay,
+.page-overlay.selection-center-only .layer-box.multi-selected:not(.editing) > .stroke-preview-underlay,
+.page-overlay.selection-center-only .layer-box.selected:not(.editing) > .layer-size-badge,
+.page-overlay.selection-center-only .layer-box.multi-selected:not(.editing) > .layer-size-badge {
+  visibility: hidden;
+}
 .page-overlay.selection-adornments-hidden .layer-box.selected,
 .page-overlay.selection-adornments-hidden .layer-box.multi-selected,
 .page-overlay.selection-adornments-hidden .layer-box-new.selected,
@@ -4862,6 +4894,10 @@ body.editor-paragraph-reordering * {
 }
 .layer-box-new.auto-font-switched.auto-font-bucket-0 .new-layer-text {
   color: #000;
+}
+.page-overlay.selection-center-only .layer-box-new.auto-font-switched.selected,
+.page-overlay.selection-center-only .layer-box-new.auto-font-switched.multi-selected {
+  box-shadow: none;
 }
 /* V ツール swap 中、入れ替え対象 B（A の元位置に移動するフレーム）を緑で強調。
    A 側はそのまま通常の選択枠を維持し、B と点線 ghost のみ緑で操作意図を示す。 */

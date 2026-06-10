@@ -72,6 +72,7 @@ let userHiddenLayerBadges = false;
 let temporaryMultiSelectionAdornmentsVisible = false;
 let rotateHandlesVisible = false;
 let selectionAdornmentsVisible = true;
+let selectionCenterOnlyMode = true;
 
 function showSelectedLayerBadges() {
   const wasHidden = hideSelectedLayerBadges;
@@ -139,6 +140,12 @@ export function setSelectionAdornmentsVisible(visible) {
 
 export function toggleSelectionAdornmentsVisible() {
   return setSelectionAdornmentsVisible(!selectionAdornmentsVisible);
+}
+
+export function toggleSelectionCenterOnlyMode() {
+  selectionCenterOnlyMode = !selectionCenterOnlyMode;
+  refreshAllOverlays();
+  return selectionCenterOnlyMode;
 }
 
 function hideRotateHandles(ctx = null) {
@@ -2108,6 +2115,7 @@ function renderOverlay(ctx) {
     && getSelectedLayers().length > 1;
   const showSelectionAdornments = selectionAdornmentsVisible || hasTemporaryMultiAdornments;
   overlay.classList.toggle("selection-adornments-hidden", !showSelectionAdornments);
+  overlay.classList.toggle("selection-center-only", selectionCenterOnlyMode);
 
   for (const layer of page.textLayers) {
     // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
@@ -4755,6 +4763,7 @@ function beginMultiLayerDrag(e, ctx) {
           autoFontSwitchBucket: nl.autoFontSwitchBucket,
           lowExtractTextMatch: nl.lowExtractTextMatch,
           extractMatchScore: nl.extractMatchScore,
+          reuseTightThick: nl.reuseTightThick === true,
         });
         updateNewLayer(dup.tempId, {
           charSizes: { ...(nl.charSizes ?? {}) },
@@ -4766,6 +4775,7 @@ function beginMultiLayerDrag(e, ctx) {
           charTrackings: { ...(nl.charTrackings ?? {}) },
           charKernings: { ...(nl.charKernings ?? {}) },
           charTateChuYokos: { ...(nl.charTateChuYokos ?? {}) },
+          charFillColors: { ...(nl.charFillColors ?? {}) },
         });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });
@@ -4810,6 +4820,7 @@ function beginMultiLayerDrag(e, ctx) {
           charTrackings: { ...(layer.charTrackings ?? {}), ...(edit.charTrackings ?? {}) },
           charKernings: { ...(layer.charKernings ?? {}), ...(edit.charKernings ?? {}) },
           charTateChuYokos: { ...(layer.charTateChuYokos ?? {}), ...(edit.charTateChuYokos ?? {}) },
+          charFillColors: { ...(layer.charFillColors ?? {}), ...(edit.charFillColors ?? {}) },
         });
         items.push({ kind: "new", nl: dup, startX: dup.x, startY: dup.y, rotation: dup.rotation ?? 0 });
         newSelections.push({ pageIndex: ctx.pageIndex, layerId: dup.tempId });

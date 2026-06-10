@@ -14,6 +14,7 @@ import {
   revealLayerAdornmentsForTemporaryMultiSelection,
   restoreSelectedLayerBadges,
   setSelectedLayerBadgesUserHidden,
+  toggleSelectionCenterOnlyMode,
   toggleSelectionAdornmentsVisible,
   snapNextSize,
   clearInplaceSelection,
@@ -670,6 +671,13 @@ function bindTools() {
       if (e.key === "Delete" || e.code === "Delete") {
         e.preventDefault();
         handleClearAllEdits();
+        return;
+      }
+      if (!isTextInput && k === "d" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        const enabled = toggleSelectionCenterOnlyMode();
+        toast(enabled ? "中心点のみ表示をオンにしました" : "中心点のみ表示をオフにしました");
         return;
       }
       if (!isTextInput && k === "x" && !e.shiftKey) {

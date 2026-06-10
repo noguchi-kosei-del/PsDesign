@@ -174,6 +174,7 @@ export const FIXED_SHORTCUTS = [
   { id: "redo", shortcut: "Ctrl + Y / Ctrl + Shift + Z", description: "やり直し" },
   { id: "clearAllEdits", shortcut: "Ctrl + Delete", description: "編集をすべて削除" },
   { id: "selectAllTextFrames", shortcut: "Ctrl + A", description: "現在ページのテキストをすべて選択" },
+  { id: "toggleSelectionCenterOnly", shortcut: "Ctrl + D", description: "選択中テキストの中心点表示を切替" },
   { id: "deleteSelection", shortcut: "Delete / Backspace", description: "選択中のテキストを削除" },
   { id: "nudgeLayer", shortcut: "← / ↑ / → / ↓", description: "選択レイヤーを移動" },
   { id: "nudgeLayerLarge", shortcut: "Shift + ← / ↑ / → / ↓", description: "選択レイヤーを大きく移動" },

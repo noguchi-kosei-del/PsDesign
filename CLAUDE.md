@@ -1,5 +1,84 @@
 # PsDesign
 
+## 2026-06-10 変更メモ: v2.4.8 リリース（PSD埋め込みガイド反映 / リサイクル写植 forbidden path 修正 / 選択中心点表示切替）
+
+v2.4.8 では、v2.4.7 後に入った既存ガイド入り PSD の読み込み改善、リサイクル写植の一時 JPG 許可リスト登録修正、テキスト選択表示の中心点モードをまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.4.8` に更新済み。
+
+### A. PSD 埋め込みガイドを定規ガイドへ自動反映
+
+- ag-psd の `psd.imageResources.gridAndGuidesInformation.guides` を `src/utils/psd-guides.js` の `extractPsdGuides(psd)` で `{ h, v }` に正規化する。
+- `src/psd-parse-worker.js` / `src/psd-loader.js` の worker 経路・メインスレッド fallback 経路の両方で `psdGuides` を page metadata に乗せる。
+- `src/rulers.js` に `setGuidesFromPsd(psdPath, guides)` を追加し、`setGuidesLocked(on, { skipApply })` と `applyGuidesToPaths(targetPaths, srcPath)` で PSD 由来ガイドを安全に全ページ展開できるようにした。
+- `src/services/psd-load.js` で、読み込んだ PSD のうち 1 ページでも縦2本・横2本以上のガイドがあれば、そのページの塗り足し枠を全ページへ反映し、定規を自動表示してガイドをロックする。ガイドのない PSD では定規 ON は強制しない。
+
+### B. リサイクル写植の `forbidden path` 修正
+
+- `src-tauri/src/photoshop.rs` の `read_text_layers` / `read_text_layers_batch` に `AllowedPaths` を渡し、Photoshop が書き出した `psdesign_reuse_ref_*.jpg` / `psdesign_reuse_bg_*.jpg` を成功時に許可リストへ登録する。
+- `src-tauri/src/lib.rs` の Tauri コマンドラッパーから `&allowed` を渡すように変更。
+- これにより、後続の `read_binary_file` / `analyze_image_text_regions` / `compute_alignment` がアプリ生成の一時 JPG を `forbidden path` で拒否しなくなる。
+
+### C. 選択中テキストの中心点表示モード
+
+- 選択中レイヤーの通常枠・文字プレビュー・サイズバッジを隠し、テキスト中心点だけを表示する CSS モード `.page-overlay.selection-center-only` を追加。
+- 中心点表示モードは環境設定からは削除し、セッション中の表示モードとして `Ctrl+D` で ON/OFF 切替する方式にした。切替時はトーストで状態を表示する。
+- `settings.js` の固定ショートカット一覧にも `Ctrl+D: 選択中テキストの中心点表示を切替` を追加。
+
+### 検証
+
+- `npm run lint` 成功。
+- `npm run build` 成功。
+- リリースはタグ `v2.4.8` push により `.github/workflows/release.yml` が Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
+## 2026-06-10 変更メモ: 既存ガイド入り PSD の塗り足し（定規ガイド）自動反映 / リサイクル写植の forbidden path 修正（v2.4.7 後・未リリース）
+
+v2.4.7 リリース後の作業ブランチでの 2 件の変更。バージョン番号は据え置き（`2.4.7` のまま。リリース時に各バージョンファイルを更新する）。いずれも `npm run check`（`check:encoding` + `check:security` 21 項目 + `lint` + `build`）緑、Rust 変更分は `cargo check` 緑を確認済み。
+
+### A. 既存ガイド入り PSD を読み込んだら塗り足し（定規ガイド）を自動反映
+
+**背景**: Photoshop で作ったガイド（トンボ / 塗り足し枠）を持つ PSD を OPUS で読み込んでも、定規ツールにはガイドが一切表示されなかった。ag-psd は PSD 埋め込みガイドを `psd.imageResources.gridAndGuidesInformation.guides`（`location: uint32/32` = PSD pixel、`direction: 'horizontal' | 'vertical'`）としてパースしているが、コードが一度も読んでいなかった。
+
+ユーザー確定の挙動: ガイドデータは常に読み込む。**1 ページでも塗り足し枠（縦2＋横2）が入っていれば、そのガイドを全ページへ展開し、定規を自動表示（ON）＋ロックして枠外ディム（塗り足し）が即座に見える**ようにする。
+
+- **座標系の整合（変換不要）**: ag-psd `location` は PSD pixel で `page.width/height` と同一単位。ルーラーの内部表現（rotation=0 = ロード直後）は axis `"h"`=画面水平線=Y座標 / `"v"`=画面垂直線=X座標（[src/rulers.js](src/rulers.js) `computePsdValueFromScreen` で確認）。よって ag-psd `direction:'horizontal'` → axis `"h"`（値=location, Y）、`'vertical'` → axis `"v"`（値=location, X）。回転は描画時に既存 `axisMappingForRotation` が処理するため保持値は無変換。低メモリ / 巨大 PSD のプレビュー縮小は論理寸法を変えないためガイド座標に影響しない。
+- **新規 [src/utils/psd-guides.js](src/utils/psd-guides.js)**: DOM / Tauri 非依存の純関数 `extractPsdGuides(psd)` を新設（worker からも import 可能）。ag-psd の guides を `{ h: number[], v: number[] }`（PSD pixel）へ変換。
+- **[src/psd-parse-worker.js](src/psd-parse-worker.js)**: パースの主経路は worker で、従来 `{width,height,dpi,textLayers,bitmap,previewScale}` しか返さずガイドを落としていた。`parsePsd` の return に `guides: extractPsdGuides(psd)` を追加（構造化複製可能なので transfer 不要）。
+- **[src/psd-loader.js](src/psd-loader.js)**: worker 経路 / メインスレッド fallback 両方の return に `psdGuides`（worker は `parsed.guides`、fallback は `extractPsdGuides(psd)`）を付与。`withPreviewMetadata` のスプレッドでそのまま page に乗る。
+- **[src/rulers.js](src/rulers.js)**:
+  - `setGuidesFromPsd(psdPath, guides)` を新設。指定パスのガイドを PSD 由来値で置き換えセット（`addGuide` の自動ロック副作用を避けるため `guidesByPsd.set` で直接書く / `Number.isFinite` フィルタ + 2 桁丸め / 両配列空ならスキップ）。
+  - `setGuidesLocked(on, opts = {})` に `skipApply` オプションを追加。`if (v && !opts.skipApply)` でロック時の全ページコピーを抑止できる。既存呼び出し（`toggleGuidesLocked` / `addGuide` 自動ロック / トリミング枠クリック / psd-load の `setGuidesLocked(false)`）は引数なし＝従来挙動。
+  - `applyGuidesToPaths(targetPaths, srcPath = getCurrentPsdPath())` にコピー元パス引数を追加（後方互換）。現在ページ以外（埋め込みガイドが入っていたページ）を起点に全ページへ展開できる。
+- **[src/services/psd-load.js](src/services/psd-load.js)**: 読み込みループで各ページの `page.psdGuides` を `setGuidesFromPsd` で流し込み、最初に塗り足し枠（縦2＋横2）が揃ったページを `sourceFramePath` として記録。ループ後、`sourceFramePath` があれば `applyGuidesToPaths(loadedPaths, sourceFramePath)` で全ページへ統一展開 → `setRulersVisible(true)`（先に表示 ON。redraw が rulersVisible を見るため）→ `setGuidesLocked(true, { skipApply: true })`（既に展開済みなので再コピー不要）。塗り足し枠がどのページにも無ければ全ページ展開は発動せず、各ページの個別ガイドはそのまま保持（定規 ON も強制しない）。
+- **副作用（ユーザー了承済み）**: `setRulersVisible(true)` は localStorage（`psdesign_rulers_visible`）に保存されるため、塗り足し枠付き PSD を読むと以降のセッションでも定規が ON で立ち上がる。
+
+### B. リサイクル写植の `forbidden path` 修正（一時 JPG を許可リストへ登録）
+
+**症状**: リサイクル写植を実行すると `forbidden path: ...AppData/Local/Temp/psdesign_reuse_ref_*.jpg`（reuse.js:536 で catch / log）が出て PSD にテキストが配置されない。
+
+**原因**: リサイクルは Photoshop に一時 JPG（見本 `psdesign_reuse_ref_*.jpg` / 背景 `psdesign_reuse_bg_*.jpg`）を `std::env::temp_dir()` 直下へ書き出させる（[src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs) の `read_text_layers` / `read_text_layers_batch`）。その後フロント（[src/services/reuse.js](src/services/reuse.js) → [src/psd-loader.js](src/psd-loader.js) `buildReusePageFromPsData` → `jpgFileToCanvas`）が `read_binary_file` で読み戻し、背景は `analyze_image_text_regions` に渡す。だが v2.4.4 の path-access 許可リスト設計ではこれら読み取り系コマンドが入口で `ensure_allowed()` を通すため、**アプリが作ったが許可リストに未登録**の一時 JPG が forbidden になる。背景の forbidden は reuse.js:149 の try/catch で握られ自動スタイリングがスキップされるだけだが、見本 ref JPG の `read_binary_file` forbidden は reuse.js:536 まで伝播してページ読込ごと失敗し、テキストが配置されない。
+
+**修正方針**: 一時 JPG を「作成した信頼できる Rust コマンド側」で、書き込み成功後に許可リストへ登録する（`list_fonts` がフォント実体を登録するのと同じ信頼入口での登録パターン）。一時ディレクトリ全体を起動時シードする案は temp 配下の任意ファイルが読めてしまい v2.4.4 の最小特権方針に反するため不採用。
+
+- **[src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs)**: import を `use crate::{jsx_gen, path_access::AllowedPaths, EditPayload};` に拡張。`read_text_layers` / `read_text_layers_batch` に `allowed: &AllowedPaths` 引数を追加し、Photoshop が JSON を書き出して成功（`return Ok(json)` 直前）したタイミングで、単一は `allowed.register_path(&ref_img_path)` / `register_path(&bg_img_path)`、一括は `for p in &temp_imgs { allowed.register_path(p); }`（全ページ分の ref/bg）を登録。`register_path` は実在しないパス（書き出し失敗ページ）では canonicalize 失敗で None を返すだけなので無害。
+- **[src-tauri/src/lib.rs](src-tauri/src/lib.rs)**: コマンドラッパー 2 箇所（`read_psd_text_layers` / `read_psd_text_layers_batch`、いずれも既に `allowed: State<AllowedPaths>` を保持）の呼び出しに `&allowed` を渡す（`ensure_allowed(&allowed, ...)` と同じ deref coercion）。
+- **短縮名 / 順スラッシュの差**（`C:/Users/NOGUCH~1/...`）は、登録側 `register_path` も読取側 `ensure_allowed` も両方 `std::fs::canonicalize` を通すため同一実体パスに正規化されて一致する。登録は Photoshop が書き出した後＝ファイルが実在するので canonicalize が成功する。フロント（JS）側の変更は不要。これで後続の `read_binary_file`（見本 / 背景の canvas 化）・`analyze_image_text_regions`（背景白率解析）・`compute_alignment`（位置合わせで temp 画像を使う場合）すべてが `ensure_allowed` を通過する。
+
+### 検証
+
+- `npm run check`（`check:encoding` 68 files + `check:security` 21 項目 + `lint` + `build`）成功。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功（リサイクル修正分）。
+- 実機確認推奨:
+  - Photoshop でガイド（縦2＋横2 のトンボ / 塗り足し枠）を入れた PSD を読み込み → 定規が自動 ON ＋ cyan ガイド線 ＋ 枠外ディム表示。複数 PSD で 1 ページにだけ枠が入っていても全ページに反映されること。枠クリックでロック解除 → 調整可能。ガイドの無い PSD では定規 ON が強制されないこと。
+  - **B は Rust 変更のため `npm run tauri build` でリビルド後**にリサイクル写植を実行し、`forbidden path: ...psdesign_reuse_ref_*.jpg` / `..._bg_*.jpg` が出ないこと・見本ペインに元 PSD 絵柄が表示されテキストが配置されること（「写植見本を再現」「フォント・サイズを指定」両モード / 複数 PSD 一括）を確認。
+
+### 変更ファイル一覧
+
+- 新規 [src/utils/psd-guides.js](src/utils/psd-guides.js)
+- [src/psd-parse-worker.js](src/psd-parse-worker.js) / [src/psd-loader.js](src/psd-loader.js)（worker・メイン両 return に `psdGuides`）
+- [src/rulers.js](src/rulers.js)（`setGuidesFromPsd` 追加、`setGuidesLocked` に `skipApply`、`applyGuidesToPaths` に srcPath 引数）
+- [src/services/psd-load.js](src/services/psd-load.js)（ロード時の流し込み＋塗り足し枠の全ページ展開＋自動 ON / ロック）
+- [src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs)（reuse 用 2 コマンドに `allowed` 追加＋成功時に temp JPG を `register_path`）
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs)（呼び出し 2 箇所に `&allowed` を渡す）
+
 ## 2026-06-09 変更メモ: v2.4.7 リリース（見開きページマーカー `<<2,3Page>>` 対応 / 単ページPSDへの自動配置振り分け）
 
 v2.4.7 では、原稿テキストが見開き単位（`<<2,3Page>>` のようにカンマ区切りで複数ページをまとめたマーカー）で区切られている場合に、見本・PSD が単ページずつでも自動配置が正しく振り分けられるようにした。従来は `<<2,3Page>>` がマーカーとして認識されず（正規表現が連続数字のみ）、それ以降の全テキストが 1 ページ目に混入していた。
