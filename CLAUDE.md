@@ -1,5 +1,37 @@
 # PsDesign
 
+## 2026-06-11 変更メモ: v2.4.9 リリース（中心点表示 / 中点ルビ補正 / 大容量見本PDFの軽量化読み込み）
+
+v2.4.9 では、選択中心点表示の見た目改善、テキスト原稿から自動配置した中点ルビのサイズ・位置補正、100MB 以上の見本PDFを読み込むための軽量化フローをまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.4.9` に更新済み。
+
+### A. Ctrl+D 中心点マーカーのリング + 芯デザイン
+
+- [src/styles.css](src/styles.css) の `.page-overlay.selection-center-only .layer-box.selected:not(.editing)` / `.multi-selected:not(.editing)` の中心マーカーを、単一の青円から `::after` リング + `::before` 芯へ変更。
+- リング径 14px、芯径 4px、メイン色 `#e87a8f`。白地でも見えるように暗ヘアラインと内外シャドウを追加。
+- セレクタは既存の `.layer-box.selected` / `.layer-box.multi-selected` を維持し、JS / DOM は変更していない。
+
+### B. 原稿テキスト由来の中点ルビ補正
+
+- [src/auto-place.js](src/auto-place.js) で、縦書き自動配置時に親文字直後のインライン中点をルビ情報へ昇格する処理を追加。
+- `｛殴り返しては｝（・ ・ ・ ・ ・ ・）` のように中点間にスペースが入る原稿でも、中点ルビとして認識できるよう loose 判定を追加。
+- 中点ルビは親文字数に合わせて `・・・・・・` のような連続中点へ正規化し、通常ルビの 50% ではなくルビパネル入力と同じ 100% スケールで配置する。
+
+### C. 100MB 以上の見本PDFを軽量化して読み込み
+
+- [src/pdf-loader.js](src/pdf-loader.js) で、見本PDFが 100,000,000 bytes 以上の場合に拒否せず、確認ダイアログを出してから軽量化処理へ進む仕様に変更。
+- ダイアログでキャンセルした場合は圧縮処理を開始せず、そのPDFを読み込み対象から外す。
+- 軽量化済みの同一PDFはセッション中キャッシュし、ページカード生成や再読み込みで二重に圧縮しない。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) に `compress_reference_pdf` Tauri コマンドを追加。PDFium で各ページをレンダリングし、一時JPEGページ列として保存して、生成パスを `AllowedPaths` に登録する。
+- 圧縮設定は見本用途向けに高速寄りへ調整。長辺最大 2400px、JPEG品質 78、印刷品質レンダリング / 画像スムージング / フォーム描画をOFF。
+- Rust 側から `reference_pdf_compress:progress` イベントを送信し、ホームの見本カードに `圧縮中 NN%` と決定型プログレスバーを表示する。
+- 圧縮後は既存の画像見本ローダーへ JPEG ページ列として渡す。横長PDF由来の圧縮画像はページ数カウントでも従来のPDF分割ルールに合わせて扱う。
+
+### 検証
+
+- `npm run build` 成功。
+- `cargo check` 成功。
+- リリースはタグ `v2.4.9` push により `.github/workflows/release.yml` が Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-10 変更メモ: v2.4.8 リリース（PSD埋め込みガイド反映 / リサイクル写植 forbidden path 修正 / 選択中心点表示切替）
 
 v2.4.8 では、v2.4.7 後に入った既存ガイド入り PSD の読み込み改善、リサイクル写植の一時 JPG 許可リスト登録修正、テキスト選択表示の中心点モードをまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.4.8` に更新済み。

@@ -4201,6 +4201,7 @@ function openHomeTypesetDialog() {
     let referencePageCount = null;
     let hiddenReferencePages = new Set();
     let referenceLoading = false;
+    let referenceCompressionProgress = null;
     let unsupportedBitmapPsdPaths = [];
     let psdPreflightChecking = false;
     let psdPreflightSerial = 0;
@@ -4302,7 +4303,7 @@ function openHomeTypesetDialog() {
       if (!row.querySelector(".home-typeset-progress")) {
         row.insertAdjacentHTML(
           "beforeend",
-          '<div class="home-typeset-progress" aria-hidden="true"><span></span></div>'
+          '<div class="home-typeset-progress" aria-hidden="true"><span></span></div><span class="home-typeset-progress-label" aria-live="polite"></span>'
         );
       }
     }
@@ -4439,6 +4440,15 @@ function openHomeTypesetDialog() {
       if (!fontCombo?.contains(e.target)) closeFontCombo();
     });
     const getReferenceDisplayCount = () => Number.isFinite(referencePageCount) ? referencePageCount : referencePaths.length;
+    const setReferenceCompressionProgress = (progress) => {
+      const percent = Math.max(0, Math.min(100, Math.round(Number(progress?.percent) || 0)));
+      referenceCompressionProgress = {
+        percent,
+        current: Math.max(0, Math.round(Number(progress?.current) || 0)),
+        total: Math.max(0, Math.round(Number(progress?.total) || 0)),
+      };
+      update();
+    };
     const loadSelectedReference = async () => {
       const paths = [...referencePaths];
       if (paths.length === 0) {
@@ -4450,16 +4460,19 @@ function openHomeTypesetDialog() {
         update();
         return getReferenceDisplayCount();
       }
-      const sizeCheck = await rejectLargeReferencePdfFiles(paths);
-      if (sizeCheck.rejectedPaths.size > 0) {
-        referencePaths = sizeCheck.acceptedPaths;
-        referencePageCount = null;
-        update();
-        if (referencePaths.length === 0) return 0;
-      }
       referenceLoading = true;
+      referenceCompressionProgress = null;
       update();
       try {
+        const sizeCheck = await rejectLargeReferencePdfFiles(paths, {
+          onCompressionProgress: setReferenceCompressionProgress,
+        });
+        if (sizeCheck.rejectedPaths.size > 0) {
+          referencePaths = sizeCheck.acceptedPaths;
+          referencePageCount = null;
+          update();
+          if (referencePaths.length === 0) return 0;
+        }
         const result = await loadReferenceFiles(referencePaths, {
           skipFirstBlankPage: false,
           excludedPages: hiddenReferencePages,
@@ -4478,6 +4491,7 @@ function openHomeTypesetDialog() {
         referencePageCount = paths.length;
       } finally {
         referenceLoading = false;
+        referenceCompressionProgress = null;
         update();
       }
       return getReferenceDisplayCount();
@@ -4512,6 +4526,17 @@ function openHomeTypesetDialog() {
           (slot === "reference" && referenceLoading)
           || (slot === "psd" && psdPreflightChecking)
         );
+        const isReferenceCompressing = slot === "reference" && !!referenceCompressionProgress;
+        row.classList.toggle("compressing", isReferenceCompressing);
+        const progressLabel = row.querySelector(".home-typeset-progress-label");
+        if (isReferenceCompressing) {
+          const pct = Math.max(0, Math.min(100, Math.round(referenceCompressionProgress.percent || 0)));
+          row.style.setProperty("--home-typeset-progress-pct", `${pct}%`);
+          if (progressLabel) progressLabel.textContent = `圧縮中 ${pct}%`;
+        } else {
+          row.style.removeProperty("--home-typeset-progress-pct");
+          if (progressLabel) progressLabel.textContent = "";
+        }
         row.classList.toggle("selected", active);
       }
       const hideBtn = modal.querySelector("[data-reference-hide]");

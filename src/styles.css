@@ -2627,6 +2627,11 @@ body.home-starting .home-screen {
 .home-typeset-row.loading .home-typeset-progress {
   opacity: 1;
 }
+.home-typeset-row.compressing .home-typeset-progress {
+  opacity: 1;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.18);
+}
 .home-typeset-progress span {
   display: block;
   width: 42%;
@@ -2634,6 +2639,26 @@ body.home-starting .home-screen {
   border-radius: inherit;
   background: var(--accent);
   animation: home-typeset-progress 1s ease-in-out infinite;
+}
+.home-typeset-row.compressing .home-typeset-progress span {
+  width: var(--home-typeset-progress-pct, 0%);
+  transform: none;
+  animation: none;
+  transition: width 0.18s ease;
+}
+.home-typeset-progress-label {
+  position: absolute;
+  right: 26px;
+  bottom: 30px;
+  z-index: 3;
+  font-size: 11px;
+  font-weight: 800;
+  color: var(--home-text);
+  opacity: 0;
+  pointer-events: none;
+}
+.home-typeset-row.compressing .home-typeset-progress-label {
+  opacity: 1;
 }
 @keyframes home-typeset-progress {
   0% { transform: translateX(-110%); }
@@ -4814,21 +4839,43 @@ body.editor-paragraph-reordering * {
 .page-overlay.selection-center-only .layer-box-new.multi-selected {
   outline: none;
 }
+/* 中心点マーカー（Ctrl+D / 中心点のみ表示モード）
+   ::after = 輪（リング） / ::before = 芯（中心点）。 */
 .page-overlay.selection-center-only .layer-box.selected:not(.editing)::after,
 .page-overlay.selection-center-only .layer-box.multi-selected:not(.editing)::after {
   content: "";
   position: absolute;
   left: 50%;
   top: 50%;
-  width: 11px;
-  height: 11px;
-  border: 2px solid #fff;
+  width: 14px;
+  height: 14px;
+  border: 1.5px solid #e87a8f;
   border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.55), 0 2px 6px rgba(0, 0, 0, 0.35);
+  background: transparent;
+  box-shadow:
+    0 0 8px rgba(232, 122, 143, 0.6),
+    0 0 0 1px rgba(18, 14, 6, 0.72),
+    inset 0 0 0 1px rgba(18, 14, 6, 0.72);
   transform: translate(-50%, -50%);
   pointer-events: none;
   z-index: 8;
+}
+.page-overlay.selection-center-only .layer-box.selected:not(.editing)::before,
+.page-overlay.selection-center-only .layer-box.multi-selected:not(.editing)::before {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: #e87a8f;
+  box-shadow:
+    0 0 6px rgba(232, 122, 143, 0.6),
+    0 0 0 0.75px rgba(18, 14, 6, 0.72);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+  z-index: 9;
 }
 .page-overlay.selection-center-only .layer-box.selected:not(.editing) > .new-layer-text,
 .page-overlay.selection-center-only .layer-box.selected:not(.editing) > .existing-layer-text,

@@ -617,7 +617,7 @@ function mapBlockToNewLayer(block, referenceScanPage, psdPage, contents, default
   // 縦書きレイヤーは設定 verticalHalfToFullEnabled (default true) に従い、
   // 半角英数字 (0-9 / A-Z / a-z) を全角に自動変換する。
   // bbox 推定は変換後テキストで行うため、文字幅差は影響しない（char count ベース）。
-  const rubyParsed = parseRubyAnnotatedText(contents ?? "");
+  const rubyParsed = parseRubyAnnotatedText(contents ?? "", { promoteInlineNakaguro: direction === "vertical" });
   const text = convertHalfToFullForVertical(rubyParsed.text, direction);
   const charRubies = rubyParsed.charRubies;
   // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
@@ -743,7 +743,7 @@ function mapBlockToNewLayer(block, referenceScanPage, psdPage, contents, default
 // direction は吹き出し情報がないため `getNewTextDirection()` (UI トグル) を採用。
 function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
   const direction = getNewTextDirection();
-  const rubyParsed = parseRubyAnnotatedText(contents ?? "");
+  const rubyParsed = parseRubyAnnotatedText(contents ?? "", { promoteInlineNakaguro: direction === "vertical" });
   const text = convertHalfToFullForVertical(rubyParsed.text, direction);
   const charRubies = rubyParsed.charRubies;
   const sizePt = defaults.sizePt ?? 24;
@@ -791,7 +791,7 @@ function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
 //     ],
 //     totals: { placed, leftoverTxt, leftoverBubbles },
 //   }
-function parseRubyAnnotatedText(raw) {
+function parseRubyAnnotatedText(raw, options = {}) {
   const input = String(raw ?? "");
   const charRubies = {};
   let text = "";
@@ -807,6 +807,7 @@ function parseRubyAnnotatedText(raw) {
     if (parentText && rubyText && rubyText !== "...") {
       const start = text.length;
       text += parentText;
+      const normalizedRubyText = normalizeAnnotatedRubyText(rubyText, parentText);
       const rubyParts = rubyText.split(/[ \u3000]+/).filter(Boolean);
       const rubyHasSpaces = /[ \t\u3000]/.test(rubyRaw);
       const rubyType = rubyHasSpaces && rubyParts.length === Array.from(parentText).length
@@ -814,9 +815,9 @@ function parseRubyAnnotatedText(raw) {
         : "group";
       charRubies[String(start)] = {
         end: start + parentText.length,
-        text: rubyText,
+        text: normalizedRubyText,
         type: rubyType,
-        scale: 50,
+        scale: rubyScaleForAnnotatedText(normalizedRubyText),
       };
     } else {
       text += match[0];
@@ -824,7 +825,116 @@ function parseRubyAnnotatedText(raw) {
     last = match.index + match[0].length;
   }
   text += input.slice(last);
+  if (options?.promoteInlineNakaguro) {
+    return promoteInlineNakaguroToRuby(text, charRubies);
+  }
   return { text, charRubies };
+}
+
+function promoteInlineNakaguroToRuby(text, charRubies) {
+  const chars = Array.from(String(text ?? ""));
+  if (!chars.some(isNakaguroChar)) return { text, charRubies };
+
+  const removed = new Set();
+  const marks = [];
+  let i = 0;
+  while (i < chars.length) {
+    if (!isNakaguroChar(chars[i])) {
+      i += 1;
+      continue;
+    }
+    const runStart = i;
+    while (i < chars.length && isNakaguroChar(chars[i])) i += 1;
+    const runEnd = i;
+    const prev = runStart - 1;
+    const next = runEnd;
+    if (isInlineNakaguroParentChar(chars[prev]) && isInlineNakaguroParentChar(chars[next])) {
+      for (let j = runStart; j < runEnd; j += 1) removed.add(j);
+      marks.push({ prev, next });
+    }
+  }
+  if (removed.size === 0) return { text, charRubies };
+
+  const boundaryMap = new Array(chars.length + 1);
+  let newLen = 0;
+  for (let old = 0; old <= chars.length; old += 1) {
+    boundaryMap[old] = newLen;
+    if (old < chars.length && !removed.has(old)) newLen += 1;
+  }
+  const nextText = chars.filter((_, idx) => !removed.has(idx)).join("");
+  const nextRubies = {};
+  for (const [key, entry] of Object.entries(charRubies ?? {})) {
+    const start = Number(key);
+    const end = Number(entry?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    const mappedStart = boundaryMap[Math.max(0, Math.min(chars.length, start))];
+    const mappedEnd = boundaryMap[Math.max(0, Math.min(chars.length, end))];
+    if (!Number.isFinite(mappedStart) || !Number.isFinite(mappedEnd) || mappedEnd <= mappedStart) continue;
+    nextRubies[String(mappedStart)] = { ...entry, end: mappedEnd };
+  }
+  for (const mark of marks) {
+    const start = boundaryMap[mark.prev];
+    const end = boundaryMap[mark.next] + 1;
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    addInlineNakaguroRuby(nextRubies, start, end);
+  }
+  return { text: nextText, charRubies: nextRubies };
+}
+
+function addInlineNakaguroRuby(map, from, to) {
+  const text = "\u30fb".repeat(Math.max(1, to - from));
+  for (const key of Object.keys(map)) {
+    const start = Number(key);
+    const entry = map[key];
+    const end = Number(entry?.end);
+    if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+    if (from < end && to > start) {
+      const overlays = Array.isArray(entry.overlays) ? entry.overlays.slice() : [];
+      const sameIndex = overlays.findIndex((overlay) =>
+        Number(overlay?.start) === from
+        && Number(overlay?.end) === to
+        && isNakaguroRubyText(overlay?.text));
+      const overlay = { start: from, end: to, text, type: "group", scale: 100 };
+      if (sameIndex >= 0) overlays[sameIndex] = overlay;
+      else overlays.push(overlay);
+      map[key] = { ...entry, overlays };
+      return;
+    }
+  }
+  map[String(from)] = { end: to, text, type: "group", scale: 100 };
+}
+
+function isInlineNakaguroParentChar(ch) {
+  if (typeof ch !== "string" || ch.length === 0) return false;
+  if (/[\r\n\s\u3000]/.test(ch)) return false;
+  return !/[、。，．.,!?！？…ー\-()（）「」『』【】［］\[\]〈〉《》]/.test(ch);
+}
+
+function normalizeAnnotatedRubyText(rubyText, parentText) {
+  if (!isNakaguroRubyTextLoose(rubyText)) return rubyText;
+  const parentCount = Array.from(String(parentText ?? "")).length;
+  return "\u30fb".repeat(Math.max(1, parentCount));
+}
+
+function rubyScaleForAnnotatedText(rubyText) {
+  return isNakaguroRubyTextLoose(rubyText) ? 100 : 50;
+}
+
+function isNakaguroChar(ch) {
+  const code = String(ch ?? "").codePointAt(0);
+  return code === 0x30fb || code === 0xff65;
+}
+
+function isNakaguroRubyText(text) {
+  const chars = Array.from(String(text ?? ""));
+  if (chars.length === 0) return false;
+  return chars.every(isNakaguroChar);
+}
+
+function isNakaguroRubyTextLoose(text) {
+  const chars = Array.from(String(text ?? "").replace(/[ \t\u3000]+/g, ""));
+  if (chars.length === 0) return false;
+  return chars.every(isNakaguroChar);
 }
 
 function isDakutenRubyText(text) {
@@ -1503,7 +1613,7 @@ function syncPlacedFromTxt() {
       // 原稿側は元データを保持する設計のため、レイヤー contents に変換後を書き戻す
       // ことで原稿との見た目差分を吸収する（横書きと設定 OFF は冪等に素通し）。
       const direction = layer.direction ?? "horizontal";
-      const rubyParsedNext = parseRubyAnnotatedText(rawNext);
+      const rubyParsedNext = parseRubyAnnotatedText(rawNext, { promoteInlineNakaguro: direction === "vertical" });
       const next = convertHalfToFullForVertical(rubyParsedNext.text, direction);
       const nextCharRubies = rubyParsedNext.charRubies;
 

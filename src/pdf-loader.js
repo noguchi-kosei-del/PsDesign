@@ -1,6 +1,6 @@
 import * as pdfjsLib from "pdfjs-dist";
 import { setPdf, setPdfExcludedReferencePages, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
-import { showProgress, hideProgress, notifyDialog, toast, updateProgress } from "./ui-feedback.js";
+import { showProgress, hideProgress, notifyDialog, confirmDialog, toast, updateProgress } from "./ui-feedback.js";
 import { withProgressFlow } from "./progress-flow.js";
 
 // 「見本」として読み込める拡張子。PDF（複数ページ）と、JPEG / PNG（単一画像）。
@@ -9,6 +9,7 @@ export const REFERENCE_EXT_REGEX = /\.(pdf|jpe?g|png)$/i;
 const IMAGE_EXT_REGEX = /\.(jpe?g|png)$/i;
 const PDF_EXT_REGEX = /\.pdf$/i;
 const REFERENCE_PDF_MAX_SIZE_BYTES = 100_000_000;
+const largeReferencePdfCompressionCache = new Map();
 
 let workerConfigured = false;
 function ensureWorker() {
@@ -63,22 +64,118 @@ async function notifyLargeReferencePdf(path, sizeBytes) {
   });
 }
 
-export async function rejectLargeReferencePdfFiles(paths, { notify = true } = {}) {
+async function compressLargeReferencePdf(path, sizeBytes, { notify = true, onProgress = null } = {}) {
+  if (!largeReferencePdfCompressionCache.has(path)) {
+    const promise = (async () => {
+      if (notify) {
+        const ok = await confirmDialog({
+          title: "大容量の見本PDFを軽量化します",
+          message: `「${basename(path)}」は ${formatSizeMb(sizeBytes)}MB あります。\nこのまま読み込むため、ページ画像へ圧縮してから見本として配置します。`,
+          confirmLabel: "圧縮して読み込む",
+          cancelLabel: "キャンセル",
+          kind: "warning",
+        });
+        if (!ok) {
+          largeReferencePdfCompressionCache.delete(path);
+          return null;
+        }
+      }
+      const jobId = `reference-pdf-compress-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      const { invoke } = await import("@tauri-apps/api/core");
+      let unlisten = null;
+      if (typeof onProgress === "function") {
+        const { listen } = await import("@tauri-apps/api/event");
+        unlisten = await listen("reference_pdf_compress:progress", (event) => {
+          const payload = event?.payload || {};
+          if (payload.jobId !== jobId) return;
+          onProgress({
+            path,
+            current: Number(payload.current) || 0,
+            total: Number(payload.total) || 0,
+            percent: Number(payload.percent) || 0,
+          });
+        });
+      }
+      try {
+        onProgress?.({ path, current: 0, total: 0, percent: 0 });
+        const result = await invoke("compress_reference_pdf", { path, jobId });
+        const outputPaths = Array.isArray(result?.outputPaths)
+          ? result.outputPaths.filter((p) => typeof p === "string" && IMAGE_EXT_REGEX.test(p))
+          : [];
+        if (outputPaths.length === 0) {
+          throw new Error("圧縮後の見本ページが生成されませんでした");
+        }
+        if (notify) {
+          const compressedBytes = Number(result?.compressedSizeBytes);
+          const compressedLabel = Number.isFinite(compressedBytes)
+            ? `（${formatSizeMb(compressedBytes)}MB）`
+            : "";
+          toast(`見本PDFを ${outputPaths.length} ページに軽量化しました${compressedLabel}`, {
+            kind: "success",
+            duration: 4000,
+          });
+        }
+        onProgress?.({ path, current: outputPaths.length, total: outputPaths.length, percent: 100 });
+        return { ...result, outputPaths };
+      } finally {
+        try { if (typeof unlisten === "function") unlisten(); } catch (_) {}
+      }
+    })();
+    largeReferencePdfCompressionCache.set(path, promise.catch((e) => {
+      largeReferencePdfCompressionCache.delete(path);
+      throw e;
+    }));
+  }
+  return largeReferencePdfCompressionCache.get(path);
+}
+
+export async function rejectLargeReferencePdfFiles(paths, { notify = true, onCompressionProgress = null } = {}) {
   const sizeBytesByPath = new Map();
   const rejectedPaths = new Set();
+  const compressedPaths = new Map();
+  const acceptedPaths = [];
   const list = Array.isArray(paths) ? paths : [];
   for (const p of list) {
-    if (typeof p !== "string" || !PDF_EXT_REGEX.test(p)) continue;
+    if (typeof p !== "string") continue;
+    if (!PDF_EXT_REGEX.test(p)) {
+      acceptedPaths.push(p);
+      continue;
+    }
     const sizeBytes = await getFileSizeBytes(p);
-    if (!Number.isFinite(sizeBytes)) continue;
+    if (!Number.isFinite(sizeBytes)) {
+      acceptedPaths.push(p);
+      continue;
+    }
     sizeBytesByPath.set(p, sizeBytes);
     if (sizeBytes >= REFERENCE_PDF_MAX_SIZE_BYTES) {
-      if (notify) await notifyLargeReferencePdf(p, sizeBytes);
-      rejectedPaths.add(p);
+      try {
+        const result = await compressLargeReferencePdf(p, sizeBytes, {
+          notify,
+          onProgress: typeof onCompressionProgress === "function" ? onCompressionProgress : null,
+        });
+        if (!result) {
+          rejectedPaths.add(p);
+          continue;
+        }
+        compressedPaths.set(p, result.outputPaths);
+        acceptedPaths.push(...result.outputPaths);
+      } catch (e) {
+        console.error("[pdf-loader] reference PDF compression failed:", p, e);
+        rejectedPaths.add(p);
+        if (notify) {
+          await notifyDialog({
+            title: "見本PDFの軽量化に失敗しました",
+            message: `「${basename(p)}」を軽量化できませんでした。\n別のPDF、または分割済みの画像を指定してください。`,
+            okLabel: "OK",
+            kind: "warning",
+          });
+        }
+      }
+      continue;
     }
+    acceptedPaths.push(p);
   }
-  const acceptedPaths = list.filter((p) => !rejectedPaths.has(p));
-  return { acceptedPaths, rejectedPaths, sizeBytesByPath };
+  return { acceptedPaths, rejectedPaths, sizeBytesByPath, compressedPaths };
 }
 
 // 自然順ソート (page1 → page2 → page10、numeric collation)。
@@ -248,13 +345,26 @@ export async function countReferencePages(paths, options = {}) {
   const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
   const sizeCheck = await rejectLargeReferencePdfFiles(paths, { notify: false });
   const filtered = sortPathsNaturally(sizeCheck.acceptedPaths.filter((p) => REFERENCE_EXT_REGEX.test(p)));
+  const compressedOutputPaths = new Set(Array.from(sizeCheck.compressedPaths?.values?.() ?? []).flat());
   let count = 0;
-  let hasPdf = false;
+  let hasPdf = sizeCheck.compressedPaths?.size > 0;
   let sourceIndex = 0;
   for (const p of filtered) {
     if (IMAGE_EXT_REGEX.test(p)) {
       sourceIndex += 1;
       if (excludedPages.has(sourceIndex)) continue;
+      if (compressedOutputPaths.has(p)) {
+        let bitmap = null;
+        try {
+          bitmap = await readImageBitmap(p);
+          count += bitmap.width > bitmap.height ? 2 : 1;
+        } catch (_) {
+          count += 1;
+        } finally {
+          try { if (typeof bitmap?.close === "function") bitmap.close(); } catch (_) {}
+        }
+        continue;
+      }
       count += 1;
       continue;
     }
@@ -401,9 +511,12 @@ export async function loadReferenceFiles(paths, options = {}) {
   const progressFlow = options.progressFlow || null;
   const skipFirstBlankPage = !!(options.skipFirstBlankPage ?? options.skipFirstPdfPage);
   const excludedPages = normalizeExcludedPages(options.excludedPages ?? options.hiddenReferencePages);
-  const sizeCheck = await rejectLargeReferencePdfFiles(paths, { notify: options.notifyLargePdf !== false });
+  const sizeCheck = await rejectLargeReferencePdfFiles(paths, {
+    notify: options.notifyLargePdf !== false,
+    onCompressionProgress: options.onLargePdfCompressionProgress,
+  });
   const filtered = sizeCheck.acceptedPaths.filter((p) => REFERENCE_EXT_REGEX.test(p));
-  const hasPdf = filtered.some((p) => !IMAGE_EXT_REGEX.test(p));
+  const hasPdf = filtered.some((p) => !IMAGE_EXT_REGEX.test(p)) || sizeCheck.compressedPaths?.size > 0;
   if (filtered.length === 0) {
     toast(sizeCheck.rejectedPaths.size > 0 ? "100MB以上の見本PDFは読み込めません" : "PDF / JPEG / PNG ファイルを指定してください", { kind: "error", duration: 4000 });
     return;

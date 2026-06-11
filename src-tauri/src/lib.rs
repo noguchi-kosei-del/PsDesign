@@ -7,13 +7,17 @@ mod path_access;
 mod photoshop;
 mod tachimi;
 
+use image::codecs::jpeg::JpegEncoder;
 use path_access::{ensure_allowed, ensure_allowed_for_write, AllowedPaths};
+use pdfium_render::prelude::*;
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::webview::PageLoadEvent;
 use tauri::{Emitter, Manager};
 
@@ -1241,6 +1245,27 @@ struct PathInfo {
 }
 
 #[derive(serde::Serialize)]
+struct CompressedReferencePdf {
+    #[serde(rename = "sourcePath")]
+    source_path: String,
+    #[serde(rename = "outputPaths")]
+    output_paths: Vec<String>,
+    #[serde(rename = "originalSizeBytes")]
+    original_size_bytes: u64,
+    #[serde(rename = "compressedSizeBytes")]
+    compressed_size_bytes: u64,
+}
+
+#[derive(serde::Serialize, Clone)]
+struct ReferencePdfCompressProgress {
+    #[serde(rename = "jobId")]
+    job_id: String,
+    current: usize,
+    total: usize,
+    percent: u32,
+}
+
+#[derive(serde::Serialize)]
 struct DriveInfo {
     letter: String,
     path: String,
@@ -1654,6 +1679,123 @@ async fn path_info(
     })
 }
 
+const REFERENCE_PDF_COMPRESS_MAX_EDGE: i32 = 2400;
+const REFERENCE_PDF_COMPRESS_JPEG_QUALITY: u8 = 78;
+
+fn safe_file_stem_for_temp(path: &Path) -> String {
+    let raw = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("reference_pdf");
+    let mut out = String::with_capacity(raw.len());
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '-' | '_') {
+            out.push(ch);
+        } else {
+            out.push('_');
+        }
+    }
+    let trimmed = out.trim_matches('_');
+    if trimmed.is_empty() {
+        "reference_pdf".to_string()
+    } else {
+        trimmed.chars().take(48).collect()
+    }
+}
+
+#[tauri::command]
+async fn compress_reference_pdf(
+    app: tauri::AppHandle,
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+    job_id: Option<String>,
+) -> Result<CompressedReferencePdf, String> {
+    let pdf_path = ensure_allowed(&allowed, &path)?;
+    let original_size_bytes = fs::metadata(&pdf_path)
+        .map_err(|e| format!("PDF metadata failed ({}): {}", pdf_path.display(), e))?
+        .len();
+
+    let pdfium = ocr::make_pdfium(&app)?;
+    let doc = pdfium
+        .load_pdf_from_file(&pdf_path, None)
+        .map_err(|e| format!("PDF read failed ({}): {:?}", pdf_path.display(), e))?;
+    let page_count = doc.pages().len();
+    if page_count == 0 {
+        return Err("PDF has no pages".to_string());
+    }
+    let job_id = job_id.unwrap_or_else(|| "reference-pdf-compress".to_string());
+    let emit_progress = |current: usize| {
+        let percent = if page_count == 0 {
+            0
+        } else {
+            ((current as f64 / page_count as f64) * 100.0).round() as u32
+        }
+        .min(100);
+        let _ = app.emit(
+            "reference_pdf_compress:progress",
+            ReferencePdfCompressProgress {
+                job_id: job_id.clone(),
+                current,
+                total: page_count as usize,
+                percent,
+            },
+        );
+    };
+    emit_progress(0);
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let temp_dir = std::env::temp_dir().join(format!(
+        "psdesign-reference-pdf-{}-{}",
+        ts,
+        safe_file_stem_for_temp(&pdf_path)
+    ));
+    fs::create_dir_all(&temp_dir)
+        .map_err(|e| format!("temp folder create failed ({}): {}", temp_dir.display(), e))?;
+
+    let pad = page_count.to_string().len().max(3);
+    let render_config = PdfRenderConfig::new()
+        .set_target_width(REFERENCE_PDF_COMPRESS_MAX_EDGE)
+        .set_maximum_height(REFERENCE_PDF_COMPRESS_MAX_EDGE)
+        .use_print_quality(false)
+        .set_image_smoothing(false)
+        .render_form_data(false);
+
+    let mut output_paths = Vec::with_capacity(page_count as usize);
+    let mut compressed_size_bytes = 0u64;
+    for (i, page) in doc.pages().iter().enumerate() {
+        let bitmap = page
+            .render_with_config(&render_config)
+            .map_err(|e| format!("PDF page render failed (page={}): {:?}", i + 1, e))?;
+        let rgb = bitmap.as_image().to_rgb8();
+        let dest = temp_dir.join(format!("page_{:0width$}.jpg", i + 1, width = pad));
+        let file = File::create(&dest)
+            .map_err(|e| format!("JPG create failed ({}): {}", dest.display(), e))?;
+        let mut encoder = JpegEncoder::new_with_quality(file, REFERENCE_PDF_COMPRESS_JPEG_QUALITY);
+        encoder
+            .encode_image(&rgb)
+            .map_err(|e| format!("JPG encode failed ({}): {}", dest.display(), e))?;
+
+        let size = fs::metadata(&dest)
+            .map(|m| m.len())
+            .unwrap_or(0);
+        compressed_size_bytes = compressed_size_bytes.saturating_add(size);
+        let dest_string = dest.to_string_lossy().to_string();
+        let _ = allowed.register_real(&dest_string);
+        output_paths.push(dest_string);
+        emit_progress(i + 1);
+    }
+
+    Ok(CompressedReferencePdf {
+        source_path: pdf_path.to_string_lossy().to_string(),
+        output_paths,
+        original_size_bytes,
+        compressed_size_bytes,
+    })
+}
+
 fn update_splash_progress(app: &tauri::AppHandle, value: u32) {
     if let Some(splash_window) = app.get_webview_window("splash") {
         let _ = splash_window.eval(format!(
@@ -1789,6 +1931,7 @@ pub fn run() {
             write_text_file,
             write_binary_file,
             copy_file,
+            compress_reference_pdf,
             opus_project_root_path,
             create_opus_project_dir,
             script_output_dir,
