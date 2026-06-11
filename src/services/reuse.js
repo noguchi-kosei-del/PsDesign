@@ -48,6 +48,7 @@ import { ensureFontLoaded } from "../font-loader.js";
 import { notifyUnsupportedBitmapPsdFiles } from "./psd-load.js";
 import { baseName, parentDir } from "../utils/path.js";
 import { setGuidesLocked } from "../rulers.js";
+import { endLoadOperation, tryBeginLoadOperation } from "./load-guard.js";
 import { getDefault } from "../settings.js";
 
 // 【写植再利用】テキスト領域の周辺解析（白率 / ウニ）から、通常写植と同じ基準で
@@ -421,8 +422,15 @@ export async function loadPsdFilesForReuse(files, {
   fontSizeMode = "reproduce",
   unifyFont = null,
   unifySize = null,
+  loadOperationToken = null,
 } = {}) {
   if (!files || files.length === 0) return;
+  const ownLoadOperationToken = loadOperationToken ? null : tryBeginLoadOperation("reuse-load");
+  if (!loadOperationToken && !ownLoadOperationToken) {
+    toast("PSDの読み込み中です。完了までお待ちください", { kind: "info", duration: 2200 });
+    return;
+  }
+  try {
   await refreshMemoryStatus();
   const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
   files = [...files].sort((a, b) => collator.compare(baseName(a), baseName(b)));
@@ -613,5 +621,8 @@ export async function loadPsdFilesForReuse(files, {
       ? `読込失敗 ${baseName(first.path)}: ${first.error?.message ?? first.error}`
       : `読込失敗 ${failures.length} 件（${baseName(first.path)} 他）`;
     toast(msg, { kind: "error", duration: 5000 });
+  }
+  } finally {
+    if (ownLoadOperationToken) endLoadOperation(ownLoadOperationToken);
   }
 }

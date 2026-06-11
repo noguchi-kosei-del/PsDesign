@@ -15,10 +15,20 @@ import { UnsupportedBitmapPsdError, loadPsdFromPath } from "../psd-loader.js";
 import { baseName, parentDir } from "../utils/path.js";
 import { setGuidesLocked, setGuidesFromPsd, setRulersVisible, applyGuidesToPaths } from "../rulers.js";
 import { refreshMemoryStatus } from "../memory-mode.js";
+import { endLoadOperation, tryBeginLoadOperation } from "./load-guard.js";
 
 function isUnsupportedBitmapPsdError(error) {
   return error instanceof UnsupportedBitmapPsdError || error?.code === "UNSUPPORTED_BITMAP_PSD";
 }
+
+function hasCompleteGuideFrame(guides) {
+  return !!guides
+    && Array.isArray(guides.h)
+    && Array.isArray(guides.v)
+    && guides.h.length >= 2
+    && guides.v.length >= 2;
+}
+
 function formatUnsupportedBitmapMessage(paths) {
   if (paths.length === 1) {
     return `「${baseName(paths[0])}」はモノクロ2階調のPSDのため読み込めません。RGBカラーまたはグレースケールに変換してから開いてください。`;
@@ -27,24 +37,10 @@ function formatUnsupportedBitmapMessage(paths) {
   const rest = paths.length > 10 ? `\nほか ${paths.length - 10} 件` : "";
   return `以下のPSDはモノクロ2階調のため読み込めません。\n\n${shown}${rest}\n\nRGBカラーまたはグレースケールに変換してから開いてください。`;
 }
-function isBitmapPsdHeader(bytes) {
-  if (!bytes || bytes.length < 26) return false;
-  const sig =
-    String.fromCharCode(bytes[0]) +
-    String.fromCharCode(bytes[1]) +
-    String.fromCharCode(bytes[2]) +
-    String.fromCharCode(bytes[3]);
-  if (sig !== "8BPS") return false;
-  const depth = (bytes[22] << 8) | bytes[23];
-  const colorMode = (bytes[24] << 8) | bytes[25];
-  return colorMode === 0 || (colorMode === 1 && depth === 1);
-}
 async function isUnsupportedBitmapPsdPath(path) {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    const raw = await invoke("read_binary_file", { path });
-    const bytes = raw instanceof Uint8Array ? raw : new Uint8Array(raw);
-    return isBitmapPsdHeader(bytes);
+    return await invoke("is_unsupported_bitmap_psd", { path }) === true;
   } catch (e) {
     console.warn("[psd-load] PSD bitmap preflight failed:", path, e);
     return false;
@@ -101,8 +97,15 @@ export async function loadPsdFilesByPaths(files, {
   confirmUnsaved = true,
   preserveOrder = false,
   progressFlow = null,
+  loadOperationToken = null,
 } = {}) {
   if (!files || files.length === 0) return;
+  const ownLoadOperationToken = loadOperationToken ? null : tryBeginLoadOperation("psd-load");
+  if (!loadOperationToken && !ownLoadOperationToken) {
+    toast("PSDの読み込み中です。完了までお待ちください", { kind: "info", duration: 2200 });
+    return;
+  }
+  try {
   await refreshMemoryStatus();
   // ファイル名を自然順 (numeric collation) でソート。D&D / OS ダイアログ / フォルダ展開
   // のいずれもページ番号順 (page1 → page2 → page10) で先頭から並ぶようにする。
@@ -161,6 +164,7 @@ export async function loadPsdFilesByPaths(files, {
   // PSD 埋め込みガイドが塗り足し枠（縦2+横2）を成す最初のページのパス。
   // 1 ページでも塗り足し枠が入っていれば、それを全ページへ適用する（コピー元）。
   let sourceFramePath = null;
+  const completeFramePaths = new Set();
   for (let i = 0; i < files.length; i++) {
     const path = files[i];
     updateProgress(withProgressFlow(progressFlow, {
@@ -177,8 +181,9 @@ export async function loadPsdFilesByPaths(files, {
       if (page.psdGuides && (page.psdGuides.h.length || page.psdGuides.v.length)) {
         setGuidesFromPsd(page.path, page.psdGuides);
         // 最初に塗り足し枠（縦2+横2）が揃ったページをコピー元として記録。
-        if (!sourceFramePath && page.psdGuides.h.length >= 2 && page.psdGuides.v.length >= 2) {
-          sourceFramePath = page.path;
+        if (hasCompleteGuideFrame(page.psdGuides)) {
+          completeFramePaths.add(page.path);
+          if (!sourceFramePath) sourceFramePath = page.path;
         }
       }
       renderAllSpreads();
@@ -200,12 +205,14 @@ export async function loadPsdFilesByPaths(files, {
     }));
   }
 
-  // 1 ページでも塗り足し枠が入っていれば、そのガイドを全ページへコピーして統一する。
+  // 1 ページでも塗り足し枠が入っていれば、ガイド不足ページだけへコピーして補完する。
+  // 各 PSD が自前で完全な枠を持つ場合は、そのページ固有のガイドを保持する。
   // その後、定規を自動表示してロック（枠外ディム = 塗り足し表示）。
   // setRulersVisible を先に呼ぶ（requestRulerRedraw が rulersVisible を見るため）。
-  // 既に全ページへ展開済みなので setGuidesLocked は skipApply: true（再コピー不要）。
+  // 必要なページへ展開済みなので setGuidesLocked は skipApply: true（再コピー不要）。
   if (sourceFramePath) {
-    applyGuidesToPaths(loadedPaths, sourceFramePath);
+    const missingFramePaths = loadedPaths.filter((path) => !completeFramePaths.has(path));
+    if (missingFramePaths.length > 0) applyGuidesToPaths(missingFramePaths, sourceFramePath);
     setRulersVisible(true);
     setGuidesLocked(true, { skipApply: true });
   }
@@ -225,5 +232,8 @@ export async function loadPsdFilesByPaths(files, {
         ? `読込失敗 ${baseName(first.path)}: ${first.error?.message ?? first.error}`
         : `読込失敗 ${failures.length} 件（${baseName(first.path)} 他）`;
     toast(msg, { kind: "error", duration: 5000 });
+  }
+  } finally {
+    if (ownLoadOperationToken) endLoadOperation(ownLoadOperationToken);
   }
 }

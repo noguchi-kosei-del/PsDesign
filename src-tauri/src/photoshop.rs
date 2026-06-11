@@ -24,6 +24,7 @@ const SENTINEL_POLL_MS: u64 = 300;
 const PHOTOSHOP_HIDE_POLL_MS: u64 = 25;
 const SAVED_PSD_UNLOCK_TIMEOUT_MS: u64 = 5_000;
 const SAVED_PSD_UNLOCK_POLL_MS: u64 = 250;
+const WAIT_HINT_INTERVAL_SECS: u64 = 90;
 const PROGRESS_EVENT: &str = "photoshop_save_progress";
 
 #[derive(Clone, Serialize)]
@@ -107,6 +108,7 @@ pub fn apply_edits(
     }
 
     let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
+    let mut next_wait_hint = Instant::now() + Duration::from_secs(WAIT_HINT_INTERVAL_SECS);
     loop {
         hidden_windows.hide_visible_photoshop_windows();
         relay_progress_file(app, &progress_path, &mut last_progress);
@@ -162,7 +164,18 @@ pub fn apply_edits(
             let msg = head.strip_prefix("ERROR ").unwrap_or(&head).to_string();
             return Err(PhotoshopError::ScriptFailed(msg));
         }
-        if Instant::now() > deadline {
+        let now = Instant::now();
+        if now >= next_wait_hint {
+            let (current, total) = progress_counts(&last_progress, payload.edits.len());
+            emit_progress(
+                app,
+                current,
+                total,
+                "Photoshopの処理待ちです。Photoshop側のダイアログが出ていないか確認してください",
+            );
+            next_wait_hint = now + Duration::from_secs(WAIT_HINT_INTERVAL_SECS);
+        }
+        if now > deadline {
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
             hidden_windows.restore_hidden_photoshop_windows_minimized();
@@ -910,6 +923,19 @@ fn relay_progress_file(app: &tauri::AppHandle, path: &PathBuf, last: &mut String
         .unwrap_or(0);
     let detail = parts.next().unwrap_or("").trim().to_string();
     emit_progress(app, current, total, detail);
+}
+
+fn progress_counts(content: &str, default_total: usize) -> (usize, usize) {
+    let mut parts = content.splitn(3, '\t');
+    let current = parts
+        .next()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(0);
+    let total = parts
+        .next()
+        .and_then(|s| s.trim().parse::<usize>().ok())
+        .unwrap_or(default_total);
+    (current, total)
 }
 
 #[cfg(windows)]

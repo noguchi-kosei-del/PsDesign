@@ -375,16 +375,11 @@
               <div class="stage-label-bar" id="left-viewer-stage-label-bar">
                 <span class="stage-label-text" id="left-viewer-stage-label">見本ビューアー</span>
                 <div class="stage-label-actions">
-                  <button id="left-viewer-prev-btn" class="icon-btn left-viewer-nav-btn" type="button" title="前の見本ページ" aria-label="前の見本ページ" disabled>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="m15 18-6-6 6-6"/>
-                    </svg>
-                  </button>
-                  <span id="left-viewer-page-label" class="left-viewer-page-label">- / -</span>
-                  <button id="left-viewer-next-btn" class="icon-btn left-viewer-nav-btn" type="button" title="次の見本ページ" aria-label="次の見本ページ" disabled>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-                      <path d="m9 18 6-6-6-6"/>
-                    </svg>
+                  <button id="left-viewer-sync-toggle" class="left-viewer-sync-toggle" type="button" title="ページ非同期" aria-label="ページ非同期" aria-pressed="false">
+                    <span class="left-viewer-sync-toggle-track" aria-hidden="true">
+                      <span class="left-viewer-sync-toggle-thumb"></span>
+                    </span>
+                    <span class="left-viewer-sync-toggle-text" data-off="非同期" data-on="同期">非同期</span>
                   </button>
                   <button id="left-viewer-load-b-btn" class="left-viewer-btn" type="button">見本を開く</button>
                 </div>
@@ -662,7 +657,7 @@
                 <line x1="8" y1="11" x2="14" y2="11"/>
               </svg>
             </button>
-            <button id="zoom-level-btn" class="page-zoom-level-btn" type="button" title="100% にリセット">100%</button>
+            <input id="zoom-level-btn" class="page-zoom-level-btn" type="text" inputmode="numeric" value="100%" title="ズーム倍率を入力" aria-label="ズーム倍率を入力" />
             <button id="zoom-out-btn" class="icon-btn page-zoom-btn" type="button" title="ズームアウト (Alt+スクロール)" aria-label="ズームアウト">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <circle cx="11" cy="11" r="8"/>
@@ -1179,6 +1174,7 @@
           <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
           <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">方向キー</button>
           <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">写植設定</button>
+          <button type="button" class="settings-tab" data-tab="explorer" role="tab" aria-selected="false">エクスプローラー</button>
           <button type="button" class="settings-tab" data-tab="themeColor" role="tab" aria-selected="false">テーマカラー</button>
         </div>
         <div class="settings-tab-panel active" id="settings-tab-shortcuts" role="tabpanel">
@@ -1332,6 +1328,28 @@
               <label class="settings-default-label" for="default-cloud-shape-font-postscript">中丸ゴシック PostScript 名 (空でフォント差し替えなし)</label>
               <input id="default-cloud-shape-font-postscript" class="settings-default-input" type="text" list="default-font-list" placeholder="DFGMaruGothic-Md" />
             </div>
+          </div>
+        </div>
+        <div class="settings-tab-panel" id="settings-tab-explorer" role="tabpanel">
+          <div class="settings-section-header">
+            <span>ファイル選択画面</span>
+          </div>
+          <p class="settings-section-desc">PDF、PSD、テキスト、保存先などを選ぶときに使うエクスプローラー画面を選択します。</p>
+          <div class="settings-radio-list">
+            <label class="settings-radio-option" data-value="opus">
+              <input type="radio" name="file-dialog-mode" value="opus" />
+              <span class="settings-radio-body">
+                <span class="settings-radio-title">OPUSオリジナル</span>
+                <span class="settings-radio-desc">アプリ内のファイル選択画面を使います。</span>
+              </span>
+            </label>
+            <label class="settings-radio-option" data-value="native">
+              <input type="radio" name="file-dialog-mode" value="native" />
+              <span class="settings-radio-body">
+                <span class="settings-radio-title">Windows標準</span>
+                <span class="settings-radio-desc">OS標準のエクスプローラー画面を使います。</span>
+              </span>
+            </label>
           </div>
         </div>
         <div class="settings-tab-panel" id="settings-tab-themeColor" role="tabpanel">

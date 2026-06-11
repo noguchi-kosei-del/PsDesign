@@ -49,8 +49,9 @@ export const DEFAULT_SETTINGS = {
   // v8: 中丸ゴシック自動切替の閾値を 0.5 (50%) に設定 + UI 側で 10% 刻みの
   //     6 段階バケット (50-59 / 60-69 / 70-79 / 80-89 / 90-99 / 100) で色分け。
   //     旧 v7 以前 (デフォルト閾値 0.9 だった想定) の保存値を破棄して新デフォルト 0.5 を強制反映。
-  version: 19,
+  version: 20,
   themeColor: "tealGreen",
+  fileDialogMode: "opus",
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
   pageDirectionInverted: false,
   arrowKeyMoveDistance: 6,
@@ -219,6 +220,9 @@ function migrate(old) {
     out.themeColor = sourceVersion < 18 && old.themeColor === "violetBlue"
       ? DEFAULT_SETTINGS.themeColor
       : old.themeColor;
+  }
+  if (old.fileDialogMode === "opus" || old.fileDialogMode === "native") {
+    out.fileDialogMode = old.fileDialogMode;
   }
   if (typeof old.arrowKeyMoveDistance === "number" && Number.isFinite(old.arrowKeyMoveDistance)) {
     const migrated = Math.max(0.1, Math.min(100, Math.round(old.arrowKeyMoveDistance * 100) / 100));
@@ -398,6 +402,19 @@ export function setPageDirectionInverted(v) {
   const next = !!v;
   if (settings.pageDirectionInverted === next) return;
   settings.pageDirectionInverted = next;
+  save();
+}
+
+export function getFileDialogMode() {
+  if (!settings) load();
+  return settings.fileDialogMode === "native" ? "native" : "opus";
+}
+
+export function setFileDialogMode(mode) {
+  if (!settings) load();
+  const next = mode === "native" ? "native" : "opus";
+  if (settings.fileDialogMode === next) return;
+  settings.fileDialogMode = next;
   save();
 }
 

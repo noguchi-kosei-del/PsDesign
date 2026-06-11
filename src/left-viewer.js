@@ -168,11 +168,12 @@ async function loadImageCanvas(path, onProgress = () => {}) {
   const bitmap = await createImageBitmap(new Blob([bytes]));
   try {
     onProgress(82, "表示を準備中");
-    const canvas = makeCanvas(bitmap.width, bitmap.height);
+    const scale = Math.min(1, MAX_CANVAS_SIDE / Math.max(1, bitmap.width, bitmap.height));
+    const canvas = makeCanvas(bitmap.width * scale, bitmap.height * scale);
     const ctx = canvas.getContext("2d");
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.drawImage(bitmap, 0, 0);
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
     return canvas;
   } finally {
     try { if (typeof bitmap.close === "function") bitmap.close(); } catch (_) {}
@@ -207,37 +208,35 @@ async function loadPdfPages(path, onProgress = () => {}) {
   try {
     const pages = [];
     const total = Math.max(1, doc.numPages || 1);
-    const renderBase = 62;
-    const renderSpan = 34;
     for (let pageNum = 1; pageNum <= total; pageNum += 1) {
-      const pageStart = renderBase + ((pageNum - 1) / total) * renderSpan;
-      const pageSpan = renderSpan / total;
+      const pageStart = 62 + (pageNum / total) * 34;
       onProgress(pageStart, "ページを描画中");
       const pdfPage = await doc.getPage(pageNum);
-      const canvas = await renderPdfPageToCanvas(pdfPage, (pct, detail) => {
-        onProgress(pageStart + (Math.max(0, Math.min(100, pct)) / 100) * pageSpan, detail);
-      });
+      const rotation = (((typeof pdfPage.rotate === "number" ? pdfPage.rotate : 0) + getPdfRotation()) % 360 + 360) % 360;
+      const viewport = pdfPage.getViewport({ scale: 1, rotation });
       pages.push({
         kind: "pdf",
         path,
         name: basename(path),
+        doc,
         pageNum,
         pageLabel: `${basename(path)}  ${pageNum} / ${total}`,
-        width: canvas.width,
-        height: canvas.height,
-        canvas,
+        width: viewport.width,
+        height: viewport.height,
+        canvas: null,
       });
       if (pageNum === 1 || pageNum === total || pageNum % 4 === 0) {
         await waitForNextPaint();
       }
     }
     onProgress(96, "表示を準備中");
-    return { pages, docs: [] };
-  } finally {
+    return { pages, docs: [doc] };
+  } catch (e) {
     try {
       const result = typeof doc.destroy === "function" ? doc.destroy() : null;
       if (result?.catch) result.catch(() => {});
     } catch (_) {}
+    throw e;
   }
 }
 
@@ -312,7 +311,6 @@ function setBusy(loading) {
   const btn = $("left-viewer-load-b-btn");
   if (btn) btn.disabled = state.loading;
   updateLoadButtonLabel();
-  updatePageControls();
 }
 
 function updateLoadButtonLabel() {
@@ -329,20 +327,6 @@ function updateStageLabel() {
     return;
   }
   label.textContent = `P${String(state.currentIndex + 1).padStart(2, "0")}  ${page.pageLabel || page.name}`;
-}
-
-function updatePageControls() {
-  const total = state.pages.length;
-  const current = total ? state.currentIndex + 1 : 0;
-  const prev = $("left-viewer-prev-btn");
-  const next = $("left-viewer-next-btn");
-  const label = $("left-viewer-page-label");
-  if (prev) prev.disabled = state.loading || current <= 1;
-  if (next) next.disabled = state.loading || current >= total;
-  if (label) {
-    label.textContent = total ? `${current} / ${total}` : "- / -";
-    label.hidden = false;
-  }
 }
 
 export function getLeftViewerPageCount() {
@@ -652,7 +636,6 @@ function render() {
   stage.classList.toggle("drag-over", state.dragOver);
   updateLoadButtonLabel();
   updateStageLabel();
-  updatePageControls();
 
   const page = currentPage();
   if (!page) {
@@ -741,17 +724,21 @@ function bindNativeDrop(stage) {
 }
 
 function bindWheelPageNav(stage) {
-  let lastWheelMs = 0;
-  const throttleMs = 120;
+  const wheelDeltaPx = (e, axis) => {
+    const raw = axis === "x" ? e.deltaX : e.deltaY;
+    if (e.deltaMode === 1) return raw * 40;
+    if (e.deltaMode === 2) return raw * (stage.clientHeight || window.innerHeight || 800);
+    return raw;
+  };
   stage.addEventListener("wheel", (e) => {
     if (getParallelViewMode() !== "imageViewer") return;
     if (e.altKey || e.ctrlKey || e.metaKey) return;
-    if (state.pages.length <= 1) return;
     e.preventDefault();
-    const now = Date.now();
-    if (now - lastWheelMs < throttleMs) return;
-    lastWheelMs = now;
-    moveViewerPage(e.deltaY > 0 ? +1 : -1);
+    stage.scrollBy({
+      left: wheelDeltaPx(e, "x"),
+      top: wheelDeltaPx(e, "y"),
+      behavior: "auto",
+    });
   }, { passive: false });
 }
 
@@ -759,8 +746,6 @@ export function initLeftViewerPanel() {
   if (initialized) return;
   initialized = true;
   $("left-viewer-load-b-btn")?.addEventListener("click", () => { void loadPickedViewerFiles(); });
-  $("left-viewer-prev-btn")?.addEventListener("click", () => { moveViewerPage(-1); });
-  $("left-viewer-next-btn")?.addEventListener("click", () => { moveViewerPage(1); });
 
   onParallelViewModeChange(() => {
     if (getParallelViewMode() !== "imageViewer") return;

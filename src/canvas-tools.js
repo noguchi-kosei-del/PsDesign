@@ -72,7 +72,22 @@ let userHiddenLayerBadges = false;
 let temporaryMultiSelectionAdornmentsVisible = false;
 let rotateHandlesVisible = false;
 let selectionAdornmentsVisible = true;
-let selectionCenterOnlyMode = true;
+const SELECTION_CENTER_ONLY_MODE_KEY = "psdesign_selection_center_only_mode";
+
+function readSelectionCenterOnlyMode() {
+  try {
+    const saved = localStorage.getItem(SELECTION_CENTER_ONLY_MODE_KEY);
+    if (saved === "0") return false;
+    if (saved === "1") return true;
+  } catch (_) {}
+  return true;
+}
+
+function writeSelectionCenterOnlyMode(value) {
+  try { localStorage.setItem(SELECTION_CENTER_ONLY_MODE_KEY, value ? "1" : "0"); } catch (_) {}
+}
+
+let selectionCenterOnlyMode = readSelectionCenterOnlyMode();
 
 function showSelectedLayerBadges() {
   const wasHidden = hideSelectedLayerBadges;
@@ -144,6 +159,7 @@ export function toggleSelectionAdornmentsVisible() {
 
 export function toggleSelectionCenterOnlyMode() {
   selectionCenterOnlyMode = !selectionCenterOnlyMode;
+  writeSelectionCenterOnlyMode(selectionCenterOnlyMode);
   refreshAllOverlays();
   return selectionCenterOnlyMode;
 }

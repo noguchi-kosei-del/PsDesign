@@ -11,6 +11,7 @@ import {
   getAllShortcuts,
   getArrowKeyMoveDistance,
   getDefaults,
+  getFileDialogMode,
   getFixedShortcuts,
   getPageDirectionInverted,
   getThemeColor,
@@ -20,6 +21,7 @@ import {
   resetShortcuts,
   setDefault,
   setArrowKeyMoveDistance,
+  setFileDialogMode,
   setPageDirectionInverted,
   setThemeColor,
   setShortcut,
@@ -41,6 +43,7 @@ function openModal() {
   // 開くたびに最新値で再描画（外部から setPageDirectionInverted が呼ばれた等を反映）。
   renderShortcutList();
   syncPageDirectionUi();
+  syncFileDialogModeUi();
   syncThemeColorUi();
   syncDefaultsUi();
   // デフォルトはショートカットタブ。
@@ -142,6 +145,17 @@ function syncPageDirectionUi() {
 function syncThemeColorUi() {
   const current = getThemeColor();
   const opts = document.querySelectorAll('input[name="theme-color"]');
+  for (const inp of opts) {
+    const isOn = inp.value === current;
+    inp.checked = isOn;
+    const wrap = inp.closest(".settings-radio-option");
+    if (wrap) wrap.classList.toggle("selected", isOn);
+  }
+}
+
+function syncFileDialogModeUi() {
+  const current = getFileDialogMode();
+  const opts = document.querySelectorAll('input[name="file-dialog-mode"]');
   for (const inp of opts) {
     const isOn = inp.value === current;
     inp.checked = isOn;
@@ -396,6 +410,16 @@ export function initSettingsUi() {
     });
   }
 
+  // ファイル選択画面。
+  const dialogModeOpts = document.querySelectorAll('input[name="file-dialog-mode"]');
+  for (const inp of dialogModeOpts) {
+    inp.addEventListener("change", () => {
+      if (!inp.checked) return;
+      setFileDialogMode(inp.value);
+      syncFileDialogModeUi();
+    });
+  }
+
   // テーマカラー。
   const themeOpts = document.querySelectorAll('input[name="theme-color"]');
   for (const inp of themeOpts) {
@@ -443,6 +467,7 @@ export function initSettingsUi() {
     if (modalOpen) {
       renderShortcutList();
       syncPageDirectionUi();
+      syncFileDialogModeUi();
       syncThemeColorUi();
       syncDefaultsUi();
     }

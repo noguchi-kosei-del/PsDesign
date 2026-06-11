@@ -758,80 +758,114 @@ function schedulePageRender() {
   });
 }
 
+const LEFT_VIEWER_PAGE_SYNC_KEY = "psdesign_left_viewer_page_sync";
+let leftViewerPageSyncEnabled = false;
 let leftViewerPageSyncBusy = false;
 
-function linkedPageSourceForLeftViewer() {
-  if (getParallelViewMode() !== "imageViewer") return null;
-  const psdCount = getPages().length;
-  const pdfCount = getPdfVirtualPageCount();
-  const txtCount = getTxtPageCount();
-  if (!getParallelSyncMode() && getActivePane() === "pdf" && pdfCount > 0) {
-    return { source: "pdf", total: pdfCount, current: getPdfPageIndex() };
-  }
-  if (psdCount > 0) return { source: "psd", total: psdCount, current: getCurrentPageIndex() };
-  if (pdfCount > 0) return { source: "pdf", total: pdfCount, current: getPdfPageIndex() };
-  if (txtCount > 0) return { source: "txt", total: txtCount, current: getPdfPageIndex() };
-  return null;
+function loadLeftViewerPageSyncEnabled() {
+  try { return localStorage.getItem(LEFT_VIEWER_PAGE_SYNC_KEY) === "1"; } catch (_) { return false; }
 }
 
-function syncLeftViewerFromLinkedPage() {
-  if (leftViewerPageSyncBusy) return;
-  const source = linkedPageSourceForLeftViewer();
-  const viewerCount = getLeftViewerPageCount();
-  if (!source || viewerCount <= 0) return;
-  const next = Math.max(0, Math.min(viewerCount - 1, source.current));
-  if (getLeftViewerPageIndex() === next) return;
+function setLeftViewerPageSyncEnabled(enabled, { align = true } = {}) {
+  leftViewerPageSyncEnabled = !!enabled;
+  try { localStorage.setItem(LEFT_VIEWER_PAGE_SYNC_KEY, leftViewerPageSyncEnabled ? "1" : "0"); } catch (_) {}
+  updateLeftViewerSyncToggle();
+  if (leftViewerPageSyncEnabled && align) syncLeftViewerFromPsd();
+}
+
+function canSyncLeftViewerWithPsd() {
+  return getParallelViewMode() === "imageViewer" && getPages().length > 0 && getLeftViewerPageCount() > 0;
+}
+
+function updateLeftViewerSyncToggle() {
+  const btn = document.getElementById("left-viewer-sync-toggle");
+  if (!btn) return;
+  const enabled = leftViewerPageSyncEnabled;
+  btn.setAttribute("aria-pressed", enabled ? "true" : "false");
+  btn.title = enabled ? "ページ同期" : "ページ非同期";
+  btn.setAttribute("aria-label", btn.title);
+  const text = btn.querySelector(".left-viewer-sync-toggle-text");
+  if (text) text.textContent = enabled ? (text.dataset.on || "SYNC") : (text.dataset.off || "ASYNC");
+}
+
+function syncLeftViewerFromPsd() {
+  if (!leftViewerPageSyncEnabled || leftViewerPageSyncBusy || !canSyncLeftViewerWithPsd()) {
+    updateLeftViewerSyncToggle();
+    return;
+  }
+  const next = Math.max(0, Math.min(getLeftViewerPageCount() - 1, getCurrentPageIndex()));
+  if (getLeftViewerPageIndex() === next) {
+    updateLeftViewerSyncToggle();
+    return;
+  }
   leftViewerPageSyncBusy = true;
   try { setLeftViewerPageIndex(next); } finally { leftViewerPageSyncBusy = false; }
+  updateLeftViewerSyncToggle();
 }
 
-function syncLinkedPageFromLeftViewer() {
-  if (leftViewerPageSyncBusy) return;
-  const source = linkedPageSourceForLeftViewer();
-  if (!source) return;
-  const next = Math.max(0, Math.min(source.total - 1, getLeftViewerPageIndex()));
-  if (source.current === next) return;
+function syncPsdFromLeftViewer() {
+  if (!leftViewerPageSyncEnabled || leftViewerPageSyncBusy || !canSyncLeftViewerWithPsd()) {
+    updateLeftViewerSyncToggle();
+    return;
+  }
+  const next = Math.max(0, Math.min(getPages().length - 1, getLeftViewerPageIndex()));
+  if (getCurrentPageIndex() === next) {
+    updateLeftViewerSyncToggle();
+    return;
+  }
   leftViewerPageSyncBusy = true;
-  try { setActivePageIndex(source.source, next); } finally { leftViewerPageSyncBusy = false; }
+  try { setCurrentPageIndex(next); } finally { leftViewerPageSyncBusy = false; }
+  updateLeftViewerSyncToggle();
+}
+
+function bindLeftViewerSyncToggle() {
+  leftViewerPageSyncEnabled = loadLeftViewerPageSyncEnabled();
+  const btn = document.getElementById("left-viewer-sync-toggle");
+  if (btn) {
+    btn.addEventListener("click", () => {
+      setLeftViewerPageSyncEnabled(!leftViewerPageSyncEnabled);
+    });
+  }
+  updateLeftViewerSyncToggle();
+  if (leftViewerPageSyncEnabled) syncLeftViewerFromPsd();
 }
 
 function bindPageChange() {
   onPageIndexChange(() => {
     schedulePageRender();
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
+    syncLeftViewerFromPsd();
   });
   onPdfPageIndexChange(() => {
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
   });
   onPdfChange(() => {
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
   });
   onPdfSplitModeChange(() => {
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
   });
   onPdfSkipFirstBlankChange(() => {
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
   });
   onParallelSyncModeChange(() => {
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
   });
   onParallelViewModeChange(() => {
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
+    syncLeftViewerFromPsd();
+    updateLeftViewerSyncToggle();
   });
   onActivePaneChange(() => {
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
+  });
+  window.addEventListener("psdesign:psd-loaded", () => {
+    syncLeftViewerFromPsd();
+    updateLeftViewerSyncToggle();
   });
   window.addEventListener("psdesign:left-viewer-page-change", (e) => {
-    if (e.detail?.reason === "load") syncLeftViewerFromLinkedPage();
-    else syncLinkedPageFromLeftViewer();
+    if (e.detail?.reason === "page") syncPsdFromLeftViewer();
+    else syncLeftViewerFromPsd();
     updatePageNav();
   });
   onTxtSourceChange(() => {
@@ -840,7 +874,6 @@ function bindPageChange() {
       if (total > 0 && getPdfPageIndex() > total - 1) setPdfPageIndex(0);
     }
     updatePageNav();
-    syncLeftViewerFromLinkedPage();
   });
 }
 
@@ -1013,7 +1046,9 @@ function updatePageNav() {
   let total = 0;
   let current = 0;
   let source = null;
-  if (getParallelSyncMode()) {
+  if (getParallelViewMode() === "imageViewer" && viewerCount > 0) {
+    source = "viewer"; total = viewerCount; current = getLeftViewerPageIndex();
+  } else if (getParallelSyncMode()) {
     if (psdCount > 0) { source = "psd"; total = psdCount; current = getCurrentPageIndex(); }
     else if (pdfCount > 0) { source = "pdf"; total = pdfCount; current = getPdfPageIndex(); }
     else if (txtCount > 0) { source = "txt"; total = txtCount; current = getPdfPageIndex(); }
@@ -1025,8 +1060,6 @@ function updatePageNav() {
     source = "pdf"; total = pdfCount; current = getPdfPageIndex();
   } else if (txtCount > 0) {
     source = "txt"; total = txtCount; current = getPdfPageIndex();
-  } else if (getParallelViewMode() === "imageViewer" && viewerCount > 0) {
-    source = "viewer"; total = viewerCount; current = getLeftViewerPageIndex();
   }
   if (label) {
     label.textContent = total > 0 ? `${current + 1} / ${total}` : "- / -";
@@ -1046,16 +1079,16 @@ function canAdvancePageNow() {
 }
 
 export function activePageSource() {
+  if (getParallelViewMode() === "imageViewer") {
+    const viewer = getLeftViewerPageCount();
+    if (viewer > 0) return { source: "viewer", total: viewer, current: getLeftViewerPageIndex() };
+  }
   const psd = getPages().length;
   if (psd > 0) return { source: "psd", total: psd, current: getCurrentPageIndex() };
   const pdf = getPdfVirtualPageCount();
   if (pdf > 0) return { source: "pdf", total: pdf, current: getPdfPageIndex() };
   const txt = getTxtPageCount();
   if (txt > 0) return { source: "txt", total: txt, current: getPdfPageIndex() };
-  if (getParallelViewMode() === "imageViewer") {
-    const viewer = getLeftViewerPageCount();
-    if (viewer > 0) return { source: "viewer", total: viewer, current: getLeftViewerPageIndex() };
-  }
   return null;
 }
 
@@ -1066,6 +1099,10 @@ function setActivePageIndex(source, idx) {
 }
 
 export function advancePage(delta) {
+  if (getParallelViewMode() === "imageViewer" && getLeftViewerPageCount() > 0) {
+    setLeftViewerPageIndex(nextPageIndexForTurn("viewer", getLeftViewerPageIndex(), getLeftViewerPageCount(), delta));
+    return;
+  }
   if (getParallelSyncMode()) {
     const info = activePageSource();
     if (!info) return;
@@ -1094,6 +1131,11 @@ export function advancePage(delta) {
 }
 
 function jumpToEdge(where) {
+  if (getParallelViewMode() === "imageViewer" && getLeftViewerPageCount() > 0) {
+    const total = getLeftViewerPageCount();
+    setLeftViewerPageIndex(where === "first" ? 0 : total - 1);
+    return;
+  }
   if (getParallelSyncMode()) {
     const info = activePageSource();
     if (!info) return;
@@ -1122,34 +1164,25 @@ function jumpToEdge(where) {
 function bindWheelPageNav() {
   const pdfArea = document.getElementById("spreads-pdf-area");
   const psdArea = document.getElementById("spreads-psd-area");
-  let lastWheelMs = 0;
-  const throttleMs = 120;
 
-  const navigate = (pane, delta) => {
-    if (getParallelSyncMode()) {
-      advancePage(delta);
-      return;
-    }
-    if (pane === "pdf") {
-      const vcount = getPdfVirtualPageCount();
-      if (vcount > 0) {
-        const next = nextPageIndexForTurn("pdf", getPdfPageIndex(), vcount, delta);
-        setPdfPageIndex(next);
-      }
-    } else if (getPages().length > 0) {
-      setCurrentPageIndex(nextPageIndexForTurn("psd", getCurrentPageIndex(), getPages().length, delta));
-    }
+  const wheelDeltaPx = (e, axis, stage) => {
+    const raw = axis === "x" ? e.deltaX : e.deltaY;
+    if (e.deltaMode === 1) return raw * 40;
+    if (e.deltaMode === 2) return raw * (axis === "x" ? stage.clientWidth : stage.clientHeight);
+    return raw;
   };
 
   const onWheel = (pane) => (e) => {
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     if (pane === "pdf" && e.target?.closest?.(".pdf-font-book-stage")) return;
+    const stage = document.getElementById(pane === "pdf" ? "pdf-stage" : "psd-stage");
+    if (!stage) return;
     e.preventDefault();
-    const now = Date.now();
-    if (now - lastWheelMs < throttleMs) return;
-    lastWheelMs = now;
-    const delta = e.deltaY > 0 ? +1 : -1;
-    navigate(pane, delta);
+    stage.scrollBy({
+      left: wheelDeltaPx(e, "x", stage),
+      top: wheelDeltaPx(e, "y", stage),
+      behavior: "auto",
+    });
   };
 
   if (pdfArea) pdfArea.addEventListener("wheel", onWheel("pdf"), { passive: false });
@@ -3572,11 +3605,23 @@ function displayZoomPercent(pane) {
   const z = pane === "pdf" ? getPdfZoom() : getPsdZoom();
   // 見開き編集時は spread-view.js 側で baseScale を 1.0 にしているので、
   // 表示倍率もそれに合わせて 100% を起点にする。
+  return Math.round(z * zoomDisplayBase(pane) * 100);
+}
+
+function zoomDisplayBase(pane) {
   const inSpreadEdit = pane !== "pdf" && getParallelViewMode() === "spreadEdit";
-  const base = pane === "pdf"
+  return pane === "pdf"
     ? PDF_FIT_BASE_SCALE
     : (inSpreadEdit ? 1.0 : PSD_FIT_BASE_SCALE);
-  return Math.round(z * base * 100);
+}
+
+function setPaneDisplayZoomPercent(pane, percent) {
+  const n = Number(percent);
+  if (!Number.isFinite(n) || n <= 0) return false;
+  const zoom = n / (zoomDisplayBase(pane) * 100);
+  if (pane === "pdf") setPdfZoom(zoom);
+  else setPsdZoom(zoom);
+  return true;
 }
 
 function bindRulerToggle() {
@@ -3646,8 +3691,9 @@ function bindZoomTool() {
   const paneLabel = (pane) => (pane === "pdf" ? "PDF" : "PSD");
   const updateLevel = () => {
     const pane = getActivePane();
-    level.textContent = `${paneLabel(pane)} ${displayZoomPercent(pane)}%`;
-    level.title = `${paneLabel(pane)} を100% にリセット`;
+    level.value = `${displayZoomPercent(pane)}%`;
+    level.title = `${paneLabel(pane)} のズーム倍率を入力`;
+    level.setAttribute("aria-label", `${paneLabel(pane)} のズーム倍率を入力`);
   };
   updateLevel();
   onPdfZoomChange(updateLevel);
@@ -3658,7 +3704,24 @@ function bindZoomTool() {
 
   out.addEventListener("click", () => zoomActivePaneBy(1 / 1.15));
   inn.addEventListener("click", () => zoomActivePaneBy(1.15));
-  level.addEventListener("click", () => resetActivePaneZoom());
+  const commitZoomInput = () => {
+    const pane = getActivePane();
+    const match = String(level.value || "").match(/\d+(?:\.\d+)?/);
+    if (!setPaneDisplayZoomPercent(pane, match?.[0])) updateLevel();
+  };
+  level.addEventListener("focus", () => level.select());
+  level.addEventListener("blur", commitZoomInput);
+  level.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      commitZoomInput();
+      level.blur();
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      updateLevel();
+      level.blur();
+    }
+  });
 
   const attachWheel = (area, pane) => {
     if (!area) return;
@@ -3681,6 +3744,7 @@ function bindZoomTool() {
   window.addEventListener(
     "keydown",
     (e) => {
+      if (e.target?.closest?.("input, textarea, select, [contenteditable='true']")) return;
       let handled = false;
       if (matchShortcut(e, "zoomIn")) { zoomActivePaneBy(1.15); handled = true; }
       else if (matchShortcut(e, "zoomOut")) { zoomActivePaneBy(1 / 1.15); handled = true; }
@@ -3694,9 +3758,13 @@ function bindZoomTool() {
   );
 }
 
-let pageJumpTarget = "psd"; // "psd" | "pdf"
+let pageJumpTarget = "psd"; // "psd" | "pdf" | "viewer"
 
 function decidePageJumpTarget() {
+  const viewerHas = getParallelViewMode() === "imageViewer" && getLeftViewerPageCount() > 0;
+  if (viewerHas) {
+    return { kind: "viewer", total: getLeftViewerPageCount(), current: getLeftViewerPageIndex(), label: "Viewer" };
+  }
   const psdHas = getPages().length > 0;
   const pdfHas = getPdfVirtualPageCount() > 0;
   const txtHas = getTxtPageCount() > 0;
@@ -3745,6 +3813,7 @@ function commitPageJump() {
   const v = parseInt(input.value, 10);
   if (Number.isFinite(v)) {
     if (pageJumpTarget === "pdf") setPdfPageIndex(v - 1);
+    else if (pageJumpTarget === "viewer") setLeftViewerPageIndex(v - 1);
     else setCurrentPageIndex(v - 1);
   }
   closePageJumpDialog();
@@ -5210,6 +5279,7 @@ function init() {
   bindFindChangeMode();
   initFontBookPanel();
   initLeftViewerPanel();
+  bindLeftViewerSyncToggle();
   bindEditorEvents();
   bindWindowControls();
   bindHomeScreen();

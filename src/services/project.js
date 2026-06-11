@@ -56,6 +56,7 @@ import {
 import { loadPsdFilesByPaths } from "./psd-load.js";
 import { loadPsdFilesForReuse } from "./reuse.js";
 import { baseName, joinPath, parentDir } from "../utils/path.js";
+import { endLoadOperation, tryBeginLoadOperation } from "./load-guard.js";
 
 const PROJECT_KIND = "opus-project";
 const PROJECT_SCHEMA_VERSION = 1;
@@ -804,6 +805,12 @@ export async function openProjectFromPath(path) {
     });
     if (!ok) return;
   }
+  const loadOperationToken = tryBeginLoadOperation("project-load");
+  if (!loadOperationToken) {
+    toast("PSDの読み込み中です。完了までお待ちください", { kind: "info", duration: 2200 });
+    return;
+  }
+  projectLoadInProgress = true;
   const progressFlowId = `project-load-${Date.now()}`;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
@@ -820,7 +827,6 @@ export async function openProjectFromPath(path) {
       { id: progressFlowId, stepId: "project-read" },
       { detail: "プロジェクト読込 完了" },
     );
-    projectLoadInProgress = true;
     const isReuseProject = project.reuse?.mode === true;
     if (isReuseProject) {
       // 【写植再利用】PSD はテキストを消した編集ペイン用に読み込む。テキスト抽出は
@@ -831,6 +837,7 @@ export async function openProjectFromPath(path) {
         keepProgressOpen: true,
         extract: false,
         skipReference: true,
+        loadOperationToken,
       });
       completeProgressFlowStep(
         { id: progressFlowId, stepId: "psd-load" },
@@ -844,9 +851,9 @@ export async function openProjectFromPath(path) {
         confirmUnsaved: false,
         preserveOrder: true,
         progressFlow: { id: progressFlowId, stepId: "psd-load" },
+        loadOperationToken,
       });
     }
-    projectLoadInProgress = false;
     if (getPages().length === 0) {
       throw new Error("プロジェクト内の PSD を読み込めませんでした");
     }
@@ -894,6 +901,8 @@ export async function openProjectFromPath(path) {
     await hideProgress();
     toast(`プロジェクトを開けませんでした: ${e?.message ?? e}`, { kind: "error", duration: 6000 });
   } finally {
+    projectLoadInProgress = false;
+    endLoadOperation(loadOperationToken);
     clearProgressFlow(progressFlowId);
   }
 }

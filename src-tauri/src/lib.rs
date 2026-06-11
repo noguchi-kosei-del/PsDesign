@@ -15,11 +15,13 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::webview::PageLoadEvent;
 use tauri::{Emitter, Manager};
+use tauri_plugin_dialog::DialogExt;
 
 #[cfg(windows)]
 fn hide_console_window(cmd: &mut Command) {
@@ -31,6 +33,29 @@ fn hide_console_window(cmd: &mut Command) {
 
 #[cfg(not(windows))]
 fn hide_console_window(_cmd: &mut Command) {}
+
+#[derive(Debug, Deserialize)]
+struct NativeDialogFilter {
+    name: String,
+    #[serde(default)]
+    extensions: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct NativeFileDialogOptions {
+    #[serde(default)]
+    mode: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    multiple: Option<bool>,
+    #[serde(default)]
+    filters: Vec<NativeDialogFilter>,
+    #[serde(rename = "defaultPath", default)]
+    default_path: Option<String>,
+    #[serde(rename = "defaultName", default)]
+    default_name: Option<String>,
+}
 
 // 【v1.26.0】ルビ 1 件分のエントリ。state.js の charRubies スキーマと対応。
 // 【v1.29.x UI-coord】offset_x / offset_y: ビューアー上のルビ wrap の実描画位置を
@@ -395,6 +420,25 @@ async fn read_binary_file(
 }
 
 #[tauri::command]
+async fn is_unsupported_bitmap_psd(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+) -> Result<bool, String> {
+    let real = ensure_allowed(&allowed, &path)?;
+    let mut file = File::open(&real).map_err(|e| format!("{}: {}", path, e))?;
+    let mut header = [0u8; 26];
+    let read = file
+        .read(&mut header)
+        .map_err(|e| format!("{}: {}", path, e))?;
+    if read < header.len() || &header[0..4] != b"8BPS" {
+        return Ok(false);
+    }
+    let depth = u16::from_be_bytes([header[22], header[23]]);
+    let color_mode = u16::from_be_bytes([header[24], header[25]]);
+    Ok(color_mode == 0 || (color_mode == 1 && depth == 1))
+}
+
+#[tauri::command]
 async fn read_text_file(
     allowed: tauri::State<'_, AllowedPaths>,
     path: String,
@@ -476,6 +520,98 @@ fn resolve_shortcut_path(path: &Path) -> PathBuf {
         .unwrap_or_else(|| path.to_path_buf())
 }
 
+fn unique_sidecar_path(path: &Path, tag: &str) -> PathBuf {
+    let parent = path.parent().unwrap_or_else(|| Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("file");
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    for attempt in 0..1000 {
+        let candidate = parent.join(format!(
+            ".{}.{}.{}.{}",
+            file_name,
+            tag,
+            std::process::id(),
+            stamp + attempt
+        ));
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    parent.join(format!(
+        ".{}.{}.{}.fallback",
+        file_name,
+        tag,
+        std::process::id()
+    ))
+}
+
+fn write_file_safely(path: &Path, data: &[u8], kind: &str) -> Result<(), String> {
+    if path.is_dir() {
+        return Err(format!("{} write target is a folder ({})", kind, path.display()));
+    }
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("folder create failed ({}): {}", parent.display(), e))?;
+        }
+    }
+
+    let temp = unique_sidecar_path(path, "tmp");
+    let write_result = (|| -> Result<(), String> {
+        let mut file = File::create(&temp)
+            .map_err(|e| format!("{} temp create failed ({}): {}", kind, temp.display(), e))?;
+        file.write_all(data)
+            .map_err(|e| format!("{} temp write failed ({}): {}", kind, temp.display(), e))?;
+        file.sync_all()
+            .map_err(|e| format!("{} temp sync failed ({}): {}", kind, temp.display(), e))?;
+        Ok(())
+    })();
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&temp);
+        return Err(err);
+    }
+
+    if cfg!(windows) && path.exists() {
+        let backup = unique_sidecar_path(path, "bak");
+        fs::rename(path, &backup).map_err(|e| {
+            let _ = fs::remove_file(&temp);
+            format!(
+                "{} backup rename failed ({} -> {}): {}",
+                kind,
+                path.display(),
+                backup.display(),
+                e
+            )
+        })?;
+        match fs::rename(&temp, path) {
+            Ok(()) => {
+                let _ = fs::remove_file(&backup);
+                Ok(())
+            }
+            Err(e) => {
+                let _ = fs::rename(&backup, path);
+                let _ = fs::remove_file(&temp);
+                Err(format!(
+                    "{} replace failed ({}): {}",
+                    kind,
+                    path.display(),
+                    e
+                ))
+            }
+        }
+    } else {
+        fs::rename(&temp, path).map_err(|e| {
+            let _ = fs::remove_file(&temp);
+            format!("{} replace failed ({}): {}", kind, path.display(), e)
+        })
+    }
+}
+
 #[tauri::command]
 async fn write_text_file(
     allowed: tauri::State<'_, AllowedPaths>,
@@ -483,14 +619,7 @@ async fn write_text_file(
     content: String,
 ) -> Result<(), String> {
     let path_buf = ensure_allowed_for_write(&allowed, &path)?;
-    if let Some(parent) = path_buf.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("folder create failed ({}): {}", parent.display(), e))?;
-        }
-    }
-    fs::write(&path_buf, content)
-        .map_err(|e| format!("text write failed ({}): {}", path_buf.display(), e))
+    write_file_safely(&path_buf, content.as_bytes(), "text")
 }
 
 // 任意のバイナリデータをディスクへ書き出す。写植再利用モードで、見本（元テキスト入りの
@@ -503,14 +632,7 @@ async fn write_binary_file(
     data: Vec<u8>,
 ) -> Result<(), String> {
     let path_buf = ensure_allowed_for_write(&allowed, &path)?;
-    if let Some(parent) = path_buf.parent() {
-        if !parent.as_os_str().is_empty() {
-            fs::create_dir_all(parent)
-                .map_err(|e| format!("folder create failed ({}): {}", parent.display(), e))?;
-        }
-    }
-    fs::write(&path_buf, &data)
-        .map_err(|e| format!("binary write failed ({}): {}", path_buf.display(), e))
+    write_file_safely(&path_buf, &data, "binary")
 }
 
 #[tauri::command]
@@ -690,8 +812,7 @@ async fn save_editor_text_to_script_output(
     let name = sanitize_txt_filename(default_name.as_deref().unwrap_or("untitled.txt"));
     let path = dir.join(name);
     let content = ensure_blank_line_after_page_markers(&content);
-    fs::write(&path, content)
-        .map_err(|e| format!("text save failed ({}): {}", path.display(), e))?;
+    write_file_safely(&path, content.as_bytes(), "text save")?;
     Ok(path.to_string_lossy().to_string())
 }
 
@@ -1400,6 +1521,95 @@ async fn desktop_dir() -> Result<String, String> {
     }
 }
 
+fn dialog_file_path_to_string(path: tauri_plugin_dialog::FilePath) -> Result<String, String> {
+    path.into_path()
+        .map(|p| p.to_string_lossy().to_string())
+        .map_err(|e| e.to_string())
+}
+
+fn register_native_dialog_path(allowed: &AllowedPaths, mode: &str, path: &str) {
+    match mode {
+        "save" => {
+            if let Some(parent) = Path::new(path).parent() {
+                let _ = allowed.register_path(parent);
+            }
+        }
+        "openFolder" => {
+            let _ = allowed.register_real(path);
+        }
+        _ => {
+            let p = Path::new(path);
+            let _ = allowed.register_path(p);
+            if let Some(parent) = p.parent() {
+                let _ = allowed.register_path(parent);
+            }
+        }
+    }
+}
+
+#[tauri::command]
+async fn native_file_dialog(
+    app: tauri::AppHandle,
+    allowed: tauri::State<'_, AllowedPaths>,
+    options: NativeFileDialogOptions,
+) -> Result<Option<Vec<String>>, String> {
+    let NativeFileDialogOptions {
+        mode,
+        title,
+        multiple,
+        filters,
+        default_path,
+        default_name,
+    } = options;
+    let mode = mode.unwrap_or_else(|| "open".to_string());
+    let multiple = multiple.unwrap_or(false);
+    let mut dialog = app.dialog().file();
+
+    if let Some(title) = title.as_deref().filter(|s| !s.trim().is_empty()) {
+        dialog = dialog.set_title(title);
+    }
+    if let Some(default_path) = default_path.as_deref().filter(|s| !s.trim().is_empty()) {
+        let path = PathBuf::from(default_path);
+        let dir = if path.is_file() {
+            path.parent().map(Path::to_path_buf)
+        } else {
+            Some(path)
+        };
+        if let Some(dir) = dir {
+            dialog = dialog.set_directory(dir);
+        }
+    }
+    if let Some(default_name) = default_name.as_deref().filter(|s| !s.trim().is_empty()) {
+        dialog = dialog.set_file_name(default_name);
+    }
+    for filter in filters {
+        if filter.extensions.is_empty() {
+            continue;
+        }
+        let exts: Vec<&str> = filter.extensions.iter().map(String::as_str).collect();
+        dialog = dialog.add_filter(filter.name, &exts);
+    }
+
+    let picked = match mode.as_str() {
+        "save" => dialog.blocking_save_file().map(|path| vec![path]),
+        "openFolder" => dialog.blocking_pick_folder().map(|path| vec![path]),
+        _ if multiple => dialog.blocking_pick_files(),
+        _ => dialog.blocking_pick_file().map(|path| vec![path]),
+    };
+
+    let Some(paths) = picked else {
+        return Ok(None);
+    };
+
+    let mut out = Vec::with_capacity(paths.len());
+    for path in paths {
+        let path_string = dialog_file_path_to_string(path)?;
+        register_native_dialog_path(&allowed, &mode, &path_string);
+        out.push(path_string);
+    }
+    Ok(Some(out))
+}
+
 // Photoshop のスクラッチディスク容量を取得する。
 // Photoshop は起動時にスクラッチディスク (デフォルト = システムドライブ、通常 C:)
 // の空き容量が一定値を下回るとモーダル警告を出して停止する。OPUS 側で事前に
@@ -1927,6 +2137,7 @@ pub fn run() {
             read_psd_text_layers_batch,
             list_fonts,
             read_binary_file,
+            is_unsupported_bitmap_psd,
             read_text_file,
             write_text_file,
             write_binary_file,
@@ -1947,6 +2158,7 @@ pub fn run() {
             path_access::browse_path_info,
             path_access::confirm_file_picker_selection,
             path_access::confirm_file_picker_save_path,
+            native_file_dialog,
             open_folder_in_explorer,
             startup_args,
             path_info,

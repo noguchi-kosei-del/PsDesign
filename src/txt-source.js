@@ -46,6 +46,7 @@ import {
   getStyleOverrideRangesForTxtRef,
 } from "./text-style-markers.js";
 import { getDefault } from "./settings.js";
+import { openContainingFolder } from "./services/open-path.js";
 import { baseName } from "./utils/path.js";
 
 const $ = (id) => document.getElementById(id);
@@ -1695,6 +1696,18 @@ async function handleSaveBtn() {
     message: `${displayName}\n${scriptOutputPath}`,
     okLabel: "閉じる",
     kind: "success",
+    secondaryAction: {
+      label: "保存先フォルダを開く",
+      kind: "primary",
+      onClick: async () => {
+        try {
+          await openContainingFolder(scriptOutputPath);
+        } catch (e) {
+          console.error(e);
+          toast(`保存先フォルダを開けませんでした: ${e?.message ?? e}`, { kind: "error" });
+        }
+      },
+    },
     primaryAction: {
       label: "ProGenを開く",
       kind: "place",

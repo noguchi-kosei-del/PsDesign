@@ -1,5 +1,64 @@
 # PsDesign
 
+## 2026-06-11 変更メモ: v2.5.0 リリース（見本ビューアー独立化 / ファイル選択切替 / 保存・読み込み堅牢化）
+
+v2.5.0 では、見本ビューアーと PSD/PDF ページの同期制御、ファイル選択画面の OPUS/Windows 標準切替、保存・読み込みまわりの致命的リスク対策、トラックパッド操作、ガイド付き PSD の塗り足し表示補正をまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.0` に更新済み。
+
+### A. 見本ビューアーのページ独立化と同期トグル
+
+- [index.html](index.html) の `left-viewer-stage-label-bar` からページ移動ボタンを撤去し、同期/非同期を切り替えるトグルスイッチを配置。
+- [src/main.js](src/main.js) で見本ビューアーと PSD ページの同期状態を `localStorage` に保持し、同期 ON のときは PSD と見本を相互同期、非同期では見本だけ単体でページ送りできるようにした。
+- 見本ビューアー中はサイドツールバーのページ表示・ジャンプ対象を見本ページ優先にし、PSD/PDF とは独立したページ操作ができる。
+- [src/left-viewer.js](src/left-viewer.js) で PDF 見本を遅延レンダリング化し、大きい見本 PDF の読み込みで固まりにくくした。
+
+### B. 保存ダイアログと保存先を開く導線
+
+- テキストメモ保存完了ダイアログに、保存したテキストデータの保存先フォルダを開くボタンを追加。
+- [src/services/open-path.js](src/services/open-path.js) を追加し、Windows Explorer でフォルダを開く処理を共通化。
+- [src/bind/editor-pane.js](src/bind/editor-pane.js) / [src/txt-source.js](src/txt-source.js) など、保存後の表示経路で保存先フォルダを開けるようにした。
+
+### C. ズーム入力と中心点表示状態の保持
+
+- `#zoom-level-btn` をボタンから入力欄へ変更し、PSD/PDF の表示倍率を数値で直接入力できるようにした。
+- [src/main.js](src/main.js) でアクティブペインに応じて `PSD 100%` / `PDF 100%` 相当の倍率を入力・反映する処理を追加。
+- テキスト中心点表示モードの ON/OFF 状態を保持し、ページ切替や再描画で毎回リセットされないようにした。
+
+### D. ファイル選択画面を OPUS / Windows 標準で切替
+
+- 環境設定に「エクスプローラー」タブを追加し、ファイル選択画面を `OPUSオリジナル` / `Windows標準` から選べるようにした。
+- [src/settings.js](src/settings.js) の設定 version を `20` に上げ、`fileDialogMode` を永続化。
+- [src/file-picker.js](src/file-picker.js) で既存 `openFileDialog` API を維持したまま、設定が Windows 標準の場合だけ native dialog へ分岐。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) に `native_file_dialog` コマンドを追加し、native dialog で選択したパスも既存の `AllowedPaths` に登録して `forbidden path` を避けるようにした。
+
+### E. 保存・読み込みの致命的リスク対策
+
+- 保存ボタンの多重押下を抑止し、Photoshop 保存処理が同じ PSD に並列で走らないようにした。
+- 未保存編集がある状態で PSD を開き直す場合は確認ダイアログを出し、意図しない編集破棄を防ぐようにした。
+- NaN / Infinity が Photoshop JSX payload に流れないよう、数値フィールドの sanitize と不正新規レイヤー除外を追加。
+- JSX 側の PSD 保存処理を per-PSD try/catch 化し、1 ファイル失敗しても残りの PSD 保存を継続し、成功数と警告を返すようにした。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) のテキスト/バイナリ書き込みを一時ファイル経由の安全な置換に変更し、保存途中失敗による破損リスクを下げた。
+- モノクロ2階調 PSD を事前検出して読み込み対象から外し、ユーザーへ変換を促す警告を出すようにした。
+
+### F. ページ送り・トラックパッド・レンダリング負荷
+
+- PDF レンダリング中に次ページへ移った場合、古い render task をキャンセルして連打時の CPU 飽和を防ぐようにした。
+- PSD ページ変更時の重い再描画を `requestAnimationFrame` で coalesce し、キーリピートはページ送りショートカットだけ 80ms throttle するようにした。
+- 通常の wheel / トラックパッド二本指ドラッグはページ送りではなく、Photoshop と同じように表示領域の上下スクロールへ変更。`Alt+wheel` のズームとレイヤー上 wheel の文字サイズ変更は維持。
+
+### G. ガイド付き PSD の塗り足し表示補正
+
+- [src/services/psd-load.js](src/services/psd-load.js) で、全ページに完全なガイド枠がある PSD の場合はページ固有のガイドを保持するようにした。
+- ガイドが不足しているページだけ、最初に見つけた完全な塗り足し枠で補完する。これによりページごとのガイド位置が違う PSD でも、外側ディム（塗り足し表示）が潰れない。
+
+### 検証
+
+- `npm run lint` 成功。
+- `npm run check:encoding` 成功。
+- `npm run check:security` 成功。
+- `npm run build` 成功。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。
+- リリースはタグ `v2.5.0` push により `.github/workflows/release.yml` が Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-11 変更メモ: v2.4.9 リリース（中心点表示 / 中点ルビ補正 / 大容量見本PDFの軽量化読み込み）
 
 v2.4.9 では、選択中心点表示の見た目改善、テキスト原稿から自動配置した中点ルビのサイズ・位置補正、100MB 以上の見本PDFを読み込むための軽量化フローをまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.4.9` に更新済み。

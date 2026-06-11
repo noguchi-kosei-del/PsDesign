@@ -4725,24 +4725,49 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         var outFolder = outFile.parent;
         if (outFolder && !outFolder.exists) outFolder.create();
       } catch (eMk) {}
-      // 既存ファイルがあれば事前に削除して saveAs の確実な上書きを保証する。
-      // asCopy=true の saveAs は本来上書きするが、ファイルロックや権限エラーで
-      // silent に失敗するケースがある（その場合 catch も走らずに古いファイルが残る）。
-      // 事前削除で「ファイルが存在しない状態で saveAs」する安全パスに揃える。
-      try {
-        if (outFile.exists) outFile.remove();
-      } catch (eRm) {
-        addWarning("既存ファイル削除失敗: " + outFile.fsName + " (" + eRm + ")");
-      }
       var opts = new PhotoshopSaveOptions();
       try { opts.embedColorProfile = true; } catch (eOpt1) {}
       try { opts.alphaChannels = true; } catch (eOpt2) {}
       try { opts.layers = true; } catch (eOpt3) {}
       try { opts.spotColors = true; } catch (eOpt4) {}
+      var __stamp = (new Date()).getTime();
+      var tmpFile = new File(outFile.fsName + ".psdesign-tmp-" + __stamp);
+      var bakFile = new File(outFile.fsName + ".psdesign-bak-" + __stamp);
+      var hadExisting = outFile.exists;
+      var movedExisting = false;
       try {
-        doc.saveAs(outFile, opts, true, Extension.LOWERCASE);
+        doc.saveAs(tmpFile, opts, true, Extension.LOWERCASE);
       } catch (eSaveAs) {
-        doc.saveAs(outFile, opts, true);
+        try {
+          doc.saveAs(tmpFile, opts, true);
+        } catch (eSaveAs2) {
+          try { if (tmpFile.exists) tmpFile.remove(); } catch (eTmpSaveRemove) {}
+          throw eSaveAs2;
+        }
+      }
+      if (!tmpFile.exists) throw new Error("saveAs did not create file: " + tmpFile.fsName);
+      try {
+        if (hadExisting) {
+          if (bakFile.exists) bakFile.remove();
+          movedExisting = outFile.rename(bakFile.name);
+          if (!movedExisting) throw new Error("backup rename failed: " + outFile.fsName);
+        }
+        if (!tmpFile.rename(outFile.name)) {
+          throw new Error("replace rename failed: " + tmpFile.fsName + " -> " + outFile.fsName);
+        }
+        if (movedExisting && bakFile.exists) {
+          try { bakFile.remove(); } catch (eBakRemove) {
+            addWarning("save backup cleanup failed: " + bakFile.fsName + " (" + eBakRemove + ")");
+          }
+        }
+      } catch (eReplace) {
+        try {
+          if (movedExisting && !outFile.exists && bakFile.exists) bakFile.rename(outFile.name);
+        } catch (eRestore) {
+          addWarning("save backup restore failed: " + bakFile.fsName + " (" + eRestore + ")");
+        }
+        try { if (tmpFile.exists) tmpFile.remove(); } catch (eTmpRemove) {}
+        throw eReplace;
       }
     } else {
       doc.save();

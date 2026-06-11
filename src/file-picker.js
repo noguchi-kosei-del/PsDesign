@@ -16,6 +16,7 @@
 // 起点パスは defaultPath → localStorage(rememberKey) → home_dir() の優先順で解決。
 
 import { baseName, parentDir } from "./utils/path.js";
+import { getFileDialogMode } from "./settings.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -32,6 +33,7 @@ let selectedPaths = new Set();
 let lastClickIndex = -1;
 let drives = [];
 let isBusy = false;
+let nativeDialogInflight = false;
 // 【セキュリティ Phase 2】Rust 側 picker セッション ID（open_picker で発行）。
 // browse_* / confirm_* はこの ID を必須とする。renderer は実パス文字列を登録に使わず、
 // browse で得た token を confirm に渡して Rust 側に実パスを解決・登録させる。
@@ -107,6 +109,54 @@ async function getInitialPath(opts) {
 async function getInvoke() {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke;
+}
+
+async function openNativeFileDialog(opts) {
+  if (nativeDialogInflight) return null;
+  nativeDialogInflight = true;
+  try {
+    const invoke = await getInvoke();
+    const initialPath = await getInitialPath(opts);
+    const raw = await invoke("native_file_dialog", {
+      options: {
+        mode: opts.mode,
+        title: opts.title,
+        multiple: !!opts.multiple,
+        filters: opts.filters ?? [],
+        defaultPath: initialPath,
+        defaultName: opts.defaultName ?? "",
+      },
+    });
+    const arr = Array.isArray(raw) ? raw.filter((p) => typeof p === "string" && p.length > 0) : [];
+    if (arr.length === 0) return null;
+
+    if (opts.mode === "save") {
+      let result = arr[0];
+      const name = baseName(result);
+      const ensuredName = ensureExtension(name, opts.filters);
+      if (ensuredName !== name) {
+        const parent = parentDir(result);
+        result = parent ? joinPathForSave(parent, ensuredName) : ensuredName;
+      }
+      const parent = parentDir(result);
+      if (parent) writeLastPath(opts.rememberKey, parent);
+      return result;
+    }
+
+    if (opts.mode === "openFolder") {
+      writeLastPath(opts.rememberKey, arr[0]);
+      return arr[0];
+    }
+
+    const parent = parentDir(arr[0]);
+    if (parent) writeLastPath(opts.rememberKey, parent);
+    return opts.multiple ? arr : arr[0];
+  } catch (e) {
+    console.error("[file-picker] native dialog failed:", e);
+    return null;
+  } finally {
+    nativeDialogInflight = false;
+  }
 }
 
 // Rust 側 picker セッションを開く（二重起動は Rust 側で picker already open 拒否）。
@@ -854,23 +904,10 @@ function bindUiOnce() {
 }
 
 export async function openFileDialog(opts) {
-  const modal = $("file-picker-modal");
-  if (!modal) {
-    console.error("[file-picker] #file-picker-modal not found");
-    return null;
-  }
   if (resolveCurrent) {
     // 既に開いている場合は無視（重複呼び出し防止）
     return null;
   }
-
-  // Promise を関数の頭で先に作って resolveCurrent を即時セットしておく。
-  // これより後の rAF / await が「open 中かどうか」を resolveCurrent で
-  // 判定できるようにする（後段で先に await が入ると rAF が先に発火して
-  // resolveCurrent が null のまま .visible が付かない問題があった）。
-  const promise = new Promise((resolve) => {
-    resolveCurrent = resolve;
-  });
 
   // デフォルト値の整備
   const mode = opts?.mode ?? "open";
@@ -884,6 +921,24 @@ export async function openFileDialog(opts) {
     defaultName: opts?.defaultName ?? "",
   };
   merged.__extRegex = mode === "openFolder" ? null : buildExtRegex(merged.filters);
+
+  if (getFileDialogMode() === "native") {
+    return openNativeFileDialog(merged);
+  }
+
+  const modal = $("file-picker-modal");
+  if (!modal) {
+    console.error("[file-picker] #file-picker-modal not found");
+    return null;
+  }
+
+  // Promise を関数の頭で先に作って resolveCurrent を即時セットしておく。
+  // これより後の rAF / await が「open 中かどうか」を resolveCurrent で
+  // 判定できるようにする（後段で先に await が入ると rAF が先に発火して
+  // resolveCurrent が null のまま .visible が付かない問題があった）。
+  const promise = new Promise((resolve) => {
+    resolveCurrent = resolve;
+  });
   currentOpts = merged;
 
   bindUiOnce();
