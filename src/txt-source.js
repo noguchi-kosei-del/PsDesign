@@ -69,13 +69,13 @@ function writeExtractSourcePanelVisible(value) {
   } catch {}
 }
 
+// extractSourcePanelVisible は「テキストエディタ（照合付）」モードのフラグ。
+// editor モードかつ照合付フラグ ON かつ画像スキャン結果があるときだけ照合パネルを表示する。
 function syncExtractSourcePanelVisibility() {
   const panel = $("extract-source-panel");
   const stage = $("spreads-stage");
-  const toggle = $("editor-extract-source-toggle");
   const source = getScanExtractTextSource();
   const show = getParallelViewMode() === "editor" && extractSourcePanelVisible && !!source?.content;
-  if (toggle) toggle.checked = extractSourcePanelVisible;
   if (panel) panel.hidden = !show;
   if (stage) stage.classList.toggle("extract-source-visible", show);
 }
@@ -84,26 +84,30 @@ function setupEditorExtractSourcePanel() {
   const panel = $("extract-source-panel");
   const stage = $("spreads-stage");
   const editorArea = $("spreads-editor-area");
-  const toolbar = document.querySelector(".editor-toolbar-row2");
+  // 照合パネルを spreads-editor-area の隣（spreads-stage 直下）へ移動して側面パネル化する。
   if (panel && stage && editorArea && panel.parentElement !== stage) {
     panel.classList.add("editor-extract-source-panel");
     editorArea.insertAdjacentElement("afterend", panel);
   }
-  if (toolbar && !$("editor-extract-source-toggle")) {
-    const label = document.createElement("label");
-    label.className = "editor-extract-toggle";
-    label.title = "画像スキャンソースパネルを表示";
-    label.innerHTML = '<input id="editor-extract-source-toggle" type="checkbox" /><span>画像スキャン</span>';
-    const pageNav = toolbar.querySelector(".editor-page-nav");
-    toolbar.insertBefore(label, pageNav || null);
-    label.querySelector("input")?.addEventListener("change", (e) => {
-      extractSourcePanelVisible = !!e.currentTarget.checked;
-      writeExtractSourcePanelVisible(extractSourcePanelVisible);
-      renderExtractSourceViewer();
-    });
-  }
   extractSourcePanelVisible = readExtractSourcePanelVisible();
   syncExtractSourcePanelVisibility();
+}
+
+// 「テキストエディタ（照合付）」モードの ON/OFF。View メニューの 2 つのテキストエディタ項目
+// から設定する（旧: エディタツールバーの画像スキャンチェックボックス）。
+const editorMatchModeListeners = new Set();
+export function getEditorMatchMode() { return extractSourcePanelVisible; }
+export function setEditorMatchMode(value) {
+  const v = !!value;
+  if (extractSourcePanelVisible === v) return;
+  extractSourcePanelVisible = v;
+  writeExtractSourcePanelVisible(v);
+  syncExtractSourcePanelVisibility();
+  for (const fn of editorMatchModeListeners) fn(v);
+}
+export function onEditorMatchModeChange(fn) {
+  editorMatchModeListeners.add(fn);
+  return () => editorMatchModeListeners.delete(fn);
 }
 
 function decodeBytes(bytes) {

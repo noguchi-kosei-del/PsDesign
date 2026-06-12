@@ -4102,7 +4102,7 @@ body.home-starting .home-screen {
   border: 1px solid transparent;
   white-space: pre;
   word-break: break-word;
-  cursor: text;
+  cursor: default;
   color: var(--text);
   outline: none;
   transition: border-color 0.1s ease, background-color 0.1s ease, box-shadow 0.1s ease, color 0.22s ease;
@@ -4120,14 +4120,18 @@ body.home-starting .home-screen {
   background: var(--border);
   pointer-events: none;
 }
-/* テキスト本体。contentEditable=true、focus/hover/outline はこの要素で受ける。 */
+/* テキスト本体。既定は編集不可（クリック=選択）。ダブルクリックで contentEditable=true。 */
 .editor-page-paragraph-text {
   white-space: pre-wrap;
-  cursor: text;
+  cursor: default;
   line-height: inherit;
   font-size: inherit;
   color: var(--text);
   outline: none;
+}
+/* 編集モード（ダブルクリックで contentEditable=true）のときだけ I ビームカーソル。 */
+.editor-page-paragraph-text[contenteditable="true"] {
+  cursor: text;
 }
 /* 奇数番目の段落にうっすら背景色を付けてストライプ表示にする。
    :hover / focus 中の :has() は同 specificity (0,2,0) で後勝ち、上書きされる。 */
@@ -4142,7 +4146,9 @@ body.home-starting .home-screen {
   background: var(--bg);
   border-color: var(--accent);
 }
-.editor-page-paragraph:focus {
+/* 段落の選択状態（クリックで選択 / Shift+↑↓ で移動）と、tabIndex フォーカスの強調。 */
+.editor-page-paragraph:focus,
+.editor-page-paragraph.selected {
   border-color: var(--accent);
   border-radius: 4px;
   background: var(--bg);
@@ -4927,6 +4933,40 @@ body.editor-paragraph-reordering * {
 .page-overlay.selection-center-only .layer-box.multi-selected:not(.editing) > .stroke-preview-underlay,
 .page-overlay.selection-center-only .layer-box.selected:not(.editing) > .layer-size-badge,
 .page-overlay.selection-center-only .layer-box.multi-selected:not(.editing) > .layer-size-badge {
+  visibility: hidden;
+}
+/* 方眼表示モード（Shift+D / MojiQ セリフ見本風）
+   選択中レイヤーの box を 1 文字 = 1 マスの方眼セル DOM（.layer-grid-cells > .grid-cell）で表示し、
+   グリフは隠す。セル間の gap がそのまま罫線になる確実な方式（background グラデーションは
+   WebView2 で background-size の % が安定せず線が出ないため不採用）。 */
+.page-overlay.selection-grid-display .layer-box.selected:not(.editing),
+.page-overlay.selection-grid-display .layer-box.multi-selected:not(.editing) {
+  outline: 1.5px solid rgba(30, 30, 30, 0.92);
+  outline-offset: 0;
+  box-shadow: none;
+}
+.layer-grid-cells {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  gap: 1px;
+  background: rgba(30, 30, 30, 0.92);
+  pointer-events: none;
+  z-index: 4;
+}
+.layer-grid-cells > .grid-cell {
+  background: rgba(255, 255, 255, 0.94);
+  min-width: 0;
+  min-height: 0;
+}
+.page-overlay.selection-grid-display .layer-box.selected:not(.editing) > .new-layer-text,
+.page-overlay.selection-grid-display .layer-box.selected:not(.editing) > .existing-layer-text,
+.page-overlay.selection-grid-display .layer-box.multi-selected:not(.editing) > .new-layer-text,
+.page-overlay.selection-grid-display .layer-box.multi-selected:not(.editing) > .existing-layer-text,
+.page-overlay.selection-grid-display .layer-box.selected:not(.editing) > .stroke-preview-underlay,
+.page-overlay.selection-grid-display .layer-box.multi-selected:not(.editing) > .stroke-preview-underlay,
+.page-overlay.selection-grid-display .layer-box.selected:not(.editing) > .layer-size-badge,
+.page-overlay.selection-grid-display .layer-box.multi-selected:not(.editing) > .layer-size-badge {
   visibility: hidden;
 }
 .page-overlay.selection-adornments-hidden .layer-box.selected,

@@ -50,3 +50,21 @@ export function nextPageIndexForTurn(source, current, total, delta) {
   if (next < 0 || next >= count) return currentIndex;
   return next;
 }
+
+// マウスホイールとトラックパッド二本指スクロールを判別する。
+// マウスホイール = ページ移動 / トラックパッド = 表示スクロール、へ振り分けるために使う。
+// 完全な判別は不可能なので「明確にホイールと言える信号」だけ true を返し、それ以外
+// （小さい / 端数 / 横成分ありの連続デルタ）はトラックパッド扱い（= 現状維持のスクロール）にする。
+export function isMouseWheelEvent(e) {
+  // 行 / ページ単位のデルタはマウスホイール（Chromium ではまれだが念のため）。
+  if (e.deltaMode !== 0) return true;
+  // 横方向の成分があれば二本指トラックパッドのスクロール。
+  if (Math.abs(e.deltaX) > 0) return false;
+  const ay = Math.abs(e.deltaY);
+  if (ay === 0) return false;
+  // マウスホイール 1 ノッチは wheelDeltaY が 120 の倍数（Chromium / WebView2）。
+  const wdy = Math.abs(Number(e.wheelDeltaY) || 0);
+  if (wdy > 0 && wdy % 120 === 0) return true;
+  // フォールバック: 横成分なし・大きめ(>=100)・整数の純縦デルタはホイール扱い。
+  return ay >= 100 && Number.isInteger(e.deltaY);
+}

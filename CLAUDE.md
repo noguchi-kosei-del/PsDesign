@@ -1,5 +1,62 @@
 # PsDesign
 
+## 2026-06-12 変更メモ: v2.5.1 リリース（方眼表示 / undo・ルビ修正 / ホイール送り / ガイド引き継ぎ / 段落並べ替え / 照合付エディタ）
+
+v2.5.1 では、v2.5.0 後に入った複数の不具合修正と機能追加をまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.1` に更新済み。Rust 変更はなく、本リリースは JS / CSS / HTML のみ。
+
+### A. 方眼表示モード（Shift+D）
+
+- [src/canvas-tools.js](src/canvas-tools.js): 選択中テキストを MojiQ のセリフ見本のように「文字セルの方眼（グリッド）」で表示し、グリフ自体は隠すモードを追加。中心点表示モード（Ctrl+D）と同型（state + localStorage `psdesign_selection_grid_mode` + `.page-overlay.selection-grid-display` クラス）。既定 OFF。
+- `buildGridCells(box, text, isVertical)` で選択レイヤー box を「最長行の文字数 × 行数」（縦書きは転置）のマス目に分割し、実セル DOM（`.layer-grid-cells > .grid-cell`）を gap で区切って描画する（WebView2 で background グラデーション方式が不安定なため実 DOM 方式）。4000 セル超は DOM 爆発防止で描画スキップ。
+- `toggleSelectionGridDisplayMode()` を新設し `Shift+D` で ON/OFF（[src/main.js](src/main.js) のキーハンドラ）。中心点表示（Ctrl+D）とは相互排他。[src/settings.js](src/settings.js) の固定ショートカット一覧に `Shift+D: 選択中テキストの方眼表示を切替` を追加。[src/styles.css](src/styles.css) に `.layer-grid-cells` / `.grid-cell` のグリッド表示スタイルを追加。
+
+### B. Ctrl+Z / Ctrl+Shift+Z（undo/redo）の断続的失敗を修正
+
+- 原因: [src/main.js](src/main.js) のキーボード undo/redo（671 行付近）だけが他の全ショートカットにある `!isTextInput` ガードを欠いていた。in-place 編集中（`.layer-box.editing` contenteditable にフォーカス）に Ctrl+Z すると `undo()` → `restoreSnapshot()` → `refreshAllOverlays`/`rebuildLayerList` が編集中 DOM を破棄し、編集セッションの `__finalize` が呼ばれず `historyTransientDepth` が 1 のまま詰まる → 以降 `pushHistorySnapshot()` が無言で空振りし undo/redo が記録されなくなる（PSD 再読込で `resetHistoryBaseline` が depth を 0 に戻すため「たまに直る」断続症状）。
+- 修正: キーボードの `z`/`y`/`shift+z` に `!isTextInput` を追加（入力欄ではブラウザ標準の取り消しに委譲）。`bindHistoryButtons` のツールバー undo/redo ボタンも実行前に `document.querySelector(".layer-box.editing")?.__finalize?.(true)` で進行中の in-place 編集を確定し、マウス操作でも transient が詰まらないようにした。
+
+### C. ルビパネルが選択解除後も残る問題を修正
+
+- 原因: 浮動ルビパネルは `onInplaceSelectionChange` でしか再評価されず、それは `setLastInplaceSelection` からしか発火しない。[src/canvas-tools.js](src/canvas-tools.js) `reportCursor` は v2.2.x 以降 collapse 時に `setLastInplaceSelection(null)` を呼ばない（cache 保持仕様）ため、エディタ内で選択を畳んでもイベントが出ずパネルが残った。
+- 修正: [src/main.js](src/main.js) のルビパネル binding に rAF スロットル付き `document` `selectionchange` リスナーを追加。`.layer-box.editing` 自身にフォーカスがある状態で live selection が collapse したときだけ `clearInplaceSelection()` し、既存の hide 経路を回す。focus がサイドバー/ルビ入力に移った場合（editor が activeElement を含まない）と親文字指定モードは対象外にし、v2.2.x の選択適用挙動を保持。
+
+### D. ルビが親文字のフォントを継がず F910 になる問題を修正
+
+- 原因: ルビ（ふりがな）フォント解決が「per-char → 記号フォント → 環境設定の既定フォント(F910)」の順で、最後に F910 を明示適用していた。一方、親文字本体は per-char フォントが無ければ font-family 未設定でレイヤーフォントを CSS 継承する。このためフレーム単位でフォントを設定（文字未選択でレイヤー全体変更）するとルビだけ F910 に落ちていた。
+- 修正: [src/canvas-tools.js](src/canvas-tools.js) `effectiveRubyFontForChar` の最終フォールバックを F910 → `null`（rt に font-family を設定せず親レイヤーフォントを継承）に、in-place 編集プレビューの `applyDefaultRubyFont` も no-op（継承）に変更。[src/state.js](src/state.js) `exportEdits` の `rubyFontPostScriptName` を空文字にし、jsx_gen 側の既存フォールバック（未指定なら親レイヤーフォント `__fontR`/`__fontRN`）で保存後も親フォントを継ぐようにした（Rust 変更なし）。記号フォント置換は維持。
+
+### E. マウスホイール = ページ移動 / トラックパッド二本指 = 表示スクロール
+
+- v2.5.0 で wheel もトラックパッドも表示スクロールに統一していたのを、マウスホイールだけページ移動へ戻した。[src/page-navigation.js](src/page-navigation.js) に `isMouseWheelEvent(e)` を新設（`deltaMode` / `deltaX` / `wheelDeltaY % 120` 等で判別。判別不能なら安全側＝トラックパッド扱い）。
+- [src/main.js](src/main.js) `bindWheelPageNav`（PSD/PDF ペイン）と [src/left-viewer.js](src/left-viewer.js)（見本ビューアー）で、マウスホイール → `advancePage` / 見本ページ送り、トラックパッド → 従来のスクロールに振り分け。80ms スロットル。`Alt+wheel` ズーム・レイヤー上 wheel の文字サイズ変更は維持。
+- 見本ビューアー（imageViewer）+ 見本非同期（`leftViewerPageSyncEnabled === false`）で PSD 側をホイールしたときは、`advancePage` が常に見本ページを動かす短絡を避け、PSD ページを直接送るようにした（PSD 側クリックでアクティブ化 → PSD を独立送り）。同期トグルが `parallelSyncMode` と別物だった点が当初の修正漏れ。
+
+### F. 見本ビューアーにフォルダドロップ対応
+
+- [src/left-viewer.js](src/left-viewer.js): ドロップ/読み込みパスにフォルダが含まれる場合、`list_directory_entries` で 1 階層展開し、中の見本対応ファイル（JPG / PNG / PDF / PSD）をファイル名の自然順に並べて読み込む `expandViewerPaths` を追加。`loadLeftViewerExtraFromPaths` がこの展開を通す。実 D&D されたフォルダは Rust 側 AllowedPaths にその配下も登録されるため `forbidden path` にならない（Rust 変更なし）。
+
+### G. ガイド（塗り足し枠）をプロジェクトに引き継ぎ
+
+- [src/rulers.js](src/rulers.js) に `exportGuides()` を新設（全 PSD のガイドを `[{ psdPath, h, v }]` で書き出し）。
+- [src/services/project.js](src/services/project.js): プロジェクト保存スナップショットに `guides` / `guidesLocked` / `rulersVisible` を付与する `buildSnapshot()` を新設し、保存 2 経路で使用。`rewriteSnapshotPaths` でガイドの psdPath も編集と同じ pathMap でコピー先へ remap。`openProjectFromPath` の PSD ロード後に `restoreProjectGuides` で `setGuidesFromPsd` 流し込み＋ルーラー表示/ロック（＝塗り足しディム）を復元。手で引いたガイドも埋め込みガイド由来も保存・復元される。
+
+### H. テキストエディタ段落の クリック選択 / ダブルクリック編集 / Shift+矢印移動
+
+- [src/bind/editor-pane.js](src/bind/editor-pane.js): `editor-page-paragraph` を、シングルクリック=選択（`.selected` ＋ 段落 div を tabIndex=0 でフォーカス）、ダブルクリック=編集（`contentEditable=true` ＋クリック位置にキャレット）に変更。既定の段落テキストは `contentEditable=false`。
+- 選択中に `Shift+↑/↓` で段落を移動（同一ページ内の並べ替え）。既存の `moveTxtBlockByIndex`（本文の `<<NPage>>` 差し替え＋ `sourceTxtRef`/配置済みレイヤー追従、Undo 1 回で戻る）を再利用。`onViewerKeydown`（viewer の bubble フェーズ）で処理し `stopPropagation` するので main.js のレイヤー操作と競合しない。再描画をまたいで選択を復元。
+- [src/styles.css](src/styles.css): カーソルを `default`（編集中のみ `text`）に変更し、`.editor-page-paragraph.selected` のハイライトを追加。
+
+### I. View に「テキストエディタ（照合付）」を追加 / 画像スキャンチェックボックス削除
+
+- [index.html](index.html): 「テキストエディタ」の下に `view-editor-match-btn`（`data-view="editorMatch"`、既定 hidden）を追加。`spreads-editor-area` の隣に `extract-source-panel`（画像スキャン結果＝照合パネル）を常に表示するモード。
+- [src/txt-source.js](src/txt-source.js): エディタツールバーの `画像スキャン` チェックボックス（`editor-extract-source-toggle`）を撤去。`extractSourcePanelVisible` を「照合付」フラグに転用し、`getEditorMatchMode` / `setEditorMatchMode` / `onEditorMatchModeChange` を export。
+- [src/main.js](src/main.js): 2 つのテキストエディタ項目は内部的に同じ `editor` モードのまま照合フラグだけ出し分ける設計（editor モードの既存挙動・CSS は不変）。「照合付」は画像スキャン結果（`getScanExtractTextSource().content`）があるときだけメニューに表示し、データが無くなれば通常エディタへ戻す。
+
+### 検証
+
+- `npm run check`（`check:encoding` + `check:security` 21 項目 + `lint` + `build`）成功。
+- Rust 変更なし（diff は JS / CSS / HTML のみ）のため `cargo check` は不要。リリースはタグ `v2.5.1` push により `.github/workflows/release.yml` が Windows ビルド・署名・`latest.json` 生成・GitHub Release 作成を実行する。
+
 ## 2026-06-11 変更メモ: v2.5.0 リリース（見本ビューアー独立化 / ファイル選択切替 / 保存・読み込み堅牢化）
 
 v2.5.0 では、見本ビューアーと PSD/PDF ページの同期制御、ファイル選択画面の OPUS/Windows 標準切替、保存・読み込みまわりの致命的リスク対策、トラックパッド操作、ガイド付き PSD の塗り足し表示補正をまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.0` に更新済み。

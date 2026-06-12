@@ -15,6 +15,7 @@ import {
   restoreSelectedLayerBadges,
   setSelectedLayerBadgesUserHidden,
   toggleSelectionCenterOnlyMode,
+  toggleSelectionGridDisplayMode,
   toggleSelectionAdornmentsVisible,
   snapNextSize,
   clearInplaceSelection,
@@ -51,7 +52,7 @@ import {
   recenterLayerToCenter,
   unifySelectedTextSize,
 } from "./text-editor.js";
-import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getTxtPageCount, initTxtSource, isTxtBlockSelectionActive, loadTxtFromPath, pickTxtPath } from "./txt-source.js";
+import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getEditorMatchMode, getTxtPageCount, initTxtSource, isTxtBlockSelectionActive, loadTxtFromPath, onEditorMatchModeChange, pickTxtPath, setEditorMatchMode } from "./txt-source.js";
 import { bindScanInstallMenu, checkScanModelsStatus } from "./scan-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
 import { bindScanExtractButton, PLACE_ICON_SVG, runScanExtractForTranscription } from "./scan-extract.js";
@@ -188,6 +189,8 @@ import {
   onTextSizeChange,
   onToolChange,
   onTxtSourceChange,
+  getScanExtractTextSource,
+  onScanExtractTextSourceChange,
   setActivePane,
   setAppMode,
   setCurrentPageIndex,
@@ -235,7 +238,7 @@ import {
   getPdfVirtualPageAt,
   getPdfVirtualPageCount,
 } from "./pdf-pages.js";
-import { nextPageIndexForTurn } from "./page-navigation.js";
+import { nextPageIndexForTurn, isMouseWheelEvent } from "./page-navigation.js";
 
 let homeTypesetDropHandler = null;
 let homeTypesetDragOverHandler = null;
@@ -436,12 +439,22 @@ async function handleClearAllEdits() {
   rebuildLayerList();
 }
 
+// 進行中の in-place 編集を確定してから履歴操作を行う。マウスで undo/redo ボタンを
+// 押したときに編集セッションの transient が宙ぶらりんになり historyTransientDepth が
+// 詰まるのを防ぐ（box.__finalize は canvas-tools.js で box にセットされる）。
+function finalizeActiveInPlaceEdit() {
+  const box = document.querySelector(".layer-box.editing");
+  if (box && typeof box.__finalize === "function") {
+    try { box.__finalize(true); } catch (_) { /* noop */ }
+  }
+}
+
 function bindHistoryButtons() {
   const undoBtn = document.getElementById("undo-btn");
   const redoBtn = document.getElementById("redo-btn");
   const clearBtn = document.getElementById("clear-all-btn");
-  if (undoBtn) undoBtn.addEventListener("click", () => { if (undo()) syncAfterHistoryChange(); });
-  if (redoBtn) redoBtn.addEventListener("click", () => { if (redo()) syncAfterHistoryChange(); });
+  if (undoBtn) undoBtn.addEventListener("click", () => { finalizeActiveInPlaceEdit(); if (undo()) syncAfterHistoryChange(); });
+  if (redoBtn) redoBtn.addEventListener("click", () => { finalizeActiveInPlaceEdit(); if (redo()) syncAfterHistoryChange(); });
   if (clearBtn) clearBtn.addEventListener("click", () => { handleClearAllEdits(); });
   onHistoryChange(() => {
     updateHistoryButtons();
@@ -656,14 +669,29 @@ function bindTools() {
       }
     }
 
+    if (
+      !isTextInput && e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey &&
+      e.key.toLowerCase() === "d"
+    ) {
+      e.preventDefault();
+      e.stopPropagation();
+      const enabled = toggleSelectionGridDisplayMode();
+      toast(enabled ? "方眼表示をオンにしました" : "方眼表示をオフにしました");
+      return;
+    }
+
     if ((e.ctrlKey || e.metaKey) && !e.altKey) {
       const k = e.key.toLowerCase();
-      if (k === "z" && !e.shiftKey) {
+      // テキスト入力 / in-place 編集中はアプリ履歴の undo/redo を走らせない。
+      // ここで undo() を呼ぶと restoreSnapshot → refreshAllOverlays/rebuildLayerList が
+      // 編集中の .layer-box.editing を破棄し、historyTransientDepth が戻らず詰まる
+      // （= undo/redo が断続的に効かなくなる原因）。入力欄ではブラウザ標準の取り消しに委ねる。
+      if (!isTextInput && k === "z" && !e.shiftKey) {
         e.preventDefault();
         if (undo()) { /* UI updates via listener */ }
         return;
       }
-      if (k === "y" || (k === "z" && e.shiftKey)) {
+      if (!isTextInput && (k === "y" || (k === "z" && e.shiftKey))) {
         e.preventDefault();
         if (redo()) { /* UI updates via listener */ }
         return;
@@ -1178,6 +1206,27 @@ function bindWheelPageNav() {
     const stage = document.getElementById(pane === "pdf" ? "pdf-stage" : "psd-stage");
     if (!stage) return;
     e.preventDefault();
+    // マウスホイール → ページ移動。トラックパッド二本指 → 表示スクロール（現状維持）。
+    if (isMouseWheelEvent(e)) {
+      if (!getParallelSyncMode()) setActivePane(pane);
+      if (!canAdvancePageNow()) return;
+      const dir = e.deltaY > 0 ? +1 : -1;
+      // 見本ビューアー(imageViewer)モードでは、見本↔PSD の同期は leftViewerPageSyncEnabled
+      // （見本ビューアー側のトグル。サイドの parallelSyncMode とは別物）で制御される。
+      // 見本が非同期のとき、PSD 側のホイールは advancePage（imageViewer では常に見本ページを
+      // 動かす）を使わず PSD ページを直接送る。これで PSD 側をクリックしてアクティブにした状態で、
+      // PSD を見本とは独立にマウススクロールで送れる。
+      if (pane === "psd"
+        && getParallelViewMode() === "imageViewer"
+        && !leftViewerPageSyncEnabled
+        && getPages().length > 0) {
+        setActivePane("psd");
+        setCurrentPageIndex(nextPageIndexForTurn("psd", getCurrentPageIndex(), getPages().length, dir));
+        return;
+      }
+      advancePage(dir);
+      return;
+    }
     stage.scrollBy({
       left: wheelDeltaPx(e, "x", stage),
       top: wheelDeltaPx(e, "y", stage),
@@ -1240,6 +1289,7 @@ function bindParallelViewMode() {
   const imageViewerBtn = document.getElementById("view-image-viewer-btn");
   const spreadEditBtn = document.getElementById("view-spread-edit-btn");
   const editorBtn = document.getElementById("view-editor-btn");
+  const editorMatchBtn = document.getElementById("view-editor-match-btn");
   const fullscreenItem = document.getElementById("view-fullscreen-psd-btn");
   const proofreadArea = document.getElementById("spreads-proofread-area");
   const editorArea = document.getElementById("spreads-editor-area");
@@ -1264,6 +1314,28 @@ function bindParallelViewMode() {
     setViewItemDisabled(imageViewerBtn, locked);
     setViewItemDisabled(spreadEditBtn, locked);
     setViewItemDisabled(fullscreenItem, locked);
+  };
+
+  // 「テキストエディタ」(照合なし) と「テキストエディタ（照合付）」はどちらも editor モード。
+  // 違いは照合パネル表示フラグ (getEditorMatchMode) のみ。メニューのアクティブ表示を出し分ける。
+  const applyEditorVariantActive = () => {
+    const inEditor = getParallelViewMode() === "editor";
+    const match = getEditorMatchMode();
+    const plainActive = inEditor && !match;
+    const matchActive = inEditor && match;
+    editorBtn.classList.toggle("active", plainActive);
+    editorBtn.setAttribute("aria-checked", plainActive ? "true" : "false");
+    if (editorMatchBtn) {
+      editorMatchBtn.classList.toggle("active", matchActive);
+      editorMatchBtn.setAttribute("aria-checked", matchActive ? "true" : "false");
+    }
+  };
+  // 照合付モードは画像スキャン結果（照合データ）があるときだけメニューに出す。
+  // データが無くなったら照合付フラグを落として通常エディタへ戻す。
+  const updateEditorMatchAvailability = () => {
+    const has = !!getScanExtractTextSource()?.content;
+    if (editorMatchBtn) editorMatchBtn.hidden = !has;
+    if (!has && getEditorMatchMode()) setEditorMatchMode(false);
   };
 
   try {
@@ -1310,7 +1382,8 @@ function bindParallelViewMode() {
   fontBookBtn.addEventListener("click", () => switchViewMode("fontBook"));
   imageViewerBtn.addEventListener("click", () => switchViewMode("imageViewer"));
   spreadEditBtn.addEventListener("click", () => switchViewMode("spreadEdit"));
-  editorBtn.addEventListener("click", () => switchViewMode("editor"));
+  editorBtn.addEventListener("click", () => { setEditorMatchMode(false); switchViewMode("editor"); });
+  editorMatchBtn?.addEventListener("click", () => { setEditorMatchMode(true); switchViewMode("editor"); });
   if (leftProofreadBtn) {
     leftProofreadBtn.addEventListener("click", () => setEditorLeftPaneMode("proofread"));
   }
@@ -1355,13 +1428,12 @@ function bindParallelViewMode() {
     fontBookBtn.classList.toggle("active", mode === "fontBook");
     imageViewerBtn.classList.toggle("active", mode === "imageViewer");
     spreadEditBtn.classList.toggle("active", mode === "spreadEdit");
-    editorBtn.classList.toggle("active", mode === "editor");
     parallelBtn.setAttribute("aria-checked", mode === "parallel" ? "true" : "false");
     proofreadBtn.setAttribute("aria-checked", mode === "proofread" ? "true" : "false");
     fontBookBtn.setAttribute("aria-checked", mode === "fontBook" ? "true" : "false");
     imageViewerBtn.setAttribute("aria-checked", mode === "imageViewer" ? "true" : "false");
     spreadEditBtn.setAttribute("aria-checked", mode === "spreadEdit" ? "true" : "false");
-    editorBtn.setAttribute("aria-checked", mode === "editor" ? "true" : "false");
+    applyEditorVariantActive();
     try { localStorage.setItem(VIEW_MODE_LS_KEY, mode); } catch {}
     applyEditorLeftPaneClass();
 
@@ -1379,6 +1451,12 @@ function bindParallelViewMode() {
   };
   onParallelViewModeChange(sync);
   onAppModeChange(sync);
+  // 照合付フラグの切替（同 editor モード内での 2 項目切替）でメニューのアクティブ表示を更新。
+  onEditorMatchModeChange(applyEditorVariantActive);
+  // 画像スキャン結果の有無で「照合付」項目の表示/非表示を更新。
+  onScanExtractTextSourceChange(updateEditorMatchAvailability);
+  updateEditorMatchAvailability();
+  applyEditorVariantActive();
 
   // 【v2.2.x】View ▾ ドロップダウン: trigger 開閉 + メニュー項目クリックで閉じる。
   // 既存の view-parallel-btn / view-proofread-btn / view-spread-edit-btn / view-editor-btn
@@ -2708,6 +2786,28 @@ function bindRubyTool() {
   window.addEventListener("psdesign:selection-changed", updateSelection);
   window.addEventListener("resize", placeRubyPanelNearText);
   window.addEventListener("scroll", placeRubyPanelNearText, true);
+  // 選択解除でルビパネルが閉じない問題の対策。reportCursor は collapse 時に
+  // setLastInplaceSelection を呼ばない（v2.2.x: cache は明示クリアまで保持）ため、
+  // editor 内で選択を畳んでも onInplaceSelectionChange が発火せずパネルが残る。
+  // editor 自身にフォーカスがある状態で live selection が collapse したときだけ
+  // cache をクリアし、既存の hide 経路（→ updateSelection → restoreRubyPanelHome）を回す。
+  // focus がサイドバー/ルビ入力に移った場合（editor が activeElement を含まない）は
+  // cache を保持して font/size の選択適用や親文字指定モードを壊さない。
+  let rubyCollapseRaf = 0;
+  document.addEventListener("selectionchange", () => {
+    if (rubyCollapseRaf) return;
+    rubyCollapseRaf = requestAnimationFrame(() => {
+      rubyCollapseRaf = 0;
+      if (panelEl.hidden) return;
+      if (manualParentRanges.length > 0) return;
+      const box = document.querySelector(".layer-box.editing");
+      if (!box || !box.contains(document.activeElement)) return;
+      const s = window.getSelection?.();
+      if (!s || s.rangeCount === 0 || s.isCollapsed) {
+        clearInplaceSelection();
+      }
+    });
+  }, true);
   window.addEventListener("psdesign:ruby-edit-request", () => {
     requestAnimationFrame(() => {
       if (!inputEl || inputEl.disabled) return;

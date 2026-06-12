@@ -50,6 +50,9 @@ let lastEditorBlockSelection = null;
 let editorRubyMode = "auto";
 let editorQuickAddShortcutBound = false;
 let editorParagraphDrag = null;
+// クリックで選択中の段落（{ pageNumber: number|null, index: number }）。
+// markerless（ページ区切りなし）は pageNumber = null。Shift+↑/↓ の移動対象。
+let selectedParagraphRef = null;
 const editorTextMappings = new WeakMap();
 
 function getEls() {
@@ -694,6 +697,89 @@ function startEditorParagraphDrag(e, el, pageNumber, paragraphIndex) {
   document.addEventListener("pointercancel", handleEditorParagraphPointerCancel, true);
 }
 
+function paragraphPageKey(pageNumber) {
+  return pageNumber == null ? "0" : String(pageNumber);
+}
+
+function samePageRef(a, b) {
+  return (a == null ? null : a) === (b == null ? null : b);
+}
+
+function paragraphElForRef(ref) {
+  if (!ref) return null;
+  return $("editor-pages-viewer")?.querySelector(
+    `.editor-page-paragraph[data-page-number="${paragraphPageKey(ref.pageNumber)}"][data-paragraph-index="${ref.index}"]`,
+  ) ?? null;
+}
+
+function countParagraphsForPage(pageNumber) {
+  return $("editor-pages-viewer")?.querySelectorAll(
+    `.editor-page-paragraph[data-page-number="${paragraphPageKey(pageNumber)}"]`,
+  ).length ?? 0;
+}
+
+function clearParagraphSelection() {
+  selectedParagraphRef = null;
+  $("editor-pages-viewer")?.querySelectorAll(".editor-page-paragraph.selected")
+    .forEach((p) => p.classList.remove("selected"));
+}
+
+// クリックで段落を選択状態にする（編集には入らない）。Shift+↑/↓ の移動対象になる。
+// 段落 div を focusable（tabIndex=0）にして focus し、Shift+↑/↓ の keydown を
+// viewer の onViewerKeydown へ届かせる。
+function selectParagraph(el) {
+  if (!el) return;
+  const viewer = $("editor-pages-viewer");
+  viewer?.querySelectorAll(".editor-page-paragraph.selected")
+    .forEach((p) => { if (p !== el) p.classList.remove("selected"); });
+  el.classList.add("selected");
+  const pn = Number(el.dataset.pageNumber);
+  selectedParagraphRef = {
+    pageNumber: (Number.isInteger(pn) && pn > 0) ? pn : null,
+    index: Number(el.dataset.paragraphIndex),
+  };
+  try { el.focus({ preventScroll: true }); } catch (_) { /* noop */ }
+}
+
+// ダブルクリックで段落テキストを編集可能（contentEditable=true）にし、キャレットを入れる。
+function enterParagraphEdit(textEl, e) {
+  if (!textEl) return;
+  textEl.contentEditable = "true";
+  textEl.focus();
+  // ダブルクリック位置にキャレットを置く（取得できなければ既定の focus 位置）。
+  try {
+    if (e && typeof document.caretRangeFromPoint === "function") {
+      const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+      const sel = window.getSelection?.();
+      if (range && sel) { sel.removeAllRanges(); sel.addRange(range); }
+    }
+  } catch (_) { /* noop */ }
+}
+
+// 選択中段落を delta（-1=上 / +1=下）方向へ移動する。同一ページ内の並べ替え。
+function moveSelectedParagraph(delta) {
+  if (!selectedParagraphRef) return;
+  // ref が現在の DOM に存在しなければ（別ページへ移動した等）選択を破棄。
+  if (!paragraphElForRef(selectedParagraphRef)) { clearParagraphSelection(); return; }
+  const { pageNumber, index } = selectedParagraphRef;
+  const count = countParagraphsForPage(pageNumber);
+  const toIdx = index + delta;
+  if (toIdx < 0 || toIdx >= count) return; // 端ではクランプ（移動なし）
+  // moveTxtBlockByIndex は setTxtSource → onTxtSourceChange → renderViewer を同期で走らせる。
+  // buildSection が新 index へ .selected を付け直せるよう、再描画前に ref を更新しておく。
+  selectedParagraphRef = { pageNumber, index: toIdx };
+  const ok = moveTxtBlockByIndex(pageNumber, index, toIdx, pageNumber);
+  if (!ok) {
+    selectedParagraphRef = { pageNumber, index };
+  }
+  // 連続操作のため、移動後の段落へ選択＋フォーカスを当て直す（画面内へスクロール）。
+  const moved = paragraphElForRef(selectedParagraphRef);
+  if (moved) {
+    moved.classList.add("selected");
+    try { moved.focus({ preventScroll: false }); } catch (_) { /* noop */ }
+  }
+}
+
 function buildSection(pageNumber, blocks, activeNum, options = {}) {
   const { markerless = false, showHeader = true } = options;
   const sec = document.createElement("section");
@@ -719,10 +805,18 @@ function buildSection(pageNumber, blocks, activeNum, options = {}) {
     blocks.forEach((block, idx) => {
       const el = document.createElement("div");
       el.className = "editor-page-paragraph";
+      el.tabIndex = 0;
       el.dataset.paragraphIndex = String(idx);
       el.dataset.pageNumber = String(pageNumber ?? 0);
       el.dataset.offset = String(block.offset);
       el.dataset.originalText = block.text;
+      // 再描画をまたいで選択状態を復元（段落移動後も選択を維持するため）。
+      const refPage = markerless ? null : (pageNumber ?? null);
+      if (selectedParagraphRef
+        && selectedParagraphRef.index === idx
+        && samePageRef(selectedParagraphRef.pageNumber, refPage)) {
+        el.classList.add("selected");
+      }
 
       const delBtn = document.createElement("button");
       delBtn.type = "button";
@@ -758,7 +852,8 @@ function buildSection(pageNumber, blocks, activeNum, options = {}) {
 
       const textEl = document.createElement("div");
       textEl.className = "editor-page-paragraph-text";
-      textEl.contentEditable = "true";
+      // 既定は編集不可。クリック=選択 / ダブルクリック=編集（enterParagraphEdit）。
+      textEl.contentEditable = "false";
       textEl.spellcheck = false;
       textEl.dataset.paragraphIndex = String(idx);
       textEl.dataset.pageNumber = String(pageNumber ?? 0);
@@ -774,6 +869,12 @@ function buildSection(pageNumber, blocks, activeNum, options = {}) {
       editorTextMappings.set(textEl, display.displayToRaw);
       el.appendChild(textEl);
       bindParagraphEdit(textEl);
+      // シングルクリック=選択（編集には入らない）、ダブルクリック=編集開始。
+      el.addEventListener("click", () => {
+        if (textEl.isContentEditable) return; // 編集中はキャレット移動に任せる
+        selectParagraph(el);
+      });
+      el.addEventListener("dblclick", (ev) => enterParagraphEdit(textEl, ev));
       body.appendChild(el);
     });
   }
@@ -857,6 +958,8 @@ function bindParagraphEdit(el) {
 
   el.addEventListener("blur", () => {
     editingBlock = false;
+    // 編集終了後は再び編集不可に戻す（クリック=選択 / ダブルクリック=編集 の状態へ）。
+    el.contentEditable = "false";
     const original = el.dataset.originalText ?? "";
     const originalDisplay = el.dataset.originalDisplayText ?? original;
     if (aborted) {
@@ -1033,6 +1136,17 @@ function onEditorPageNavShortcut(e) {
 }
 
 function onViewerKeydown(e) {
+  // Shift+↑/↓: 選択中の段落を移動（編集中は除外 → 編集中はネイティブの文字選択）。
+  // 全ページ表示 / 単ページ表示の両方で動作させるため、下の早期 return より前に処理する。
+  if (e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey
+    && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
+    if (!editingBlock && selectedParagraphRef) {
+      e.preventDefault();
+      e.stopPropagation();
+      moveSelectedParagraph(e.key === "ArrowUp" ? -1 : +1);
+    }
+    return;
+  }
   if (editingBlock || editorPageMode === "all") return;
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
   const tag = e.target?.tagName;
@@ -1092,6 +1206,10 @@ export function bindEditorPane() {
   els.viewer.tabIndex = 0;
   els.viewer.addEventListener("keydown", onViewerKeydown);
   els.viewer.addEventListener("scroll", handleEditorSelectionChange, { passive: true });
+  // 段落以外（余白）クリックで選択解除。
+  els.viewer.addEventListener("click", (e) => {
+    if (!e.target?.closest?.(".editor-page-paragraph")) clearParagraphSelection();
+  });
 
   // mousedown の preventDefault で、ボタンが contenteditable からフォーカスを奪わない
   // ようにする（選択崩れ→ selectionchange でポップオーバーが消える競合を防ぐ）。

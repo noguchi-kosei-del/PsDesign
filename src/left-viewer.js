@@ -9,6 +9,7 @@ import {
 } from "./state.js";
 import { applyOverscrollMargin, centerCanvasInViewport } from "./overscroll.js";
 import { toast } from "./ui-feedback.js";
+import { isMouseWheelEvent, nextPageIndexForTurn } from "./page-navigation.js";
 
 const VIEWER_EXTENSIONS = ["jpg", "jpeg", "png", "pdf", "psd"];
 const VIEWER_RE = /\.(jpe?g|png|pdf|psd)$/i;
@@ -686,8 +687,40 @@ export function isLeftViewerDropPayload(payload) {
   return pointsFromDropPayload(payload).some(pointHitsViewer);
 }
 
+const viewerNameCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+
+// ドロップ / 読み込みパスに含まれるフォルダを、その中の見本対応ファイル
+// (JPG / PNG / PDF / PSD) へ 1 階層展開する。見本ファイルはそのまま通し、
+// フォルダ内のファイルはファイル名の自然順 (page1 → page2 → page10) に並べる。
+// 実 D&D されたフォルダは Rust 側で AllowedPaths に登録され、その配下も許可される
+// ため、list_directory_entries と後続の読み込みが forbidden path にならない。
+async function expandViewerPaths(paths) {
+  const list = (Array.isArray(paths) ? paths : [paths]).filter((p) => typeof p === "string" && p.length > 0);
+  const out = [];
+  for (const p of list) {
+    if (isViewerPath(p)) { out.push(p); continue; }
+    // 見本拡張子でないものはフォルダ候補として展開を試みる（失敗時はスキップ）。
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const entries = await invoke("list_directory_entries", { path: p });
+      if (Array.isArray(entries)) {
+        const files = entries
+          .filter((entry) => entry?.isFile)
+          .map((entry) => entry?.path)
+          .filter((fp) => isViewerPath(fp))
+          .sort((a, b) => viewerNameCollator.compare(basename(a), basename(b)));
+        out.push(...files);
+      }
+    } catch (e) {
+      console.warn("[left-viewer] フォルダ展開に失敗", p, e);
+    }
+  }
+  return out;
+}
+
 async function loadLeftViewerExtraFromPaths(paths, { notify = true } = {}) {
-  return loadViewerPaths(paths, { notify });
+  const expanded = await expandViewerPaths(paths);
+  return loadViewerPaths(expanded, { notify });
 }
 
 export async function handleLeftViewerDrop(paths, payload) {
@@ -723,6 +756,7 @@ function bindNativeDrop(stage) {
   });
 }
 
+let lastViewerWheelPageAt = 0;
 function bindWheelPageNav(stage) {
   const wheelDeltaPx = (e, axis) => {
     const raw = axis === "x" ? e.deltaX : e.deltaY;
@@ -734,6 +768,21 @@ function bindWheelPageNav(stage) {
     if (getParallelViewMode() !== "imageViewer") return;
     if (e.altKey || e.ctrlKey || e.metaKey) return;
     e.preventDefault();
+    // マウスホイール → 見本ページ移動。トラックパッド二本指 → 表示スクロール（現状維持）。
+    if (isMouseWheelEvent(e)) {
+      const now = performance.now();
+      if (now - lastViewerWheelPageAt < 80) return;
+      const total = getLeftViewerPageCount();
+      if (total > 0) {
+        const cur = getLeftViewerPageIndex();
+        const next = nextPageIndexForTurn("viewer", cur, total, e.deltaY > 0 ? +1 : -1);
+        if (next !== cur) {
+          setLeftViewerPageIndex(next);
+          lastViewerWheelPageAt = now;
+        }
+      }
+      return;
+    }
     stage.scrollBy({
       left: wheelDeltaPx(e, "x"),
       top: wheelDeltaPx(e, "y"),

@@ -57,6 +57,14 @@ import { loadPsdFilesByPaths } from "./psd-load.js";
 import { loadPsdFilesForReuse } from "./reuse.js";
 import { baseName, joinPath, parentDir } from "../utils/path.js";
 import { endLoadOperation, tryBeginLoadOperation } from "./load-guard.js";
+import {
+  exportGuides,
+  getGuidesLocked,
+  getRulersVisible,
+  setGuidesFromPsd,
+  setGuidesLocked,
+  setRulersVisible,
+} from "../rulers.js";
 
 const PROJECT_KIND = "opus-project";
 const PROJECT_SCHEMA_VERSION = 1;
@@ -103,8 +111,20 @@ function defaultWorkName() {
   return stem === "opus-project" ? "" : stem;
 }
 
-function makeProjectDocument() {
+// プロジェクト保存用スナップショット。state.js の編集スナップショットに加えて、
+// ルーラーで引いた / PSD 埋め込みの「ガイド（塗り足し枠）」と、ルーラー表示・ロック
+// 状態を付与する。ガイドは rulers.js（セッション保持）にあり state には入らないので、
+// ここで合流させて .opus に保存 → 再開時に復元できるようにする。
+function buildSnapshot() {
   const snapshot = exportProjectSnapshot();
+  snapshot.guides = exportGuides();
+  snapshot.guidesLocked = getGuidesLocked();
+  snapshot.rulersVisible = getRulersVisible();
+  return snapshot;
+}
+
+function makeProjectDocument() {
+  const snapshot = buildSnapshot();
   return {
     kind: PROJECT_KIND,
     schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -399,6 +419,10 @@ function rewriteSnapshotPaths(snapshot, pathMap) {
   }
   for (const layer of copy.newLayers || []) {
     if (pathMap.has(layer.psdPath)) layer.psdPath = pathMap.get(layer.psdPath);
+  }
+  // ガイド（塗り足し枠）も psdPath をプロジェクトコピー先パスへ remap する。
+  for (const g of copy.guides || []) {
+    if (g && pathMap.has(g.psdPath)) g.psdPath = pathMap.get(g.psdPath);
   }
   return copy;
 }
@@ -722,7 +746,7 @@ export async function saveProject() {
         const ok = await confirmProjectOverwrite(`「${saveOptions.projectName}」を上書き保存してよろしいですか？`);
         if (!ok) return;
       }
-      result = await createProjectBundle(exportProjectSnapshot(), saveOptions);
+      result = await createProjectBundle(buildSnapshot(), saveOptions);
       setCurrentProject(result.opusPath, {
         projectDir: result.projectDir,
         projectName: result.projectName,
@@ -793,6 +817,27 @@ async function restoreProjectReferences(refs, options = {}) {
     console.error("[project] reference restore failed:", e);
     toast(`見本の復元に失敗しました: ${e?.message ?? e}`, { kind: "warning", duration: 4500 });
   }
+}
+
+// 保存済みスナップショットからガイド（塗り足し枠）を復元する。
+// snapshot.guides の psdPath は保存時にコピー先パスへ remap 済みで、再開時に
+// ロードした PSD のパスと一致する。ロード済み PSD 分だけ流し込み、ルーラー表示と
+// ロック状態（= 外側ディム = 塗り足し表示）を復元する。
+function restoreProjectGuides(snapshot) {
+  const guides = Array.isArray(snapshot?.guides) ? snapshot.guides : [];
+  const loadedPaths = new Set(getPages().map((p) => p.path));
+  let applied = false;
+  for (const g of guides) {
+    if (!g || typeof g.psdPath !== "string" || !loadedPaths.has(g.psdPath)) continue;
+    setGuidesFromPsd(g.psdPath, { h: g.h, v: g.v });
+    applied = true;
+  }
+  if (!applied) return;
+  // 表示を先に ON（redraw が rulersVisible を見るため）→ ロック（ディム描画）を復元。
+  // 旧フォーマット（フラグ無し）は塗り足しを見せる前提で既定 true。
+  // 既にパスごとに展開済みなので skipApply: true（現在ページのガイドで上書きしない）。
+  setRulersVisible(snapshot.rulersVisible !== false);
+  setGuidesLocked(snapshot.guidesLocked !== false, { skipApply: true });
 }
 
 export async function openProjectFromPath(path) {
@@ -877,6 +922,9 @@ export async function openProjectFromPath(path) {
       { detail: "編集復元 完了" },
     );
     restoreProjectView(project.view);
+    // ガイド（塗り足し枠）と表示・ロック状態を復元。PSD ロード後（getPages 確定後）に
+    // 行うことで、コピー PSD 埋め込みガイドの自動適用より後に上書きされ、保存時の状態が勝つ。
+    restoreProjectGuides(project.snapshot);
     leaveHomeScreen();
     renderAllSpreads();
     rebuildLayerList();

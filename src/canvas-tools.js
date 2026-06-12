@@ -89,6 +89,47 @@ function writeSelectionCenterOnlyMode(value) {
 
 let selectionCenterOnlyMode = readSelectionCenterOnlyMode();
 
+// 【方眼表示モード（Shift+D）】選択中テキストを MojiQ のセリフ見本のように方眼（文字セルのグリッド）で
+// 表示し、グリフ自体は隠す。中心点モードと同型（状態 + localStorage + .page-overlay クラス）。既定 OFF。
+const SELECTION_GRID_MODE_KEY = "psdesign_selection_grid_mode";
+
+function readSelectionGridMode() {
+  try { return localStorage.getItem(SELECTION_GRID_MODE_KEY) === "1"; } catch (_) { return false; }
+}
+
+function writeSelectionGridMode(value) {
+  try { localStorage.setItem(SELECTION_GRID_MODE_KEY, value ? "1" : "0"); } catch (_) {}
+}
+
+let selectionGridMode = readSelectionGridMode();
+
+// 方眼表示モード（Shift+D）: 選択中レイヤーの box を「最長行の文字数 × 行数」（縦書きは転置）の
+// マス目に分割し、1 文字 = 1 マスの方眼セル DOM を作る（グリフ自体は CSS で非表示）。
+// CSS の background グラデーション方式は WebView2 で background-size の calc/% が安定せず線が出ない
+// ため、実セル DOM（.layer-grid-cells > .grid-cell）を gap で区切る確実な方式に切り替える。
+function buildGridCells(box, text, isVertical) {
+  const lines = String(text ?? "").split(/\r\n|\r|\n/);
+  const lineCount = Math.max(1, lines.length);
+  let maxChars = 1;
+  for (const ln of lines) { const n = [...ln].length; if (n > maxChars) maxChars = n; }
+  const cols = Math.max(1, isVertical ? lineCount : maxChars);
+  const rows = Math.max(1, isVertical ? maxChars : lineCount);
+  const total = cols * rows;
+  if (total > 4000) return; // 点検用途の安全上限（極端な文字数での DOM 爆発を防ぐ）
+  const grid = document.createElement("div");
+  grid.className = "layer-grid-cells";
+  grid.style.gridTemplateColumns = `repeat(${cols}, 1fr)`;
+  grid.style.gridTemplateRows = `repeat(${rows}, 1fr)`;
+  const frag = document.createDocumentFragment();
+  for (let i = 0; i < total; i++) {
+    const cell = document.createElement("div");
+    cell.className = "grid-cell";
+    frag.appendChild(cell);
+  }
+  grid.appendChild(frag);
+  box.appendChild(grid);
+}
+
 function showSelectedLayerBadges() {
   const wasHidden = hideSelectedLayerBadges;
   hideSelectedLayerBadges = false;
@@ -160,8 +201,25 @@ export function toggleSelectionAdornmentsVisible() {
 export function toggleSelectionCenterOnlyMode() {
   selectionCenterOnlyMode = !selectionCenterOnlyMode;
   writeSelectionCenterOnlyMode(selectionCenterOnlyMode);
+  // 中心点と方眼は両方ともテキストを隠すため相互排他。
+  if (selectionCenterOnlyMode && selectionGridMode) {
+    selectionGridMode = false;
+    writeSelectionGridMode(false);
+  }
   refreshAllOverlays();
   return selectionCenterOnlyMode;
+}
+
+export function toggleSelectionGridDisplayMode() {
+  selectionGridMode = !selectionGridMode;
+  writeSelectionGridMode(selectionGridMode);
+  // 方眼と中心点は両方ともテキストを隠すため相互排他。
+  if (selectionGridMode && selectionCenterOnlyMode) {
+    selectionCenterOnlyMode = false;
+    writeSelectionCenterOnlyMode(false);
+  }
+  refreshAllOverlays();
+  return selectionGridMode;
 }
 
 function hideRotateHandles(ctx = null) {
@@ -730,12 +788,11 @@ export function applyEditModeRubyToRange(start, end, rubyText, rubyType, rubySca
     });
   };
   const isSpecialRubyText = (value) => isNakaguroRubyText(value) || isDakutenRubyText(value);
-  const applyDefaultRubyFont = (el) => {
-    const ps = String(getDefault("fontPostScriptName") || "");
-    if (!ps) return;
-    const fam = cssFontFamily(ps);
-    if (fam) el.style.fontFamily = fam;
-    ensureFontLoaded(ps);
+  const applyDefaultRubyFont = () => {
+    // ルビは親文字（レイヤー）のフォントを CSS 継承させるため、font-family を設定しない。
+    // 以前は環境設定の既定フォント (F910) を明示適用しており、フレーム全体のフォントを
+    // 変えても in-place 編集中のルビプレビューだけ F910 になる原因だった。
+    // （確定後の描画は effectiveRubyFontForChar 側で同じく継承する。）
   };
   const rubyTextMatches = (value, target) => {
     if (typeof value !== "string" || typeof target !== "string" || !target) return false;
@@ -2132,6 +2189,7 @@ function renderOverlay(ctx) {
   const showSelectionAdornments = selectionAdornmentsVisible || hasTemporaryMultiAdornments;
   overlay.classList.toggle("selection-adornments-hidden", !showSelectionAdornments);
   overlay.classList.toggle("selection-center-only", selectionCenterOnlyMode);
+  overlay.classList.toggle("selection-grid-display", selectionGridMode);
 
   for (const layer of page.textLayers) {
     // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
@@ -2206,6 +2264,7 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
+      if (selectionGridMode) buildGridCells(box, rect.previewText, rect.isVertical);
       if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
@@ -2325,6 +2384,8 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, nl.tempId)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
+      // layerRectForNew は previewText を返さないため、新規レイヤーは nl.contents を渡す。
+      if (selectionGridMode) buildGridCells(box, nl.contents, rect.isVertical);
       if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
       if (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments)) {
         const fontListNew = collectLayerFontValues(
@@ -3717,8 +3778,11 @@ function appendRubySegment(parentEl, parentText, parentLocalStart, lineStartIdx,
     if (typeof symbolFontPS === "string" && symbolFontPS.length > 0 && SYMBOL_CHAR_CODES.has(ch.charCodeAt(0))) {
       return symbolFontPS;
     }
-    const defaultRubyFontPS = String(getDefault("fontPostScriptName") || "");
-    return defaultRubyFontPS || null;
+    // per-char フォントも記号フォントも無ければ null を返し、rt に font-family を設定しない。
+    // → 親文字 (.ruby-base / inner) と同じくレイヤーのフォントを CSS 継承する。
+    //   以前は環境設定の既定フォント (F910) を明示適用していたため、フレーム全体の
+    //   フォントを変えてもルビだけ F910 のままになっていた。
+    return null;
   };
   const rubyFontForParentSlice = (segText, segLocalStart) => {
     for (let i = 0; i < segText.length; i++) {

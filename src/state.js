@@ -1508,7 +1508,11 @@ export function exportEdits() {
     ? Number(getDefault("rubyPhotoshopOffsetEm")) : 0;
   const rubyPhotoshopBiasPx = Number.isFinite(Number(getDefault("rubyPhotoshopBiasPx")))
     ? Number(getDefault("rubyPhotoshopBiasPx")) : 0;
-  const rubyFontPostScriptName = String(getDefault("fontPostScriptName") || "");
+  // ルビレイヤーのフォントは親文字レイヤーのフォントを継承させる。空文字を渡すと
+  // jsx_gen 側 (applyToPsd → applyRubies) が __fontR / __fontRN（親レイヤーのフォント）に
+  // フォールバックする。以前は環境設定の既定フォント (F910) を当てていたため、フレームの
+  // フォントを変えても保存後のルビだけ F910 になっていた。
+  const rubyFontPostScriptName = "";
 
   return {
     dashTrackingMille,

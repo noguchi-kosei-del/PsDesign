@@ -130,6 +130,20 @@ function getGuidesObj(psdPath) {
 
 export function getGuides(psdPath) { return getGuidesObj(psdPath); }
 
+// プロジェクト保存用: 全 PSD のガイドを配列でエクスポートする（h/v が両方空のものは除外）。
+// 形式は [{ psdPath, h:number[], v:number[] }]。project.js が rewriteSnapshotPaths で
+// psdPath をプロジェクトのコピー先パスへ remap し、復元時に setGuidesFromPsd で流し込む。
+export function exportGuides() {
+  const out = [];
+  for (const [psdPath, g] of guidesByPsd.entries()) {
+    const h = Array.isArray(g?.h) ? g.h.filter(Number.isFinite) : [];
+    const v = Array.isArray(g?.v) ? g.v.filter(Number.isFinite) : [];
+    if (h.length === 0 && v.length === 0) continue;
+    out.push({ psdPath, h: [...h], v: [...v] });
+  }
+  return out;
+}
+
 export function addGuide(psdPath, axis, psdValue) {
   if (!psdPath || !Number.isFinite(psdValue)) return;
   const g = getGuidesObj(psdPath);
