@@ -16,6 +16,7 @@ import {
   onPdfRotationChange,
   onPdfSkipFirstBlankChange,
   onPdfSplitModeChange,
+  onPdfSplitPageNumbersChange,
   onPdfZoomChange,
   onPsdRotationChange,
   onPsdZoomChange,
@@ -161,6 +162,7 @@ export function mountPdfView() {
   });
   onPdfRotationChange(() => schedule());
   onPdfSplitModeChange(() => schedule());
+  onPdfSplitPageNumbersChange(() => schedule());
   onPdfFirstRightBlankChange(() => schedule());
   onPdfSkipFirstBlankChange(() => schedule());
   onParallelViewModeChange(() => schedule());

@@ -2,6 +2,7 @@ import {
   getPdfFirstRightBlank,
   getPdfPageCount,
   getPdfSkipFirstBlank,
+  getPdfSplitPageNumbers,
   getPdfSplitMode,
 } from "./state.js";
 
@@ -9,6 +10,7 @@ export function getPdfVirtualPages() {
   const total = getPdfPageCount();
   if (total <= 0) return [];
   const split = getPdfSplitMode();
+  const splitPageNumbers = getPdfSplitPageNumbers();
   const skip = getPdfSkipFirstBlank();
   const out = [];
 
@@ -22,6 +24,11 @@ export function getPdfVirtualPages() {
 
   const startPage = skip ? 2 : 1;
   for (let i = startPage; i <= total; i += 1) {
+    const shouldSplitThisPage = splitPageNumbers.size === 0 || splitPageNumbers.has(i);
+    if (!shouldSplitThisPage) {
+      out.push({ pageNum: i, side: "full" });
+      continue;
+    }
     if (i === 1 && getPdfFirstRightBlank()) {
       out.push({ pageNum: i, side: "left" });
       continue;

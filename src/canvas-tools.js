@@ -108,7 +108,13 @@ let selectionGridMode = readSelectionGridMode();
 // マス目に分割し、1 文字 = 1 マスの方眼セル DOM を作る（グリフ自体は CSS で非表示）。
 // CSS の background グラデーション方式は WebView2 で background-size の calc/% が安定せず線が出ない
 // ため、実セル DOM（.layer-grid-cells > .grid-cell）を gap で区切る確実な方式に切り替える。
-function buildGridCells(box, text, isVertical) {
+function buildGridCells(box, text, isVertical, page = null, rect = null) {
+  if (page && rect && page.width > 0 && page.height > 0) {
+    const pageArea = page.width * page.height;
+    const rectArea = Math.max(0, rect.width) * Math.max(0, rect.height);
+    // 方眼は文字ボックス確認用。誤った巨大 bbox でページ全体を暗く覆う場合は出さない。
+    if (pageArea > 0 && rectArea / pageArea > 0.25) return;
+  }
   const lines = String(text ?? "").split(/\r\n|\r|\n/);
   const lineCount = Math.max(1, lines.length);
   let maxChars = 1;
@@ -2287,7 +2293,7 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
-      if (effectiveSelectionGridMode) buildGridCells(box, rect.previewText, rect.isVertical);
+      if (effectiveSelectionGridMode) buildGridCells(box, rect.previewText, rect.isVertical, page, rect);
       if (!showSizeOnlyBadges && showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
@@ -2410,7 +2416,7 @@ function renderOverlay(ctx) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
       // layerRectForNew は previewText を返さないため、新規レイヤーは nl.contents を渡す。
-      if (effectiveSelectionGridMode) buildGridCells(box, nl.contents, rect.isVertical);
+      if (effectiveSelectionGridMode) buildGridCells(box, nl.contents, rect.isVertical, page, rect);
       if (!showSizeOnlyBadges && showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
       if (showSizeOnlyBadges || (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments))) {
         const fontListNew = collectLayerFontValues(
@@ -4652,6 +4658,7 @@ function cancelHoverSelect() {
 }
 
 function scheduleHoverSelect(box, ctx, layerId) {
+  if (getDefault("hoverSelectEnabled") === false) return;
   if (getTool() !== "move") return;
   if (box?.classList?.contains("editing")) return;
   if (isLayerSelected(ctx.pageIndex, layerId)) return;
@@ -4661,6 +4668,7 @@ function scheduleHoverSelect(box, ctx, layerId) {
     hoverSelectTimer = null;
     if (token !== hoverSelectToken) return;
     if (!box.isConnected || !box.matches(":hover")) return;
+    if (getDefault("hoverSelectEnabled") === false) return;
     if (getTool() !== "move") return;
     if (document.querySelector(".layer-box.editing")) return;
     if (isLayerSelected(ctx.pageIndex, layerId)) return;

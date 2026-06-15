@@ -222,6 +222,7 @@ const DEFAULT_SCHEMA = [
   { id: "default-font",                 key: "fontPostScriptName",        type: "text-trim",        applyTool: true },
   { id: "default-show-badge",           key: "showBadge",                 type: "bool-showhide",    applyTool: false },
   { id: "default-inplace-edit-zoom",     key: "inPlaceEditZoomEnabled",    type: "bool-onoff",       applyTool: false },
+  { id: "default-hover-select",          key: "hoverSelectEnabled",        type: "bool-onoff",       applyTool: false },
   { id: "default-dash-run-tracking",    key: "dashRunTrackingMille",      type: "number",           applyTool: true },
   { id: "default-tilde-run-kerning",    key: "tildeRunKerningMille",      type: "number",           applyTool: true },
   { id: "default-tcy-enabled",          key: "tateChuYokoEnabled",        type: "bool-onoff",       applyTool: false },

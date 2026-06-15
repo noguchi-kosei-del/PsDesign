@@ -11,6 +11,7 @@ import {
 let psdParseWorker = null;
 let psdParseWorkerSeq = 1;
 const psdParseWorkerPending = new Map();
+const MANY_LAYER_LIGHT_PARSE_THRESHOLD = 700;
 
 function maybeReleasePsdParseWorkerForMemory() {
   if (!isLowMemoryMode()) return;
@@ -166,6 +167,32 @@ function virtualSplitPath(path, side) {
   return `${path}#psdesign-split-${side}`;
 }
 
+function stripVirtualSplitSuffix(path) {
+  return String(path ?? "").replace(/#psdesign-split-(?:right|left)$/i, "");
+}
+
+function stripFileExtForPageNumber(name) {
+  return String(name ?? "").replace(/\.[^.\\/]+$/, "");
+}
+
+function baseNameForPageNumber(path) {
+  const clean = stripVirtualSplitSuffix(path);
+  const m = clean && clean.match(/[\\/]([^\\/]+)$/);
+  return m ? m[1] : clean;
+}
+
+function parseExplicitSpreadPageNumbers(path) {
+  const name = stripFileExtForPageNumber(baseNameForPageNumber(path));
+  const match = name.match(/(?:^|_)(\d{1,4})(?:[_\s]+(\d{1,4}))$/)
+    ?? name.match(/^(\d{1,4})(?:[\-\s]+(\d{1,4}))$/);
+  if (!match) return null;
+  const nums = [match[1], match[2]]
+    .map((v) => parseInt(v, 10))
+    .filter((v) => Number.isInteger(v) && v > 0);
+  if (nums.length !== 2) return null;
+  return Math.abs(nums[1] - nums[0]) === 1 ? nums : null;
+}
+
 function cropCanvasHalf(source, logicalWidth, logicalHeight, offsetX, splitWidth) {
   if (!source || !(logicalWidth > 0) || !(logicalHeight > 0) || !(splitWidth > 0)) return null;
   const sxScale = source.width / logicalWidth;
@@ -208,12 +235,14 @@ function shiftLayerForSplit(layer, offsetX) {
 
 export function expandLandscapePsdPage(page) {
   if (!page || !(page.width > page.height)) return [page];
+  const spreadPages = parseExplicitSpreadPageNumbers(page.path);
+  if (!spreadPages) return [page];
   const splitWidth = page.width / 2;
   const sides = [
-    { side: "right", offsetX: splitWidth },
-    { side: "left", offsetX: 0 },
+    { side: "right", offsetX: splitWidth, logicalPageNumber: spreadPages[0] },
+    { side: "left", offsetX: 0, logicalPageNumber: spreadPages[1] },
   ];
-  return sides.map(({ side, offsetX }) => ({
+  return sides.map(({ side, offsetX, logicalPageNumber }) => ({
     ...page,
     path: virtualSplitPath(page.path, side),
     sourcePath: page.path,
@@ -222,6 +251,7 @@ export function expandLandscapePsdPage(page) {
     splitSide: side,
     splitOffsetX: offsetX,
     splitWidth,
+    logicalPageNumber,
     width: splitWidth,
     canvas: cropCanvasHalf(page.canvas, page.width, page.height, offsetX, splitWidth),
     reuseReferenceCanvas: cropCanvasHalf(page.reuseReferenceCanvas, page.width, page.height, offsetX, splitWidth),
@@ -258,11 +288,80 @@ function readPsdHeaderSize(bytes) {
   }
 }
 
+function readUint64AsNumber(view, offset) {
+  if (offset + 8 > view.byteLength) return null;
+  const hi = view.getUint32(offset, false);
+  const lo = view.getUint32(offset + 4, false);
+  const value = hi * 2 ** 32 + lo;
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+function readSectionLength(view, offset, version) {
+  if (version === 2) return { length: readUint64AsNumber(view, offset), bytes: 8 };
+  if (offset + 4 > view.byteLength) return { length: null, bytes: 4 };
+  return { length: view.getUint32(offset, false), bytes: 4 };
+}
+
+function readPsdLayerCount(bytes) {
+  try {
+    const view = bytes instanceof Uint8Array
+      ? new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+      : new DataView(bytes);
+    if (view.byteLength < 34) return null;
+    const sig = String.fromCharCode(
+      view.getUint8(0),
+      view.getUint8(1),
+      view.getUint8(2),
+      view.getUint8(3),
+    );
+    if (sig !== "8BPS") return null;
+    const version = view.getUint16(4, false);
+    if (version !== 1 && version !== 2) return null;
+    let offset = 26;
+    const colorModeLength = view.getUint32(offset, false);
+    offset += 4 + colorModeLength;
+    if (offset >= view.byteLength) return null;
+    const imageResources = readSectionLength(view, offset, version);
+    if (!Number.isFinite(imageResources.length)) return null;
+    offset += imageResources.bytes + imageResources.length;
+    if (offset >= view.byteLength) return null;
+    const layerMask = readSectionLength(view, offset, version);
+    if (!Number.isFinite(layerMask.length) || layerMask.length <= 0) return 0;
+    offset += layerMask.bytes;
+    if (offset >= view.byteLength) return null;
+    const layerInfo = readSectionLength(view, offset, version);
+    if (!Number.isFinite(layerInfo.length) || layerInfo.length <= 0) return 0;
+    offset += layerInfo.bytes;
+    if (version === 2 && offset + 4 <= view.byteLength) {
+      const count32 = Math.abs(view.getInt32(offset, false));
+      return count32 < 1_000_000 ? count32 : null;
+    }
+    if (offset + 2 <= view.byteLength) {
+      return Math.abs(view.getInt16(offset, false));
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 function shouldPreserveLayerImagesForLowMemory(bytes) {
   const maxPixels = Number(getRasterMemoryLimits().highFidelityMaskingMaxPixels);
   if (!(maxPixels > 0)) return false;
   const size = readPsdHeaderSize(bytes);
   return !!size && size.pixels <= maxPixels;
+}
+
+function psdParseHints(bytes) {
+  const layerCount = readPsdLayerCount(bytes);
+  return {
+    layerCount,
+    forceLightLayerParse: Number.isFinite(layerCount) && layerCount >= MANY_LAYER_LIGHT_PARSE_THRESHOLD,
+  };
+}
+
+function shouldForceLightLayerParse(hints) {
+  return hints?.forceLightLayerParse === true && isCriticalLowMemoryMode();
 }
 
 function getPsdParseWorker() {
@@ -295,7 +394,7 @@ function getPsdParseWorker() {
   return psdParseWorker;
 }
 
-function parsePsdWithWorker(bytes) {
+function parsePsdWithWorker(bytes, hints = psdParseHints(bytes)) {
   if (!canUsePsdParseWorker()) return Promise.reject(new Error("PSD parse worker is not available"));
   const buffer = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
   // 低メモリ時は強い制限 + lowMemory フラグ（レイヤー画像スキップ等のパース挙動を変える）。
@@ -304,6 +403,8 @@ function parsePsdWithWorker(bytes) {
   const limits = isLowMemoryMode()
     ? { ...getRasterMemoryLimits(), critical: isCriticalLowMemoryMode(), lowMemory: true }
     : { ...getLargePsdPreviewLimits(), lowMemory: false };
+  limits.layerCount = hints.layerCount;
+  limits.forceLightLayerParse = shouldForceLightLayerParse(hints);
   const id = psdParseWorkerSeq++;
   return new Promise((resolve, reject) => {
     psdParseWorkerPending.set(id, { resolve, reject });
@@ -321,6 +422,115 @@ function imageBitmapToCanvas(bitmap) {
   ctx.drawImage(bitmap, 0, 0);
   bitmap.close?.();
   return canvas;
+}
+
+function canvasDarknessStats(canvas) {
+  if (!canvas || !(canvas.width > 0) || !(canvas.height > 0)) return null;
+  const ctx = canvas.getContext?.("2d");
+  if (!ctx) return null;
+
+  const sampleCols = Math.min(48, Math.max(8, canvas.width));
+  const sampleRows = Math.min(48, Math.max(8, canvas.height));
+  let count = 0;
+  let dark = 0;
+  let veryDark = 0;
+  let bright = 0;
+  let sum = 0;
+
+  try {
+    for (let row = 0; row < sampleRows; row++) {
+      const y = Math.min(canvas.height - 1, Math.floor((row + 0.5) * canvas.height / sampleRows));
+      for (let col = 0; col < sampleCols; col++) {
+        const x = Math.min(canvas.width - 1, Math.floor((col + 0.5) * canvas.width / sampleCols));
+        const data = ctx.getImageData(x, y, 1, 1).data;
+        const alpha = data[3] ?? 255;
+        if (alpha < 16) continue;
+        const lum = 0.2126 * data[0] + 0.7152 * data[1] + 0.0722 * data[2];
+        count += 1;
+        sum += lum;
+        if (lum < 72) dark += 1;
+        if (lum < 36) veryDark += 1;
+        if (lum > 210) bright += 1;
+      }
+    }
+  } catch {
+    return null;
+  }
+
+  if (count === 0) return null;
+  return {
+    average: sum / count,
+    darkRatio: dark / count,
+    veryDarkRatio: veryDark / count,
+    brightRatio: bright / count,
+  };
+}
+
+function darkPreviewDecision(canvas, meta = {}) {
+  const dpi = Number(meta.dpi ?? 0);
+  const colorMode = Number(meta.colorMode);
+  const bitsPerChannel = Number(meta.bitsPerChannel ?? 0);
+  const channels = Number(meta.channels ?? 0);
+  const isRgb = !Number.isFinite(colorMode) || colorMode === 3;
+  const highRisk =
+    isRgb
+    && (dpi >= 300 || bitsPerChannel > 8 || channels > 3);
+  const stats = canvasDarknessStats(canvas);
+  const suspicious = !!stats && highRisk && (
+    (stats.average < 82 && stats.darkRatio > 0.56 && stats.brightRatio < 0.28)
+    || (stats.average < 64 && stats.darkRatio > 0.44)
+    || (stats.veryDarkRatio > 0.72 && stats.brightRatio < 0.18)
+  );
+  let reason = "ok";
+  if (!highRisk) reason = "not-high-risk";
+  else if (!stats) reason = "no-stats";
+  else if (suspicious) reason = "suspicious-dark";
+  else reason = "stats-not-suspicious";
+  return {
+    suspicious,
+    reason,
+    stats,
+    meta: {
+      path: meta.path ?? "",
+      width: meta.width ?? null,
+      height: meta.height ?? null,
+      canvasWidth: canvas?.width ?? null,
+      canvasHeight: canvas?.height ?? null,
+      previewScale: pageCanvasScale(canvas, meta.width, meta.height),
+      dpi: Number.isFinite(dpi) && dpi > 0 ? dpi : null,
+      colorMode: Number.isFinite(colorMode) ? colorMode : null,
+      bitsPerChannel: Number.isFinite(bitsPerChannel) && bitsPerChannel > 0 ? bitsPerChannel : null,
+      channels: Number.isFinite(channels) && channels > 0 ? channels : null,
+      isRgb,
+      highRisk,
+    },
+  };
+}
+
+function looksLikeDarkAgPsdPreview(canvas, meta = {}) {
+  const decision = darkPreviewDecision(canvas, meta);
+  if (!decision.suspicious) return false;
+  return true;
+}
+
+async function tryLoadPhotoshopPreviewCanvas(path, width, height) {
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const json = await invoke("read_psd_text_layers", { psdPath: path });
+    const psData = JSON.parse(json);
+    const imagePath = psData?.refImage || psData?.bgImage;
+    if (!imagePath) return null;
+    return await jpgFileToCanvas(imagePath, width, height);
+  } catch {
+    return null;
+  }
+}
+
+async function replaceDarkPreviewWithPhotoshopIfNeeded(canvas, meta) {
+  if (!looksLikeDarkAgPsdPreview(canvas, meta)) return canvas;
+  const replacement = await tryLoadPhotoshopPreviewCanvas(meta.path, meta.width, meta.height);
+  if (!replacement) return canvas;
+  return replacement;
 }
 
 export class UnsupportedBitmapPsdError extends Error {
@@ -1054,11 +1264,17 @@ export async function loadPsdForReuse(path) {
   // --- フォールバック: ag-psd（ライブテキストが解析できる PSD 向け） ---
   const bytes = await readFileBytes(path);
   await waitForNextFrame();
-  const preserveLayerImages = !isLowMemoryMode() || shouldPreserveLayerImagesForLowMemory(bytes);
-  const skipLayerImageData = isLowMemoryMode() && !preserveLayerImages;
+  const hints = psdParseHints(bytes);
+  const forceLightLayerParse = shouldForceLightLayerParse(hints);
+  const preserveLayerImages = !forceLightLayerParse
+    && (!isLowMemoryMode() || shouldPreserveLayerImagesForLowMemory(bytes));
+  const skipLayerImageData = forceLightLayerParse || (isLowMemoryMode() && !preserveLayerImages);
+  if (forceLightLayerParse) {
+    console.info(`[psd-loader] many-layer reuse fallback: skip layer image data | path=${path} | layers=${hints.layerCount}`);
+  }
   const psd = readPsd(bytes, {
     skipLayerImageData,
-    skipLinkedFilesData: isLowMemoryMode(),
+    skipLinkedFilesData: isLowMemoryMode() || forceLightLayerParse,
     skipThumbnail: true,
     useImageData: false,
   });
@@ -1115,9 +1331,14 @@ export async function loadPsdForReuse(path) {
 
 export async function loadPsdFromPath(path) {
   const bytes = await readFileBytes(path);
+  const hints = psdParseHints(bytes);
+  const forceLightLayerParse = shouldForceLightLayerParse(hints);
+  if (forceLightLayerParse) {
+    console.info(`[psd-loader] many-layer PSD: using light layer parse | path=${path} | layers=${hints.layerCount}`);
+  }
   if (canUsePsdParseWorker()) {
     try {
-      const parsed = await parsePsdWithWorker(bytes);
+      const parsed = await parsePsdWithWorker(bytes, hints);
       let canvas = imageBitmapToCanvas(parsed.bitmap);
       let previewScale = Number.isFinite(parsed.previewScale) && parsed.previewScale > 0
         ? parsed.previewScale
@@ -1136,6 +1357,16 @@ export async function loadPsdFromPath(path) {
         previewScale = fallback.previewScale;
       }
       if (canvas) {
+        canvas = await replaceDarkPreviewWithPhotoshopIfNeeded(canvas, {
+          path,
+          width: parsed.width,
+          height: parsed.height,
+          dpi: parsed.dpi ?? 72,
+          colorMode: parsed.colorMode,
+          bitsPerChannel: parsed.bitsPerChannel,
+          channels: parsed.channels,
+        });
+        previewScale = pageCanvasScale(canvas, parsed.width, parsed.height);
         return withPreviewMetadata({
           path,
           width: parsed.width,
@@ -1156,11 +1387,12 @@ export async function loadPsdFromPath(path) {
 
   await waitForNextFrame();
 
-  const preserveLayerImages = !isLowMemoryMode() || shouldPreserveLayerImagesForLowMemory(bytes);
-  const skipLayerImageData = isLowMemoryMode() && !preserveLayerImages;
+  const preserveLayerImages = !forceLightLayerParse
+    && (!isLowMemoryMode() || shouldPreserveLayerImagesForLowMemory(bytes));
+  const skipLayerImageData = forceLightLayerParse || (isLowMemoryMode() && !preserveLayerImages);
   const psd = readPsd(bytes, {
     skipLayerImageData,
-    skipLinkedFilesData: isLowMemoryMode(),
+    skipLinkedFilesData: isLowMemoryMode() || forceLightLayerParse,
     skipThumbnail: true,
     useImageData: false,
   });
@@ -1198,6 +1430,15 @@ export async function loadPsdFromPath(path) {
     );
     canvas = createBlankCanvas(psd.width, psd.height);
   }
+  canvas = await replaceDarkPreviewWithPhotoshopIfNeeded(canvas, {
+    path,
+    width: psd.width,
+    height: psd.height,
+    dpi,
+    colorMode: psd.colorMode,
+    bitsPerChannel: psd.bitsPerChannel,
+    channels: psd.channels,
+  });
 
   const preview = createFinalPageCanvas(canvas, psd.width, psd.height);
   return withPreviewMetadata({

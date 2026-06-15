@@ -1,5 +1,34 @@
 # PsDesign
 
+## 2026-06-15 変更メモ: v2.5.4 リリース（途中見開きページ対応 / Photoshop 低メモリ保存対策 / ホバー選択設定 / PSD表示調整）
+v2.5.4 では、途中に横長見開きページが混ざる原稿で PSD と見本のページ対応が崩れる問題、50GB 以下など低メモリ環境で Photoshop の警告ダイアログにより保存が止まる問題、テキストホバー選択を環境設定から切り替えたい要望を中心に修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.4` に更新済み。
+
+### A. 途中見開きページとページ数計算
+- [src/psd-loader.js](src/psd-loader.js): 横長 PSD を無条件に分割せず、`004_005` のように連続するページ番号がファイル名から読める場合だけ中央分割するようにした。分割後は `logicalPageNumber` を持たせ、右半分/左半分をそれぞれ単ページとして扱えるようにした。
+- [src/pdf-loader.js](src/pdf-loader.js) / [src/pdf-pages.js](src/pdf-pages.js) / [src/state.js](src/state.js): PDF/見本側も 1 ページ目だけではなく各物理ページごとに横長判定し、途中の見開きページだけ仮想ページ分割するようにした。
+- [src/auto-place.js](src/auto-place.js): PSD ファイル名・仮想分割ページ・見本ページを論理ページ番号で対応付け、途中見開きがあってもテキスト配置と照合がずれないようにした。見開き側の吹き出しは左右半分に分け、単ページ/見開き混在の配置計画を組み直している。
+- [src/mechanical-checks.js](src/mechanical-checks.js) / [src/test-mode.js](src/test-mode.js): PDF 仮想ページ数の自動チェックを、途中見開き分割後の期待値に合わせて更新した。
+
+### B. Photoshop 低メモリ保存対策
+- [src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs): 保存・読込・一括読込の待機ループ中に Photoshop の既知のブロッキングダイアログを継続的に検出して OK/Enter/Close を試すようにした。非表示状態のダイアログも `ShowWindow(..., SW_SHOWNA)` で表示だけ戻してから処理する。
+- ダイアログ検出は Photoshop 関連プロセス ID、ウィンドウクラス、子ウィンドウ文言を合わせて判定し、スクラッチディスク不足、メモリ不足、容量不足、`could not complete` 系の文言を対象にした。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) / [src/pdf-loader.js](src/pdf-loader.js): ファイル情報に更新時刻を追加し、大きな見本 PDF の圧縮キャッシュをパス・サイズ・更新時刻で分けるようにした。
+- [src/psd-loader.js](src/psd-loader.js) / [src/psd-parse-worker.js](src/psd-parse-worker.js): レイヤー数を PSD ヘッダーから事前推定し、低メモリかつ多レイヤーの PSD ではレイヤー画像データを軽く読む経路に寄せてハングリスクを下げた。
+
+### C. 写植設定と選択表示
+- [src/settings.js](src/settings.js) / [src/settings-ui.js](src/settings-ui.js) / [src/canvas-tools.js](src/canvas-tools.js): 環境設定の写植設定に「テキストホバー選択」の ON/OFF を追加し、OFF の場合は V ツールでホバーしても自動選択しないようにした。
+- [src/canvas-tools.js](src/canvas-tools.js): 選択中テキストの方眼表示で、誤った巨大 bbox がページ全体を覆う場合は方眼セルを出さないようにして、ページが暗く見える副作用を抑えた。
+- [src/styles.css](src/styles.css): PSD ページ、canvas、overlay に対して opacity/filter/mix-blend-mode の保護を追加し、外側の表示効果で PSD プレビューが暗くなるのを避けた。
+
+### D. PSD プレビューと調査ログ整理
+- [src/psd-loader.js](src/psd-loader.js): RGB / 高 ppi / 多チャンネルなどで ag-psd のプレビューが極端に暗いと判定した場合、Photoshop から取得したプレビュー画像へ置き換える fallback を追加した。
+- [src/spread-view.js](src/spread-view.js) / [src/canvas-tools.js](src/canvas-tools.js) / [src/psd-loader.js](src/psd-loader.js): 原因調査用に一時追加していた `[psd-preview]` / `[psd-render]` / `[psd-overlay]` 系のコンソールログと no-op デバッグ呼び出しを削除した。
+
+### 検証
+- `npm run lint` 成功。
+- `npm run build` 成功（Vite の既存 warning は継続）。
+- リリースはタグ `v2.5.4` push により `.github/workflows/release.yml` が Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-15 変更メモ: v2.5.3 リリース（見開き分割 / テキストブロックページ跨ぎ移動 / テキスト照合結果パネル / 見本フィット）
 
 v2.5.3 では、横長の見開き見本と単ページ PSD の対応、テキストエディタ内のページ跨ぎ編集、OCR 照合結果の見やすさ、見本ビューアーの表示フィットを中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.3` に更新済み。

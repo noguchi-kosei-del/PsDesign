@@ -186,6 +186,7 @@ import {
   onPdfRotationChange,
   onPdfSkipFirstBlankChange,
   onPdfSplitModeChange,
+  onPdfSplitPageNumbersChange,
   onPdfZoomChange,
   onPsdZoomChange,
   onTextSizeChange,
@@ -903,6 +904,9 @@ function bindPageChange() {
     updatePageNav();
   });
   onPdfSplitModeChange(() => {
+    updatePageNav();
+  });
+  onPdfSplitPageNumbersChange(() => {
     updatePageNav();
   });
   onPdfFirstRightBlankChange(() => {

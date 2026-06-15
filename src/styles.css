@@ -4828,6 +4828,9 @@ body.editor-paragraph-reordering * {
   position: relative;
   background: var(--page-bg);
   border: 1px solid var(--border);
+  opacity: 1 !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
 }
 .psd-current-page {
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 68%, transparent);
@@ -4841,12 +4844,19 @@ body.editor-paragraph-reordering * {
   grid-template-rows: auto;
   line-height: 0;
   vertical-align: top;
+  opacity: 1 !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
+  isolation: isolate;
 }
 .canvas-wrap > canvas {
   grid-row: 1;
   grid-column: 1;
   display: block;
   image-rendering: auto;
+  opacity: 1 !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
 }
 .page-overlay {
   grid-row: 1;
@@ -4855,6 +4865,9 @@ body.editor-paragraph-reordering * {
   width: 100%;
   height: 100%;
   pointer-events: none;
+  background: transparent !important;
+  filter: none !important;
+  mix-blend-mode: normal !important;
 }
 /* Photoshop ポイントテキスト風: 未選択時はテキストのみ可視で、枠装飾は出さない。
    bbox は寸法を持ったまま絶対配置され、クリック判定 / マーキー / wheel サイズ /

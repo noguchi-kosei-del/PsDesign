@@ -94,11 +94,13 @@ pub fn apply_edits(
     start_scratch_dialog_auto_dismiss();
 
     let mut hidden_windows = HiddenPhotoshopWindows::default();
+    let _ = dismiss_known_photoshop_dialogs();
     hidden_windows.hide_visible_photoshop_windows();
     let mut last_progress = String::new();
     // 起動直後に Photoshop が一瞬前面化することがあるため、最初の数秒だけ
     // 25ms 間隔で隠し続ける。JSX 実行自体は止めず、sentinel ができたら即座に通常ループへ戻る。
     for _ in 0..160 {
+        let _ = dismiss_known_photoshop_dialogs();
         hidden_windows.hide_visible_photoshop_windows();
         relay_progress_file(app, &progress_path, &mut last_progress);
         if sentinel_path.exists() {
@@ -110,6 +112,7 @@ pub fn apply_edits(
     let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
     let mut next_wait_hint = Instant::now() + Duration::from_secs(WAIT_HINT_INTERVAL_SECS);
     loop {
+        let _ = dismiss_known_photoshop_dialogs();
         hidden_windows.hide_visible_photoshop_windows();
         relay_progress_file(app, &progress_path, &mut last_progress);
         if sentinel_path.exists() {
@@ -231,9 +234,11 @@ pub fn read_text_layers(
 
     start_scratch_dialog_auto_dismiss();
     let mut hidden_windows = HiddenPhotoshopWindows::default();
+    let _ = dismiss_known_photoshop_dialogs();
     hidden_windows.hide_visible_photoshop_windows();
     // 起動直後の前面フラッシュ防止（25ms 間隔の高速ループ）。
     for _ in 0..160 {
+        let _ = dismiss_known_photoshop_dialogs();
         hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             break;
@@ -243,6 +248,7 @@ pub fn read_text_layers(
 
     let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
     loop {
+        let _ = dismiss_known_photoshop_dialogs();
         hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             let content = std::fs::read_to_string(&sentinel_path).unwrap_or_default();
@@ -344,10 +350,12 @@ pub fn read_text_layers_batch(
 
     start_scratch_dialog_auto_dismiss();
     let mut hidden_windows = HiddenPhotoshopWindows::default();
+    let _ = dismiss_known_photoshop_dialogs();
     hidden_windows.hide_visible_photoshop_windows();
     // 起動直後の前面フラッシュを防ぐため、最初の数秒は高速ループ（25ms 間隔）で
     // Photoshop のウィンドウが出た瞬間に隠す。通常植字と同様に「ずっと非表示」にする。
     for _ in 0..160 {
+        let _ = dismiss_known_photoshop_dialogs();
         hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             break;
@@ -358,6 +366,7 @@ pub fn read_text_layers_batch(
     let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
     loop {
         // 処理中に出てくる Photoshop ウィンドウは隠し続ける（前面化を防止）。
+        let _ = dismiss_known_photoshop_dialogs();
         hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             let content = std::fs::read_to_string(&sentinel_path).unwrap_or_default();
@@ -560,7 +569,7 @@ fn start_scratch_dialog_auto_dismiss() {
         let deadline = Instant::now() + Duration::from_secs(90);
         while Instant::now() < deadline {
             let _ = dismiss_known_photoshop_dialogs();
-            std::thread::sleep(Duration::from_millis(500));
+            std::thread::sleep(Duration::from_millis(250));
         }
     });
 }
@@ -649,22 +658,22 @@ fn dismiss_known_photoshop_dialogs() -> usize {
     use winapi::shared::windef::HWND;
     use winapi::um::winuser::{
         EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextLengthW,
-        GetWindowTextW, IsWindowVisible, PostMessageW, SendInput, SetForegroundWindow, BM_CLICK,
-        INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, VK_RETURN, WM_CHAR, WM_CLOSE, WM_COMMAND,
-        WM_KEYDOWN, WM_KEYUP,
+        GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SendInput,
+        SetForegroundWindow, ShowWindow, BM_CLICK, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP,
+        SW_SHOWNA, VK_RETURN, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
     };
-
-    // 検出対象のダイアログタイトル (小文字で部分一致判定)。複数のロケール / バージョン
-    // 表記揺れを 1 リストに集約する。
-    const TARGET_KEYWORDS: &[&str] = &[
-        "仮想記憶ディスクの容量不足",
-        "仮想記憶ディスク",
-        "scratch disk",
-        "scratch disks",
-    ];
 
     // OK ボタンのラベル候補 (Photoshop 言語別 + 半角全角)。
     const OK_LABELS: &[&str] = &["ok", "ｏｋ", "ＯＫ", "&ok"];
+
+    struct DismissState {
+        count: usize,
+        target_pids: Vec<u32>,
+    }
+
+    struct ChildTextMatchState {
+        matched: bool,
+    }
 
     unsafe extern "system" fn find_ok_button_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
         let out = &mut *(lparam as *mut HWND);
@@ -684,19 +693,50 @@ fn dismiss_known_photoshop_dialogs() -> usize {
         1
     }
 
-    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let count = &mut *(lparam as *mut usize);
-        if IsWindowVisible(hwnd) == 0 {
-            return 1;
+    unsafe extern "system" fn child_text_match_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let state = &mut *(lparam as *mut ChildTextMatchState);
+        if state.matched {
+            return 0;
         }
         let title = window_title(hwnd);
+        if contains_photoshop_blocking_dialog_keyword(&title) {
+            state.matched = true;
+            return 0;
+        }
+        1
+    }
+
+    unsafe fn child_text_matches(hwnd: HWND) -> bool {
+        let mut state = ChildTextMatchState { matched: false };
+        EnumChildWindows(
+            hwnd,
+            Some(child_text_match_proc),
+            &mut state as *mut _ as LPARAM,
+        );
+        state.matched
+    }
+
+    unsafe extern "system" fn enum_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let state = &mut *(lparam as *mut DismissState);
+        let title = window_title(hwnd);
         let title_lower = title.to_lowercase();
-        if title_lower.is_empty() {
+        let class_lower = window_class_name(hwnd).to_ascii_lowercase();
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(hwnd, &mut pid);
+        let is_photoshop_window = (pid != 0 && state.target_pids.contains(&pid))
+            || title_lower.contains("photoshop")
+            || title_lower.contains("adobe")
+            || class_lower.contains("photoshop");
+        if !is_photoshop_window {
             return 1;
         }
-        let matched = TARGET_KEYWORDS
-            .iter()
-            .any(|kw| title_lower.contains(&kw.to_lowercase()));
+
+        let dialog_like = class_lower == "#32770"
+            || class_lower.contains("dialog")
+            || class_lower.contains("modal")
+            || title_lower.trim() == "adobe photoshop";
+        let matched = contains_photoshop_blocking_dialog_keyword(&title)
+            || (dialog_like && child_text_matches(hwnd));
         if !matched {
             return 1;
         }
@@ -705,6 +745,12 @@ fn dismiss_known_photoshop_dialogs() -> usize {
             "[ps-dismiss] detected dialog hwnd={:?} title={:?}",
             hwnd, title
         );
+
+        if IsWindowVisible(hwnd) == 0 {
+            eprintln!("[ps-dismiss] dialog was hidden; showing without activation before dismiss");
+            let _ = ShowWindow(hwnd, SW_SHOWNA);
+            std::thread::sleep(std::time::Duration::from_millis(80));
+        }
 
         // 戦略 1: 子ウィンドウから OK ボタンを探して BM_CLICK。
         // 標準 Win32 Button が存在すれば確実。Adobe Skia UI ではボタンが
@@ -781,7 +827,7 @@ fn dismiss_known_photoshop_dialogs() -> usize {
         eprintln!("[ps-dismiss] strategy 6: WM_CLOSE to dialog");
         let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
 
-        *count += 1;
+        state.count += 1;
         1
     }
 
@@ -801,16 +847,62 @@ fn dismiss_known_photoshop_dialogs() -> usize {
         String::from_utf16_lossy(&buf[..got.max(0) as usize])
     }
 
-    let mut count: usize = 0;
+    let mut state = DismissState {
+        count: 0,
+        target_pids: photoshop_related_process_ids(),
+    };
     unsafe {
-        EnumWindows(Some(enum_proc), &mut count as *mut _ as LPARAM);
+        EnumWindows(Some(enum_proc), &mut state as *mut _ as LPARAM);
     }
-    count
+    state.count
+}
+
+#[cfg(not(windows))]
+fn dismiss_known_photoshop_dialogs() -> usize {
+    0
 }
 
 #[cfg(windows)]
 struct PhotoshopWindowTarget {
     hwnd: winapi::shared::windef::HWND,
+}
+
+#[cfg(windows)]
+const PHOTOSHOP_BLOCKING_DIALOG_KEYWORDS: &[&str] = &[
+    "仮想記憶ディスク",
+    "スクラッチディスク",
+    "scratch disk",
+    "scratch disks",
+    "容量不足",
+    "空き容量",
+    "メモリ不足",
+    "メモリー不足",
+    "not enough ram",
+    "not enough memory",
+    "insufficient memory",
+    "out of memory",
+    "could not complete",
+    "cannot complete",
+    "要求された操作を完了できません",
+];
+
+#[cfg(windows)]
+fn contains_photoshop_blocking_dialog_keyword(text: &str) -> bool {
+    let lower = text.to_lowercase();
+    PHOTOSHOP_BLOCKING_DIALOG_KEYWORDS
+        .iter()
+        .any(|kw| lower.contains(kw))
+}
+
+#[cfg(windows)]
+fn is_photoshop_dialog_hide_exempt(class_name: &str, title: &str) -> bool {
+    let class_lower = class_name.trim().to_ascii_lowercase();
+    let title_lower = title.trim().to_lowercase();
+    class_lower == "#32770"
+        || class_lower.contains("dialog")
+        || class_lower.contains("modal")
+        || title_lower == "adobe photoshop"
+        || contains_photoshop_blocking_dialog_keyword(title)
 }
 
 #[cfg(windows)]
@@ -838,7 +930,14 @@ fn find_visible_photoshop_windows() -> Vec<PhotoshopWindowTarget> {
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, &mut pid);
         let is_target_process = pid != 0 && state.target_pids.contains(&pid);
-        if is_target_process || class_name.contains("photoshop") || title.contains("photoshop") {
+        if is_photoshop_dialog_hide_exempt(&class_name, &title) {
+            return 1;
+        }
+        let hideable_photoshop_surface = class_name.contains("photoshop")
+            || title.contains("photoshop")
+            || title.contains(".psd")
+            || title.contains(".psb");
+        if is_target_process && hideable_photoshop_surface {
             state.windows.push(PhotoshopWindowTarget { hwnd });
         }
         1

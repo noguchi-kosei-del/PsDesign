@@ -20,6 +20,7 @@ import {
   getPdfExcludedReferencePages,
   getPdfFirstRightBlank,
   getPdfSkipFirstBlank,
+  getPdfSplitPageNumbers,
   getPdfSplitMode,
   getTxtSource,
   setScanExtractDoc,
@@ -296,6 +297,11 @@ function splitReferenceScanPageToHalf(page, side) {
   };
 }
 
+function shouldSplitReferenceScanPage(pageNum, splitPageNumbers) {
+  if (!getPdfSplitMode()) return false;
+  return splitPageNumbers.size === 0 || splitPageNumbers.has(pageNum);
+}
+
 export function normalizeReferenceScanDocForReferencePages(doc, options = {}) {
   if (!doc || !Array.isArray(doc.pages)) return doc;
   if (doc.__opusVirtualPages === true) return doc;
@@ -308,19 +314,19 @@ export function normalizeReferenceScanDocForReferencePages(doc, options = {}) {
     .filter(({ pageNum }) => !excludedPages.has(pageNum))
     .filter(({ pageNum }) => !(skipFirstBlank && pageNum === 1));
 
-  let pages;
-  if (getPdfSplitMode()) {
-    pages = [];
-    for (const { page, pageNum } of physicalPages) {
-      if (pageNum === 1 && getPdfFirstRightBlank()) {
-        pages.push(splitReferenceScanPageToHalf(page, "left"));
-        continue;
-      }
-      pages.push(splitReferenceScanPageToHalf(page, "right"));
-      pages.push(splitReferenceScanPageToHalf(page, "left"));
+  const splitPageNumbers = getPdfSplitPageNumbers();
+  const pages = [];
+  for (const { page, pageNum } of physicalPages) {
+    if (!shouldSplitReferenceScanPage(pageNum, splitPageNumbers)) {
+      pages.push(page);
+      continue;
     }
-  } else {
-    pages = physicalPages.map(({ page }) => page);
+    if (pageNum === 1 && getPdfFirstRightBlank()) {
+      pages.push(splitReferenceScanPageToHalf(page, "left"));
+      continue;
+    }
+    pages.push(splitReferenceScanPageToHalf(page, "right"));
+    pages.push(splitReferenceScanPageToHalf(page, "left"));
   }
 
   return {

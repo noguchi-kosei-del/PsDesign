@@ -28,6 +28,8 @@ const state = {
   pdfPath: null,
   pdfPaths: [], // loadReferenceFiles で読み込まれた全ファイルパス（自然順ソート済み）
   pdfExcludedReferencePages: new Set(),
+  pdfSplitPageNumbers: new Set(),
+  pdfSplitPageNumberListeners: new Set(),
   pdfPageCount: 0,
   pdfListeners: new Set(),
   // 編集の undo / redo 履歴。スナップショット（edits + newLayers）配列。
@@ -1849,27 +1851,66 @@ export const getPsdZoom = $psdZoom.get;
 export const setPsdZoom = $psdZoom.set;
 export const onPsdZoomChange = $psdZoom.on;
 
+function stringArraysEqual(a, b) {
+  if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+  return a.every((value, i) => value === b[i]);
+}
+
+function numberSetsEqual(a, b) {
+  if (!(a instanceof Set) || !(b instanceof Set) || a.size !== b.size) return false;
+  for (const value of a) {
+    if (!b.has(value)) return false;
+  }
+  return true;
+}
+
 export function getPdfDoc() { return state.pdfDoc; }
 export function getPdfPath() { return state.pdfPath; }
 export function getPdfPaths() { return [...state.pdfPaths]; }
 export function getPdfExcludedReferencePages() { return new Set(state.pdfExcludedReferencePages); }
 export function setPdfExcludedReferencePages(pages) {
-  state.pdfExcludedReferencePages = new Set(
+  const next = new Set(
     Array.from(pages || [])
       .map((v) => Number(v))
       .filter((v) => Number.isInteger(v) && v > 0),
   );
+  const changed = !numberSetsEqual(state.pdfExcludedReferencePages, next);
+  state.pdfExcludedReferencePages = next;
+  if (changed) clearScanExtractDoc();
+}
+export function getPdfSplitPageNumbers() { return new Set(state.pdfSplitPageNumbers); }
+export function setPdfSplitPageNumbers(pages) {
+  const next = new Set(
+    Array.from(pages || [])
+      .map((v) => Number(v))
+      .filter((v) => Number.isInteger(v) && v > 0),
+  );
+  const changed = !numberSetsEqual(state.pdfSplitPageNumbers, next);
+  if (!changed) return;
+  state.pdfSplitPageNumbers = next;
+  clearScanExtractDoc();
+  for (const fn of state.pdfSplitPageNumberListeners) fn(new Set(next));
+}
+export function onPdfSplitPageNumbersChange(fn) {
+  state.pdfSplitPageNumberListeners.add(fn);
+  return () => state.pdfSplitPageNumberListeners.delete(fn);
 }
 export function getPdfPageCount() { return state.pdfPageCount; }
 export function setPdf(doc, path, paths) {
   const prev = state.pdfDoc;
+  const nextPath = path || null;
+  const nextPaths = Array.isArray(paths) ? [...paths] : (path ? [path] : []);
+  const referenceChanged = prev !== doc
+    || state.pdfPath !== nextPath
+    || !stringArraysEqual(state.pdfPaths, nextPaths);
   if (prev && prev !== doc && typeof prev.destroy === "function") {
     try { prev.destroy(); } catch (_) {}
   }
   state.pdfDoc = doc || null;
-  state.pdfPath = path || null;
-  state.pdfPaths = Array.isArray(paths) ? [...paths] : (path ? [path] : []);
+  state.pdfPath = nextPath;
+  state.pdfPaths = nextPaths;
   state.pdfExcludedReferencePages = new Set();
+  if (referenceChanged) clearScanExtractDoc();
   state.pdfPageCount = doc && typeof doc.numPages === "number" ? doc.numPages : 0;
   // ユーザー回転は PDF 切替時も保持（同じワークフローの PDF は同じ向きの傾向があるため）。
   // リセットしたい場合はホームに戻るで clearPdf → clearPdfRotation を呼ぶ。
@@ -1878,7 +1919,10 @@ export function setPdf(doc, path, paths) {
   for (const fn of state.pdfListeners) fn(state.pdfDoc);
 }
 export function clearPdf() {
-  if (!state.pdfDoc && !state.pdfPath) return;
+  if (!state.pdfDoc && !state.pdfPath) {
+    clearScanExtractDoc();
+    return;
+  }
   setPdf(null, null);
 }
 export function onPdfChange(fn) {

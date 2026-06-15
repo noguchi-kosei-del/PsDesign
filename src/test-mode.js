@@ -24,9 +24,11 @@ import {
   setCurrentPageIndex,
   setParallelSyncMode,
   setPdf,
+  setPdfFirstRightBlank,
   setPdfPageIndex,
   setPdfSkipFirstBlank,
   setPdfSplitMode,
+  setPdfSplitPageNumbers,
   setTxtDirty,
   setTxtFilePath,
   setTxtSource,
@@ -103,6 +105,8 @@ export async function runTestMode() {
 
   // --- 見本ペイン: 白紙合成 doc ---
   setPdfSplitMode(false);
+  setPdfSplitPageNumbers([]);
+  setPdfFirstRightBlank(false);
   setPdfSkipFirstBlank(false);
   const refDoc = await buildBlankReferenceDoc(PAGE_COUNT, PAGE_W, PAGE_H);
   setPdf(refDoc, "テスト見本", []);

@@ -12,6 +12,7 @@ import {
   setPdfRotation,
   setPdfSkipFirstBlank,
   setPdfSplitMode,
+  setPdfSplitPageNumbers,
   setPdfZoom,
   setPsdRotation,
   setPsdZoom,
@@ -128,6 +129,7 @@ async function goHome() {
   setPdfRotation(0);
   setPsdRotation(0);
   setPdfSplitMode(false);
+  setPdfSplitPageNumbers([]);
   setPdfSkipFirstBlank(false);
   setParallelSyncMode(true);
   setActivePane("psd");

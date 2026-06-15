@@ -1363,6 +1363,8 @@ struct PathInfo {
     is_file: bool,
     #[serde(rename = "sizeBytes")]
     size_bytes: u64,
+    #[serde(rename = "modifiedMs")]
+    modified_ms: Option<u64>,
 }
 
 #[derive(serde::Serialize)]
@@ -1886,6 +1888,11 @@ async fn path_info(
         is_directory: meta.is_dir(),
         is_file: meta.is_file(),
         size_bytes: meta.len(),
+        modified_ms: meta
+            .modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64),
     })
 }
 

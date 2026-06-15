@@ -35,6 +35,7 @@ import {
   getPdfRotation,
   getPdfSkipFirstBlank,
   getPdfSplitMode,
+  getPdfSplitPageNumbers,
   getPdfZoom,
   getPsdRotation,
   getPsdZoom,
@@ -50,6 +51,7 @@ import {
   setPdfRotation,
   setPdfSkipFirstBlank,
   setPdfSplitMode,
+  setPdfSplitPageNumbers,
   setPdfZoom,
   setPsdRotation,
   setPsdZoom,
@@ -137,6 +139,7 @@ function makeProjectDocument() {
       paths: getPdfPaths(),
       excludedPages: Array.from(getPdfExcludedReferencePages()),
       splitMode: getPdfSplitMode(),
+      splitPageNumbers: Array.from(getPdfSplitPageNumbers()),
       skipFirstBlank: getPdfSkipFirstBlank(),
     },
     view: {
@@ -608,6 +611,7 @@ async function createProjectBundle(snapshot, options = {}) {
     originalPaths: getPdfPaths(),
     excludedPages: Array.from(getPdfExcludedReferencePages()),
     splitMode: getPdfSplitMode(),
+    splitPageNumbers: Array.from(getPdfSplitPageNumbers()),
     skipFirstBlank: getPdfSkipFirstBlank(),
   };
 
@@ -667,6 +671,7 @@ async function overwriteCurrentProjectFile() {
       originalPaths: [],
       excludedPages: [],
       splitMode: false,
+      splitPageNumbers: [],
       skipFirstBlank: false,
     };
   } else {
@@ -675,6 +680,7 @@ async function overwriteCurrentProjectFile() {
       originalPaths: getPdfPaths(),
       excludedPages: Array.from(getPdfExcludedReferencePages()),
       splitMode: getPdfSplitMode(),
+      splitPageNumbers: Array.from(getPdfSplitPageNumbers()),
       skipFirstBlank: getPdfSkipFirstBlank(),
     };
   }
@@ -812,6 +818,7 @@ async function restoreProjectReferences(refs, options = {}) {
       excludedPages: refs.excludedPages,
       skipFirstBlankPage: refs.skipFirstBlank,
     });
+    if (Array.isArray(refs.splitPageNumbers)) setPdfSplitPageNumbers(refs.splitPageNumbers);
     if (typeof refs.splitMode === "boolean") setPdfSplitMode(refs.splitMode);
     if (typeof refs.skipFirstBlank === "boolean") setPdfSkipFirstBlank(refs.skipFirstBlank);
   } catch (e) {

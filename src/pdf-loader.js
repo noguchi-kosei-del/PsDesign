@@ -1,5 +1,12 @@
 import * as pdfjsLib from "pdfjs-dist";
-import { setPdf, setPdfExcludedReferencePages, setPdfFirstRightBlank, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
+import {
+  setPdf,
+  setPdfExcludedReferencePages,
+  setPdfFirstRightBlank,
+  setPdfSkipFirstBlank,
+  setPdfSplitMode,
+  setPdfSplitPageNumbers,
+} from "./state.js";
 import { showProgress, hideProgress, notifyDialog, confirmDialog, toast, updateProgress } from "./ui-feedback.js";
 import { withProgressFlow } from "./progress-flow.js";
 
@@ -39,12 +46,17 @@ async function readFileBytes(path) {
   return new Uint8Array(bytes);
 }
 
-async function getFileSizeBytes(path) {
+async function getFileInfo(path) {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     const info = await invoke("path_info", { path });
     const size = Number(info?.sizeBytes);
-    return Number.isFinite(size) ? size : null;
+    if (!Number.isFinite(size)) return null;
+    return {
+      path: typeof info?.path === "string" && info.path ? info.path : path,
+      sizeBytes: size,
+      modifiedMs: Number.isFinite(Number(info?.modifiedMs)) ? Number(info.modifiedMs) : null,
+    };
   } catch (e) {
     console.warn("[pdf-loader] file size preflight failed:", path, e);
     return null;
@@ -64,8 +76,17 @@ async function notifyLargeReferencePdf(path, sizeBytes) {
   });
 }
 
-async function compressLargeReferencePdf(path, sizeBytes, { notify = true, onProgress = null } = {}) {
-  if (!largeReferencePdfCompressionCache.has(path)) {
+function compressionCacheKey(path, fileInfo) {
+  const resolvedPath = typeof fileInfo?.path === "string" && fileInfo.path ? fileInfo.path : path;
+  const size = Number.isFinite(Number(fileInfo?.sizeBytes)) ? Number(fileInfo.sizeBytes) : "";
+  const modified = Number.isFinite(Number(fileInfo?.modifiedMs)) ? Number(fileInfo.modifiedMs) : "";
+  return `${resolvedPath}\u0000${size}\u0000${modified}`;
+}
+
+async function compressLargeReferencePdf(path, fileInfo, { notify = true, onProgress = null } = {}) {
+  const sizeBytes = Number(fileInfo?.sizeBytes);
+  const cacheKey = compressionCacheKey(path, fileInfo);
+  if (!largeReferencePdfCompressionCache.has(cacheKey)) {
     const promise = (async () => {
       if (notify) {
         const ok = await confirmDialog({
@@ -76,7 +97,7 @@ async function compressLargeReferencePdf(path, sizeBytes, { notify = true, onPro
           kind: "warning",
         });
         if (!ok) {
-          largeReferencePdfCompressionCache.delete(path);
+          largeReferencePdfCompressionCache.delete(cacheKey);
           return null;
         }
       }
@@ -121,12 +142,12 @@ async function compressLargeReferencePdf(path, sizeBytes, { notify = true, onPro
         try { if (typeof unlisten === "function") unlisten(); } catch (_) {}
       }
     })();
-    largeReferencePdfCompressionCache.set(path, promise.catch((e) => {
-      largeReferencePdfCompressionCache.delete(path);
+    largeReferencePdfCompressionCache.set(cacheKey, promise.catch((e) => {
+      largeReferencePdfCompressionCache.delete(cacheKey);
       throw e;
     }));
   }
-  return largeReferencePdfCompressionCache.get(path);
+  return largeReferencePdfCompressionCache.get(cacheKey);
 }
 
 export async function rejectLargeReferencePdfFiles(paths, { notify = true, onCompressionProgress = null } = {}) {
@@ -141,7 +162,8 @@ export async function rejectLargeReferencePdfFiles(paths, { notify = true, onCom
       acceptedPaths.push(p);
       continue;
     }
-    const sizeBytes = await getFileSizeBytes(p);
+    const fileInfo = await getFileInfo(p);
+    const sizeBytes = Number(fileInfo?.sizeBytes);
     if (!Number.isFinite(sizeBytes)) {
       acceptedPaths.push(p);
       continue;
@@ -149,7 +171,7 @@ export async function rejectLargeReferencePdfFiles(paths, { notify = true, onCom
     sizeBytesByPath.set(p, sizeBytes);
     if (sizeBytes >= REFERENCE_PDF_MAX_SIZE_BYTES) {
       try {
-        const result = await compressLargeReferencePdf(p, sizeBytes, {
+        const result = await compressLargeReferencePdf(p, fileInfo, {
           notify,
           onProgress: typeof onCompressionProgress === "function" ? onCompressionProgress : null,
         });
@@ -189,16 +211,21 @@ function waitForNextFrame() {
   return new Promise((resolve) => requestAnimationFrame(resolve));
 }
 
-// 1 ページ目の物理サイズで「横長原稿」と判定する。横長なら単ページ表示（左右分割）。
-async function detectLandscape(doc) {
-  try {
-    const page = await doc.getPage(1);
-    const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
-    const vp = page.getViewport({ scale: 1, rotation: baseRotation });
-    return vp.width > vp.height;
-  } catch (_) {
-    return false;
+// 各物理ページの表示サイズで「横長原稿」と判定する。横長ページだけ左右分割する。
+async function detectLandscapePages(doc) {
+  const out = new Set();
+  const total = Math.max(0, Math.trunc(Number(doc?.numPages) || 0));
+  for (let pageNum = 1; pageNum <= total; pageNum += 1) {
+    try {
+      const page = await doc.getPage(pageNum);
+      const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
+      const vp = page.getViewport({ scale: 1, rotation: baseRotation });
+      if (vp.width > vp.height) out.add(pageNum);
+    } catch (e) {
+      console.warn(`[pdf-loader] landscape detection failed for page ${pageNum}:`, e);
+    }
   }
+  return out;
 }
 
 async function detectFirstRightHalfBlank(doc) {
@@ -641,13 +668,15 @@ export async function loadReferenceFiles(paths, options = {}) {
     }
 
     const compositeDoc = makeCompositeDoc(sources);
-    // 横長判定は 1 ページ目（先頭ソース）で行い、PDF と同じく自動 split mode を設定。
-    const isLandscape = await detectLandscape(compositeDoc);
-    const firstRightBlank = isLandscape ? await detectFirstRightHalfBlank(compositeDoc) : false;
+    // 横長判定はページごとに行い、途中の見開きだけを自動 split 対象にする。
+    const landscapePages = await detectLandscapePages(compositeDoc);
+    const shouldSplitPages = landscapePages.size > 0;
+    const firstRightBlank = landscapePages.has(1) ? await detectFirstRightHalfBlank(compositeDoc) : false;
     if (shouldShowProgress) {
       updateProgress(withProgressFlow(progressFlow, { detail: headLabel, current: total + 1, total: progressTotal, taskIndex: 2 }));
     }
-    setPdfSplitMode(isLandscape);
+    setPdfSplitPageNumbers(landscapePages);
+    setPdfSplitMode(shouldSplitPages);
     setPdfFirstRightBlank(firstRightBlank);
     setPdfSkipFirstBlank(skipFirstBlankPage && hasPdf);
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、

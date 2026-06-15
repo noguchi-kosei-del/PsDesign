@@ -485,13 +485,15 @@ function parsePsd(buffer, preview) {
   // 最後に finalizeCanvasForPreview で表示ラスターだけ縮小する。
   const lowPreview = preview?.lowMemory === true;
   const criticalLowPreview = lowPreview && preview?.critical === true;
-  const preserveLayerImages = !lowPreview || shouldPreserveLayerImagesForLowMemory(buffer, preview);
-  const skipLayerImageData = lowPreview && !preserveLayerImages;
+  const forceLightLayerParse = preview?.forceLightLayerParse === true;
+  const preserveLayerImages = !forceLightLayerParse
+    && (!lowPreview || shouldPreserveLayerImagesForLowMemory(buffer, preview));
+  const skipLayerImageData = forceLightLayerParse || (lowPreview && !preserveLayerImages);
   const skipCompositeImageData = criticalLowPreview && preserveLayerImages;
   const psd = readPsd(buffer, {
     skipLayerImageData,
     skipCompositeImageData,
-    skipLinkedFilesData: lowPreview,
+    skipLinkedFilesData: lowPreview || forceLightLayerParse,
     skipThumbnail: true,
     useImageData: false,
   });
@@ -519,6 +521,9 @@ function parsePsd(buffer, preview) {
   return {
     width: psd.width,
     height: psd.height,
+    colorMode: psd.colorMode ?? null,
+    bitsPerChannel: psd.bitsPerChannel ?? null,
+    channels: psd.channels ?? null,
     dpi: psd.imageResources?.resolutionInfo?.horizontalResolution ?? 72,
     textLayers,
     bitmap,

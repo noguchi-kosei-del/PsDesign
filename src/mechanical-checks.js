@@ -6,18 +6,22 @@ import {
   getPages,
   getParallelSyncMode,
   getPdfDoc,
+  getPdfFirstRightBlank,
   getPdfPageCount,
   getPdfPageIndex,
   getPdfSkipFirstBlank,
   getPdfSplitMode,
+  getPdfSplitPageNumbers,
   getPdfZoom,
   getPsdZoom,
   setActivePane,
   setCurrentPageIndex,
+  setPdfFirstRightBlank,
   setParallelSyncMode,
   setPdfPageIndex,
   setPdfSkipFirstBlank,
   setPdfSplitMode,
+  setPdfSplitPageNumbers,
 } from "./state.js";
 import {
   getPdfVirtualPageAt,
@@ -80,13 +84,16 @@ function pageSideLabel(v) {
 function checkPdfVirtualSequence(total) {
   const saved = {
     split: getPdfSplitMode(),
+    splitPages: getPdfSplitPageNumbers(),
     skip: getPdfSkipFirstBlank(),
+    firstRightBlank: getPdfFirstRightBlank(),
     index: getPdfPageIndex(),
   };
   try {
     setPdfPageIndex(0);
 
     setPdfSplitMode(false);
+    setPdfSplitPageNumbers([]);
     setPdfSkipFirstBlank(false);
     if (getPdfVirtualPageCount() !== total) {
       return fail(`full mode count ${getPdfVirtualPageCount()} !== ${total}`);
@@ -105,14 +112,26 @@ function checkPdfVirtualSequence(total) {
     }
 
     setPdfSplitMode(true);
+    setPdfSplitPageNumbers(Array.from({ length: total }, (_, i) => i + 1));
     setPdfSkipFirstBlank(false);
-    const splitTotal = total > 0 ? 1 + Math.max(0, total - 1) * 2 : 0;
+    setPdfFirstRightBlank(false);
+    const splitTotal = total * 2;
     if (getPdfVirtualPageCount() !== splitTotal) {
       return fail(`split count ${getPdfVirtualPageCount()} !== ${splitTotal}`);
     }
     const split = getPdfVirtualPages().slice(0, 3).map(pageSideLabel).join(",");
-    if (total >= 2 && split !== "1:left,2:right,2:left") {
+    if (total >= 2 && split !== "1:right,1:left,2:right") {
       return fail(`split order starts with ${split}`);
+    }
+
+    setPdfFirstRightBlank(true);
+    const splitFirstBlankTotal = total > 0 ? 1 + Math.max(0, total - 1) * 2 : 0;
+    if (getPdfVirtualPageCount() !== splitFirstBlankTotal) {
+      return fail(`split first-right-blank count ${getPdfVirtualPageCount()} !== ${splitFirstBlankTotal}`);
+    }
+    const splitFirstBlank = getPdfVirtualPages().slice(0, 3).map(pageSideLabel).join(",");
+    if (total >= 2 && splitFirstBlank !== "1:left,2:right,2:left") {
+      return fail(`split first-right-blank order starts with ${splitFirstBlank}`);
     }
 
     setPdfSkipFirstBlank(true);
@@ -125,10 +144,29 @@ function checkPdfVirtualSequence(total) {
       return fail(`split+skip order starts with ${splitSkip}`);
     }
 
-    return pass("full / skip-first / split sequences are consistent");
+    if (total >= 2) {
+      setPdfSkipFirstBlank(false);
+      setPdfFirstRightBlank(false);
+      setPdfSplitPageNumbers([2]);
+      const mixedTotal = total + 1;
+      if (getPdfVirtualPageCount() !== mixedTotal) {
+        return fail(`mixed split count ${getPdfVirtualPageCount()} !== ${mixedTotal}`);
+      }
+      const mixed = getPdfVirtualPages().slice(0, Math.min(4, mixedTotal)).map(pageSideLabel).join(",");
+      const expectedMixed = total >= 3
+        ? "1:full,2:right,2:left,3:full"
+        : "1:full,2:right,2:left";
+      if (mixed !== expectedMixed) {
+        return fail(`mixed split order starts with ${mixed}`);
+      }
+    }
+
+    return pass("full / skip-first / split / mixed sequences are consistent");
   } finally {
+    setPdfSplitPageNumbers(saved.splitPages);
     setPdfSplitMode(saved.split);
     setPdfSkipFirstBlank(saved.skip);
+    setPdfFirstRightBlank(saved.firstRightBlank);
     setPdfPageIndex(saved.index);
   }
 }

@@ -2,11 +2,15 @@ import {
   getParallelViewMode,
   getPdfSplitMode,
 } from "./state.js";
-import { getPdfVirtualPageAt } from "./pdf-pages.js";
+import { getPdfVirtualPageAt, getPdfVirtualPages } from "./pdf-pages.js";
 
 function isSpreadNavigation(source) {
   if (source === "psd") return getParallelViewMode() === "spreadEdit";
-  if (source === "pdf") return getPdfSplitMode();
+  if (source === "pdf") {
+    if (!getPdfSplitMode()) return false;
+    const pages = getPdfVirtualPages();
+    return pages.length > 0 && pages.every((p) => p.side !== "full");
+  }
   return false;
 }
 

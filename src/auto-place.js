@@ -43,6 +43,7 @@ import { notifyDialog, confirmDialog, hideProgress, showProgress, updateProgress
 import { withProgressFlow, updateProgressFlow, completeProgressFlowStep } from "./progress-flow.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runScanExtractForFiles, runScanExtractForPlacementOnly, PLACE_ICON_SVG, normalizeReferenceScanDocForReferencePages } from "./scan-extract.js";
+import { getPdfVirtualPageAt } from "./pdf-pages.js";
 import { renderAllSpreads } from "./spread-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
@@ -566,6 +567,7 @@ async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, refer
   const isSinglePdfMultiPsd = referencePaths.length === 1
     && /\.pdf$/i.test(referencePaths[0])
     && psdPages.length > 1;
+  const psdPageMap = buildPsdPageMap(psdPages, referenceScanDoc?.pages?.length ?? 0);
   const N = isSinglePdfMultiPsd
     ? psdPages.length
     : Math.min(psdPages.length, referencePaths.length);
@@ -574,12 +576,13 @@ async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, refer
   }
   for (let i = 0; i < N; i++) {
     const psd = psdPages[i];
+    const referenceIndex = referenceIndexForPsdRow(psdPageMap, i);
     const refEntry = isSinglePdfMultiPsd ? referencePaths[0] : referencePaths[i];
     const refPath = typeof refEntry === "string" ? refEntry : refEntry?.path;
     const pdfPageIdx = Number.isInteger(refEntry?.pdfPageIndex)
       ? refEntry.pdfPageIndex
-      : (isSinglePdfMultiPsd ? i : 0);
-    const referenceScan = referenceScanDoc?.pages?.[i] ?? { blocks: [] };
+      : (isSinglePdfMultiPsd ? referenceIndex : 0);
+    const referenceScan = referenceScanDoc?.pages?.[referenceIndex] ?? { blocks: [] };
     if (progressLabel) {
       updateProgress(withProgressFlow(progressFlow, { current: i, total: N, detail: `${progressLabel} ${i + 1}/${N} を計算中…`, showCount: false }));
     }
@@ -595,8 +598,10 @@ async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, refer
 function getLoadedReferenceEntryForPage(index) {
   const doc = getPdfDoc();
   if (doc && typeof doc.getSourcePath === "function") {
-    const pageNum = typeof doc.getSourcePageNum === "function" ? doc.getSourcePageNum(index + 1) : 1;
-    const path = doc.getSourcePath(index + 1);
+    const virtualPage = getPdfVirtualPageAt(index);
+    const physicalPageNum = virtualPage?.pageNum ?? (index + 1);
+    const pageNum = typeof doc.getSourcePageNum === "function" ? doc.getSourcePageNum(physicalPageNum) : 1;
+    const path = doc.getSourcePath(physicalPageNum);
     return path ? { path, pdfPageIndex: Math.max(0, (Number(pageNum) || 1) - 1) } : null;
   }
   return null;
@@ -1097,6 +1102,255 @@ function buildTxtPageMapForSync(parsed) {
   return parsed.hasMarkers ? parsed.byPage : new Map([[1, parsed.all]]);
 }
 
+function stripFileExt(name) {
+  return String(name ?? "").replace(/\.[^.\\/]+$/, "");
+}
+
+function parsePsdPageNumbersFromPath(path, fallbackPageNumber) {
+  const name = stripFileExt(baseName(path ?? ""));
+  const match = name.match(/(?:^|_)(\d{1,4})(?:[_\s]+(\d{1,4}))?$/)
+    ?? name.match(/^(\d{1,4})(?:[\-\s]+(\d{1,4}))?$/);
+  if (!match) return [fallbackPageNumber];
+  const nums = [match[1], match[2]]
+    .filter(Boolean)
+    .map((v) => parseInt(v, 10))
+    .filter((v) => Number.isInteger(v) && v > 0);
+  if (nums.length === 2) {
+    if (nums[0] === nums[1]) return [nums[0]];
+    if (Math.abs(nums[1] - nums[0]) === 1) return nums;
+    return [fallbackPageNumber];
+  }
+  return nums.length === 1 ? nums : [fallbackPageNumber];
+}
+
+function buildPsdPageMap(psdPages, referencePageCount = 0) {
+  const pageNumbersByPsdIndex = psdPages.map((psd, index) => {
+    if (Number.isInteger(psd?.logicalPageNumber) && psd.logicalPageNumber > 0) {
+      return [psd.logicalPageNumber];
+    }
+    const nums = parsePsdPageNumbersFromPath(psd?.sourcePath ?? psd?.path, index + 1);
+    if (nums.length >= 2 && psd?.splitSide === "right") return [nums[0]];
+    if (nums.length >= 2 && psd?.splitSide === "left") return [nums[1]];
+    return nums;
+  });
+  const pageToPsdIndices = new Map();
+  let logicalMaxPage = 0;
+  let hasSpreadPsd = false;
+  let hasLogicalMismatch = false;
+  for (let index = 0; index < pageNumbersByPsdIndex.length; index += 1) {
+    const nums = pageNumbersByPsdIndex[index];
+    if (nums.length > 1) hasSpreadPsd = true;
+    if (nums.length !== 1 || nums[0] !== index + 1) hasLogicalMismatch = true;
+    for (const pageNumber of nums) {
+      logicalMaxPage = Math.max(logicalMaxPage, pageNumber);
+      const arr = pageToPsdIndices.get(pageNumber) ?? [];
+      arr.push(index);
+      pageToPsdIndices.set(pageNumber, arr);
+    }
+  }
+  if (!(logicalMaxPage > 0)) logicalMaxPage = psdPages.length;
+  const usedPsdIndices = new Set();
+  for (const [pageNumber, indices] of pageToPsdIndices.entries()) {
+    const preferred = indices.find((idx) => psdPages[idx]?.logicalPageNumber === pageNumber)
+      ?? indices.find((idx) => {
+        const psd = psdPages[idx];
+        const nums = parsePsdPageNumbersFromPath(psd?.sourcePath ?? psd?.path, idx + 1);
+        return (psd?.splitSide === "right" && nums[0] === pageNumber)
+          || (psd?.splitSide === "left" && nums[1] === pageNumber);
+      })
+      ?? indices[0];
+    pageToPsdIndices.set(pageNumber, [preferred]);
+    usedPsdIndices.add(preferred);
+  }
+  return {
+    pageNumbersByPsdIndex,
+    pageToPsdIndices,
+    logicalMaxPage,
+    hasSpreadPsd,
+    hasLogicalMismatch,
+    usedPsdIndices,
+    referenceUsesLogicalPages: referencePageCount >= logicalMaxPage && (hasSpreadPsd || hasLogicalMismatch),
+  };
+}
+
+function uniquePsdIndicesForPageNumbers(pageNumbers, psdPageMap, psdCount) {
+  const out = [];
+  const seen = new Set();
+  for (const n of pageNumbers) {
+    const mapped = psdPageMap.pageToPsdIndices.get(n);
+    const candidates = mapped && mapped.length ? mapped : [n - 1];
+    for (const idx of candidates) {
+      if (!Number.isInteger(idx) || idx < 0 || idx >= psdCount || seen.has(idx)) continue;
+      seen.add(idx);
+      out.push(idx);
+    }
+  }
+  return out;
+}
+
+function referenceIndexForPsdRow(psdPageMap, rowIndex) {
+  const logicalPages = psdPageMap.pageNumbersByPsdIndex[rowIndex] ?? [rowIndex + 1];
+  if (psdPageMap.referenceUsesLogicalPages) {
+    return Math.max(0, (logicalPages[0] ?? rowIndex + 1) - 1);
+  }
+  return rowIndex;
+}
+
+function originalIndexBlock(block, originalIndex) {
+  return {
+    ...block,
+    __opusOriginalBlockIndex: Number.isInteger(block?.__opusOriginalBlockIndex)
+      ? block.__opusOriginalBlockIndex
+      : originalIndex,
+  };
+}
+
+function withOriginalBlockIndices(referenceScan) {
+  if (!referenceScan || !Array.isArray(referenceScan.blocks)) return referenceScan;
+  return {
+    ...referenceScan,
+    blocks: referenceScan.blocks.map((block, index) => originalIndexBlock(block, index)),
+  };
+}
+
+function centerXOfBlock(block) {
+  const box = Array.isArray(block?.box) ? block.box : null;
+  if (!box || box.length < 4) return null;
+  const x1 = Number(box[0]);
+  const x2 = Number(box[2]);
+  return Number.isFinite(x1) && Number.isFinite(x2) ? (x1 + x2) / 2 : null;
+}
+
+function spreadSideForLogicalPage(logicalPages, pageNumber) {
+  const pos = logicalPages.indexOf(pageNumber);
+  if (pos === 0) return "right";
+  if (pos === 1) return "left";
+  return null;
+}
+
+function filterSpreadReferenceScanSide(referenceScan, side) {
+  const width = Number(referenceScan?.img_width);
+  const blocks = Array.isArray(referenceScan?.blocks) ? referenceScan.blocks : [];
+  if (!referenceScan || !Number.isFinite(width) || width <= 0 || (side !== "left" && side !== "right")) {
+    return withOriginalBlockIndices(referenceScan);
+  }
+  const half = width / 2;
+  return {
+    ...referenceScan,
+    blocks: blocks
+      .map((block, index) => ({ block, index, cx: centerXOfBlock(block) }))
+      .filter((item) => Number.isFinite(item.cx) && (side === "right" ? item.cx >= half : item.cx < half))
+      .map((item) => originalIndexBlock(item.block, item.index)),
+    __opusSpreadSide: side,
+  };
+}
+
+function expandSinglePageScanIntoSpread(referenceScan, side, leftWidth, rightWidth, originalBase = 0) {
+  if (!referenceScan || (side !== "left" && side !== "right")) return withOriginalBlockIndices(referenceScan);
+  const ownWidth = Math.max(1, Number(referenceScan.img_width) || 1);
+  const lw = Math.max(1, Number(leftWidth) || ownWidth);
+  const rw = Math.max(1, Number(rightWidth) || ownWidth);
+  const fullWidth = lw + rw;
+  const offsetX = side === "right" ? lw : 0;
+  const blocks = Array.isArray(referenceScan.blocks) ? referenceScan.blocks : [];
+  return {
+    ...referenceScan,
+    img_width: fullWidth,
+    blocks: blocks.map((block, index) => {
+      const box = Array.isArray(block?.box) ? block.box : null;
+      const next = originalIndexBlock(block, originalBase + index);
+      if (!box || box.length < 4) return next;
+      return {
+        ...next,
+        box: [
+          Number(box[0]) + offsetX,
+          Number(box[1]),
+          Number(box[2]) + offsetX,
+          Number(box[3]),
+        ],
+      };
+    }),
+    __opusSpreadSide: side,
+  };
+}
+
+function referenceScanForSpreadPage(referenceScanDoc, rowReferenceScan, logicalPages, pageNumber, psdPageMap, wholeSpread) {
+  if (logicalPages.length < 2) return withOriginalBlockIndices(rowReferenceScan);
+  const side = spreadSideForLogicalPage(logicalPages, pageNumber);
+  if (psdPageMap.referenceUsesLogicalPages) {
+    const firstPageScan = referenceScanDoc?.pages?.[(logicalPages[0] ?? 1) - 1] ?? null;
+    const secondPageScan = referenceScanDoc?.pages?.[(logicalPages[1] ?? 1) - 1] ?? null;
+    if (wholeSpread && firstPageScan && secondPageScan) {
+      const leftWidth = Math.max(1, Number(secondPageScan.img_width) || 1);
+      const rightWidth = Math.max(1, Number(firstPageScan.img_width) || 1);
+      const right = expandSinglePageScanIntoSpread(firstPageScan, "right", leftWidth, rightWidth, 0);
+      const left = expandSinglePageScanIntoSpread(secondPageScan, "left", leftWidth, rightWidth, 100000);
+      return {
+        ...right,
+        img_height: Math.max(Number(firstPageScan.img_height) || 0, Number(secondPageScan.img_height) || 0),
+        blocks: [...(right.blocks ?? []), ...(left.blocks ?? [])],
+        __opusSpreadSide: "both",
+      };
+    }
+    const sourceScan = side === "right" ? firstPageScan : side === "left" ? secondPageScan : null;
+    if (sourceScan) {
+      const leftWidth = Math.max(1, Number(secondPageScan?.img_width) || Number(sourceScan.img_width) || 1);
+      const rightWidth = Math.max(1, Number(firstPageScan?.img_width) || Number(sourceScan.img_width) || 1);
+      return expandSinglePageScanIntoSpread(sourceScan, side, leftWidth, rightWidth);
+    }
+  }
+  if (wholeSpread) return withOriginalBlockIndices(rowReferenceScan);
+  return filterSpreadReferenceScanSide(rowReferenceScan, side);
+}
+
+function referenceScanForPlacement(referenceScanDoc, row, pageNumber, psdPageMap, wholeSpread) {
+  const logicalPages = psdPageMap.pageNumbersByPsdIndex[row.pageIndex - 1] ?? [row.pageIndex];
+  if (logicalPages.length >= 2) {
+    return referenceScanForSpreadPage(referenceScanDoc, row.referenceScan, logicalPages, pageNumber, psdPageMap, wholeSpread);
+  }
+  return withOriginalBlockIndices(row.referenceScan);
+}
+
+function placementEntriesForGroup(referenceScanDoc, rows, pageNumbers, psdPageMap) {
+  const wholeSpread = pageNumbers.length >= 2;
+  const rowIndices = uniquePsdIndicesForPageNumbers(pageNumbers, psdPageMap, rows.length);
+  const entries = [];
+  const seen = new Set();
+  for (const rowIdx of rowIndices) {
+    const row = rows[rowIdx];
+    if (!row) continue;
+    const logicalPages = psdPageMap.pageNumbersByPsdIndex[rowIdx] ?? [rowIdx + 1];
+    const logicalMembers = pageNumbers.filter((n) => logicalPages.includes(n));
+    const targetPages = logicalMembers.length ? logicalMembers : [pageNumbers[0] ?? rowIdx + 1];
+    for (const pageNumber of targetPages) {
+      const key = wholeSpread ? `${rowIdx}:spread` : `${rowIdx}:${pageNumber}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const referenceScan = referenceScanForPlacement(referenceScanDoc, row, pageNumber, psdPageMap, wholeSpread);
+      if (!referenceScan) continue;
+      entries.push({ rowIdx, pageNumber, referenceScan });
+      if (wholeSpread) break;
+    }
+  }
+  return entries;
+}
+
+function getAutoPlaceScanPageLimit(psdPages) {
+  return buildPsdPageMap(psdPages).logicalMaxPage;
+}
+
+function referenceScanForLayerAdjustment(referenceScanDoc, psdPageMap, psdIndex, sourceTxtRef = null) {
+  const row = {
+    pageIndex: psdIndex + 1,
+    referenceScan: referenceScanDoc?.pages?.[referenceIndexForPsdRow(psdPageMap, psdIndex)] ?? null,
+  };
+  const pageNumber = Number(sourceTxtRef?.pageNumber);
+  if (Number.isInteger(pageNumber) && pageNumber > 0) {
+    return referenceScanForPlacement(referenceScanDoc, row, pageNumber, psdPageMap, false) ?? row.referenceScan;
+  }
+  return withOriginalBlockIndices(row.referenceScan);
+}
+
 // 【見開きマーカー対応】txtGroups (= buildPlacementGroups) を「見開き単位」で処理する。
 // 見開き <<2,3Page>> は構成する単ページ PSD (P2・P3) の吹き出しを 1 つに結合し、
 // その見開きのテキストプールを内容マッチで割り当てる。各レイヤーは所属する単ページ PSD の
@@ -1107,7 +1361,7 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
   const alignmentByPath = options.alignmentByPath instanceof Map ? options.alignmentByPath : null;
   const M = psdPages.length;
   const R = referenceScanDoc.pages.length;
-  const N = Math.min(M, R);
+  const psdPageMap = buildPsdPageMap(psdPages, R);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
 
   // PSD ページごとの行。各見開きグループの配置結果を、bubble が属する単ページ PSD の行へ溜める。
@@ -1116,7 +1370,8 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
     psd,
     psdPath: psd?.path ?? null,
     psdName: baseName(psd?.path ?? ""),
-    referenceScan: i < R ? referenceScanDoc.pages[i] : null,
+    referenceScanIndex: referenceIndexForPsdRow(psdPageMap, i),
+    referenceScan: referenceScanDoc.pages[referenceIndexForPsdRow(psdPageMap, i)] ?? null,
     sorted: null,
     layers: [],
     placedCount: 0,
@@ -1131,20 +1386,27 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
       ? group.pageNumbers
       : [group.key];
     // この見開きに属する単ページ PSD のうち、OCR 結果がある index を集める。
-    const memberIdx = pageNumbers
-      .map((n) => n - 1)
-      .filter((i) => i >= 0 && i < N && rows[i] && rows[i].referenceScan);
+    const memberEntries = placementEntriesForGroup(referenceScanDoc, rows, pageNumbers, psdPageMap)
+      .filter((entry) => rows[entry.rowIdx]?.referenceScan && entry.referenceScan);
     // 構成ページの吹き出しを結合（各 bubble に所属行 + 連結グループ情報を記録）。
     const combined = [];
     const meta = [];
-    for (const i of memberIdx) {
-      const row = rows[i];
-      const sorted = sortBlocksMangaOrder(row.referenceScan.blocks ?? []);
-      row.sorted = sorted;
+    for (const entry of memberEntries) {
+      const row = rows[entry.rowIdx];
+      const sorted = sortBlocksMangaOrder(entry.referenceScan.blocks ?? []);
+      if (!row.sorted) row.sorted = sortBlocksMangaOrder(row.referenceScan?.blocks ?? []);
       // 【v1.26.0 移植】連結グループ判定 (ひょうたん型) はページ単位で算出。
-      const connected = groupConnectedBlocks(sorted, ` page ${i + 1}`);
+      const connected = groupConnectedBlocks(sorted, ` page ${entry.pageNumber ?? entry.rowIdx + 1}`);
       for (let k = 0; k < sorted.length; k++) {
-        meta.push({ rowIdx: i, localIdx: k, connected: connected[k] });
+        const originalIdx = Number.isInteger(sorted[k]?.__opusOriginalBlockIndex)
+          ? sorted[k].__opusOriginalBlockIndex
+          : k;
+        meta.push({
+          rowIdx: entry.rowIdx,
+          localIdx: originalIdx,
+          connected: connected[k],
+          referenceScan: entry.referenceScan,
+        });
         combined.push(sorted[k]);
       }
     }
@@ -1165,7 +1427,7 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
       if (a && m) {
         const row = rows[m.rowIdx];
         const alignment = row.psdPath && alignmentByPath ? alignmentByPath.get(row.psdPath) : null;
-        const layer = mapBlockToNewLayer(a.block, row.referenceScan, row.psd, txt[j], defaults, sourceTxtRef, m.connected, alignment);
+        const layer = mapBlockToNewLayer(a.block, m.referenceScan, row.psd, txt[j], defaults, sourceTxtRef, m.connected, alignment);
         layer.lowExtractTextMatch = a.lowConfidence === true;
         layer.extractMatchScore = sourceTxtRef.extractMatchScore;
         row.layers.push(layer);
@@ -1175,11 +1437,11 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
       } else {
         // 余り TXT: 読み順で前半→先頭ページ / 後半→次ページに振り分け。
         let tgtIdx;
-        if (memberIdx.length >= 1) {
+        if (memberEntries.length >= 1) {
           const frac = txt.length > 1 ? j / txt.length : 0;
-          tgtIdx = memberIdx[Math.min(memberIdx.length - 1, Math.floor(frac * memberIdx.length))];
+          tgtIdx = memberEntries[Math.min(memberEntries.length - 1, Math.floor(frac * memberEntries.length))].rowIdx;
         } else {
-          tgtIdx = group.key - 1;
+          tgtIdx = uniquePsdIndicesForPageNumbers([group.key], psdPageMap, M)[0] ?? (group.key - 1);
         }
         const row = rows[tgtIdx];
         if (row && row.psd) {
@@ -1200,6 +1462,8 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
 
   // 行 → out.pages（PSD ページ単位の結果）。
   for (const row of rows) {
+    const rowIndex = row.pageIndex - 1;
+    if (!psdPageMap.usedPsdIndices.has(rowIndex) && row.placedCount === 0) continue;
     const sorted = row.sorted ?? sortBlocksMangaOrder(row.referenceScan?.blocks ?? []);
     const bubbleCount = sorted.length;
     const leftoverBubbles = sorted
@@ -1226,8 +1490,9 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
     out.totals.leftoverBubbles += leftoverBubbles.length;
   }
   // PSD 数 / 画像スキャン ページ数の不一致を末尾に warning として記録
-  if (M > N) out.unmappedPsdCount = M - N;
-  if (R > N) out.unmappedReferenceScanCount = R - N;
+  const logicalPsdCount = psdPageMap.logicalMaxPage;
+  if (logicalPsdCount > R) out.unmappedPsdCount = logicalPsdCount - R;
+  if (R > logicalPsdCount) out.unmappedReferenceScanCount = R - logicalPsdCount;
   return out;
 }
 
@@ -1402,14 +1667,19 @@ export async function runAutoPlace({
     //   - キャッシュ有効: 結果あり & pages 1 件以上 → そのまま再利用
     //   - 無効なら、読込済み見本ファイル全てを対象に画像スキャンを自動トリガーする。
     let cache = getScanExtractDoc();
-    const cacheValid = !forceRescan && !!(
+    const loadedRefs = getPdfPaths();
+    const imageReferenceOnly = loadedRefs.length > 0 && loadedRefs.every((p) => /\.(jpe?g|png|webp|tiff?|bmp)$/i.test(p));
+    const cacheLooksLikeStaleImageSplit = imageReferenceOnly
+      && cache?.doc?.__opusVirtualPages === true
+      && Array.isArray(cache.doc.pages)
+      && cache.doc.pages.length > loadedRefs.length;
+    const cacheValid = !forceRescan && !cacheLooksLikeStaleImageSplit && !!(
       cache &&
       cache.doc &&
       Array.isArray(cache.doc.pages) &&
       cache.doc.pages.length > 0
     );
     if (!cacheValid) {
-      const loadedRefs = getPdfPaths();
       if (loadedRefs.length === 0) {
         await notifyDialog({
           title: "自動配置できません",
@@ -1424,7 +1694,7 @@ export async function runAutoPlace({
       } else {
         await runScanExtractForFiles(loadedRefs, {
           loadText: !preserveTxtDuringExtract || !(txtSrc && txtSrc.content),
-          maxPages: psdPages.length,
+          maxPages: getAutoPlaceScanPageLimit(psdPages),
           excludedPages: getPdfExcludedReferencePages(),
           keepProgressOpen: true,
           progressFlow: scanProgressFlow,
@@ -1488,11 +1758,14 @@ export async function runAutoPlace({
     if (positionAdjustMode === "mode1" || positionAdjustMode === "mode2") {
       progressOpenForAutoPlace = true;
       showProgress(withProgressFlow(alignProgressFlow, { title: "自動配置中…", detail: "位置調整を計算中…", icon: PLACE_ICON_SVG, variant: "place" }));
+      const alignPsdPageMap = buildPsdPageMap(psdPages, placementDoc?.pages?.length ?? 0);
       alignmentByPath = await computeAlignmentsForPages(
         positionAdjustMode,
         psdPages,
         placementDoc,
-        psdPages.map((_, i) => getLoadedReferenceEntryForPage(i)).filter(Boolean),
+        psdPages
+          .map((_, i) => getLoadedReferenceEntryForPage(referenceIndexForPsdRow(alignPsdPageMap, i)))
+          .filter(Boolean),
         { progressLabel: "位置調整を計算中…", progressFlow: alignProgressFlow },
       );
       if (alignmentByPath.size === 0) {
@@ -1770,19 +2043,19 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
 
     showProgress({ detail: `${modeLabel} 中…`, icon: PLACE_ICON_SVG, label: modeLabel, variant: "place" });
 
+    const psdPageMap = buildPsdPageMap(psdPages, referenceScanDoc?.pages?.length ?? 0);
+    const referenceEntries = psdPages.map((_, i) => getLoadedReferenceEntryForPage(referenceIndexForPsdRow(psdPageMap, i)));
     const alignmentByPath = new Map();
-    const isSinglePdfMultiPsd = referencePaths.length === 1
-      && /\.pdf$/i.test(referencePaths[0])
-      && psdPages.length > 1;
-    const N = isSinglePdfMultiPsd
-      ? psdPages.length
-      : Math.min(psdPages.length, referencePaths.length);
+    const N = psdPages.length;
     updateProgress({ current: 0, total: Math.max(N, 1), detail: `${modeLabel} 0/${N}`, showCount: false });
     for (let i = 0; i < N; i++) {
       const psd = psdPages[i];
-      const refPath = isSinglePdfMultiPsd ? referencePaths[0] : referencePaths[i];
-      const pdfPageIdx = isSinglePdfMultiPsd ? i : 0;
-      const referenceScan = referenceScanDoc?.pages?.[i] ?? { blocks: [] };
+      const referenceIndex = referenceIndexForPsdRow(psdPageMap, i);
+      const refEntry = referenceEntries[i];
+      const refPath = typeof refEntry === "string" ? refEntry : refEntry?.path;
+      const pdfPageIdx = Number.isInteger(refEntry?.pdfPageIndex) ? refEntry.pdfPageIndex : 0;
+      const referenceScan = referenceScanDoc?.pages?.[referenceIndex] ?? { blocks: [] };
+      if (!refPath) continue;
       updateProgress({ current: i, total: N, detail: `${modeLabel} ${i + 1}/${N} を計算中…`, showCount: false });
       console.info(
         `[scan-adjust] page=${i + 1} mode=${mode} ref=${refPath}`,
@@ -1824,7 +2097,7 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
         if (!Number.isFinite(alignment.scale) || alignment.scale <= 0) continue;
         const idx = pathToIndex.get(layer.psdPath);
         const psd = psdPages[idx];
-        const referenceScanPage = referenceScanDoc?.pages?.[idx];
+        const referenceScanPage = referenceScanForLayerAdjustment(referenceScanDoc, psdPageMap, idx, layer.sourceTxtRef);
         if (!psd || !referenceScanPage) continue;
         const sx = psd.width / Math.max(referenceScanPage.img_width, 1);
         const sy = psd.height / Math.max(referenceScanPage.img_height, 1);
@@ -2293,6 +2566,7 @@ async function runOverlayAlign(options = {}) {
   if (!result) return;
 
   const referenceScanDoc = getScanExtractDoc()?.doc;
+  const psdPageMap = buildPsdPageMap(psdPages, referenceScanDoc?.pages?.length ?? 0);
 
   runningAdjust = true;
   showProgress(withProgressFlow(progressFlow, {
@@ -2313,7 +2587,7 @@ async function runOverlayAlign(options = {}) {
       const idx = psdPages.findIndex((p) => p?.path === layer.psdPath);
       if (idx < 0) continue;
       const psd = psdPages[idx];
-      const referenceScanPage = referenceScanDoc?.pages?.[idx];
+      const referenceScanPage = referenceScanForLayerAdjustment(referenceScanDoc, psdPageMap, idx, layer.sourceTxtRef);
       if (!psd || !referenceScanPage) continue;
       const referenceScanW = Math.max(referenceScanPage.img_width, 1);
       const referenceScanH = Math.max(referenceScanPage.img_height, 1);
