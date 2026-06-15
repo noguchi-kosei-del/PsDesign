@@ -157,6 +157,7 @@ const $psdRotation = createObservable(0, _norm90);
 const $pdfPageIndex = createObservable(0, _normPageIndex);
 const $pdfSplitMode = createObservable(false, _normBool);
 const $pdfSkipFirstBlank = createObservable(false, _normBool);
+const $pdfFirstRightBlank = createObservable(false, _normBool);
 const $parallelSyncMode = createObservable(true, _normBool);
 const $activePane = createObservable("psd", _normActivePane);
 const $parallelViewMode = createObservable("parallel", _normParallelViewMode);
@@ -1224,7 +1225,7 @@ function resetHistoryBaseline() {
 
 export function exportProjectSnapshot() {
   const snap = {
-    psdPaths: state.pages.map((p) => p.path).filter(Boolean),
+    psdPaths: getUniquePsdSourcePaths(),
     edits: Array.from(state.edits.values()).map(cloneProjectValue),
     newLayers: state.newLayers.map(cloneProjectValue),
     nextTempId: state.nextTempId,
@@ -1388,6 +1389,36 @@ export function onHistoryChange(fn) {
 export function addPage(page) { state.pages.push(page); }
 export function getPages() { return state.pages; }
 
+export function getPsdSourcePath(pageOrPath) {
+  if (!pageOrPath) return null;
+  if (typeof pageOrPath === "object") return pageOrPath.sourcePath ?? pageOrPath.path ?? null;
+  const page = state.pages.find((p) => p.path === pageOrPath || p.sourcePath === pageOrPath);
+  return page?.sourcePath ?? pageOrPath;
+}
+
+export function getUniquePsdSourcePaths() {
+  const out = [];
+  const seen = new Set();
+  for (const page of state.pages) {
+    const path = getPsdSourcePath(page);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    out.push(path);
+  }
+  return out;
+}
+
+function getPsdSourcePageForPath(path) {
+  const page = state.pages.find((p) => p.path === path || p.sourcePath === path) ?? null;
+  if (!page) return null;
+  return {
+    ...page,
+    path: page.sourcePath ?? page.path,
+    width: page.sourceWidth ?? page.width,
+    height: page.sourceHeight ?? page.height,
+  };
+}
+
 // 基準PSD（最初に読み込まれた PSD ページ）。1 つも読み込まれていない場合は null。
 export function getReferencePage() {
   return state.pages[0] ?? null;
@@ -1450,16 +1481,18 @@ function sanitizeNumericFields(obj) {
 export function exportEdits() {
   const byPsd = new Map();
   const ensure = (psdPath) => {
-    if (!byPsd.has(psdPath)) {
-      const page = state.pages.find((p) => p.path === psdPath) ?? null;
-      byPsd.set(psdPath, {
+    const sourcePath = getPsdSourcePath(psdPath);
+    if (!sourcePath) return null;
+    if (!byPsd.has(sourcePath)) {
+      const page = getPsdSourcePageForPath(sourcePath);
+      byPsd.set(sourcePath, {
         pageWidth: Number.isFinite(Number(page?.width)) ? Number(page.width) : null,
         pageHeight: Number.isFinite(Number(page?.height)) ? Number(page.height) : null,
         layers: [],
         newLayers: [],
       });
     }
-    return byPsd.get(psdPath);
+    return byPsd.get(sourcePath);
   };
 
   // Save/export operates on every loaded PSD, even when a file has no text layers
@@ -1475,7 +1508,7 @@ export function exportEdits() {
     const payload = { layerId, ...sanitizeNumericFields(rest) };
     if (payload.strokeColor == null && layer?.strokeColor != null) payload.strokeColor = layer.strokeColor;
     if (payload.strokeWidthPx == null && Number.isFinite(layer?.strokeWidthPx)) payload.strokeWidthPx = layer.strokeWidthPx;
-    ensure(psdPath).layers.push(payload);
+    ensure(psdPath)?.layers.push(payload);
   }
 
   for (const nl of state.newLayers) {
@@ -1483,7 +1516,10 @@ export function exportEdits() {
     // 新規レイヤーの x/y は配置必須のため、いずれかが NaN/Infinity なら
     // そのレイヤー自体を payload から落とす（不正配置で JSX を壊さない）。
     if (!Number.isFinite(nl.x) || !Number.isFinite(nl.y)) continue;
-    ensure(psdPath).newLayers.push(sanitizeNumericFields(rest));
+    const page = state.pages.find((p) => p.path === psdPath) ?? null;
+    const offsetX = Number.isFinite(page?.splitOffsetX) ? page.splitOffsetX : 0;
+    const payload = sanitizeNumericFields({ ...rest, x: nl.x + offsetX, y: nl.y });
+    ensure(psdPath)?.newLayers.push(payload);
   }
 
   // 連続記号のツメ（環境設定の global 値）。新規レイヤー（newLayers）にだけ JSX 側で適用する。
@@ -1869,6 +1905,10 @@ export const onPdfSplitModeChange = $pdfSplitMode.on;
 export const getPdfSkipFirstBlank = $pdfSkipFirstBlank.get;
 export const setPdfSkipFirstBlank = $pdfSkipFirstBlank.set;
 export const onPdfSkipFirstBlankChange = $pdfSkipFirstBlank.on;
+
+export const getPdfFirstRightBlank = $pdfFirstRightBlank.get;
+export const setPdfFirstRightBlank = $pdfFirstRightBlank.set;
+export const onPdfFirstRightBlankChange = $pdfFirstRightBlank.on;
 
 export const getParallelSyncMode = $parallelSyncMode.get;
 export const setParallelSyncMode = $parallelSyncMode.set;

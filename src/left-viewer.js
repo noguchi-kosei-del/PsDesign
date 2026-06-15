@@ -18,7 +18,7 @@ const PDF_RE = /\.pdf$/i;
 const PSD_RE = /\.psd$/i;
 const MAX_CANVAS_SIDE = 16384;
 const PDF_RENDER_SCALE = 4;
-const VIEWER_FIT_BASE_SCALE = 1.1;
+const VIEWER_FIT_BASE_SCALE = 1.0;
 
 const state = {
   pages: [],
@@ -469,9 +469,7 @@ function displaySizeForPage(page, host) {
 }
 
 function displayHostForStage(stage) {
-  // 写植見本/PDF 側はペイン全体を基準に fit サイズを算出する。
-  // 内側 stage 基準にすると、ペイン padding 分だけ画像の表示領域が狭くなる。
-  return $("spreads-viewer-area") || stage;
+  return stage;
 }
 
 function makeEmpty() {

@@ -186,7 +186,7 @@ export function renderAllSpreads() {
   }
 
   const page = pages[idx];
-  if (psdLabelEl) psdLabelEl.textContent = truncateLabel(`P${pageNumLabel(idx + 1)}  ${fileName(page.path)}`);
+  if (psdLabelEl) psdLabelEl.textContent = truncateLabel(`P${pageNumLabel(idx + 1)}${splitSideLabel(page)}  ${fileName(page.sourcePath ?? page.path)}`);
   root.appendChild(buildPage(page, idx, root, { current: true }));
 }
 
@@ -498,4 +498,10 @@ function fileName(p) {
   if (!p) return "";
   const m = p.match(/[\\/]([^\\/]+)$/);
   return m ? m[1] : p;
+}
+
+function splitSideLabel(page) {
+  if (page?.splitSide === "right") return "右";
+  if (page?.splitSide === "left") return "左";
+  return "";
 }

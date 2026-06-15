@@ -715,10 +715,44 @@ function paragraphElForRef(ref) {
   ) ?? null;
 }
 
-function countParagraphsForPage(pageNumber) {
-  return $("editor-pages-viewer")?.querySelectorAll(
-    `.editor-page-paragraph[data-page-number="${paragraphPageKey(pageNumber)}"]`,
-  ).length ?? 0;
+function setActivePageNumberForEditor(pageNumber) {
+  if (!Number.isInteger(pageNumber) || pageNumber <= 0) return;
+  const nextIndex = pageNumber - 1;
+  const psdTotal = getPages().length;
+  if (psdTotal > 0) {
+    setCurrentPageIndex(Math.max(0, Math.min(psdTotal - 1, nextIndex)));
+  } else {
+    setPdfPageIndex(Math.max(0, nextIndex));
+  }
+}
+
+function selectedParagraphMoveTarget(ref, delta) {
+  if (!ref || !Number.isInteger(ref.index) || !Number.isInteger(delta) || delta === 0) return null;
+  const model = buildPageModel(getTxtSource()?.content ?? "");
+  const step = delta < 0 ? -1 : 1;
+
+  if (!model.hasMarkers) {
+    const nextIndex = ref.index + step;
+    if (nextIndex < 0 || nextIndex >= model.allBlocks.length) return null;
+    return { pageNumber: null, index: nextIndex };
+  }
+
+  const pagePos = model.pages.findIndex((p) => samePageRef(p.pageNumber, ref.pageNumber));
+  if (pagePos < 0) return null;
+  const page = model.pages[pagePos];
+  const nextIndex = ref.index + step;
+  if (nextIndex >= 0 && nextIndex < page.blocks.length) {
+    return { pageNumber: ref.pageNumber, index: nextIndex };
+  }
+
+  if (delta < 0) {
+    const targetPage = model.pages[pagePos - 1];
+    if (!targetPage) return null;
+    return { pageNumber: targetPage.pageNumber, index: targetPage.blocks.length };
+  }
+  const targetPage = model.pages[pagePos + 1];
+  if (!targetPage) return null;
+  return { pageNumber: targetPage.pageNumber, index: 0 };
 }
 
 function clearParagraphSelection() {
@@ -773,22 +807,23 @@ function moveSelectedParagraph(delta) {
   // ref が現在の DOM に存在しなければ（別ページへ移動した等）選択を破棄。
   if (!paragraphElForRef(selectedParagraphRef)) { clearParagraphSelection(); return; }
   const { pageNumber, index } = selectedParagraphRef;
-  const count = countParagraphsForPage(pageNumber);
-  const toIdx = index + delta;
-  if (toIdx < 0 || toIdx >= count) return; // 端ではクランプ（移動なし）
-  // moveTxtBlockByIndex は setTxtSource → onTxtSourceChange → renderViewer を同期で走らせる。
-  // buildSection が新 index へ .selected を付け直せるよう、再描画前に ref を更新しておく。
-  selectedParagraphRef = { pageNumber, index: toIdx };
-  const ok = moveTxtBlockByIndex(pageNumber, index, toIdx, pageNumber);
-  if (!ok) {
+  const target = selectedParagraphMoveTarget(selectedParagraphRef, delta);
+  if (!target) return;
+  selectedParagraphRef = { pageNumber: target.pageNumber, index: target.index };
+  const movedOk = moveTxtBlockByIndex(pageNumber, index, target.index, target.pageNumber);
+  if (!movedOk) {
     selectedParagraphRef = { pageNumber, index };
+    return;
   }
-  // 連続操作のため、移動後の段落へ選択＋フォーカスを当て直す（画面内へスクロール）。
-  const moved = paragraphElForRef(selectedParagraphRef);
-  if (moved) {
-    moved.classList.add("selected");
-    try { moved.focus({ preventScroll: false }); } catch (_) { /* noop */ }
+  if (target.pageNumber != null && target.pageNumber !== pageNumber) {
+    setActivePageNumberForEditor(target.pageNumber);
   }
+  const targetEl = paragraphElForRef(selectedParagraphRef);
+  if (targetEl) {
+    targetEl.classList.add("selected");
+    try { targetEl.focus({ preventScroll: false }); } catch (_) { /* noop */ }
+  }
+  return;
 }
 
 function buildSection(pageNumber, blocks, activeNum, options = {}) {

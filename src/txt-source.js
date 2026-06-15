@@ -28,6 +28,8 @@ import {
   onParallelViewModeChange,
   onTxtSourceChange,
   removeNewLayer,
+  setCurrentPageIndex,
+  setPdfPageIndex,
   setSelectedLayer,
   setSelectedLayers,
   setTxtDirty,
@@ -52,8 +54,45 @@ import { baseName } from "./utils/path.js";
 const $ = (id) => document.getElementById(id);
 const RUNTIME_TOKEN = "a" + "i";
 const 画像スキャン_SOURCE_VISIBLE_KEY = "opus_extract_source_panel_visible";
+const EXTRACT_SOURCE_PANEL_WIDTH_KEY = "opus_extract_source_panel_width";
+const EXTRACT_SOURCE_PANEL_MIN_WIDTH = 220;
+const EXTRACT_SOURCE_PANEL_MAX_WIDTH = 560;
 let extractSourcePanelVisible = false;
 let txtSourceSaveInflight = false;
+
+function clampExtractSourcePanelWidth(width) {
+  const n = Number(width);
+  const fallback = 280;
+  const base = Number.isFinite(n) ? n : fallback;
+  const stage = $("spreads-stage");
+  const stageLimit = stage ? Math.floor(stage.clientWidth * 0.42) : EXTRACT_SOURCE_PANEL_MAX_WIDTH;
+  const max = Math.max(
+    EXTRACT_SOURCE_PANEL_MIN_WIDTH,
+    Math.min(EXTRACT_SOURCE_PANEL_MAX_WIDTH, stageLimit || EXTRACT_SOURCE_PANEL_MAX_WIDTH),
+  );
+  return Math.round(Math.max(EXTRACT_SOURCE_PANEL_MIN_WIDTH, Math.min(max, base)));
+}
+
+function readExtractSourcePanelWidth() {
+  try {
+    return clampExtractSourcePanelWidth(localStorage.getItem(EXTRACT_SOURCE_PANEL_WIDTH_KEY));
+  } catch {
+    return clampExtractSourcePanelWidth(280);
+  }
+}
+
+function applyExtractSourcePanelWidth(width, { persist = false } = {}) {
+  const next = clampExtractSourcePanelWidth(width);
+  const value = `${next}px`;
+  const stage = $("spreads-stage");
+  const panel = $("extract-source-panel");
+  if (stage) stage.style.setProperty("--extract-source-panel-width", value);
+  if (panel) panel.style.setProperty("--extract-source-panel-width", value);
+  if (persist) {
+    try { localStorage.setItem(EXTRACT_SOURCE_PANEL_WIDTH_KEY, String(next)); } catch {}
+  }
+  return next;
+}
 
 function readExtractSourcePanelVisible() {
   try {
@@ -89,8 +128,53 @@ function setupEditorExtractSourcePanel() {
     panel.classList.add("editor-extract-source-panel");
     editorArea.insertAdjacentElement("afterend", panel);
   }
+  setupExtractSourcePanelResize();
+  applyExtractSourcePanelWidth(readExtractSourcePanelWidth());
   extractSourcePanelVisible = readExtractSourcePanelVisible();
   syncExtractSourcePanelVisibility();
+}
+
+function setupExtractSourcePanelResize() {
+  const panel = $("extract-source-panel");
+  if (!panel || panel.querySelector(".extract-source-resize-handle")) return;
+  const handle = document.createElement("div");
+  handle.className = "extract-source-resize-handle";
+  handle.title = "幅を変更";
+  handle.setAttribute("role", "separator");
+  handle.setAttribute("aria-orientation", "vertical");
+  panel.prepend(handle);
+
+  let drag = null;
+  const end = () => {
+    if (!drag) return;
+    try { handle.releasePointerCapture(drag.pointerId); } catch {}
+    document.body.classList.remove("extract-source-resizing");
+    drag = null;
+  };
+
+  handle.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    drag = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startWidth: panel.getBoundingClientRect().width || readExtractSourcePanelWidth(),
+    };
+    document.body.classList.add("extract-source-resizing");
+    try { handle.setPointerCapture(e.pointerId); } catch {}
+  });
+  handle.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    e.preventDefault();
+    applyExtractSourcePanelWidth(drag.startWidth - (e.clientX - drag.startX));
+  });
+  handle.addEventListener("pointerup", (e) => {
+    if (!drag) return;
+    e.preventDefault();
+    applyExtractSourcePanelWidth(panel.getBoundingClientRect().width, { persist: true });
+    end();
+  });
+  handle.addEventListener("pointercancel", end);
 }
 
 // 「テキストエディタ（照合付き）」モードの ON/OFF。View メニューの 2 つのテキストエディタ項目
@@ -483,6 +567,20 @@ function buildExtractDisplayRows(textBlocks, extractBlocks, pageNumber) {
   return rows;
 }
 
+function appendExtractSourceLine(parent, label, value, labelClass = "", valueClass = "") {
+  const line = document.createElement("div");
+  line.className = "extract-source-line";
+  const labelEl = document.createElement("span");
+  labelEl.className = `extract-source-line-label ${labelClass}`.trim();
+  labelEl.textContent = `${label}：`;
+  line.appendChild(labelEl);
+  const valueEl = document.createElement("span");
+  valueEl.className = `extract-source-line-value ${valueClass}`.trim();
+  valueEl.textContent = value || "-";
+  line.appendChild(valueEl);
+  parent.appendChild(line);
+}
+
 function renderExtractSourceViewer() {
   const panel = $("extract-source-panel");
   if (!panel) return;
@@ -501,7 +599,7 @@ function renderExtractSourceViewer() {
   const rows = buildExtractDisplayRows(textInfo.blocks, extractInfo.blocks, pageNumber);
   const diffs = getScanExtractTextDiffs();
   syncExtractSourcePanelVisibility();
-  if (title) title.textContent = source.name || "画像スキャン結果";
+  if (title) title.textContent = source.name || "テキスト照合結果";
   if (summary) {
     const changedCount = rows.filter((r) => r.type !== "matched").length;
     summary.textContent = diffs.length > 0
@@ -513,7 +611,7 @@ function renderExtractSourceViewer() {
   if (rows.length === 0) {
     const empty = document.createElement("div");
     empty.className = "extract-source-empty";
-    empty.textContent = "このページの画像スキャン結果はありません";
+    empty.textContent = "このページのテキスト照合結果はありません";
     viewer.appendChild(empty);
     return;
   }
@@ -523,13 +621,16 @@ function renderExtractSourceViewer() {
     const label = document.createElement("div");
     label.className = "extract-source-block-label";
     label.textContent = row.type === "extra-extract"
-      ? `画像スキャンのみ #${(row.extractIndex ?? 0) + 1}`
+      ? `テキスト照合結果のみ #${(row.extractIndex ?? 0) + 1}`
       : `#${(row.textIndex ?? 0) + 1}${Number.isFinite(row.score) ? ` / ${Math.round(row.score * 100)}%` : ""}`;
     const body = document.createElement("div");
     body.className = "extract-source-block-body";
-    body.textContent = row.type === "matched"
-      ? row.scanned
-      : `使用: ${row.expected || "-"}\n画像スキャン: ${row.scanned || "-"}`;
+    if (row.type === "matched" || row.type === "extra-extract") {
+      appendExtractSourceLine(body, "OCR", row.scanned, "extract-source-line-label-ocr", "extract-source-line-value-ocr");
+    } else {
+      appendExtractSourceLine(body, "txt", row.expected);
+      appendExtractSourceLine(body, "OCR", row.scanned, "extract-source-line-label-ocr", "extract-source-line-value-ocr");
+    }
     el.appendChild(label);
     el.appendChild(body);
     viewer.appendChild(el);
@@ -775,6 +876,62 @@ function psdPathForTxtPageNumber(pageNumber) {
   return getPages()[pageNumber - 1]?.path ?? null;
 }
 
+function markedPageKeysInOrder(content) {
+  const out = [];
+  const seen = new Set();
+  const re = new RegExp(PAGE_MARKER_RE.source, "gi");
+  let match;
+  while ((match = re.exec(String(content ?? ""))) !== null) {
+    const pages = parsePageMarkerNumbers(match[1]);
+    const key = pages[0];
+    if (!Number.isInteger(key) || seen.has(key)) continue;
+    seen.add(key);
+    out.push(key);
+  }
+  return out;
+}
+
+function setActivePageNumberForTxt(pageNumber) {
+  if (!Number.isInteger(pageNumber) || pageNumber <= 0) return;
+  const nextIndex = pageNumber - 1;
+  const psdTotal = getPages().length;
+  if (psdTotal > 0) {
+    setCurrentPageIndex(Math.max(0, Math.min(psdTotal - 1, nextIndex)));
+  } else {
+    setPdfPageIndex(Math.max(0, nextIndex));
+  }
+}
+
+function txtBlockMoveTarget(source, pageNumber, index, delta) {
+  if (!source || !Number.isInteger(index) || !Number.isInteger(delta) || delta === 0) return null;
+  const parsed = parsePages(source.content);
+  const blocks = pageNumber == null ? parsed.all : (parsed.byPage.get(pageNumber) ?? []);
+  if (index < 0 || index >= blocks.length) return null;
+
+  const nextIndex = index + (delta < 0 ? -1 : 1);
+  if (nextIndex >= 0 && nextIndex < blocks.length) {
+    return { pageNumber, index: nextIndex };
+  }
+  if (!parsed.hasMarkers || pageNumber == null) return null;
+
+  const pageKeys = markedPageKeysInOrder(source.content);
+  const pagePos = pageKeys.indexOf(pageNumber);
+  if (pagePos < 0) return null;
+
+  if (delta < 0) {
+    const targetPage = pageKeys[pagePos - 1];
+    if (!Number.isInteger(targetPage)) return null;
+    return {
+      pageNumber: targetPage,
+      index: (parsed.byPage.get(targetPage) ?? []).length,
+    };
+  }
+
+  const targetPage = pageKeys[pagePos + 1];
+  if (!Number.isInteger(targetPage)) return null;
+  return { pageNumber: targetPage, index: 0 };
+}
+
 export function moveTxtBlockByIndex(pageNumber, fromIdx, toIdx, toPageNumber = pageNumber) {
   const source = getTxtSource();
   if (!source) return false;
@@ -853,6 +1010,29 @@ export function moveTxtBlockByIndex(pageNumber, fromIdx, toIdx, toPageNumber = p
 //   - 削除対象段落を sourceTxtRef で参照していたレイヤーは removeNewLayer で消す
 //   - 後続段落（paragraphIndex > idx）を参照していたレイヤーは paragraphIndex を 1 デクリメント
 // すべて withHistoryTransient で 1 つの undo スナップショットにまとめる。
+export function moveSelectedTxtBlock(delta) {
+  const source = getTxtSource();
+  if (!source) return false;
+  const idx = getTxtSelectedBlockIndex();
+  const { blocks, pageNumber } = getVisibleBlocks();
+  if (!Number.isInteger(idx) || idx < 0 || idx >= blocks.length) return false;
+
+  const target = txtBlockMoveTarget(source, pageNumber, idx, delta);
+  if (!target) return false;
+  const movedText = blocks[idx];
+  const ok = moveTxtBlockByIndex(pageNumber, idx, target.index, target.pageNumber);
+  if (!ok) return false;
+
+  if (target.pageNumber != null && target.pageNumber !== pageNumber) {
+    setActivePageNumberForTxt(target.pageNumber);
+  }
+  renderTxtSourceViewer();
+  selectBlock(target.index, movedText);
+  const targetEl = $("txt-source-viewer")?.querySelector(`.txt-block[data-block-index="${target.index}"]`);
+  if (targetEl) targetEl.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  return true;
+}
+
 export function deleteSelectedTxtBlock() {
   const source = getTxtSource();
   if (!source) return false;

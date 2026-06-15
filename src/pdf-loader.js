@@ -1,5 +1,5 @@
 import * as pdfjsLib from "pdfjs-dist";
-import { setPdf, setPdfExcludedReferencePages, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
+import { setPdf, setPdfExcludedReferencePages, setPdfFirstRightBlank, setPdfSkipFirstBlank, setPdfSplitMode } from "./state.js";
 import { showProgress, hideProgress, notifyDialog, confirmDialog, toast, updateProgress } from "./ui-feedback.js";
 import { withProgressFlow } from "./progress-flow.js";
 
@@ -197,6 +197,51 @@ async function detectLandscape(doc) {
     const vp = page.getViewport({ scale: 1, rotation: baseRotation });
     return vp.width > vp.height;
   } catch (_) {
+    return false;
+  }
+}
+
+async function detectFirstRightHalfBlank(doc) {
+  try {
+    const page = await doc.getPage(1);
+    const baseRotation = typeof page.rotate === "number" ? page.rotate : 0;
+    const vp0 = page.getViewport({ scale: 1, rotation: baseRotation });
+    if (!(vp0.width > vp0.height)) return false;
+    const scale = Math.min(1, 360 / Math.max(vp0.width, vp0.height));
+    const viewport = page.getViewport({ scale, rotation: baseRotation });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.round(viewport.width));
+    canvas.height = Math.max(1, Math.round(viewport.height));
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    if (!ctx) return false;
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const task = page.render({ canvasContext: ctx, viewport });
+    await task.promise;
+
+    const half = Math.floor(canvas.width / 2);
+    const marginX = Math.max(2, Math.floor(canvas.width * 0.015));
+    const marginY = Math.max(2, Math.floor(canvas.height * 0.015));
+    const sx = half + marginX;
+    const sy = marginY;
+    const sw = Math.max(1, canvas.width - sx - marginX);
+    const sh = Math.max(1, canvas.height - marginY * 2);
+    const data = ctx.getImageData(sx, sy, sw, sh).data;
+    let ink = 0;
+    let lumSum = 0;
+    const total = sw * sh;
+    for (let i = 0; i < data.length; i += 4) {
+      const a = data[i + 3] / 255;
+      const r = 255 * (1 - a) + data[i] * a;
+      const g = 255 * (1 - a) + data[i + 1] * a;
+      const b = 255 * (1 - a) + data[i + 2] * a;
+      const lum = 0.2126 * r + 0.7152 * g + 0.0722 * b;
+      lumSum += lum;
+      if (lum < 245) ink += 1;
+    }
+    return total > 0 && ink / total < 0.01 && lumSum / total > 248;
+  } catch (e) {
+    console.warn("[pdf-loader] first right blank detection failed:", e);
     return false;
   }
 }
@@ -598,10 +643,12 @@ export async function loadReferenceFiles(paths, options = {}) {
     const compositeDoc = makeCompositeDoc(sources);
     // 横長判定は 1 ページ目（先頭ソース）で行い、PDF と同じく自動 split mode を設定。
     const isLandscape = await detectLandscape(compositeDoc);
+    const firstRightBlank = isLandscape ? await detectFirstRightHalfBlank(compositeDoc) : false;
     if (shouldShowProgress) {
       updateProgress(withProgressFlow(progressFlow, { detail: headLabel, current: total + 1, total: progressTotal, taskIndex: 2 }));
     }
     setPdfSplitMode(isLandscape);
+    setPdfFirstRightBlank(firstRightBlank);
     setPdfSkipFirstBlank(skipFirstBlankPage && hasPdf);
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
     // 画像スキャンや自動配置が複数ファイルを 画像スキャン 対象にできるようにする。

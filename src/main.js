@@ -53,7 +53,7 @@ import {
   recenterLayerToCenter,
   unifySelectedTextSize,
 } from "./text-editor.js";
-import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getEditorMatchMode, getTxtPageCount, initTxtSource, isTxtBlockSelectionActive, loadTxtFromPath, onEditorMatchModeChange, pickTxtPath, setEditorMatchMode } from "./txt-source.js";
+import { cycleTxtBlockSelection, deleteSelectedTxtBlock, getEditorMatchMode, getTxtPageCount, initTxtSource, isTxtBlockSelectionActive, loadTxtFromPath, moveSelectedTxtBlock, onEditorMatchModeChange, pickTxtPath, setEditorMatchMode } from "./txt-source.js";
 import { bindScanInstallMenu, checkScanModelsStatus } from "./scan-install.js";
 import { bindFirstRunSetup, maybeShowFirstRunSetup } from "./first-run-setup.js";
 import { bindScanExtractButton, PLACE_ICON_SVG, runScanExtractForTranscription } from "./scan-extract.js";
@@ -181,6 +181,7 @@ import {
   onParallelSyncModeChange,
   onParallelViewModeChange,
   onPdfChange,
+  onPdfFirstRightBlankChange,
   onPdfPageIndexChange,
   onPdfRotationChange,
   onPdfSkipFirstBlankChange,
@@ -640,6 +641,16 @@ function bindTools() {
       const t = e.target;
       const isInput = t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable);
       if (!isInput) {
+        if (
+          e.shiftKey &&
+          (e.key === "ArrowUp" || e.key === "ArrowDown") &&
+          isTxtBlockSelectionActive()
+        ) {
+          const delta = e.key === "ArrowDown" ? +1 : -1;
+          moveSelectedTxtBlock(delta);
+          e.preventDefault();
+          return;
+        }
         // 原稿テキスト選択がアクティブなら、↑/↓ で原稿ブロックの選択を前後へ移動する
         // （選択に追従して対応レイヤー＝テキストプロパティ表示も切替わる）。nudge より優先。
         if ((e.key === "ArrowUp" || e.key === "ArrowDown") && isTxtBlockSelectionActive()) {
@@ -892,6 +903,9 @@ function bindPageChange() {
     updatePageNav();
   });
   onPdfSplitModeChange(() => {
+    updatePageNav();
+  });
+  onPdfFirstRightBlankChange(() => {
     updatePageNav();
   });
   onPdfSkipFirstBlankChange(() => {

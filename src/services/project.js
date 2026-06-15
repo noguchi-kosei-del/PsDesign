@@ -38,6 +38,7 @@ import {
   getPdfZoom,
   getPsdRotation,
   getPsdZoom,
+  getPsdSourcePath,
   hasEdits,
   markProjectSaveClean,
   setActivePane,
@@ -101,7 +102,7 @@ function clearCurrentProject() {
 }
 
 function defaultProjectStem() {
-  const first = getPages()[0]?.path;
+  const first = getPsdSourcePath(getPages()[0]);
   const stem = first ? baseName(first).replace(/\.[^.]+$/, "") : "opus-project";
   return stem || "opus-project";
 }

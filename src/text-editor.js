@@ -550,7 +550,7 @@ export function rebuildLayerList() {
 
   const header = document.createElement("li");
   header.className = "layer-list-header";
-  header.textContent = `— ${fileName(page.path)} —`;
+  header.textContent = `— ${fileName(page.sourcePath ?? page.path)}${splitSideLabel(page)} —`;
   header.style.pointerEvents = "none";
   header.style.color = "var(--text-muted)";
   header.style.fontWeight = "600";
@@ -2842,4 +2842,10 @@ function fileName(p) {
   if (!p) return "";
   const m = p.match(/[\\/]([^\\/]+)$/);
   return m ? m[1] : p;
+}
+
+function splitSideLabel(page) {
+  if (page?.splitSide === "right") return " 右";
+  if (page?.splitSide === "left") return " 左";
+  return "";
 }

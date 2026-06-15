@@ -11,7 +11,7 @@ import { confirmDialog, hideProgress, notifyDialog, showProgress, toast, updateP
 import { withProgressFlow } from "../progress-flow.js";
 import { renderAllSpreads } from "../spread-view.js";
 import { rebuildLayerList } from "../text-editor.js";
-import { UnsupportedBitmapPsdError, loadPsdFromPath } from "../psd-loader.js";
+import { UnsupportedBitmapPsdError, expandLandscapePsdPage, loadPsdFromPath } from "../psd-loader.js";
 import { baseName, parentDir } from "../utils/path.js";
 import { setGuidesLocked, setGuidesFromPsd, setRulersVisible, applyGuidesToPaths } from "../rulers.js";
 import { refreshMemoryStatus } from "../memory-mode.js";
@@ -175,11 +175,15 @@ export async function loadPsdFilesByPaths(files, {
     }));
     try {
       const page = await loadPsdFromPath(path);
-      addPage(page);
+      const viewPages = expandLandscapePsdPage(page);
+      for (const viewPage of viewPages) addPage(viewPage);
       loadedPaths.push(page.path);
       // PSD に埋め込まれたガイド（トンボ/塗り足し枠）を定規へ流し込む。
       if (page.psdGuides && (page.psdGuides.h.length || page.psdGuides.v.length)) {
         setGuidesFromPsd(page.path, page.psdGuides);
+        for (const viewPage of viewPages) {
+          if (viewPage.path !== page.path && viewPage.psdGuides) setGuidesFromPsd(viewPage.path, viewPage.psdGuides);
+        }
         // 最初に塗り足し枠（縦2+横2）が揃ったページをコピー元として記録。
         if (hasCompleteGuideFrame(page.psdGuides)) {
           completeFramePaths.add(page.path);

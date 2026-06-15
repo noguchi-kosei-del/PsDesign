@@ -18,6 +18,7 @@ import {
 import {
   getPdfPaths,
   getPdfExcludedReferencePages,
+  getPdfFirstRightBlank,
   getPdfSkipFirstBlank,
   getPdfSplitMode,
   getTxtSource,
@@ -301,20 +302,25 @@ export function normalizeReferenceScanDocForReferencePages(doc, options = {}) {
   const applyExcludedPages = options.applyExcludedPages !== false;
 
   const excludedPages = applyExcludedPages ? getPdfExcludedReferencePages() : new Set();
-  const physicalPages = excludedPages.size
-    ? doc.pages.filter((_, index) => !excludedPages.has(index + 1))
-    : doc.pages;
+  const skipFirstBlank = getPdfSkipFirstBlank();
+  const physicalPages = doc.pages
+    .map((page, index) => ({ page, pageNum: index + 1 }))
+    .filter(({ pageNum }) => !excludedPages.has(pageNum))
+    .filter(({ pageNum }) => !(skipFirstBlank && pageNum === 1));
 
   let pages;
   if (getPdfSplitMode()) {
     pages = [];
-    for (const page of physicalPages) {
+    for (const { page, pageNum } of physicalPages) {
+      if (pageNum === 1 && getPdfFirstRightBlank()) {
+        pages.push(splitReferenceScanPageToHalf(page, "left"));
+        continue;
+      }
       pages.push(splitReferenceScanPageToHalf(page, "right"));
       pages.push(splitReferenceScanPageToHalf(page, "left"));
     }
-    if (getPdfSkipFirstBlank()) pages = pages.slice(1);
   } else {
-    pages = getPdfSkipFirstBlank() ? physicalPages.slice(1) : physicalPages.slice();
+    pages = physicalPages.map(({ page }) => page);
   }
 
   return {

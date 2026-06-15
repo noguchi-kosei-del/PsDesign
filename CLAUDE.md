@@ -1,5 +1,40 @@
 # PsDesign
 
+## 2026-06-15 変更メモ: v2.5.3 リリース（見開き分割 / テキストブロックページ跨ぎ移動 / テキスト照合結果パネル / 見本フィット）
+
+v2.5.3 では、横長の見開き見本と単ページ PSD の対応、テキストエディタ内のページ跨ぎ編集、OCR 照合結果の見やすさ、見本ビューアーの表示フィットを中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.3` に更新済み。
+
+### A. 横長見開き見本の単ページ化
+
+- [src/pdf-loader.js](src/pdf-loader.js) / [src/pdf-pages.js](src/pdf-pages.js): 見本 PDF / 画像が縦辺より横辺のほうが長い場合に横長見開きとして扱い、中央で左右に分割して仮想ページ化する処理を追加した。
+- [src/pdf-pages.js](src/pdf-pages.js): 1ページ目右側が白紙で、2ページ目以降が見開きになっている和書右綴じ見本に対応するため、先頭ページは左半分のみ、以降は右半分→左半分の順に展開する。
+- [src/pdf-view.js](src/pdf-view.js) / [src/main.js](src/main.js) / [src/state.js](src/state.js): 分割後の仮想ページと PSD / テキストページの同期がずれないよう、ページ数・ページ送り・同期ブリッジを調整した。
+- [src/psd-loader.js](src/psd-loader.js) / [src/spread-view.js](src/spread-view.js) / [src/services/psd-load.js](src/services/psd-load.js): 横長 PSD 原稿も中央分割できるようにし、見開き 1 枚として入っている原稿を単ページ運用へ合わせた。
+
+### B. テキストエディタのページ跨ぎブロック移動
+
+- [src/txt-source.js](src/txt-source.js): 選択中のテキストブロックを `Shift+↑/↓` で移動できる処理を追加し、ページ先頭・末尾を越えた場合は隣接ページへ移動するようにした。
+- [src/bind/editor-pane.js](src/bind/editor-pane.js) / [src/main.js](src/main.js): テキストエディタ側でのキー操作を拾い、移動後は対象ページへ表示を切り替えて選択状態を維持する。
+- ページマーカー付きテキストでは、移動に合わせて本文順序と `sourceTxtRef` の参照を更新し、undo 1 回で戻せる既存編集フローに合わせた。
+
+### C. テキスト照合結果パネル
+
+- [index.html](index.html) / [src/txt-source.js](src/txt-source.js): 「画像スキャン結果」表記を「テキスト照合結果」に変更した。
+- [src/txt-source.js](src/txt-source.js) / [src/styles.css](src/styles.css): 照合カードの本文表示を `txt：...` / `OCR：...` に整理し、OCR ラベルと OCR 本文を黄色で表示するようにした。
+- [src/styles.css](src/styles.css): `changed` は txt と OCR が一致しない行を赤系の左線で示し、`extra-extract` は OCR のみに存在する行を青系の左線で示す既存意味を維持した。
+- [src/txt-source.js](src/txt-source.js) / [src/styles.css](src/styles.css): テキスト照合結果パネルの幅をドラッグで変更できるようにし、幅を `localStorage` に保存する。
+
+### D. 見本ビューアーのフィット調整
+
+- [src/left-viewer.js](src/left-viewer.js): JPG / PNG / PDF / PSD の見本ビューアー表示を外側ペイン基準から実ステージ基準に変更し、初期表示倍率を 1.1 から 1.0 に下げて画像全体が収まりやすいようにした。
+- [src/styles.css](src/styles.css): エディタ内の見本表示を 50% 固定から `--left-pdf-width` ベースに戻し、画像アスペクト比に応じた見本パネル幅が効くようにした。
+
+### 検証
+
+- `npm run check` 成功（`check:encoding` / `check:security` / `lint` / `build`）。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。
+- リリースはタグ `v2.5.3` push により `.github/workflows/release.yml` が Windows ビルド・署名・`latest.json` 生成・GitHub Release 作成を実行する。
+
 ## 2026-06-15 変更メモ: v2.5.2 リリース（句読点置換 / 選択表示 / 照合付きエディタ / フォント検出）
 
 v2.5.2 では、句読点「、」の半角スペース置換を写植・自動配置・リサイクル系の設定へ広げ、選択表示とテキストエディタまわりの実機フィードバックを反映した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.2` に更新済み。

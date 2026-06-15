@@ -162,6 +162,76 @@ export function buildBlankPsdPage(path, width, height, dpi = 72) {
   }, preview.previewScale);
 }
 
+function virtualSplitPath(path, side) {
+  return `${path}#psdesign-split-${side}`;
+}
+
+function cropCanvasHalf(source, logicalWidth, logicalHeight, offsetX, splitWidth) {
+  if (!source || !(logicalWidth > 0) || !(logicalHeight > 0) || !(splitWidth > 0)) return null;
+  const sxScale = source.width / logicalWidth;
+  const syScale = source.height / logicalHeight;
+  const sx = Math.max(0, Math.round(offsetX * sxScale));
+  const sw = Math.max(1, Math.round(splitWidth * sxScale));
+  const sh = Math.max(1, Math.round(logicalHeight * syScale));
+  const canvas = document.createElement("canvas");
+  canvas.width = sw;
+  canvas.height = sh;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return source;
+  ctx.drawImage(source, sx, 0, sw, sh, 0, 0, sw, sh);
+  return canvas;
+}
+
+function shiftGuidesForSplit(guides, offsetX, splitWidth) {
+  if (!guides) return guides;
+  const h = Array.isArray(guides.h) ? [...guides.h] : [];
+  const v = (Array.isArray(guides.v) ? guides.v : [])
+    .map((x) => x - offsetX)
+    .filter((x) => Number.isFinite(x) && x >= 0 && x <= splitWidth);
+  return { h, v };
+}
+
+function splitLayerBelongsToSide(layer, offsetX, splitWidth) {
+  const left = Number(layer?.left);
+  const right = Number(layer?.right);
+  if (!Number.isFinite(left) || !Number.isFinite(right)) return false;
+  const center = (left + right) / 2;
+  return center >= offsetX && center < offsetX + splitWidth;
+}
+
+function shiftLayerForSplit(layer, offsetX) {
+  const out = { ...layer };
+  if (Number.isFinite(out.left)) out.left -= offsetX;
+  if (Number.isFinite(out.right)) out.right -= offsetX;
+  return out;
+}
+
+export function expandLandscapePsdPage(page) {
+  if (!page || !(page.width > page.height)) return [page];
+  const splitWidth = page.width / 2;
+  const sides = [
+    { side: "right", offsetX: splitWidth },
+    { side: "left", offsetX: 0 },
+  ];
+  return sides.map(({ side, offsetX }) => ({
+    ...page,
+    path: virtualSplitPath(page.path, side),
+    sourcePath: page.path,
+    sourceWidth: page.width,
+    sourceHeight: page.height,
+    splitSide: side,
+    splitOffsetX: offsetX,
+    splitWidth,
+    width: splitWidth,
+    canvas: cropCanvasHalf(page.canvas, page.width, page.height, offsetX, splitWidth),
+    reuseReferenceCanvas: cropCanvasHalf(page.reuseReferenceCanvas, page.width, page.height, offsetX, splitWidth),
+    psdGuides: shiftGuidesForSplit(page.psdGuides, offsetX, splitWidth),
+    textLayers: (page.textLayers ?? [])
+      .filter((layer) => splitLayerBelongsToSide(layer, offsetX, splitWidth))
+      .map((layer) => shiftLayerForSplit(layer, offsetX)),
+  }));
+}
+
 function canUsePsdParseWorker() {
   return typeof Worker === "function" && typeof OffscreenCanvas === "function";
 }

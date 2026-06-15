@@ -1,4 +1,5 @@
 import {
+  getPdfFirstRightBlank,
   getPdfPageCount,
   getPdfSkipFirstBlank,
   getPdfSplitMode,
@@ -21,7 +22,7 @@ export function getPdfVirtualPages() {
 
   const startPage = skip ? 2 : 1;
   for (let i = startPage; i <= total; i += 1) {
-    if (i === 1) {
+    if (i === 1 && getPdfFirstRightBlank()) {
       out.push({ pageNum: i, side: "left" });
       continue;
     }

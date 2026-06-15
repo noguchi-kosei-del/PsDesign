@@ -5757,20 +5757,17 @@ body.editor-paragraph-reordering * {
   position: absolute;
   top: 34px; /* proofread-panel-header (padding 6+6 + button 22 = 34px) */
   left: 0;
-  /* 見本とテキストを常にウインドウ半分ずつにする（アスペクト比駆動の --left-pdf-width は使わない）。 */
-  width: 50%;
+  width: var(--left-pdf-width, 50%);
   height: calc(100% - 34px);
   z-index: 12;
   /* width のトランジションは shared rule (`width 0.3s`) に乗る。
      個別 transition 宣言で上書きすると slide-in 用の transform/opacity が消えるので注意。 */
 }
 .workspace.editor-mode.left-pdf .spreads-proofread-area {
-  /* proofread-area も見本パネル幅（50%）に合わせ、ヘッダー右端を pdf-area 右端と揃える。 */
-  width: 50%;
+  width: var(--left-pdf-width, 50%);
 }
 .workspace.editor-mode.left-pdf .spreads-editor-area {
-  /* 見本サブ状態では editor-area を右半分（50%）に固定。見本(左50%) と隙間なく隣接する。 */
-  left: 50%;
+  left: var(--left-pdf-width, 50%);
   width: auto;
   right: 0;
 }
@@ -5780,7 +5777,7 @@ body.editor-paragraph-reordering * {
 }
 .workspace.editor-mode.left-pdf.flipped .spreads-editor-area {
   left: 0;
-  right: 50%;
+  right: var(--left-pdf-width, 50%);
 }
 /* ===== ワークスペース反転時の editor モード レイアウト（左右ミラー） =====
    非反転時は「校正/見本パネル = 左、テキストエディタ = 右」。サイドバーが左に来る
@@ -7168,11 +7165,10 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 }
 .extract-source-panel[hidden] { display: none; }
 .editor-extract-source-panel {
-  --extract-source-panel-width: 280px;
   position: absolute;
   top: 0;
   right: 0;
-  width: var(--extract-source-panel-width);
+  width: var(--extract-source-panel-width, 280px);
   height: 100%;
   max-height: none;
   margin: 0;
@@ -7188,12 +7184,42 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
 .editor-extract-source-panel[hidden] {
   display: none !important;
 }
+.extract-source-resize-handle {
+  display: none;
+}
+.editor-extract-source-panel .extract-source-resize-handle {
+  display: block;
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -4px;
+  width: 8px;
+  cursor: col-resize;
+  z-index: 2;
+}
+.editor-extract-source-panel .extract-source-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 1px;
+  background: transparent;
+}
+.editor-extract-source-panel .extract-source-resize-handle:hover::after,
+body.extract-source-resizing .editor-extract-source-panel .extract-source-resize-handle::after {
+  background: var(--accent);
+}
+body.extract-source-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
 .workspace.editor-mode.left-pdf .spreads-stage.extract-source-visible .spreads-editor-area {
   right: var(--extract-source-panel-width);
   width: auto;
 }
 .workspace.editor-mode.left-pdf.flipped .spreads-stage.extract-source-visible .spreads-editor-area {
-  right: calc(50% + var(--extract-source-panel-width));
+  right: calc(var(--left-pdf-width, 50%) + var(--extract-source-panel-width));
 }
 .extract-source-header {
   display: flex;
@@ -7246,6 +7272,31 @@ button.proofread-page-link:focus { outline: none; text-decoration: underline; }
   font-size: 12px;
   line-height: 1.55;
   color: var(--text);
+}
+.extract-source-line {
+  white-space: pre-wrap;
+}
+.extract-source-line + .extract-source-line {
+  margin-top: 4px;
+}
+.extract-source-line-label {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+.extract-source-line-label-ocr {
+  color: #facc15;
+}
+.extract-source-token {
+  font-weight: 800;
+}
+.extract-source-token-ocr {
+  color: #facc15;
+}
+.extract-source-line-value {
+  color: var(--text);
+}
+.extract-source-line-value-ocr {
+  color: #facc15;
 }
 .extract-source-empty {
   padding: 10px;

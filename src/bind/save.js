@@ -9,6 +9,7 @@ import {
   getPages,
   getPdfPaths,
   getProjectSaveDirty,
+  getUniquePsdSourcePaths,
   markProjectSaveClean,
   markPsdSaveClean,
 } from "../state.js";
@@ -251,9 +252,10 @@ async function runSaveWithMode({ saveMode, targetDir }) {
     //   - saveMode "saveAs": <targetDir>/<元 PSD basename> として連番フォルダ内の出力先を指す
     //   - saveMode "overwrite": 元の PSD パス自体（旧フロー互換）
     // 配列の順序は getPages() の順 = ユーザーの並び順 = Tachimi 側で連番プレフィックスでも保持される
+    const sourcePaths = getUniquePsdSourcePaths();
     const savedPaths = (saveMode === "saveAs" && targetDir)
-      ? getPages().map((p) => joinPath(targetDir, baseName(p.path)))
-      : getPages().map((p) => p.path);
+      ? sourcePaths.map((p) => joinPath(targetDir, baseName(p)))
+      : sourcePaths;
     const savedFolder = (saveMode === "saveAs" && targetDir)
       ? targetDir
       : parentDir(savedPaths[0]);
