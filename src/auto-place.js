@@ -32,6 +32,7 @@ import {
   abortHistoryTransient,
   setActivePane,
   setPsdZoom,
+  setPdfZoom,
 } from "./state.js";
 import {
   parsePages,
@@ -44,7 +45,8 @@ import { withProgressFlow, updateProgressFlow, completeProgressFlowStep } from "
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
 import { runScanExtractForFiles, runScanExtractForPlacementOnly, PLACE_ICON_SVG, normalizeReferenceScanDocForReferencePages } from "./scan-extract.js";
 import { getPdfVirtualPageAt } from "./pdf-pages.js";
-import { renderAllSpreads } from "./spread-view.js";
+import { renderAllSpreads, resetPsdViewportToStart, PSD_FIT_ZOOM } from "./spread-view.js";
+import { resetPdfViewportToStart, PDF_FIT_ZOOM } from "./pdf-view.js";
 import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
@@ -62,6 +64,15 @@ function waitForTransitionPaint() {
 
 function wait(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// 配置 / 位置調整の完了後に、見本(PDF)と PSD の両ペインを「全体が映る」フィット表示
+// （Ctrl+0 相当: viewport を始点へ戻し zoom をフィット倍率に）へ揃える。
+// resetPaneZoom (main.js) と同じ経路を使うが循環 import を避けるため view モジュール
+// から直接 import している。
+function fitBothPanesToWindow() {
+  try { resetPdfViewportToStart(); setPdfZoom(PDF_FIT_ZOOM); } catch (_) {}
+  try { resetPsdViewportToStart(); setPsdZoom(PSD_FIT_ZOOM); } catch (_) {}
 }
 
 let runningPlacePromise = null;
@@ -441,28 +452,92 @@ function groupConnectedBlocks(blocks, debugTag = "") {
 // PDF / JPEG / PNG に対応。失敗 / 見本未指定 は null を返してフォールバック。
 let lastAlignmentError = "";
 
-function computeCenterMarginAlignment(psdPage, referenceScanPage) {
+// contentScale (= k) は「OCR(見本) 1px が PSD 何 logical px に相当するか」。
+// 見本がPDFの場合、OCRは PDF_RENDER_DPI(=300) でラスタライズされるため、PSDが600dpi等だと
+// img_width(300dpi) と psd.width(600dpi) が別単位になり、従来の (refW-psdW)/2 は単位混在で
+// ずれる。k を渡すと scale=1/k・offset=refW/2 - psdW/(2k) で dpi 差を吸収する。
+// k=1 のとき従来挙動 (見本とPSDが同解像度前提) に一致する。
+function computeCenterMarginAlignment(psdPage, referenceScanPage, contentScale = 1) {
   const refW = Number(referenceScanPage?.img_width);
   const refH = Number(referenceScanPage?.img_height);
   const psdW = Number(psdPage?.width);
   const psdH = Number(psdPage?.height);
   if (![refW, refH, psdW, psdH].every((v) => Number.isFinite(v) && v > 0)) return null;
+  const k = (Number.isFinite(contentScale) && contentScale > 0) ? contentScale : 1;
+  // newPsdC = (refC - offset) / scale を満たすよう scale=1/k, offset=refC側の中心余白。
+  const scale = 1 / k;
+  const offsetX = refW / 2.0 - psdW / (2.0 * k);
+  const offsetY = refH / 2.0 - psdH / (2.0 * k);
+  // psd_bbox / ref_bbox は診断ログ用 (配置計算では未使用)。k 換算後の見本対応領域を表す。
+  const refWInPsd = refW * k;
+  const refHInPsd = refH * k;
   return {
-    scale: 1.0,
-    offset_x: (refW - psdW) / 2.0,
-    offset_y: (refH - psdH) / 2.0,
+    scale,
+    offset_x: offsetX,
+    offset_y: offsetY,
     diff_score: 0.0,
     candidates: 1,
     psd_bbox: [
-      psdW / 2.0 - refW / 2.0,
-      psdH / 2.0 - refH / 2.0,
-      psdW / 2.0 + refW / 2.0,
-      psdH / 2.0 + refH / 2.0,
+      psdW / 2.0 - refWInPsd / 2.0,
+      psdH / 2.0 - refHInPsd / 2.0,
+      psdW / 2.0 + refWInPsd / 2.0,
+      psdH / 2.0 + refHInPsd / 2.0,
     ],
     ref_bbox: [0.0, 0.0, refW, refH],
     psd_full_size: [psdW, psdH],
     ref_full_size: [refW, refH],
+    content_scale: k,
   };
+}
+
+// 見本PDFのOCRラスタライズ解像度 (src-tauri/src/ocr.rs PDF_RENDER_DPI と一致させること)。
+const REFERENCE_PDF_OCR_DPI = 300;
+
+// 【1ページ目基準】見本の解像度(dpi)は「先頭の見本ファイル」から一度だけ読み、全ページで使い回す
+// (毎ページ読み込まない)。PDF見本は OCR が 300dpi 描画なので 300。画像見本は埋め込みdpi
+// (JPEG JFIF / PNG pHYs) を Rust の read_reference_dpi で読む。先頭パスが変わったときだけ再取得。
+let baseReferenceDpiPromise = null;
+let baseReferenceDpiKey = "";
+async function getBaseReferenceDpi() {
+  const paths = getPdfPaths();
+  const first = (Array.isArray(paths) && paths.length) ? paths[0] : null;
+  const key = first || "";
+  if (baseReferenceDpiKey === key && baseReferenceDpiPromise) return baseReferenceDpiPromise;
+  baseReferenceDpiKey = key;
+  baseReferenceDpiPromise = (async () => {
+    if (!first) return null;
+    if (/\.pdf$/i.test(first)) return REFERENCE_PDF_OCR_DPI; // PDFは300dpiで描画される
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const dpi = await invoke("read_reference_dpi", { path: first });
+      return (Number.isFinite(dpi) && dpi > 0) ? dpi : null;
+    } catch (_) {
+      return null;
+    }
+  })();
+  return baseReferenceDpiPromise;
+}
+
+// 【mode1 = PSDに余白あり / 確定式】見本とPSDの「解像度を揃えてから」中央余白計算するための
+// 解像度マッチ係数 k (= 見本1px が PSD 何 logical px に相当するか = psd.dpi / 見本dpi)。
+// baseRefDpi は getBaseReferenceDpi() で 1ページ目から取得した見本dpi (PDF=300, 画像=埋め込み)。
+// psd.dpi または 見本dpi が不明なら揃えられないので k=1 + warn を返す (→画像差分にフォールバック)。
+function resolutionMatchForMode1(referencePath, psdPage, baseRefDpi) {
+  const isPdf = /\.pdf$/i.test(String(referencePath || ""));
+  const psdDpi = Number(psdPage?.dpi);
+  const psdDpiOk = Number.isFinite(psdDpi) && psdDpi >= 72 && psdDpi <= 4800;
+  const refDpi = (Number.isFinite(baseRefDpi) && baseRefDpi > 0) ? baseRefDpi : null;
+  let k = 1;
+  let warn = "";
+  if (psdDpiOk && refDpi != null) {
+    k = psdDpi / refDpi;
+    if (!(k > 0.1 && k < 10)) { k = 1; warn = `k=${(psdDpi / refDpi).toFixed(2)} が範囲外`; }
+  } else if (!psdDpiOk) {
+    warn = "PSDのdpi不明";
+  } else if (refDpi == null) {
+    warn = isPdf ? "PDF基準dpi未取得" : "見本画像に埋め込みdpiが無い";
+  }
+  return { k, refDpi, psdDpi: psdDpiOk ? psdDpi : null, isPdf, warn };
 }
 
 function snapHalfOrFull(pt) {
@@ -477,10 +552,40 @@ async function computeAlignmentSafe(referencePath, psdPage, referenceScanPage, p
   if (!referencePath) return null;
   if (!psdPage?.canvas) return null;
   if (mode === "mode1") {
-    const alignment = computeCenterMarginAlignment(psdPage, referenceScanPage);
-    if (alignment) {
-      lastAlignmentError = "";
-      return alignment;
+    // 確定式(中央配置)は「見本とPSDが同解像度」が前提。解像度を確実に揃えられるのは
+    // 「見本がPDF かつ PSDに正しい印刷dpiがある」ケースのみ。それ以外(画像見本 / dpi不明 /
+    // 異常dpi)は確定式が中心寄りの誤配置になるため、下の画像差分(content matching)へフォールバックする。
+    const baseRefDpi = await getBaseReferenceDpi();
+    const rm = resolutionMatchForMode1(referencePath, psdPage, baseRefDpi);
+    // 確定式が使える信頼条件: 見本dpi(1ページ目基準)とPSD印刷dpi(>=150)が両方取れ、kが妥当な範囲。
+    const reliable = rm.refDpi != null && Number.isFinite(rm.psdDpi) && rm.psdDpi >= 150 && !rm.warn;
+    if (reliable) {
+      const alignment = computeCenterMarginAlignment(psdPage, referenceScanPage, rm.k);
+      if (alignment) {
+        lastAlignmentError = "";
+        console.info(
+          `[scan-adjust mode1/確定式] 解像度マッチ(1ページ目基準): 見本=${rm.isPdf ? "PDF" : "画像"}@${rm.refDpi}dpi → PSD@${rm.psdDpi}dpi, k=${rm.k.toFixed(4)} → scale=${alignment.scale.toFixed(4)}, offset=(${alignment.offset_x.toFixed(0)}, ${alignment.offset_y.toFixed(0)})`,
+        );
+        const refW = Number(referenceScanPage?.img_width);
+        const refH = Number(referenceScanPage?.img_height);
+        const psdW = Number(psdPage?.width);
+        const psdH = Number(psdPage?.height);
+        if ([refW, refH, psdW, psdH].every((v) => Number.isFinite(v) && v > 0)) {
+          const aspectDiffPct = Math.abs((refW / refH) / (psdW / psdH) - 1) * 100;
+          if (aspectDiffPct > 5) {
+            console.warn(
+              `[scan-adjust mode1] ⚠ 見本とPSDの縦横比が ${aspectDiffPct.toFixed(1)}% 異なります。確定式の前提が崩れる可能性 → 重ね調整(手動)を検討してください。`,
+            );
+          }
+        }
+        return alignment;
+      }
+    } else {
+      // フォールバック: 画像差分で位置合わせ (解像度非依存)。下の invokeAlignment(mode="mode1") が
+      // Rust 側で grid search を実行する。
+      console.info(
+        `[scan-adjust mode1/画像差分フォールバック] 解像度を確定できないため絵柄の重なりで位置合わせします (見本=${rm.isPdf ? "PDF" : "画像"}, psdDpi=${rm.psdDpi ?? "?"}${rm.warn ? `, ${rm.warn}` : ""})`,
+      );
     }
   }
   const errors = [];
@@ -574,6 +679,10 @@ async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, refer
   if (progressLabel) {
     updateProgress(withProgressFlow(progressFlow, { current: 0, total: Math.max(N, 1), detail: `${progressLabel} 0/${N}`, showCount: false }));
   }
+  // 【高速化・1ページ目基準】位置合わせ(scale+offset)は判型/塗り足し/解像度が同じなら全ページ同一。
+  // 同じ寸法 (PSD寸法 × 見本寸法) のページは最初の1回だけ計算し、以降は使い回して画像差分の
+  // 重い再計算を避ける。寸法が違うページ (見開き等) だけ個別に計算する。
+  const geomCache = new Map();
   for (let i = 0; i < N; i++) {
     const psd = psdPages[i];
     const referenceIndex = referenceIndexForPsdRow(psdPageMap, i);
@@ -586,7 +695,14 @@ async function computeAlignmentsForPages(mode, psdPages, referenceScanDoc, refer
     if (progressLabel) {
       updateProgress(withProgressFlow(progressFlow, { current: i, total: N, detail: `${progressLabel} ${i + 1}/${N} を計算中…`, showCount: false }));
     }
-    const alignment = await computeAlignmentSafe(refPath, psd, referenceScan, pdfPageIdx, mode);
+    const geomSig = `${psd?.width}x${psd?.height}|${referenceScan?.img_width}x${referenceScan?.img_height}`;
+    let alignment;
+    if (geomCache.has(geomSig)) {
+      alignment = geomCache.get(geomSig);
+    } else {
+      alignment = await computeAlignmentSafe(refPath, psd, referenceScan, pdfPageIdx, mode);
+      geomCache.set(geomSig, alignment);
+    }
     if (alignment && psd?.path) alignmentByPath.set(psd.path, alignment);
     if (progressLabel) {
       updateProgress(withProgressFlow(progressFlow, { current: i + 1, total: N, detail: `${progressLabel} ${i + 1}/${N} 完了`, showCount: false }));
@@ -1848,7 +1964,8 @@ export async function runAutoPlace({
     }
     await wait(320);
     setActivePane("psd");
-    setPsdZoom(1);
+    // 配置完了後、見本(PDF)と PSD の両方が全体表示になるようフィットへ揃える。
+    fitBothPanesToWindow();
     return { placed: true, positionAdjusted: positionAdjustMode === "mode1" || positionAdjustMode === "mode2" };
   } catch (e) {
     console.error(e);
@@ -2047,6 +2164,9 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
     const referenceEntries = psdPages.map((_, i) => getLoadedReferenceEntryForPage(referenceIndexForPsdRow(psdPageMap, i)));
     const alignmentByPath = new Map();
     const N = psdPages.length;
+    // 【高速化・1ページ目基準】同じ寸法 (PSD寸法 × 見本寸法) のページは位置合わせを使い回す
+    // (判型/塗り足し/解像度が同じなら scale+offset は全ページ同一)。重い画像差分を 1 回だけにする。
+    const geomCache = new Map();
     updateProgress({ current: 0, total: Math.max(N, 1), detail: `${modeLabel} 0/${N}`, showCount: false });
     for (let i = 0; i < N; i++) {
       const psd = psdPages[i];
@@ -2057,10 +2177,15 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
       const referenceScan = referenceScanDoc?.pages?.[referenceIndex] ?? { blocks: [] };
       if (!refPath) continue;
       updateProgress({ current: i, total: N, detail: `${modeLabel} ${i + 1}/${N} を計算中…`, showCount: false });
+      const geomSig = `${psd?.width}x${psd?.height}|${referenceScan?.img_width}x${referenceScan?.img_height}`;
+      const cached = geomCache.has(geomSig);
       console.info(
-        `[scan-adjust] page=${i + 1} mode=${mode} ref=${refPath}`,
+        `[scan-adjust] page=${i + 1} mode=${mode} ref=${refPath}${cached ? " (1ページ目の結果を再利用)" : ""}`,
       );
-      const alignment = await computeAlignmentSafe(refPath, psd, referenceScan, pdfPageIdx, mode);
+      const alignment = cached
+        ? geomCache.get(geomSig)
+        : await computeAlignmentSafe(refPath, psd, referenceScan, pdfPageIdx, mode);
+      if (!cached) geomCache.set(geomSig, alignment);
       if (alignment) {
         alignmentByPath.set(psd.path, alignment);
         const expectedSign = mode === "mode2" ? "+" : "-";
@@ -2189,6 +2314,8 @@ export async function runPositionAdjust(mode = "mode1", options = {}) {
       try { renderAllSpreads(); } catch (_) {}
       try { rebuildLayerList(); } catch (_) {}
     }
+    // 位置調整完了後、見本(PDF)と PSD の両方が全体表示になるようフィットへ揃える。
+    fitBothPanesToWindow();
     await hideProgress({ success: true });
     if (!options?.automatic) await notifyDialog({
       title: `${modeLabel} 完了`,
@@ -2578,6 +2705,19 @@ async function runOverlayAlign(options = {}) {
     showCount: false,
   }));
 
+  // 【bugfix】重ね調整モーダルは psd0.canvas (= 大きい PSD では表示用に縮小されたプレビュー
+  // canvas) のピクセル寸法で transform を算出する。result.scale_in_ref は「ref自然px / PSD
+  // *canvas*px」単位なので、そのまま実寸 (logical) 座標として適用するとプレビュー縮小率ぶん
+  // 位置が原点 (左上) 方向に縮んで全レイヤーが左上に固まる。canvas→logical 係数で補正して
+  // 「ref自然px / PSD *logical*px」へ換算する (小さい PSD では canvas==logical で係数=1 の no-op)。
+  const psd0CanvasW = Number(psd0?.canvas?.width);
+  const psd0LogicalW = Number(psd0?.width);
+  const overlayCanvasToLogical = (Number.isFinite(psd0CanvasW) && psd0CanvasW > 0
+    && Number.isFinite(psd0LogicalW) && psd0LogicalW > 0)
+    ? (psd0CanvasW / psd0LogicalW)
+    : 1;
+  const scaleInRefLogical = result.scale_in_ref * overlayCanvasToLogical;
+
   beginHistoryTransient();
   let movedCount = 0;
   let transientCommitted = false;
@@ -2597,8 +2737,8 @@ async function runOverlayAlign(options = {}) {
 
       const referenceScanPerRefX = referenceScanW / result.ref_natural_w;
       const referenceScanPerRefY = referenceScanH / result.ref_natural_h;
-      const alignScaleX = result.scale_in_ref * referenceScanPerRefX;
-      const alignScaleY = result.scale_in_ref * referenceScanPerRefY;
+      const alignScaleX = scaleInRefLogical * referenceScanPerRefX;
+      const alignScaleY = scaleInRefLogical * referenceScanPerRefY;
       const alignScale = (alignScaleX + alignScaleY) / 2;
       const alignOffsetX = result.offset_x_in_ref * referenceScanPerRefX;
       const alignOffsetY = result.offset_y_in_ref * referenceScanPerRefY;
@@ -2669,6 +2809,8 @@ async function runOverlayAlign(options = {}) {
     try { renderAllSpreads(); } catch (_) {}
     try { rebuildLayerList(); } catch (_) {}
   }
+  // 重ね調整完了後、見本(PDF)と PSD の両方が全体表示になるようフィットへ揃える。
+  fitBothPanesToWindow();
   if (progressFlow) {
     completeProgressFlowStep(progressFlow, { detail: "重ね調整 完了" });
     await waitForTransitionPaint();

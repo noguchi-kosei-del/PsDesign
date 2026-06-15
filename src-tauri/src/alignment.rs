@@ -18,7 +18,15 @@ use tauri::AppHandle;
 
 use crate::ocr::make_pdfium;
 
-const DOWNSAMPLE_TARGET: u32 = 400; // 長辺 400px に縮小して高速化
+const DOWNSAMPLE_TARGET: u32 = 600; // 長辺 600px に縮小 (400→600 で位置精度を約1.5倍に)
+
+// 【精度向上】白地 (>= この輝度) どうしの比較はスキップする。
+// 漫画原稿はページの大半が白なので、白vs白の 0 差分が大量に混じると平均差分が薄まり、
+// 「絵柄が合っていなくても白同士が重なれば良い」誤収束を招く。インク同士の一致だけで
+// 評価することで、線画・トーンの実際の重なりに収束させる。
+const WHITE_SKIP_THRESHOLD: i32 = 235;
+// インク画素がこの数未満しか重ならない候補は信頼できない (ほぼ白紙の比較) として除外。
+const MIN_INK_OVERLAP: u64 = 48;
 
 #[derive(Serialize, Debug, Clone)]
 pub struct Alignment {
@@ -186,8 +194,11 @@ pub async fn compute_alignment(
     // これでフロント側で `alignment.offset` と `mokuroPage.img_width` の単位整合が取れる。
     let mode_str = mode.as_deref().unwrap_or("mode1");
 
-    if mode_str == "mode2" {
-        // === モード2: KENBAN 流の画像差分 grid search ===
+    // mode2 は常に画像差分。mode1 も JS 側で「解像度を確実に揃えられない」と判断された場合
+    // (画像見本 / dpi 不明) はここに来る → 確定式(中央配置)は中心寄り誤配置になるため画像差分で合わせる。
+    // (mode1 で解像度が確実に揃う PDF+正dpi のケースは JS が確定式で先に return するのでここには来ない)
+    if mode_str == "mode2" || mode_str == "mode1" {
+        // === 画像差分 grid search (KENBAN 流) ===
         // 見本と PSD の絵柄を grayscale + downsample + テキスト mask した状態で、
         // scale + offset の組合せを総当たりして「差分の絶対値平均が最小」になる
         // 組合せを採用する。両者の絵柄が同じ部分を自動的に重ね合わせる方式。
@@ -260,30 +271,42 @@ pub async fn compute_alignment(
             }
         }
 
-        // best を細かく refine (粗→細の 2 段階)
-        let refine_range = (offset_step * 2).max(2);
-        let refine_scales: Vec<f64> = (-5..=5)
-            .map(|d| best_scale * (1.0 + (d as f64) / 100.0 * 2.0))
-            .collect();
-        let coarse_ox = best_ox;
-        let coarse_oy = best_oy;
-        for ds in refine_scales {
-            if !ds.is_finite() || ds <= 0.0 {
-                continue;
-            }
-            for ox in (coarse_ox - refine_range)..=(coarse_ox + refine_range) {
-                for oy in (coarse_oy - refine_range)..=(coarse_oy + refine_range) {
-                    let d = compute_diff(psd_view, ref_view, ds, ox, oy);
-                    tested += 1;
-                    if d < best_diff {
-                        best_diff = d;
-                        best_scale = ds;
-                        best_ox = ox;
-                        best_oy = oy;
+        // best を細かく refine (粗→細の 2 段階)。
+        // 1段目: 粗探索 best の周辺を ±offset_step*2、scale ±10% (2%刻み) で 1px 探索。
+        // 2段目: 1段目 best の周辺を ±offset_step、scale ±3% (1%刻み) でさらに詰める。
+        let refine_passes: [(i32, std::ops::RangeInclusive<i32>, f64); 2] = [
+            (offset_step * 2, -5..=5, 2.0),
+            (offset_step, -3..=3, 1.0),
+        ];
+        for (refine_range, scale_iter, scale_step_pct) in refine_passes {
+            let refine_scales: Vec<f64> = scale_iter
+                .map(|d| best_scale * (1.0 + (d as f64) / 100.0 * scale_step_pct))
+                .collect();
+            let coarse_ox = best_ox;
+            let coarse_oy = best_oy;
+            for ds in refine_scales {
+                if !ds.is_finite() || ds <= 0.0 {
+                    continue;
+                }
+                for ox in (coarse_ox - refine_range)..=(coarse_ox + refine_range) {
+                    for oy in (coarse_oy - refine_range)..=(coarse_oy + refine_range) {
+                        let d = compute_diff(psd_view, ref_view, ds, ox, oy);
+                        tested += 1;
+                        if d < best_diff {
+                            best_diff = d;
+                            best_scale = ds;
+                            best_ox = ox;
+                            best_oy = oy;
+                        }
                     }
                 }
             }
         }
+
+        // インク重なりが見つからず全候補が棄却された場合 (best_diff=∞) は init_scale/オフセット0
+        // (= 全画面フィット ≒ 自動配置と同じ) のまま。JSON は Infinity を表現できないため
+        // diff_score は有限値に丸めて返す (シリアライズ失敗→アライメント取得失敗を防ぐ)。
+        let diff_out = if best_diff.is_finite() { best_diff } else { 1.0 };
 
         // ダウンサンプル単位 → 元単位への変換
         // compute_diff の scale = ref_small / psd_small だが、これは元単位でも同じ比 (両者を同じ倍率で down)
@@ -333,7 +356,7 @@ pub async fn compute_alignment(
             scale: final_scale,
             offset_x: final_offset_x,
             offset_y: final_offset_y,
-            diff_score: best_diff,
+            diff_score: diff_out,
             candidates: tested,
             psd_bbox: [0.0, 0.0, psd_w_f, psd_h_f],
             ref_bbox: [bbox_left, bbox_top, bbox_right, bbox_bottom],
@@ -481,11 +504,16 @@ fn compute_diff(
             if ref_v == 128 || psd_v == 128 {
                 continue;
             }
+            // 【精度向上】白地どうしはスキップ (インク同士の一致だけで評価して誤収束を防ぐ)。
+            if ref_v >= WHITE_SKIP_THRESHOLD && psd_v >= WHITE_SKIP_THRESHOLD {
+                continue;
+            }
             total += (ref_v - psd_v).unsigned_abs() as u64;
             count += 1;
         }
     }
-    if count == 0 {
+    // インク重なりが極端に少ない候補 (ほぼ白紙どうし) は信頼できないので除外。
+    if count < MIN_INK_OVERLAP {
         return f64::INFINITY;
     }
     (total as f64) / (count as f64) / 255.0

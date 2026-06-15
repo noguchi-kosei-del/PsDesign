@@ -419,6 +419,165 @@ async fn read_binary_file(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+/// 見本画像 (JPEG / PNG) に埋め込まれた解像度 (dpi) を読む。取得できなければ None。
+/// JPEG: JFIF APP0 の density、PNG: pHYs チャンク。位置調整 mode1 で見本とPSDの解像度を
+/// 揃える (k = psd.dpi / 見本dpi) ために使う。
+#[tauri::command]
+async fn read_reference_dpi(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+) -> Result<Option<f64>, String> {
+    let real = ensure_allowed(&allowed, &path)?;
+    let mut file = File::open(&real).map_err(|e| format!("{}: {}", path, e))?;
+    let mut buf = vec![0u8; 65536];
+    let n = file
+        .read(&mut buf)
+        .map_err(|e| format!("{}: {}", path, e))?;
+    Ok(parse_image_dpi(&buf[..n]))
+}
+
+fn parse_image_dpi(buf: &[u8]) -> Option<f64> {
+    // PNG: シグネチャ + pHYs チャンク (ppuX, ppuY, unit)。unit=1(meter) のとき dpi = ppu * 0.0254。
+    if buf.len() >= 8 && buf[0..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A] {
+        let mut i = 8usize;
+        while i + 8 <= buf.len() {
+            let len = u32::from_be_bytes([buf[i], buf[i + 1], buf[i + 2], buf[i + 3]]) as usize;
+            let ctype = &buf[i + 4..i + 8];
+            let data_start = i + 8;
+            if ctype == b"pHYs" && data_start + 9 <= buf.len() {
+                let ppux = u32::from_be_bytes([
+                    buf[data_start],
+                    buf[data_start + 1],
+                    buf[data_start + 2],
+                    buf[data_start + 3],
+                ]);
+                let unit = buf[data_start + 8];
+                if unit == 1 && ppux > 0 {
+                    return Some(ppux as f64 * 0.0254);
+                }
+                return None;
+            }
+            if ctype == b"IDAT" {
+                break; // pHYs は IDAT より前にあるはず
+            }
+            i = data_start + len + 4; // data + crc(4)
+        }
+        return None;
+    }
+    // JPEG: SOI + APP0(JFIF) の density / APP1(EXIF) の XResolution。
+    // Photoshop 書き出しは JFIF 無しで EXIF にだけ dpi を持つことがある (実例: XRes=350)。
+    // JFIF を優先し、無ければ EXIF を使う。
+    if buf.len() >= 2 && buf[0] == 0xFF && buf[1] == 0xD8 {
+        let mut i = 2usize;
+        let mut jfif: Option<f64> = None;
+        let mut exif: Option<f64> = None;
+        while i + 4 <= buf.len() {
+            if buf[i] != 0xFF {
+                break;
+            }
+            let marker = buf[i + 1];
+            if marker == 0xD9 || marker == 0xDA {
+                break; // EOI / SOS (画像データ開始)
+            }
+            let seg_len = u16::from_be_bytes([buf[i + 2], buf[i + 3]]) as usize;
+            let seg_start = i + 4;
+            let seg_end = (i + 2 + seg_len).min(buf.len());
+            if marker == 0xE0
+                && seg_start + 12 <= buf.len()
+                && &buf[seg_start..seg_start + 5] == b"JFIF\0"
+            {
+                let units = buf[seg_start + 7];
+                let xden = u16::from_be_bytes([buf[seg_start + 8], buf[seg_start + 9]]);
+                if xden > 0 {
+                    if units == 1 {
+                        jfif = Some(xden as f64);
+                    } else if units == 2 {
+                        jfif = Some(xden as f64 * 2.54);
+                    }
+                }
+            } else if marker == 0xE1
+                && seg_start + 6 <= buf.len()
+                && seg_start + 6 <= seg_end
+                && &buf[seg_start..seg_start + 6] == b"Exif\0\0"
+            {
+                // seg_start+6 <= seg_end を確認してから slice (壊れた短いセグメントでの panic 回避)。
+                exif = parse_exif_dpi(&buf[seg_start + 6..seg_end]);
+            }
+            if jfif.is_some() {
+                return jfif;
+            }
+            i = i + 2 + seg_len;
+        }
+        return jfif.or(exif);
+    }
+    None
+}
+
+/// EXIF (TIFF) から XResolution + ResolutionUnit を読んで dpi を返す。
+/// buf は "Exif\0\0" の直後 (= TIFF ヘッダ先頭) を指す。
+fn parse_exif_dpi(buf: &[u8]) -> Option<f64> {
+    if buf.len() < 8 {
+        return None;
+    }
+    let le = &buf[0..2] == b"II";
+    let be = &buf[0..2] == b"MM";
+    if !le && !be {
+        return None;
+    }
+    let r16 = |o: usize| -> Option<u16> {
+        if o + 2 > buf.len() {
+            return None;
+        }
+        Some(if le {
+            u16::from_le_bytes([buf[o], buf[o + 1]])
+        } else {
+            u16::from_be_bytes([buf[o], buf[o + 1]])
+        })
+    };
+    let r32 = |o: usize| -> Option<u32> {
+        if o + 4 > buf.len() {
+            return None;
+        }
+        Some(if le {
+            u32::from_le_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]])
+        } else {
+            u32::from_be_bytes([buf[o], buf[o + 1], buf[o + 2], buf[o + 3]])
+        })
+    };
+    let ifd0 = r32(4)? as usize;
+    let n = r16(ifd0)? as usize;
+    let mut xres: Option<f64> = None;
+    let mut unit: u16 = 2; // 既定 inch
+    for e in 0..n {
+        let eo = ifd0 + 2 + e * 12;
+        if eo + 12 > buf.len() {
+            break;
+        }
+        let tagid = r16(eo)?;
+        let typ = r16(eo + 2)?;
+        if tagid == 0x011A && typ == 5 {
+            // XResolution (RATIONAL): 値は 8 バイトなので offset 参照
+            let off = r32(eo + 8)? as usize;
+            let num = r32(off)?;
+            let den = r32(off + 4)?;
+            if den != 0 {
+                xres = Some(num as f64 / den as f64);
+            }
+        } else if tagid == 0x0128 && typ == 3 {
+            // ResolutionUnit (SHORT): 値フィールド先頭に左詰め格納
+            unit = r16(eo + 8)?;
+        }
+    }
+    let x = xres?;
+    if !(x.is_finite() && x > 0.0) {
+        return None;
+    }
+    match unit {
+        3 => Some(x * 2.54), // per cm → per inch
+        _ => Some(x),        // 2 = inch (不明時も inch とみなす)
+    }
+}
+
 #[tauri::command]
 async fn is_unsupported_bitmap_psd(
     allowed: tauri::State<'_, AllowedPaths>,
@@ -2144,6 +2303,7 @@ pub fn run() {
             read_psd_text_layers_batch,
             list_fonts,
             read_binary_file,
+            read_reference_dpi,
             is_unsupported_bitmap_psd,
             read_text_file,
             write_text_file,

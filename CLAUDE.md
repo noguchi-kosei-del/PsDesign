@@ -1,5 +1,45 @@
 # PsDesign
 
+## 2026-06-15 変更メモ: v2.5.5 リリース（位置調整の精度・速度改善 / 見本dpi自動取得(EXIF対応) / 配置後の全体フィット）
+
+v2.5.5 では、写植時の「見本との位置調整」3モード（位置調整1=確定式 / 位置調整2=画像差分 / 重ね調整=手動）の不具合と精度・速度を中心に修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.5` に更新済み。
+
+### A. 重ね調整（手動 / mode3）が左上に固まる不具合
+
+- [src/auto-place.js](src/auto-place.js) `runOverlayAlign`: 重ね調整モーダルは `psd0.canvas`（大きい PSD では表示用に縮小されたプレビュー canvas）のピクセル寸法で transform を算出するため、`result.scale_in_ref` は「見本自然px / PSD *canvas* px」単位。これを実寸(logical)座標としてそのまま適用すると、プレビュー縮小率ぶん全レイヤーが原点(左上)方向に縮んで固まっていた。
+- 修正: `overlayCanvasToLogical = psd0.canvas.width / psd0.width` を掛けて「見本自然px / PSD *logical* px」へ換算する `scaleInRefLogical` を導入。小さい PSD（canvas==logical）では係数 1 の no-op。
+
+### B. 位置調整1（確定式 / mode1）の解像度マッチと、揃わない場合の画像差分フォールバック
+
+- 確定式（見本を PSD 中央へ余白ぶんオフセット）は「見本と PSD が同解像度」を前提にする。見本 PDF の OCR は 300dpi、PSD は 600/350dpi 等で別単位のため、従来の `(refW - psdW)/2` は単位混在で位置がずれ、解像度が大きく違うと中央に文字が固まっていた。
+- [src/auto-place.js](src/auto-place.js): 見本と PSD の「解像度を揃えてから」確定計算するため content scale `k = psd.dpi / 見本dpi` を導入（`resolutionMatchForMode1` / `computeCenterMarginAlignment(_,_,k)` で `scale=1/k, offset=refW/2 - psdW/(2k)`）。見本 dpi は **1 ページ目基準で一度だけ取得**（`getBaseReferenceDpi`、先頭見本パスでキャッシュ）。PDF=300dpi、画像=埋め込みdpi。
+- 解像度を確実に揃えられる（見本dpiと PSD印刷dpi(>=150)が両方取れ k が妥当）場合のみ JS 確定式。そうでない場合（dpi 不明等）は **Rust の画像差分（grid search）にフォールバック**（[src-tauri/src/alignment.rs](src-tauri/src/alignment.rs) の grid search 分岐を `mode2 || mode1` に拡張）。これで解像度が読めない原稿でも中央固まりにならない。
+- 縦横比が 5% 超ずれる場合は確定式の前提（左右上下対称の余白）が崩れるため `console.warn` で重ね調整/画像差分を促す。
+
+### C. 見本画像の dpi をファイルから自動取得（JFIF + EXIF）
+
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs): `read_reference_dpi` コマンドを追加。JPEG は JFIF APP0 の density に加え **EXIF(APP1) の XResolution/ResolutionUnit** も解析（`parse_exif_dpi`）。PNG は pHYs。実原稿が JFIF 無し・EXIF に 350dpi を持つケースを確認したため EXIF 対応は必須だった。
+- 見本 dpi が読めれば確定式（一瞬・正確）に乗り、画像差分フォールバックが不要になる。
+
+### D. 位置調整 2（画像差分 / mode2）の収束・精度強化
+
+- [src-tauri/src/alignment.rs](src-tauri/src/alignment.rs): 漫画原稿は大半が白のため白vs白の 0 差分が誤収束を招く。`WHITE_SKIP_THRESHOLD=235` で白地どうしを比較対象から除外し、インク（線画・トーン）同士の一致だけで評価。インク重なりが `MIN_INK_OVERLAP=48` 未満の候補は除外。探索解像度 `DOWNSAMPLE_TARGET` を 400→600 に上げ、refine を 2 段（±10%/2% → ±3%/1%）に。全候補棄却時は `diff_score` を有限値に丸めて JSON シリアライズ事故を回避。
+
+### E. 全ページで同じ位置合わせを使い回し（1 ページ目基準で高速化）
+
+- [src/auto-place.js](src/auto-place.js) `computeAlignmentsForPages` / `runPositionAdjust`: 判型・塗り足し・解像度が同じなら位置合わせ(scale+offset)は全ページ同一。`geomCache`（キー=`PSD寸法|見本寸法`）で同寸法ページは 1 ページ目の結果を使い回し、重い画像差分を 1 回だけにする。見開き等の異寸法ページのみ個別計算。
+
+### F. 配置・位置調整の完了後に見本と PSD を全体フィット表示
+
+- [src/auto-place.js](src/auto-place.js) `fitBothPanesToWindow()` を新設し、`runAutoPlace` / `runPositionAdjust` / `runOverlayAlign` の完了時に呼ぶ。`resetPdfViewportToStart()+setPdfZoom(PDF_FIT_ZOOM)` / `resetPsdViewportToStart()+setPsdZoom(PSD_FIT_ZOOM)`（Ctrl+0 相当）で見本(PDF)と PSD の両ペインを全体表示に揃える。
+
+### 検証
+
+- `npm run check`（`check:encoding` + `check:security` 21 項目 + `lint` + `build`）成功。
+- `cargo check` / `cargo build` 成功。
+- 実機（クローン環境で `npm run dev` + `tauri dev --no-dev-server`）で、重ね調整の左上固まり解消、確定式の解像度マッチ（見本=画像@350dpi → PSD）と配置精度、2 ページ目以降の高速化、配置後の全体フィットをユーザー確認済み。
+- リリースはタグ `v2.5.5` push により `.github/workflows/release.yml` が Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-15 変更メモ: v2.5.4 リリース（途中見開きページ対応 / Photoshop 低メモリ保存対策 / ホバー選択設定 / PSD表示調整）
 v2.5.4 では、途中に横長見開きページが混ざる原稿で PSD と見本のページ対応が崩れる問題、50GB 以下など低メモリ環境で Photoshop の警告ダイアログにより保存が止まる問題、テキストホバー選択を環境設定から切り替えたい要望を中心に修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.4` に更新済み。
 
