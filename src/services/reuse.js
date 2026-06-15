@@ -194,6 +194,12 @@ function normalizeReuseFillColor(value) {
   return "default";
 }
 
+function normalizeReusePunctuationSpace(text, enabled) {
+  const s = String(text ?? "");
+  if (enabled === false) return s;
+  return s.replace(/、/g, " ");
+}
+
 function appendReuseTextSourceBlock(sourcePages, pageNumber, text) {
   if (!Array.isArray(sourcePages)) return null;
   const normalized = String(text ?? "").replace(/\r\n?/g, "\n").trim();
@@ -225,7 +231,16 @@ function reuseTextSourceName(files) {
   return "recycle_text.txt";
 }
 
-async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "reproduce", unifyFont = null, unifySize = null, sourcePages = null, pageNumber = 1) {
+async function extractTextLayersToNewLayers(
+  page,
+  alignTargets,
+  fontSizeMode = "reproduce",
+  unifyFont = null,
+  unifySize = null,
+  sourcePages = null,
+  pageNumber = 1,
+  punctuationSpaceReplacementEnabled = getDefault("punctuationSpaceReplacementEnabled"),
+) {
   const unify = fontSizeMode === "select";
   const defaultFont = unify ? (unifyFont || getDefault("fontPostScriptName") || null) : null;
   const sizeRaw = unify ? Number(unifySize ?? getDefault("textSize")) : NaN;
@@ -240,7 +255,10 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       const it = psItems[i];
       if (!it) continue;
       // Photoshop の contents は改行が \r。アプリ内は \n に正規化。
-      const contents = String(it.contents ?? "").replace(/\r\n?/g, "\n");
+      const contents = normalizeReusePunctuationSpace(
+        String(it.contents ?? "").replace(/\r\n?/g, "\n"),
+        punctuationSpaceReplacementEnabled,
+      );
       if (!contents) continue;
       const direction = it.direction === "vertical" ? "vertical" : "horizontal";
       const hasBounds = [it.left, it.top, it.right, it.bottom].every((v) => Number.isFinite(v))
@@ -345,7 +363,10 @@ async function extractTextLayersToNewLayers(page, alignTargets, fontSizeMode = "
       sourceFont: tl.font || null,
     });
     const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: boundsSizePt });
-    const contents = String(tl.text ?? "").replace(/\r\n?/g, "\n");
+    const contents = normalizeReusePunctuationSpace(
+      String(tl.text ?? "").replace(/\r\n?/g, "\n"),
+      punctuationSpaceReplacementEnabled,
+    );
     if (!contents) continue;
     const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
     const created = addNewLayer({
@@ -422,6 +443,7 @@ export async function loadPsdFilesForReuse(files, {
   fontSizeMode = "reproduce",
   unifyFont = null,
   unifySize = null,
+  punctuationSpaceReplacementEnabled = getDefault("punctuationSpaceReplacementEnabled"),
   loadOperationToken = null,
 } = {}) {
   if (!files || files.length === 0) return;
@@ -527,6 +549,7 @@ export async function loadPsdFilesForReuse(files, {
           unifySize,
           reuseTextSourcePages,
           i + 1,
+          punctuationSpaceReplacementEnabled,
         );
       }
       setReuseInfo(page.path, {

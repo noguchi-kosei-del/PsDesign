@@ -162,11 +162,30 @@ export function createFontCombobox({
     if (positionMode !== "fixed" || !list) return;
     const target = positionTarget || combo || input;
     if (!target) return;
-    if (appendToBody && list.parentElement !== document.body) document.body.appendChild(list);
+    if (appendToBody && list.parentElement !== document.body) {
+      document.body.appendChild(list);
+    }
     const r = target.getBoundingClientRect();
-    list.style.top = `${r.bottom + 2}px`;
-    list.style.left = `${r.left}px`;
-    list.style.width = `${r.width}px`;
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 800;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 600;
+    const margin = 8;
+    const gap = 4;
+    const width = Math.max(160, Math.min(r.width, viewportWidth - margin * 2));
+    const left = Math.max(margin, Math.min(r.left, viewportWidth - width - margin));
+    const estimatedHeight = Math.min(((items.length || list.children.length || 1) * 34) + 12, 260);
+    const naturalHeight = Math.max(120, estimatedHeight);
+    const spaceBelow = Math.max(0, viewportHeight - r.bottom - margin);
+    const spaceAbove = Math.max(0, r.top - margin);
+    const openAbove = spaceAbove > spaceBelow && spaceBelow < naturalHeight;
+    const availableHeight = Math.max(120, openAbove ? spaceAbove : spaceBelow);
+    const height = Math.min(naturalHeight, availableHeight);
+    const top = openAbove
+      ? Math.max(margin, r.top - height - gap)
+      : Math.min(viewportHeight - margin - height, r.bottom + gap);
+    list.style.left = `${left}px`;
+    list.style.top = `${top}px`;
+    list.style.width = `${width}px`;
+    list.style.maxHeight = `${height}px`;
   }
 
   function openCombo({ showAll = false, query = null, rebuild: shouldRebuild = false } = {}) {
@@ -175,9 +194,9 @@ export function createFontCombobox({
     if (shouldRebuild || !items.length) rebuild();
     if (!items.length && !emptyText) return;
     open = true;
-    setHidden(list, false);
     combo?.classList.add("open");
     position();
+    setHidden(list, false);
     filter(showAll ? "" : query ?? input.value);
     const currentPs = getCurrentPostScriptName() || "";
     if (currentPs) {

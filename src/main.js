@@ -12,6 +12,7 @@ import {
   showRotationHandlesForSelectedLayers,
   refreshAllOverlays,
   revealLayerAdornmentsForTemporaryMultiSelection,
+  revealSelectedLayerSizeOnlyBadges,
   restoreSelectedLayerBadges,
   setSelectedLayerBadgesUserHidden,
   toggleSelectionCenterOnlyMode,
@@ -189,7 +190,9 @@ import {
   onTextSizeChange,
   onToolChange,
   onTxtSourceChange,
+  onTxtFilePathChange,
   getScanExtractTextSource,
+  getTxtFilePath,
   onScanExtractTextSourceChange,
   setActivePane,
   setAppMode,
@@ -585,6 +588,20 @@ function bindTools() {
       e.key === "ArrowUp" || e.key === "ArrowDown";
 
     if (
+      !isTextInput &&
+      (e.ctrlKey || e.metaKey) &&
+      !e.altKey &&
+      !e.shiftKey &&
+      (e.key === "ArrowLeft" || e.key === "ArrowRight")
+    ) {
+      if (revealSelectedLayerSizeOnlyBadges()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+    }
+
+    if (
       isArrowKey &&
       (e.ctrlKey || e.metaKey) &&
       !e.altKey &&
@@ -631,6 +648,10 @@ function bindTools() {
             e.preventDefault();
             return;
           }
+        }
+        if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && isTxtBlockSelectionActive()) {
+          e.preventDefault();
+          return;
         }
         const hasSel = getSelectedLayers().length > 0;
         if (hasSel) {
@@ -1316,7 +1337,7 @@ function bindParallelViewMode() {
     setViewItemDisabled(fullscreenItem, locked);
   };
 
-  // 「テキストエディタ」(照合なし) と「テキストエディタ（照合付）」はどちらも editor モード。
+  // 「テキストエディタ」(照合なし) と「テキストエディタ（照合付き）」はどちらも editor モード。
   // 違いは照合パネル表示フラグ (getEditorMatchMode) のみ。メニューのアクティブ表示を出し分ける。
   const applyEditorVariantActive = () => {
     const inEditor = getParallelViewMode() === "editor";
@@ -1330,10 +1351,10 @@ function bindParallelViewMode() {
       editorMatchBtn.setAttribute("aria-checked", matchActive ? "true" : "false");
     }
   };
-  // 照合付モードは画像スキャン結果（照合データ）があるときだけメニューに出す。
-  // データが無くなったら照合付フラグを落として通常エディタへ戻す。
+  // 照合付きモードは、原稿テキストのファイルと画像スキャン結果の両方があるときだけメニューに出す。
+  // どちらかが無くなったら照合付きフラグを落として通常エディタへ戻す。
   const updateEditorMatchAvailability = () => {
-    const has = !!getScanExtractTextSource()?.content;
+    const has = !!getTxtFilePath() && !!getScanExtractTextSource()?.content;
     if (editorMatchBtn) editorMatchBtn.hidden = !has;
     if (!has && getEditorMatchMode()) setEditorMatchMode(false);
   };
@@ -1451,10 +1472,12 @@ function bindParallelViewMode() {
   };
   onParallelViewModeChange(sync);
   onAppModeChange(sync);
-  // 照合付フラグの切替（同 editor モード内での 2 項目切替）でメニューのアクティブ表示を更新。
+  // 照合付きフラグの切替（同 editor モード内での 2 項目切替）でメニューのアクティブ表示を更新。
   onEditorMatchModeChange(applyEditorVariantActive);
-  // 画像スキャン結果の有無で「照合付」項目の表示/非表示を更新。
+  // 原稿テキストのファイルと画像スキャン結果の有無で「照合付き」項目の表示/非表示を更新。
   onScanExtractTextSourceChange(updateEditorMatchAvailability);
+  onTxtSourceChange(updateEditorMatchAvailability);
+  onTxtFilePathChange(updateEditorMatchAvailability);
   updateEditorMatchAvailability();
   applyEditorVariantActive();
 
@@ -1474,6 +1497,7 @@ function bindParallelViewMode() {
       if (toolbar && toolbarWasDragRegion) toolbar.setAttribute("data-tauri-drag-region", "");
     };
     const openDropdown = () => {
+      updateEditorMatchAvailability();
       dropdownMenu.hidden = false;
       dropdownTrigger.setAttribute("aria-expanded", "true");
       toolbar?.classList.add("view-mode-menu-open");
@@ -4481,12 +4505,23 @@ function openHomeTypesetDialog() {
       "beforebegin",
       '<button class="home-typeset-pick-btn home-typeset-hide-btn" data-reference-hide type="button" disabled>非表示選択</button>'
     );
+    modal.querySelector(".home-typeset-settings")?.insertAdjacentHTML(
+      "beforeend",
+      `<div class="home-typeset-setting home-typeset-punct-setting">
+        <label class="home-typeset-setting-label" for="home-typeset-punct-space">句読点置換</label>
+        <select id="home-typeset-punct-space" class="home-typeset-select">
+          <option value="on">適用</option>
+          <option value="off">適用しない</option>
+        </select>
+      </div>`
+    );
     const startBtn = modal.querySelector(".home-typeset-start");
     const sizeInput = modal.querySelector("#home-typeset-size");
     const fontInput = modal.querySelector("#home-typeset-font");
     const fontCombo = modal.querySelector("#home-typeset-font-combo");
     const fontToggle = modal.querySelector(".home-typeset-font-toggle");
     const fontList = modal.querySelector("#home-typeset-font-list");
+    const punctSpaceSelect = modal.querySelector("#home-typeset-punct-space");
     const fontFamilyFor = (font) => {
       const parts = [];
       const add = (name) => {
@@ -4535,8 +4570,8 @@ function openHomeTypesetDialog() {
       emptyText: getFonts().length ? "該当するフォントがありません" : "フォント一覧を読み込み中です",
     });
     homeFontCombo.rebuild();
-    const openFontCombo = (query = "") => {
-      homeFontCombo.open({ query, rebuild: true });
+    const openFontCombo = (query = "", { rebuild = false } = {}) => {
+      homeFontCombo.open({ query, rebuild });
     };
     const closeFontCombo = () => {
       homeFontCombo.close();
@@ -4551,6 +4586,7 @@ function openHomeTypesetDialog() {
       if (font?.postScriptName) baseFontPs = font.postScriptName;
       setDefault("textSize", baseTextSize);
       setTextSize(baseTextSize);
+      setDefault("punctuationSpaceReplacementEnabled", punctSpaceSelect?.value !== "off");
       if (baseFontPs) {
         setDefault("fontPostScriptName", baseFontPs);
         setCurrentFont(baseFontPs);
@@ -4566,6 +4602,9 @@ function openHomeTypesetDialog() {
     };
     syncSizeInput();
     syncFontInput();
+    if (punctSpaceSelect) {
+      punctSpaceSelect.value = getDefault("punctuationSpaceReplacementEnabled") === false ? "off" : "on";
+    }
     window.addEventListener("psdesign:fonts-loaded", onFontsLoadedForTypeset);
     sizeInput?.addEventListener("change", () => {
       baseTextSize = clampSize(sizeInput.value);
@@ -4575,8 +4614,17 @@ function openHomeTypesetDialog() {
       baseTextSize = clampSize(sizeInput.value);
       syncSizeInput();
     });
-    fontInput?.addEventListener("focus", () => openFontCombo(""));
-    fontInput?.addEventListener("input", () => openFontCombo(fontInput.value));
+    let skipNextFontFocusOpen = false;
+    fontInput?.addEventListener("focus", () => {
+      if (skipNextFontFocusOpen) {
+        skipNextFontFocusOpen = false;
+        return;
+      }
+      openFontCombo("");
+    });
+    fontInput?.addEventListener("input", () => {
+      openFontCombo(fontInput.value);
+    });
     fontInput?.addEventListener("keydown", (e) => {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -4598,10 +4646,15 @@ function openHomeTypesetDialog() {
         if (!fontCombo?.contains(document.activeElement)) commitFontInput();
       }, 0);
     });
-    fontToggle?.addEventListener("click", () => {
+    fontToggle?.addEventListener("mousedown", (e) => {
+      e.preventDefault();
       if (homeFontCombo.isOpen()) closeFontCombo();
       else {
-        fontInput?.focus();
+        skipNextFontFocusOpen = true;
+        fontInput?.focus({ preventScroll: true });
+        setTimeout(() => {
+          skipNextFontFocusOpen = false;
+        }, 0);
         openFontCombo("");
       }
     });
@@ -4856,6 +4909,7 @@ function openHomeTypesetDialog() {
       if (homeTypesetDragLeaveHandler === clearDragOverRows) homeTypesetDragLeaveHandler = null;
       window.removeEventListener("keydown", onKeyDown, true);
       window.removeEventListener("psdesign:fonts-loaded", onFontsLoadedForTypeset);
+      closeFontCombo();
       hideModalAnimated(modal);
       setTimeout(() => modal.remove(), 260);
       resolve(value);
@@ -4963,7 +5017,15 @@ function openHomeTypesetDialog() {
         return;
       }
       applyTypesetDefaults();
-      cleanup({ referencePaths, psdPaths, txtPath, hiddenReferencePages: [...hiddenReferencePages], baseTextSize, baseFontPs });
+      cleanup({
+        referencePaths,
+        psdPaths,
+        txtPath,
+        hiddenReferencePages: [...hiddenReferencePages],
+        baseTextSize,
+        baseFontPs,
+        punctuationSpaceReplacementEnabled: punctSpaceSelect?.value !== "off",
+      });
     });
     window.addEventListener("keydown", onKeyDown, true);
     homeTypesetDropHandler = handleHomeTypesetDrop;
@@ -5131,6 +5193,7 @@ async function startHomeTypesetFlow() {
       allowExtractText: true,
       preserveTxtDuringExtract: !!picked.txtPath,
       positionAdjustMode,
+      punctuationSpaceReplacementEnabled: picked.punctuationSpaceReplacementEnabled,
       progressFlowId,
       skipFinalHide: true,
     });
@@ -5251,10 +5314,12 @@ async function startHomeReuseFlow() {
       fonts: fontList,
       defaultFontPs: getDefault("fontPostScriptName"),
       defaultSizePt: Number(getDefault("textSize")) || 12,
+      defaultPunctuationSpaceReplacementEnabled: getDefault("punctuationSpaceReplacementEnabled"),
     });
     if (!picked) return; // キャンセル → 開始を中止
     unifyFont = picked.fontPostScriptName;
     unifySize = picked.sizePt;
+    setDefault("punctuationSpaceReplacementEnabled", picked.punctuationSpaceReplacementEnabled !== false);
   }
 
   const progressFlowId = `home-reuse-${Date.now()}`;
@@ -5278,6 +5343,7 @@ async function startHomeReuseFlow() {
       fontSizeMode,
       unifyFont,
       unifySize,
+      punctuationSpaceReplacementEnabled: getDefault("punctuationSpaceReplacementEnabled"),
       progressFlow: { id: progressFlowId, stepId: "psd-read" },
       progressFlowSteps: {
         read: "psd-read",
@@ -5331,9 +5397,8 @@ async function closeStartupSplash() {
   try {
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("close_splash");
-  } catch (e) {
+  } catch {
     // Browser-only dev and already-visible windows do not have the splash command.
-    console.debug("close_splash skipped:", e);
   }
 }
 

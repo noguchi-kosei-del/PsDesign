@@ -2421,7 +2421,12 @@ export function chooseReuseFontSizeMode() {
   });
 }
 
-export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizePt = 12 } = {}) {
+export function pickReuseFontSize({
+  fonts = [],
+  defaultFontPs = "",
+  defaultSizePt = 12,
+  defaultPunctuationSpaceReplacementEnabled = true,
+} = {}) {
   return new Promise((resolve) => {
     const modal = $("confirm-modal");
     const titleEl = $("confirm-modal-title");
@@ -2559,10 +2564,21 @@ export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizeP
     sizeInput.step = "0.1";
     sizeInput.value = String(Number.isFinite(defaultSizePt) && defaultSizePt > 0 ? defaultSizePt : 12);
 
+    const punctLabel = document.createElement("label");
+    punctLabel.className = "reuse-fontsize-label";
+    punctLabel.textContent = "句読点置換";
+    const punctSelect = document.createElement("select");
+    punctSelect.className = "prompt-modal-input reuse-fontsize-punct-select";
+    punctSelect.setAttribute("aria-label", "句読点「、」の半角スペース置換");
+    punctSelect.innerHTML = '<option value="on">適用</option><option value="off">適用しない</option>';
+    punctSelect.value = defaultPunctuationSpaceReplacementEnabled === false ? "off" : "on";
+
     wrap.appendChild(fontLabel);
     wrap.appendChild(fontCombo);
     wrap.appendChild(sizeLabel);
     wrap.appendChild(sizeInput);
+    wrap.appendChild(punctLabel);
+    wrap.appendChild(punctSelect);
     msgEl.parentNode.insertBefore(wrap, msgEl.nextSibling);
 
     okBtn.classList.remove("page-jump-btn-place");
@@ -2586,6 +2602,7 @@ export function pickReuseFontSize({ fonts = [], defaultFontPs = "", defaultSizeP
       cleanup({
         fontPostScriptName: ps,
         sizePt: Number.isFinite(sz) && sz > 0 ? Math.min(999, Math.max(6, sz)) : null,
+        punctuationSpaceReplacementEnabled: punctSelect.value !== "off",
       });
     };
     const onCancel = () => cleanup(null);

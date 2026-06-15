@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS = {
   // v8: 中丸ゴシック自動切替の閾値を 0.5 (50%) に設定 + UI 側で 10% 刻みの
   //     6 段階バケット (50-59 / 60-69 / 70-79 / 80-89 / 90-99 / 100) で色分け。
   //     旧 v7 以前 (デフォルト閾値 0.9 だった想定) の保存値を破棄して新デフォルト 0.5 を強制反映。
-  version: 20,
+  version: 21,
   themeColor: "tealGreen",
   fileDialogMode: "opus",
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
@@ -125,6 +125,9 @@ export const DEFAULT_SETTINGS = {
     // 0 で OFF。v1.24.0 でプレビュー / bbox / 自動配置にも反映済み（render-all + save）。
     // scope: render-all + save
     punctuationTsumePercent: 50,
+    // 句読点「、」(U+3001) を入力時に半角スペースへ置換するか。
+    // scope: creation-only + editing（入力時の正規化。既存テキストは再編集時のみ反映）
+    punctuationSpaceReplacementEnabled: true,
     // 縦書きレイヤーで半角の英数字 (0-9 / a-z / A-Z) を全角 (０-９ / ａ-ｚ / Ａ-Ｚ) に
     // 自動変換するか。サイドバー / エディタモードの新規入力、自動配置の contents 生成、
     // 自動配置済みレイヤーの TXT 追従同期に共通適用される（横書きと既存レイヤーには無影響）。
@@ -310,6 +313,9 @@ function migrate(old) {
     if (typeof d.punctuationTsumePercent === "number" && Number.isFinite(d.punctuationTsumePercent)) {
       // 0-100 にクランプ
       out.defaults.punctuationTsumePercent = Math.max(0, Math.min(100, d.punctuationTsumePercent));
+    }
+    if (typeof d.punctuationSpaceReplacementEnabled === "boolean") {
+      out.defaults.punctuationSpaceReplacementEnabled = d.punctuationSpaceReplacementEnabled;
     }
     if (typeof d.verticalHalfToFullEnabled === "boolean") {
       out.defaults.verticalHalfToFullEnabled = d.verticalHalfToFullEnabled;

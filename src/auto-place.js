@@ -33,7 +33,12 @@ import {
   setActivePane,
   setPsdZoom,
 } from "./state.js";
-import { parsePages, convertHalfToFullForVertical, renderTxtSourceViewer } from "./txt-source.js";
+import {
+  parsePages,
+  convertHalfToFullForVertical,
+  normalizePunctuationSpaceReplacement,
+  renderTxtSourceViewer,
+} from "./txt-source.js";
 import { notifyDialog, confirmDialog, hideProgress, showProgress, updateProgress } from "./ui-feedback.js";
 import { withProgressFlow, updateProgressFlow, completeProgressFlowStep } from "./progress-flow.js";
 import { loadPsdFilesByPaths, pickPsdFiles } from "./services/psd-load.js";
@@ -618,7 +623,10 @@ function mapBlockToNewLayer(block, referenceScanPage, psdPage, contents, default
   // 半角英数字 (0-9 / A-Z / a-z) を全角に自動変換する。
   // bbox 推定は変換後テキストで行うため、文字幅差は影響しない（char count ベース）。
   const rubyParsed = parseRubyAnnotatedText(contents ?? "", { promoteInlineNakaguro: direction === "vertical" });
-  const text = convertHalfToFullForVertical(rubyParsed.text, direction);
+  const text = normalizePunctuationSpaceReplacement(
+    convertHalfToFullForVertical(rubyParsed.text, direction),
+    defaults.punctuationSpaceReplacementEnabled,
+  );
   const charRubies = rubyParsed.charRubies;
   // 【v1.26.0 移植 (PsDesign-main v1.24.0 要件①)】
   // 連結グループに属するブロック (member >= 2) はサイズを基本フォントサイズに統一。
@@ -744,7 +752,10 @@ function mapBlockToNewLayer(block, referenceScanPage, psdPage, contents, default
 function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
   const direction = getNewTextDirection();
   const rubyParsed = parseRubyAnnotatedText(contents ?? "", { promoteInlineNakaguro: direction === "vertical" });
-  const text = convertHalfToFullForVertical(rubyParsed.text, direction);
+  const text = normalizePunctuationSpaceReplacement(
+    convertHalfToFullForVertical(rubyParsed.text, direction),
+    defaults.punctuationSpaceReplacementEnabled,
+  );
   const charRubies = rubyParsed.charRubies;
   const sizePt = defaults.sizePt ?? 24;
   const { width, height } = estimateLayerSize(
@@ -1343,6 +1354,7 @@ export async function runAutoPlace({
   forceRescan = false,
   positionOnlyScan = false,
   positionAdjustMode = null,
+  punctuationSpaceReplacementEnabled = null,
   progressFlowId = null,
   // v2.2.x: 完了 → workspace の星空ディゾルブ演出を呼び出し側で実施したい場合は
   // true を渡す。runAutoPlace の最終 hideProgress(success: true) を skip するので、
@@ -1466,6 +1478,9 @@ export async function runAutoPlace({
       cloudShapeFontEnabled: getDefault("cloudShapeFontEnabled"),
       cloudShapeScoreThreshold: getDefault("cloudShapeScoreThreshold"),
       cloudShapeFontPostScriptName: getDefault("cloudShapeFontPostScriptName"),
+      punctuationSpaceReplacementEnabled: punctuationSpaceReplacementEnabled == null
+        ? getDefault("punctuationSpaceReplacementEnabled")
+        : punctuationSpaceReplacementEnabled !== false,
       positionAdjustMode,
     };
     const placementDoc = normalizeReferenceScanDocForReferencePages(cache.doc);
@@ -1614,7 +1629,10 @@ function syncPlacedFromTxt() {
       // ことで原稿との見た目差分を吸収する（横書きと設定 OFF は冪等に素通し）。
       const direction = layer.direction ?? "horizontal";
       const rubyParsedNext = parseRubyAnnotatedText(rawNext, { promoteInlineNakaguro: direction === "vertical" });
-      const next = convertHalfToFullForVertical(rubyParsedNext.text, direction);
+      const next = normalizePunctuationSpaceReplacement(
+        convertHalfToFullForVertical(rubyParsedNext.text, direction),
+        getDefault("punctuationSpaceReplacementEnabled"),
+      );
       const nextCharRubies = rubyParsedNext.charRubies;
 
       // 【手動ルビ保護: char index 単位のマージ】TXT 注記由来のルビと手動ルビを統合。

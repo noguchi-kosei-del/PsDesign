@@ -14,13 +14,14 @@ pub enum FontError {
 }
 
 pub fn list_fonts() -> Result<Vec<FontEntry>, FontError> {
-    if let Some(cached) = read_cache() {
-        return Ok(cached);
-    }
-
     let dirs = font_directories();
     if dirs.is_empty() {
         return Err(FontError::NoFontDir);
+    }
+
+    let fingerprint = font_dirs_fingerprint(&dirs);
+    if let Some(cached) = read_cache(&fingerprint) {
+        return Ok(cached);
     }
 
     let mut seen: HashSet<String> = HashSet::new();
@@ -44,7 +45,7 @@ pub fn list_fonts() -> Result<Vec<FontEntry>, FontError> {
 
     result.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
 
-    write_cache(&result);
+    write_cache(&result, &fingerprint);
     Ok(result)
 }
 
@@ -55,7 +56,7 @@ fn is_font_file(path: &Path) -> bool {
             let lower = ext.to_ascii_lowercase();
             lower == "ttf" || lower == "otf" || lower == "ttc" || lower == "otc"
         })
-        .unwrap_or(false)
+        .unwrap_or_else(|| path.is_file())
 }
 
 fn extract_fonts(bytes: &[u8], path: &Path, seen: &mut HashSet<String>, out: &mut Vec<FontEntry>) {
@@ -191,6 +192,17 @@ fn decode_name(record: &ttf_parser::name::Name) -> Option<String> {
     None
 }
 
+fn push_font_dir(dirs: &mut Vec<PathBuf>, path: PathBuf) {
+    if !path.is_dir() {
+        return;
+    }
+    let key = path.to_string_lossy().to_lowercase();
+    if dirs.iter().any(|d| d.to_string_lossy().to_lowercase() == key) {
+        return;
+    }
+    dirs.push(path);
+}
+
 #[cfg(windows)]
 fn font_directories() -> Vec<PathBuf> {
     let mut dirs = Vec::new();
@@ -198,14 +210,10 @@ fn font_directories() -> Vec<PathBuf> {
     if let Ok(windir) = std::env::var("WINDIR") {
         let mut p = PathBuf::from(windir);
         p.push("Fonts");
-        if p.is_dir() {
-            dirs.push(p);
-        }
+        push_font_dir(&mut dirs, p);
     } else {
         let p = PathBuf::from(r"C:\Windows\Fonts");
-        if p.is_dir() {
-            dirs.push(p);
-        }
+        push_font_dir(&mut dirs, p);
     }
 
     if let Ok(local) = std::env::var("LOCALAPPDATA") {
@@ -213,9 +221,29 @@ fn font_directories() -> Vec<PathBuf> {
         p.push("Microsoft");
         p.push("Windows");
         p.push("Fonts");
-        if p.is_dir() {
-            dirs.push(p);
+        push_font_dir(&mut dirs, p);
+    }
+
+    for env_name in ["ProgramFiles", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(env_name) {
+            push_font_dir(
+                &mut dirs,
+                PathBuf::from(root).join("Common Files").join("Adobe").join("Fonts"),
+            );
         }
+    }
+
+    if let Some(appdata) = std::env::var_os("APPDATA") {
+        let appdata = PathBuf::from(appdata);
+        push_font_dir(&mut dirs, appdata.join("Adobe").join("Fonts"));
+        push_font_dir(
+            &mut dirs,
+            appdata.join("Adobe").join("CoreSync").join("plugins").join("livetype").join("r"),
+        );
+    }
+
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        push_font_dir(&mut dirs, PathBuf::from(local).join("Adobe").join("Fonts"));
     }
 
     dirs
@@ -235,7 +263,59 @@ fn cache_path() -> Option<PathBuf> {
     Some(p)
 }
 
-fn read_cache() -> Option<Vec<FontEntry>> {
+#[derive(Debug, Clone, serde::Deserialize, serde::Serialize, PartialEq, Eq)]
+struct FontCacheDir {
+    path: String,
+    #[serde(rename = "fileCount")]
+    file_count: u64,
+    #[serde(rename = "latestModifiedMs")]
+    latest_modified_ms: u64,
+    #[serde(rename = "totalSize")]
+    total_size: u64,
+}
+
+fn system_time_ms(time: std::time::SystemTime) -> u64 {
+    time.duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis().min(u128::from(u64::MAX)) as u64)
+        .unwrap_or(0)
+}
+
+fn font_dirs_fingerprint(dirs: &[PathBuf]) -> Vec<FontCacheDir> {
+    let mut out = Vec::new();
+    for dir in dirs {
+        let mut file_count = 0u64;
+        let mut latest_modified_ms = 0u64;
+        let mut total_size = 0u64;
+        if let Ok(entries) = std::fs::read_dir(dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if !is_font_file(&path) {
+                    continue;
+                }
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                if !meta.is_file() {
+                    continue;
+                }
+                file_count += 1;
+                total_size = total_size.saturating_add(meta.len());
+                if let Ok(modified) = meta.modified() {
+                    latest_modified_ms = latest_modified_ms.max(system_time_ms(modified));
+                }
+            }
+        }
+        out.push(FontCacheDir {
+            path: dir.to_string_lossy().into_owned(),
+            file_count,
+            latest_modified_ms,
+            total_size,
+        });
+    }
+    out
+}
+
+fn read_cache(expected_fingerprint: &[FontCacheDir]) -> Option<Vec<FontEntry>> {
     let path = cache_path()?;
     let raw = std::fs::read_to_string(&path).ok()?;
     #[derive(serde::Deserialize)]
@@ -250,7 +330,17 @@ fn read_cache() -> Option<Vec<FontEntry>> {
         #[serde(rename = "faceIndex", default)]
         face_index: Option<u32>,
     }
-    let rows: Vec<Row> = serde_json::from_str(&raw).ok()?;
+    #[derive(serde::Deserialize)]
+    struct CacheFile {
+        version: u32,
+        fingerprint: Vec<FontCacheDir>,
+        fonts: Vec<Row>,
+    }
+    let cache: CacheFile = serde_json::from_str(&raw).ok()?;
+    if cache.version < 3 || cache.fingerprint != expected_fingerprint {
+        return None;
+    }
+    let rows = cache.fonts;
     // 旧 v1 キャッシュ（path なし or face_index なし）は破棄して再ビルド。
     // face_index が無いと TTC 第 2 face 以降の Yu Gothic Bold 等が一切登録できないため、
     // 必ず再ビルドして全 face をキャッシュに含める必要がある。
@@ -273,9 +363,19 @@ fn read_cache() -> Option<Vec<FontEntry>> {
     )
 }
 
-fn write_cache(fonts: &[FontEntry]) {
+fn write_cache(fonts: &[FontEntry], fingerprint: &[FontCacheDir]) {
     let Some(path) = cache_path() else { return };
-    let json = serde_json::to_string_pretty(fonts);
+    #[derive(serde::Serialize)]
+    struct CacheFile<'a> {
+        version: u32,
+        fingerprint: &'a [FontCacheDir],
+        fonts: &'a [FontEntry],
+    }
+    let json = serde_json::to_string_pretty(&CacheFile {
+        version: 3,
+        fingerprint,
+        fonts,
+    });
     if let Ok(s) = json {
         let _ = std::fs::write(path, s);
     }

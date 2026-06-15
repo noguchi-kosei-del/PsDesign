@@ -69,8 +69,8 @@ function writeExtractSourcePanelVisible(value) {
   } catch {}
 }
 
-// extractSourcePanelVisible は「テキストエディタ（照合付）」モードのフラグ。
-// editor モードかつ照合付フラグ ON かつ画像スキャン結果があるときだけ照合パネルを表示する。
+// extractSourcePanelVisible は「テキストエディタ（照合付き）」モードのフラグ。
+// editor モードかつ照合付きフラグ ON かつ画像スキャン結果があるときだけ照合パネルを表示する。
 function syncExtractSourcePanelVisibility() {
   const panel = $("extract-source-panel");
   const stage = $("spreads-stage");
@@ -93,7 +93,7 @@ function setupEditorExtractSourcePanel() {
   syncExtractSourcePanelVisibility();
 }
 
-// 「テキストエディタ（照合付）」モードの ON/OFF。View メニューの 2 つのテキストエディタ項目
+// 「テキストエディタ（照合付き）」モードの ON/OFF。View メニューの 2 つのテキストエディタ項目
 // から設定する（旧: エディタツールバーの画像スキャンチェックボックス）。
 const editorMatchModeListeners = new Set();
 export function getEditorMatchMode() { return extractSourcePanelVisible; }
@@ -378,7 +378,10 @@ function renderViewer() {
         el.classList.add(`auto-font-bucket-${b}`);
       }
     }
-    el.addEventListener("click", () => selectBlock(idx, paragraph));
+    el.addEventListener("click", () => {
+      if (getTxtSelectedBlockIndex() === idx) clearBlockSelection();
+      else selectBlock(idx, paragraph);
+    });
     el.addEventListener("dblclick", (e) => {
       e.preventDefault(); // text selection の暴走を抑止
       startInlineEdit(el, paragraph, pageNumber);
@@ -1144,6 +1147,30 @@ export function convertHalfToFullForVertical(text, direction) {
   );
 }
 
+export function normalizePunctuationSpaceReplacement(
+  text,
+  enabled = getDefault("punctuationSpaceReplacementEnabled"),
+) {
+  const s = String(text ?? "");
+  if (enabled === false) return s;
+  return s.replace(/、/g, " ");
+}
+
+export function applyPunctuationSpaceReplacementToInput(inputEl) {
+  if (!inputEl || getDefault("punctuationSpaceReplacementEnabled") === false) return false;
+  const before = String(inputEl.value ?? "");
+  const after = normalizePunctuationSpaceReplacement(before);
+  if (after === before) return false;
+
+  const start = inputEl.selectionStart;
+  const end = inputEl.selectionEnd;
+  inputEl.value = after;
+  if (typeof inputEl.setSelectionRange === "function" && start != null && end != null) {
+    inputEl.setSelectionRange(start, end);
+  }
+  return true;
+}
+
 // 新規入力テキストを「現在ページの末尾」に追記し、新しい content と
 // その新パラグラフが visible blocks 上で持つ paragraphIndex を返す。
 //
@@ -1211,7 +1238,7 @@ export function appendBlockToCurrentPageContent(content, pageNumber, newText) {
 export function commitNewTxtInput({ inputEl } = {}) {
   if (!inputEl) inputEl = $("txt-new-input");
   if (!inputEl) return;
-  const text = (inputEl.value ?? "").trim();
+  const text = normalizePunctuationSpaceReplacement(inputEl.value ?? "").trim();
   if (!text) return;
 
   // V ツール統合後は「新規テキスト方向」トグルから direction を取得する。
@@ -1508,6 +1535,18 @@ function selectBlock(idx, text) {
 
 // 現在ページの配置済みレイヤーから、原稿ブロック idx に対応する layer を探す。
 // syncTxtSelectionToLayer の逆向き（block → layer）。一致しなければ null。
+function clearBlockSelection() {
+  setTxtSelectedBlockIndex(null);
+  setTxtSelection("");
+  const viewer = $("txt-source-viewer");
+  for (const el of viewer?.querySelectorAll(".txt-block.selected") ?? []) {
+    el.classList.remove("selected");
+  }
+  const deleteBtn = $("delete-txt-btn");
+  if (deleteBtn) deleteBtn.disabled = true;
+  selectLayerForBlock(null);
+}
+
 function findPlacedLayerForBlock(blockIndex) {
   if (!Number.isInteger(blockIndex) || blockIndex < 0) return null;
   const pageIdx = getCurrentPageIndex();
@@ -1913,7 +1952,10 @@ export function initTxtSource() {
   const newInputEl = $("txt-new-input");
   const newInputBtn = $("txt-new-input-btn");
   if (newInputEl) {
-    newInputEl.addEventListener("input", syncNewInputAvailability);
+    newInputEl.addEventListener("input", () => {
+      applyPunctuationSpaceReplacementToInput(newInputEl);
+      syncNewInputAvailability();
+    });
     newInputEl.addEventListener("keydown", (e) => {
       if (isQuickAddTextShortcut(e)) {
         consumeQuickAddTextShortcut(e);

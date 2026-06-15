@@ -1,5 +1,44 @@
 # PsDesign
 
+## 2026-06-15 変更メモ: v2.5.2 リリース（句読点置換 / 選択表示 / 照合付きエディタ / フォント検出）
+
+v2.5.2 では、句読点「、」の半角スペース置換を写植・自動配置・リサイクル系の設定へ広げ、選択表示とテキストエディタまわりの実機フィードバックを反映した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.2` に更新済み。
+
+### A. 句読点の半角スペース置換
+
+- [src/settings.js](src/settings.js) / [src/settings-ui.js](src/settings-ui.js): 環境設定に「句読点の半角スペース置換」を追加し、既定値・永続化・設定 UI から切り替えられるようにした。
+- [src/txt-source.js](src/txt-source.js): 句読点置換の正規化関数を共通化し、入力済みテキストや写植用ファイル選択時の適用状態を扱えるようにした。
+- [src/auto-place.js](src/auto-place.js): 自動配置で生成されるテキストにも、適用中の句読点置換設定を反映するようにした。
+- [index.html](index.html) / [src/main.js](src/main.js) / [src/services/reuse.js](src/services/reuse.js) / [src/styles.css](src/styles.css): 写植用ファイル選択画面と、リサイクルの「フォント・サイズを指定」内「統一するフォントとサイズ」パネルへ、句読点置換の適用 / 非適用ドロップダウンを追加した。未選択側の文字が白く見えない問題、基本フォントドロップダウンの開閉遅延調査用ログの削除も含む。
+
+### B. 選択表示とショートカット挙動
+
+- [src/canvas-tools.js](src/canvas-tools.js): 方眼表示・中心点表示は複数選択時には通常のテキスト表示へ戻し、複数選択でもフォントやサイズなどのプロパティを確認しやすくした。
+- [src/canvas-tools.js](src/canvas-tools.js): 中心点表示モードの未保存時デフォルトを OFF に修正。アップデート後の初期状態で、テキスト選択が中心点表示になってしまう問題を直した。
+- [src/main.js](src/main.js): どの表示モードでも `Ctrl+←` / `Ctrl+→` 操作後に、選択中テキストへサイズのみのプロパティ表示が出るようにした。
+- [src/settings.js](src/settings.js): 追加・固定ショートカットの一覧を更新し、アプリ内ショートカット表示に反映した。
+
+### C. 原稿テキスト / テキストエディタの選択挙動
+
+- [src/txt-source.js](src/txt-source.js): 「原稿テキスト」タブでテキスト選択中に左右方向キーで配置テキストが移動しないようにした。選択済みテキストを再クリックした場合は選択解除する。
+- [src/bind/editor-pane.js](src/bind/editor-pane.js): テキストエディタ側でも、選択済み段落を再クリックすると選択解除するようにした。
+
+### D. 「テキストエディタ（照合付き）」の表示条件
+
+- [index.html](index.html) / [src/main.js](src/main.js): 表記を「テキストエディタ（照合付）」から「テキストエディタ（照合付き）」へ変更した。
+- [src/main.js](src/main.js) / [src/styles.css](src/styles.css): 写植用ファイル選択でテキストが読み込まれていない場合は、View メニューから「テキストエディタ（照合付き）」を非表示にするようにした。データがなくなった場合は通常エディタへ戻す。
+
+### E. フォント検出の堅牢化
+
+- [src-tauri/src/fonts.rs](src-tauri/src/fonts.rs): Windows / Adobe 系フォントフォルダを探索対象へ追加し、拡張子なしフォントも拾えるようにした。フォントキャッシュはディレクトリ fingerprint 付きの v3 形式に更新し、インストール済みフォントの増減に追従する。
+- [src/style-palette.js](src/style-palette.js): スタイルパレット登録フォントの照合を、PostScript 名・表示名・alias・正規化済み候補で行うようにし、インストール済みなのに未インストール扱いになるケースを減らした。
+- [src/font-combobox.js](src/font-combobox.js): フォントコンボボックスの開閉時ログを削除し、通常動作時のコンソール出力を戻した。
+
+### 検証
+
+- `npm run check`（`check:encoding` 70 files + `check:security` 21 項目 + `lint` + `build`）成功。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。リリースはタグ `v2.5.2` push により `.github/workflows/release.yml` が Windows ビルド・署名・`latest.json` 生成・GitHub Release 作成を実行する。
+
 ## 2026-06-12 変更メモ: v2.5.1 リリース（方眼表示 / undo・ルビ修正 / ホイール送り / ガイド引き継ぎ / 段落並べ替え / 照合付エディタ）
 
 v2.5.1 では、v2.5.0 後に入った複数の不具合修正と機能追加をまとめてリリースする。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.1` に更新済み。Rust 変更はなく、本リリースは JS / CSS / HTML のみ。

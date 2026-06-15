@@ -612,6 +612,7 @@ body.home-mode .toolbar .settings-toolbar-btn {
   z-index: 3;
 }
 .view-mode-menu[hidden] { display: none; }
+.view-mode-menu-item[hidden] { display: none; }
 .view-mode-menu-item {
   display: flex;
   align-items: center;
@@ -2697,7 +2698,8 @@ body.home-starting .home-screen {
   align-items: center;
 }
 .home-typeset-size-input,
-.home-typeset-font-input {
+.home-typeset-font-input,
+.home-typeset-select {
   width: 100%;
   min-width: 0;
   height: 34px;
@@ -2711,7 +2713,8 @@ body.home-starting .home-screen {
   outline: none;
 }
 .home-typeset-size-input:focus,
-.home-typeset-font-input:focus {
+.home-typeset-font-input:focus,
+.home-typeset-select:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent) 45%, transparent);
 }
@@ -4353,6 +4356,9 @@ body.editor-paragraph-reordering * {
 .reuse-fontsize-fields .prompt-modal-input {
   margin: 2px 0 0;
 }
+.reuse-fontsize-punct-select {
+  width: 100%;
+}
 .reuse-fontsize-combo {
   position: relative;
   display: flex;
@@ -4969,6 +4975,12 @@ body.editor-paragraph-reordering * {
 .page-overlay.selection-grid-display .layer-box.multi-selected:not(.editing) > .layer-size-badge {
   visibility: hidden;
 }
+.page-overlay.selection-center-only.selection-size-only-properties .layer-box.selected:not(.editing) > .layer-size-badge-size-only,
+.page-overlay.selection-center-only.selection-size-only-properties .layer-box.multi-selected:not(.editing) > .layer-size-badge-size-only,
+.page-overlay.selection-grid-display.selection-size-only-properties .layer-box.selected:not(.editing) > .layer-size-badge-size-only,
+.page-overlay.selection-grid-display.selection-size-only-properties .layer-box.multi-selected:not(.editing) > .layer-size-badge-size-only {
+  visibility: visible;
+}
 .page-overlay.selection-adornments-hidden .layer-box.selected,
 .page-overlay.selection-adornments-hidden .layer-box.multi-selected,
 .page-overlay.selection-adornments-hidden .layer-box-new.selected,
@@ -5204,6 +5216,10 @@ body.editor-paragraph-reordering * {
   line-height: 1.25;
   color: #fff;
   text-shadow: none;
+}
+.layer-size-badge-size-only {
+  width: max-content;
+  min-width: 0;
 }
 .layer-size-badge-font {
   flex: 0 0 100%;
@@ -12967,7 +12983,7 @@ button.home-scan-engine-install-btn:hover:not(:disabled) {
   box-shadow: var(--opus-dialog-card-shadow) !important;
   backdrop-filter: var(--opus-dialog-card-blur);
   -webkit-backdrop-filter: var(--opus-dialog-card-blur);
-  overflow: hidden;
+  overflow: visible;
 }
 /* タイトル: 旧 30px → 統一サイズに */
 .home-typeset-modal .home-typeset-header {
@@ -13037,17 +13053,31 @@ button.home-scan-engine-install-btn:hover:not(:disabled) {
   flex: 0 0 80px;
 }
 .home-typeset-modal .home-typeset-font-combo {
+  position: relative;
+  z-index: 30;
   width: clamp(220px, 30vw, 320px);
   flex: 0 0 auto;
   display: inline-grid;
   grid-template-columns: minmax(0, 1fr) 34px;
+}
+.home-typeset-modal .home-typeset-font-combo.open {
+  z-index: 90;
+}
+.home-typeset-modal .home-typeset-select {
+  width: 112px;
+  flex: 0 0 112px;
+}
+.home-typeset-modal .home-typeset-select option {
+  color: #111;
+  background: #fff;
 }
 .home-typeset-modal .home-typeset-setting-label {
   font-weight: 700;
   letter-spacing: 0.02em;
 }
 .home-typeset-modal .home-typeset-size-input,
-.home-typeset-modal .home-typeset-font-input {
+.home-typeset-modal .home-typeset-font-input,
+.home-typeset-modal .home-typeset-select {
   background: rgba(255, 255, 255, 0.06);
   border-color: rgba(255, 255, 255, 0.18);
 }

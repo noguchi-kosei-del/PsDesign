@@ -118,21 +118,62 @@ function updateFilenameDisplay(path) {
 //   2. 大小・幅違い吸収 (localeCompare with sensitivity: "base")
 //   3. PS 名直書き保険 (f.postScriptName === displayName)
 // 正規化（"Regular"/"W4" のスペース揺れ等）は誤マッチ防止のため導入しない。
+function normalizeFontLookupName(value) {
+  return String(value ?? "")
+    .normalize("NFKC")
+    .trim()
+    .toLocaleLowerCase("ja")
+    .replace(/[\s\u3000]+/g, "")
+    .replace(/[‐‑‒–—―−－]/g, "-")
+    .replace(/[_-]+/g, "");
+}
+
+function fontLookupVariants(value) {
+  const raw = String(value ?? "").trim();
+  if (!raw) return [];
+  const variants = new Set([raw]);
+  variants.add(raw.normalize("NFKC"));
+  variants.add(raw.replace(/\s+(regular|normal)$/i, ""));
+  variants.add(raw.replace(/\s+(regular|normal)$/i, "").normalize("NFKC"));
+  return Array.from(variants).filter(Boolean);
+}
+
+function fontCandidateNames(font) {
+  const names = new Set();
+  const add = (value) => {
+    const s = String(value ?? "").trim();
+    if (s) names.add(s);
+  };
+  add(font?.name);
+  add(font?.postScriptName);
+  for (const alias of Array.isArray(font?.aliases) ? font.aliases : []) add(alias);
+  return Array.from(names);
+}
+
 function resolveFontPsName(displayName) {
   if (!displayName) return null;
   const fonts = getFonts();
   if (!fonts || fonts.length === 0) return null;
-  const exact = fonts.find((f) => f && f.name === displayName);
+  const variants = fontLookupVariants(displayName);
+  const normalizedVariants = new Set(variants.map(normalizeFontLookupName).filter(Boolean));
+
+  const exact = fonts.find((font) => (
+    font && fontCandidateNames(font).some((name) => variants.includes(name))
+  ));
   if (exact) return exact.postScriptName || null;
-  const ci = fonts.find(
-    (f) =>
-      f &&
-      typeof f.name === "string" &&
-      f.name.localeCompare(displayName, "ja", { sensitivity: "base" }) === 0,
-  );
+
+  const ci = fonts.find((font) => (
+    font && fontCandidateNames(font).some((name) => (
+      variants.some((variant) => name.localeCompare(variant, "ja", { sensitivity: "base" }) === 0)
+    ))
+  ));
   if (ci) return ci.postScriptName || null;
-  const ps = fonts.find((f) => f && f.postScriptName === displayName);
-  if (ps) return ps.postScriptName;
+
+  const normalized = fonts.find((font) => (
+    font && fontCandidateNames(font).some((name) => normalizedVariants.has(normalizeFontLookupName(name)))
+  ));
+  if (normalized) return normalized.postScriptName || null;
+
   return null;
 }
 

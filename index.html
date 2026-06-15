@@ -134,7 +134,7 @@
                 <path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>
                 <path d="m9 14 2 2 4-4"/>
               </svg>
-              <span class="view-mode-menu-label">テキストエディタ（照合付）</span>
+              <span class="view-mode-menu-label">テキストエディタ（照合付き）</span>
             </button>
             <div class="view-mode-menu-divider" role="separator"></div>
             <button id="view-spread-edit-btn" class="view-mode-menu-item" type="button" role="menuitemradio" aria-checked="false" data-view="spreadEdit">
@@ -1306,6 +1306,13 @@
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-punct-tsume">句読点 (、。) のツメ 50%</label>
               <select id="default-punct-tsume" class="settings-default-input">
+                <option value="on">適用</option>
+                <option value="off">適用しない</option>
+              </select>
+            </div>
+            <div class="settings-default-row">
+              <label class="settings-default-label" for="default-punct-space-replacement">句読点「、」の半角スペース置換</label>
+              <select id="default-punct-space-replacement" class="settings-default-input">
                 <option value="on">適用</option>
                 <option value="off">適用しない</option>
               </select>

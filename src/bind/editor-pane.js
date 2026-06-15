@@ -21,6 +21,7 @@ import {
 import { getPdfVirtualPageCount } from "../pdf-pages.js";
 import { nextPageIndexForTurn } from "../page-navigation.js";
 import {
+  applyPunctuationSpaceReplacementToInput,
   commitNewTxtInput,
   consumeQuickAddTextShortcut,
   deleteTxtBlockByIndex,
@@ -28,6 +29,7 @@ import {
   getTxtPageCount,
   isQuickAddTextShortcut,
   moveTxtBlockByIndex,
+  normalizePunctuationSpaceReplacement,
   shouldHandleBlurredQuickAddShortcut,
   splitTxtBlockAndPlace,
   syncNewInputAvailabilityFor,
@@ -37,6 +39,7 @@ import {
   appendTextWithStyleMarkers,
   getStyleOverrideRangesForTxtRef,
 } from "../text-style-markers.js";
+import { revealSelectedLayerSizeOnlyBadges } from "../canvas-tools.js";
 import { openContainingFolder } from "../services/open-path.js";
 import { baseName } from "../utils/path.js";
 
@@ -727,6 +730,14 @@ function clearParagraphSelection() {
 // クリックで段落を選択状態にする（編集には入らない）。Shift+↑/↓ の移動対象になる。
 // 段落 div を focusable（tabIndex=0）にして focus し、Shift+↑/↓ の keydown を
 // viewer の onViewerKeydown へ届かせる。
+function isParagraphSelected(el) {
+  if (!el || !selectedParagraphRef) return false;
+  const pn = Number(el.dataset.pageNumber);
+  const pageNumber = (Number.isInteger(pn) && pn > 0) ? pn : null;
+  return samePageRef(selectedParagraphRef.pageNumber, pageNumber)
+    && selectedParagraphRef.index === Number(el.dataset.paragraphIndex);
+}
+
 function selectParagraph(el) {
   if (!el) return;
   const viewer = $("editor-pages-viewer");
@@ -872,7 +883,8 @@ function buildSection(pageNumber, blocks, activeNum, options = {}) {
       // シングルクリック=選択（編集には入らない）、ダブルクリック=編集開始。
       el.addEventListener("click", () => {
         if (textEl.isContentEditable) return; // 編集中はキャレット移動に任せる
-        selectParagraph(el);
+        if (isParagraphSelected(el)) clearParagraphSelection();
+        else selectParagraph(el);
       });
       el.addEventListener("dblclick", (ev) => enterParagraphEdit(textEl, ev));
       body.appendChild(el);
@@ -967,7 +979,9 @@ function bindParagraphEdit(el) {
       aborted = false;
       return;
     }
-    const newText = (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n");
+    const newText = normalizePunctuationSpaceReplacement(
+      (el.innerText ?? el.textContent ?? "").replace(/\r\n?/g, "\n"),
+    );
     if (newText === originalDisplay) return;
     // 空行（連続改行）で分割されていれば、空行より後ろのパートを画像中央へ新規配置する。
     // 分割正規表現は再描画 splitBlocksWithOffsets と同じ（全角スペースも含む空行を許容）。
@@ -1129,6 +1143,12 @@ function onEditorPageNavShortcut(e) {
   if (e.altKey || e.shiftKey) return;
   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
   if (getParallelViewMode() !== "editor") return;
+  if (revealSelectedLayerSizeOnlyBadges()) {
+    e.preventDefault();
+    e.stopPropagation();
+    e.stopImmediatePropagation();
+    return;
+  }
   e.preventDefault();
   e.stopPropagation();
   e.stopImmediatePropagation();
@@ -1165,7 +1185,10 @@ function onViewerKeydown(e) {
 function bindNewInput() {
   const els = getEls();
   if (!els.newInput) return;
-  els.newInput.addEventListener("input", () => syncNewInputAvailabilityFor(els.newInput));
+  els.newInput.addEventListener("input", () => {
+    applyPunctuationSpaceReplacementToInput(els.newInput);
+    syncNewInputAvailabilityFor(els.newInput);
+  });
   els.newInput.addEventListener("keydown", (e) => {
     if (isQuickAddTextShortcut(e)) {
       consumeQuickAddTextShortcut(e);

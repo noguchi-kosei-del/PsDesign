@@ -70,6 +70,7 @@ const LAYER_DRAG_THRESHOLD_PX = 5;
 let hideSelectedLayerBadges = false;
 let userHiddenLayerBadges = false;
 let temporaryMultiSelectionAdornmentsVisible = false;
+let temporarySizeOnlyBadgesVisible = false;
 let rotateHandlesVisible = false;
 let selectionAdornmentsVisible = true;
 const SELECTION_CENTER_ONLY_MODE_KEY = "psdesign_selection_center_only_mode";
@@ -80,7 +81,7 @@ function readSelectionCenterOnlyMode() {
     if (saved === "0") return false;
     if (saved === "1") return true;
   } catch (_) {}
-  return true;
+  return false;
 }
 
 function writeSelectionCenterOnlyMode(value) {
@@ -139,6 +140,7 @@ function showSelectedLayerBadges() {
 function handleSelectedLayerBadgeVisibilityClick(e) {
   if (!e?.ctrlKey || e.shiftKey || e.metaKey || e.altKey) return false;
   temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = false;
   setSelectionAdornmentsVisible(false);
   userHiddenLayerBadges = true;
   hideSelectedLayerBadges = false;
@@ -148,6 +150,7 @@ function handleSelectedLayerBadgeVisibilityClick(e) {
 export function setSelectedLayerBadgesUserHidden(hidden) {
   userHiddenLayerBadges = hidden === true;
   temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = false;
   hideSelectedLayerBadges = false;
   refreshAllOverlays();
 }
@@ -155,6 +158,16 @@ export function setSelectedLayerBadgesUserHidden(hidden) {
 export function clearTemporaryMultiSelectionAdornments() {
   if (!temporaryMultiSelectionAdornmentsVisible) return false;
   temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = false;
+  refreshAllOverlays();
+  return true;
+}
+
+export function revealSelectedLayerSizeOnlyBadges() {
+  if (getSelectedLayers().length <= 0) return false;
+  temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = true;
+  hideSelectedLayerBadges = false;
   refreshAllOverlays();
   return true;
 }
@@ -162,6 +175,7 @@ export function clearTemporaryMultiSelectionAdornments() {
 export function revealLayerAdornmentsForTemporaryMultiSelection() {
   if (getSelectedLayers().length <= 1) return false;
   temporaryMultiSelectionAdornmentsVisible = true;
+  temporarySizeOnlyBadgesVisible = false;
   hideSelectedLayerBadges = false;
   refreshAllOverlays();
   return true;
@@ -189,6 +203,7 @@ export function getSelectionAdornmentsVisible() {
 export function setSelectionAdornmentsVisible(visible) {
   const next = visible !== false;
   if (selectionAdornmentsVisible === next) return next;
+  temporarySizeOnlyBadgesVisible = false;
   selectionAdornmentsVisible = next;
   refreshAllOverlays();
   return next;
@@ -200,6 +215,7 @@ export function toggleSelectionAdornmentsVisible() {
 
 export function toggleSelectionCenterOnlyMode() {
   selectionCenterOnlyMode = !selectionCenterOnlyMode;
+  temporarySizeOnlyBadgesVisible = false;
   writeSelectionCenterOnlyMode(selectionCenterOnlyMode);
   // 中心点と方眼は両方ともテキストを隠すため相互排他。
   if (selectionCenterOnlyMode && selectionGridMode) {
@@ -212,6 +228,7 @@ export function toggleSelectionCenterOnlyMode() {
 
 export function toggleSelectionGridDisplayMode() {
   selectionGridMode = !selectionGridMode;
+  temporarySizeOnlyBadgesVisible = false;
   writeSelectionGridMode(selectionGridMode);
   // 方眼と中心点は両方ともテキストを隠すため相互排他。
   if (selectionGridMode && selectionCenterOnlyMode) {
@@ -639,6 +656,7 @@ export function unmountAll() {
   hideSelectedLayerBadges = false;
   userHiddenLayerBadges = false;
   temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = false;
   mounts.clear();
   for (const ro of resizeObservers) ro.disconnect();
   resizeObservers.clear();
@@ -2183,13 +2201,18 @@ function renderOverlay(ctx) {
   const pxPerPsd = ctx.canvas.clientWidth > 0 ? ctx.canvas.clientWidth / page.width : 0;
   // 複数選択 (2 件以上) の判定。.multi-selected クラスで CSS 側が水色点線 + 青バッジに切替える。
   const isMultiSelect = getSelectedLayers().length > 1;
+  // 方眼/中心点表示は文字とプロパティバッジを隠すため、複数選択では一時的に通常表示へ戻す。
+  const effectiveSelectionCenterOnlyMode = selectionCenterOnlyMode && !isMultiSelect;
+  const effectiveSelectionGridMode = selectionGridMode && !isMultiSelect;
   const hasTemporaryMultiAdornments = userHiddenLayerBadges
     && temporaryMultiSelectionAdornmentsVisible
     && getSelectedLayers().length > 1;
-  const showSelectionAdornments = selectionAdornmentsVisible || hasTemporaryMultiAdornments;
+  const showSizeOnlyBadges = temporarySizeOnlyBadgesVisible && getSelectedLayers().length > 0;
+  const showSelectionAdornments = selectionAdornmentsVisible || hasTemporaryMultiAdornments || showSizeOnlyBadges;
   overlay.classList.toggle("selection-adornments-hidden", !showSelectionAdornments);
-  overlay.classList.toggle("selection-center-only", selectionCenterOnlyMode);
-  overlay.classList.toggle("selection-grid-display", selectionGridMode);
+  overlay.classList.toggle("selection-size-only-properties", showSizeOnlyBadges);
+  overlay.classList.toggle("selection-center-only", effectiveSelectionCenterOnlyMode);
+  overlay.classList.toggle("selection-grid-display", effectiveSelectionGridMode);
 
   for (const layer of page.textLayers) {
     // 編集中レイヤーは既存 DOM を温存（contenteditable キャレットを破壊しない）
@@ -2264,11 +2287,11 @@ function renderOverlay(ctx) {
     if (isLayerSelected(pageIndex, layer.id)) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
-      if (selectionGridMode) buildGridCells(box, rect.previewText, rect.isVertical);
-      if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
+      if (effectiveSelectionGridMode) buildGridCells(box, rect.previewText, rect.isVertical);
+      if (!showSizeOnlyBadges && showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, layer.id));
       // バッジは bounds 逆算後の実効 pt（layerRectForExisting が rect.ptInPsdPx に反映済み）を表示。
       // 環境設定でフォント/サイズ両方とも非表示の場合 createSizeBadge は null を返す。
-      if (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments)) {
+      if (showSizeOnlyBadges || (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments))) {
         const effectivePt = edit.sizePt ?? (rect.ptInPsdPx * 72 / (page.dpi ?? 72));
         const charSizes = { ...(layer.charSizes ?? {}), ...(edit.charSizes ?? {}) };
         const charFontsMerged = { ...(layer.charFonts ?? {}), ...(edit.charFonts ?? {}) };
@@ -2288,7 +2311,9 @@ function renderOverlay(ctx) {
           edit.strokeColor ?? layer.strokeColor ?? "none",
           edit.strokeWidthPx ?? layer.strokeWidthPx ?? 20,
           {
-            rubyRemove: {
+            forceVisible: showSizeOnlyBadges,
+            sizeOnly: showSizeOnlyBadges,
+            rubyRemove: showSizeOnlyBadges ? null : {
               psdPath: page.path,
               layerId: layer.id,
               hasRuby: Object.keys(edit.charRubies ?? layer.charRubies ?? {}).length > 0,
@@ -2385,9 +2410,9 @@ function renderOverlay(ctx) {
       box.classList.add("selected");
       if (isMultiSelect) box.classList.add("multi-selected");
       // layerRectForNew は previewText を返さないため、新規レイヤーは nl.contents を渡す。
-      if (selectionGridMode) buildGridCells(box, nl.contents, rect.isVertical);
-      if (showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
-      if (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments)) {
+      if (effectiveSelectionGridMode) buildGridCells(box, nl.contents, rect.isVertical);
+      if (!showSizeOnlyBadges && showSelectionAdornments && rotateHandlesVisible) box.appendChild(createRotateHandle(ctx, nl.tempId));
+      if (showSizeOnlyBadges || (showSelectionAdornments && !hideSelectedLayerBadges && (!userHiddenLayerBadges || hasTemporaryMultiAdornments))) {
         const fontListNew = collectLayerFontValues(
           nl.fontPostScriptName ?? null,
           nl.charFonts ?? {},
@@ -2401,7 +2426,9 @@ function renderOverlay(ctx) {
           nl.strokeColor ?? "none",
           nl.strokeWidthPx ?? 20,
           {
-            rubyRemove: {
+            forceVisible: showSizeOnlyBadges,
+            sizeOnly: showSizeOnlyBadges,
+            rubyRemove: showSizeOnlyBadges ? null : {
               psdPath: page.path,
               tempId: nl.tempId,
               hasRuby: Object.keys(nl.charRubies ?? {}).length > 0,
@@ -4234,10 +4261,12 @@ function onBadgeStrokeMouseDown(e) {
 function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none", strokeWidthPx = 20, options = {}) {
   // 環境設定（デフォルトタブ）でフォント名・文字サイズの表示/非表示を一括切替。
   // OFF の場合はバッジ自体を生成せず null を返し、呼び出し側で append をスキップする。
-  if (getDefault("showBadge") === false) return null;
+  const sizeOnly = options.sizeOnly === true;
+  if (!options.forceVisible && getDefault("showBadge") === false) return null;
 
   const el = document.createElement("div");
   el.className = "layer-size-badge";
+  if (sizeOnly) el.classList.add("layer-size-badge-size-only");
   // 基準PSD 比で換算した pt を表示。複数サイズ混在時は 13pt/15pt のように列挙する。
   const sizeLabel = formatBadgeSizeLabel(sizePt, page);
   // フォントは配列（複数フォント混在）と単一文字列の両方を受け付ける。
@@ -4247,7 +4276,7 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
     : (fontPostScriptName ? [fontPostScriptName] : []))
     .filter((f) => typeof f === "string" && f);
   // フォント名と文字サイズを 2 行に分けて表示（フォント上 / サイズ下）。
-  if (fontList.length > 0) {
+  if (!sizeOnly && fontList.length > 0) {
     const fontEl = document.createElement("div");
     fontEl.className = "layer-size-badge-font";
     const labels = fontList.map((f) => getFontDisplayName(f) ?? f);
@@ -4279,7 +4308,7 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
   sizeEl.title = "文字サイズを変更";
   sizeEl.addEventListener("mousedown", onBadgeSizeMouseDown);
   el.appendChild(sizeEl);
-  if (options.rubyRemove?.hasRuby) {
+  if (!sizeOnly && options.rubyRemove?.hasRuby) {
     const rubyBtn = document.createElement("button");
     rubyBtn.type = "button";
     rubyBtn.className = "layer-size-badge-ruby-remove";
@@ -4299,8 +4328,10 @@ function createSizeBadge(sizePt, page, fontPostScriptName, strokeColor = "none",
     });
     el.appendChild(rubyBtn);
   }
-  const strokeBadge = createStrokeBadgeSwatches(strokeColor, strokeWidthPx);
-  if (strokeBadge) el.appendChild(strokeBadge);
+  if (!sizeOnly) {
+    const strokeBadge = createStrokeBadgeSwatches(strokeColor, strokeWidthPx);
+    if (strokeBadge) el.appendChild(strokeBadge);
+  }
   return el;
 }
 
@@ -4634,6 +4665,7 @@ function scheduleHoverSelect(box, ctx, layerId) {
     if (document.querySelector(".layer-box.editing")) return;
     if (isLayerSelected(ctx.pageIndex, layerId)) return;
     temporaryMultiSelectionAdornmentsVisible = false;
+    temporarySizeOnlyBadgesVisible = false;
     showSelectedLayerBadges();
     setSelectedLayer(ctx.pageIndex, layerId);
     renderOverlay(ctx);
@@ -4679,6 +4711,7 @@ function handleRenderedRubyMouseDown(e, ctx, target) {
   e.stopPropagation();
   e.preventDefault();
   temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = false;
   showSelectedLayerBadges();
 
   const isExisting = target.kind === "existing";
@@ -4738,6 +4771,7 @@ function onExistingLayerMouseDown(e, ctx, layer) {
     return;
   }
   temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = false;
   showSelectedLayerBadges();
   if (isLayerDoubleClick(ctx.pageIndex, layer.id)) {
     enterInPlaceEditFromMove(ctx, { kind: "existing", layer });
@@ -4772,6 +4806,7 @@ function onNewLayerMouseDown(e, ctx, nl) {
     return;
   }
   temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = false;
   showSelectedLayerBadges();
   if (isLayerDoubleClick(ctx.pageIndex, nl.tempId)) {
     enterInPlaceEditFromMove(ctx, { kind: "new", nl });
@@ -5177,6 +5212,7 @@ function finalizeMarquee() {
   const tinyClick = Math.abs(currentX - startX) < 2 && Math.abs(currentY - startY) < 2;
   if (tinyClick) {
     temporaryMultiSelectionAdornmentsVisible = false;
+    temporarySizeOnlyBadgesVisible = false;
     if (!additive) {
       setSelectedLayers([]);
       renderOverlay(ctx);
@@ -5208,6 +5244,7 @@ function finalizeMarquee() {
     revealLayerAdornmentsForTemporaryMultiSelection();
   } else {
     temporaryMultiSelectionAdornmentsVisible = false;
+    temporarySizeOnlyBadgesVisible = false;
   }
   renderOverlay(ctx);
   if (!maybeApplyStickyFont()) rebuildLayerList();
@@ -5638,6 +5675,11 @@ function startContentEditableEdit(ctx, target, options = {}) {
     );
   };
 
+  const maybeReplacePunctuationWithHalfSpace = (s) => {
+    if (getDefault("punctuationSpaceReplacementEnabled") === false) return String(s ?? "");
+    return String(s ?? "").replace(/、/g, " ");
+  };
+
   // contenteditable の現在テキスト読み取り。
   // 【設計判断】TreeWalker で text node を直接連結する方式を採用。理由:
   //   - innerText だと <br> / <div> 境界 / display:block 子要素の境界が暗黙的に
@@ -5678,9 +5720,10 @@ function startContentEditableEdit(ctx, target, options = {}) {
   // で textContent を書換えて DOM 構造を強制的にリセットする。
   const applyConversionToInner = () => {
     const raw = readContents();
-    const converted = (
+    let converted = (
       editDirection === "vertical" && getDefault("verticalHalfToFullEnabled") !== false
     ) ? maybeConvertHalfToFull(raw) : raw;
+    converted = maybeReplacePunctuationWithHalfSpace(converted);
     // 「全 child が text node」のときは zwsp anchor (Enter 後の caret anchor、v1.21.0
     // C4-4) を維持するため書換しない。一方 <div> / <br> 等 element node が混入して
     // いれば必ず plain text に書換える。比較は zwsp を strip した形で行う（converted
