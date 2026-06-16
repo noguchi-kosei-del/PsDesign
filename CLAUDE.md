@@ -1,5 +1,39 @@
 # PsDesign
 
+## 2026-06-16 変更メモ: v2.5.7 リリース（PSDファイル名リネームガード / 文頭約物ツメ / サイズ単位 px 対応）
+
+v2.5.7 では、巻数＋ページ番号を含む PSD ファイル名で写植ページ対応が崩れる問題を防ぐリネームガード、文頭の全角約物をカーニング/トラッキングで詰める操作、文字サイズ単位と刻みの `pt` / `px` / `級` / `mm` 対応を中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.7` に更新済み。
+
+### A. PSDファイル名のリネームガード
+
+- [src/services/psd-rename-guard.js](src/services/psd-rename-guard.js): `sansa_06_005.psd` のように巻数とページ番号が並ぶ PSD 名を検出し、開始ボタン押下時にリネーム確認ダイアログを出すガードを追加。`sansa_005.psd` のように巻数を外した名前へまとめてリネームできる。
+- [src/main.js](src/main.js): 写植用ファイル選択の開始処理で、PSD プリフライト後・本処理前にリネームガードを呼び出すようにした。見本読み込みに失敗している場合は開始を止め、警告ダイアログで再選択を促す。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs): フロントから安全にファイルリネームできる Tauri コマンドを追加し、許可済みパスの範囲内でのみ実行するようにした。
+- [src/styles.css](src/styles.css): リネームダイアログを OPUS モーダル上でも確実に前面表示できるよう z-index と一覧スタイルを追加。
+
+### B. 文頭の約物ツメ
+
+- [index.html](index.html) / [src/text-editor.js](src/text-editor.js): カーニング/トラッキング欄に「文頭」ボタンを追加し、選択中レイヤーの文頭文字へ現在値を適用できるようにした。
+- [src/canvas-tools.js](src/canvas-tools.js): `（` / `「` / `【` などの開き約物に負の字間を入れた場合、次の文字ではなく約物自身の前側を詰めるプレビューに変更。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): Photoshop 保存時も、文頭の開き約物に入った負のカーニング/トラッキングを `tracking` / `kerningRange` ではなく `mojiZume` へ変換し、プレビューと保存結果が揃うようにした。
+
+### C. 文字サイズ単位と刻み
+
+- [src/text-size-unit.js](src/text-size-unit.js): 文字サイズ単位に `px` を追加。内部値は従来どおり pt のまま保持し、`1px = 0.75pt` として表示・入力時に換算する。
+- [index.html](index.html): サイズ単位メニューに `px` を追加。
+- [src/main.js](src/main.js): 刻みセレクトの表示を現在単位へ追従させ、`0.1 pt` / `0.1 px` / `0.1 級` / `0.1 mm` のように表示するようにした。
+- [src/canvas-tools.js](src/canvas-tools.js): V ツール中の wheel サイズ変更も、現在のサイズ単位と刻みに追従するようにした。`1` 刻みも wheel 経路で正しく使う。
+
+### D. 句読点置換表示
+
+- [index.html](index.html) / [src/main.js](src/main.js) / [src/ui-feedback.js](src/ui-feedback.js): 句読点「、」の半角スペース置換設定を「句読点あり / 句読点なし」に統一し、写植フローやフォントサイズ選択モーダルでも同じ表記にした。
+
+### 検証
+
+- `npm run check` 成功
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功
+- リリースはタグ `v2.5.7` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-16 変更メモ: v2.5.6 リリース（OPUS移動耐性 / 写植モーダル改善 / テキスト文頭スナップ / PSD保存失敗時の修復再保存）
 
 v2.5.6 では、OPUSプロジェクトとリンクフォルダを別の場所へ移動した後でも開けるようにパス復元を強化し、写植用ファイル選択・フォントサイズ扱いのモーダル操作、テキスト移動時の文頭スナップ、PSD保存失敗時の自動修復リトライを中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.6` に更新済み。

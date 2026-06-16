@@ -778,6 +778,7 @@
                         <button id="size-unit-label" class="size-unit size-unit-toggle" type="button" aria-haspopup="menu" aria-expanded="false" aria-label="文字サイズ単位を選択">pt</button>
                         <div id="size-unit-menu" class="size-unit-menu" role="menu" hidden>
                           <button class="size-unit-option" type="button" role="menuitemradio" aria-checked="true" data-text-size-unit="pt">pt</button>
+                          <button class="size-unit-option" type="button" role="menuitemradio" aria-checked="false" data-text-size-unit="px">px</button>
                           <button class="size-unit-option" type="button" role="menuitemradio" aria-checked="false" data-text-size-unit="q">級</button>
                           <button class="size-unit-option" type="button" role="menuitemradio" aria-checked="false" data-text-size-unit="mm">mm</button>
                         </div>
@@ -954,6 +955,7 @@
                         <button id="kerning-inc-btn" class="size-btn" type="button" title="広げる" aria-label="カーニングを広げる">＋</button>
                         <input id="kerning-input" class="size-input spacing-input" type="number" min="-1000" max="1000" step="10" value="0" aria-label="カーニング" />
                         <button id="kerning-dec-btn" class="size-btn" type="button" title="詰める" aria-label="カーニングを詰める">−</button>
+                        <button id="kerning-head-btn" class="size-btn spacing-head-btn" type="button" title="文頭に適用" aria-label="文頭の文字にカーニングを適用">文頭</button>
                       </div>
                     </div>
                     <div class="style-control-item">
@@ -962,6 +964,7 @@
                         <button id="tracking-inc-btn" class="size-btn" type="button" title="広げる" aria-label="トラッキングを広げる">＋</button>
                         <input id="tracking-input" class="size-input spacing-input" type="number" min="-1000" max="1000" step="10" value="0" aria-label="トラッキング" />
                         <button id="tracking-dec-btn" class="size-btn" type="button" title="詰める" aria-label="トラッキングを詰める">−</button>
+                        <button id="tracking-head-btn" class="size-btn spacing-head-btn" type="button" title="文頭に適用" aria-label="文頭の文字にトラッキングを適用">文頭</button>
                       </div>
                     </div>
                   </div>
@@ -1320,8 +1323,8 @@
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-punct-space-replacement">句読点「、」の半角スペース置換</label>
               <select id="default-punct-space-replacement" class="settings-default-input">
-                <option value="on">適用</option>
-                <option value="off">適用しない</option>
+                <option value="on">句読点あり</option>
+                <option value="off">句読点なし</option>
               </select>
             </div>
             <div class="settings-default-row">

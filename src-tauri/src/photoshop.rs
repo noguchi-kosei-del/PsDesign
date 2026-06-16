@@ -129,22 +129,8 @@ fn run_apply_edits_once(
         "Photoshop に処理を渡しています...",
     );
 
-    // 【v2.x】Photoshop 起動時の「仮想記憶ディスクの容量不足」警告ダイアログを自動 OK する。
-    // このダイアログは Photoshop プロセスが起動するタイミング (= JSX 実行前) に出るため
-    // JSX 内の app.displayDialogs = NO では抑制できない。Windows API で別途検出して
-    // OK ボタン (IDOK = 1) に WM_COMMAND を送ることでバックグラウンドで自動クローズする。
-    // バックグラウンドスレッドで動かし、メイン処理 (sentinel ポーリング) をブロックしない。
-    start_scratch_dialog_auto_dismiss();
-
-    let mut hidden_windows = HiddenPhotoshopWindows::default();
-    let _ = dismiss_known_photoshop_dialogs();
-    hidden_windows.hide_visible_photoshop_windows();
     let mut last_progress = String::new();
-    // 起動直後に Photoshop が一瞬前面化することがあるため、最初の数秒だけ
-    // 25ms 間隔で隠し続ける。JSX 実行自体は止めず、sentinel ができたら即座に通常ループへ戻る。
     for _ in 0..160 {
-        let _ = dismiss_known_photoshop_dialogs();
-        hidden_windows.hide_visible_photoshop_windows();
         relay_progress_file(app, &progress_path, &mut last_progress);
         if sentinel_path.exists() {
             break;
@@ -155,15 +141,12 @@ fn run_apply_edits_once(
     let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
     let mut next_wait_hint = Instant::now() + Duration::from_secs(WAIT_HINT_INTERVAL_SECS);
     loop {
-        let _ = dismiss_known_photoshop_dialogs();
-        hidden_windows.hide_visible_photoshop_windows();
         relay_progress_file(app, &progress_path, &mut last_progress);
         if sentinel_path.exists() {
             let content = std::fs::read_to_string(&sentinel_path).unwrap_or_default();
             let _ = std::fs::remove_file(&sentinel_path);
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
-            hidden_windows.restore_hidden_photoshop_windows_minimized();
             cleanup_adobe_crash_processors();
             let lock_warnings = release_saved_psd_locks(&saved_psd_paths);
             let trimmed = content.trim().to_string();
@@ -217,7 +200,6 @@ fn run_apply_edits_once(
         if now > deadline {
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
-            hidden_windows.restore_hidden_photoshop_windows_minimized();
             cleanup_adobe_crash_processors();
             return Err(PhotoshopError::Timeout);
         }
@@ -395,14 +377,8 @@ pub fn read_text_layers(
         .spawn()
         .map_err(|e| PhotoshopError::LaunchFailed(e.to_string()))?;
 
-    start_scratch_dialog_auto_dismiss();
-    let mut hidden_windows = HiddenPhotoshopWindows::default();
-    let _ = dismiss_known_photoshop_dialogs();
-    hidden_windows.hide_visible_photoshop_windows();
     // 起動直後の前面フラッシュ防止（25ms 間隔の高速ループ）。
     for _ in 0..160 {
-        let _ = dismiss_known_photoshop_dialogs();
-        hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             break;
         }
@@ -411,14 +387,11 @@ pub fn read_text_layers(
 
     let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
     loop {
-        let _ = dismiss_known_photoshop_dialogs();
-        hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             let content = std::fs::read_to_string(&sentinel_path).unwrap_or_default();
             let _ = std::fs::remove_file(&sentinel_path);
             let _ = std::fs::remove_file(&jsx_path);
             // 完了後は前面化させず、タスクバーに最小化で戻す（別途 Photoshop を使える）。
-            hidden_windows.restore_hidden_photoshop_windows_minimized();
             cleanup_adobe_crash_processors();
             let trimmed = content.trim().to_string();
             if trimmed.starts_with("OK") {
@@ -441,7 +414,6 @@ pub fn read_text_layers(
         }
         if Instant::now() > deadline {
             let _ = std::fs::remove_file(&jsx_path);
-            hidden_windows.restore_hidden_photoshop_windows_minimized();
             cleanup_adobe_crash_processors();
             return Err(PhotoshopError::Timeout);
         }
@@ -511,15 +483,9 @@ pub fn read_text_layers_batch(
         .spawn()
         .map_err(|e| PhotoshopError::LaunchFailed(e.to_string()))?;
 
-    start_scratch_dialog_auto_dismiss();
-    let mut hidden_windows = HiddenPhotoshopWindows::default();
-    let _ = dismiss_known_photoshop_dialogs();
-    hidden_windows.hide_visible_photoshop_windows();
     // 起動直後の前面フラッシュを防ぐため、最初の数秒は高速ループ（25ms 間隔）で
     // Photoshop のウィンドウが出た瞬間に隠す。通常植字と同様に「ずっと非表示」にする。
     for _ in 0..160 {
-        let _ = dismiss_known_photoshop_dialogs();
-        hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             break;
         }
@@ -528,15 +494,11 @@ pub fn read_text_layers_batch(
 
     let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
     loop {
-        // 処理中に出てくる Photoshop ウィンドウは隠し続ける（前面化を防止）。
-        let _ = dismiss_known_photoshop_dialogs();
-        hidden_windows.hide_visible_photoshop_windows();
         if sentinel_path.exists() {
             let content = std::fs::read_to_string(&sentinel_path).unwrap_or_default();
             let _ = std::fs::remove_file(&sentinel_path);
             let _ = std::fs::remove_file(&jsx_path);
             // 完了後は前面化させず、タスクバーに最小化で戻す（別途 Photoshop を使える）。
-            hidden_windows.restore_hidden_photoshop_windows_minimized();
             cleanup_adobe_crash_processors();
             let trimmed = content.trim().to_string();
             if trimmed.starts_with("OK") {
@@ -559,7 +521,6 @@ pub fn read_text_layers_batch(
         }
         if Instant::now() > deadline {
             let _ = std::fs::remove_file(&jsx_path);
-            hidden_windows.restore_hidden_photoshop_windows_minimized();
             cleanup_adobe_crash_processors();
             return Err(PhotoshopError::Timeout);
         }
@@ -569,16 +530,19 @@ pub fn read_text_layers_batch(
 
 #[cfg(windows)]
 #[derive(Default)]
+#[allow(dead_code)]
 struct HiddenPhotoshopWindows {
     windows: Vec<HiddenPhotoshopWindow>,
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 struct HiddenPhotoshopWindow {
     hwnd: isize,
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 impl HiddenPhotoshopWindows {
     fn hide_visible_photoshop_windows(&mut self) {
         for target in find_visible_photoshop_windows() {
@@ -633,9 +597,11 @@ impl HiddenPhotoshopWindows {
 
 #[cfg(not(windows))]
 #[derive(Default)]
+#[allow(dead_code)]
 struct HiddenPhotoshopWindows;
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 impl HiddenPhotoshopWindows {
     fn hide_visible_photoshop_windows(&mut self) {}
     fn restore_hidden_photoshop_windows(&mut self) {}
@@ -719,16 +685,16 @@ fn is_psd_file_locked(path: &Path) -> bool {
 //   - "Scratch Disks are almost full"
 //   - "Scratch disks are full"
 //
-// ポーリング期間: Photoshop 起動から最大 90 秒間、500ms 間隔。複数の警告ダイアログ
-// (容量不足の後にフォント置換警告など) が連鎖して出るケースにも対応する。
+// ポーリング期間: Photoshop 起動から最大 90 秒間、500ms 間隔。
+// 対象は起動時のスクラッチディスク容量警告だけに限定する。
 //
-// dismiss 戦略は 2 段:
-//   戦略 1: ダイアログ HWND の子ウィンドウから「OK」テキストを持つ Button クラスを
+// dismiss 戦略:
+//   ダイアログ HWND の子ウィンドウから「OK」テキストを持つ Button クラスを
 //           EnumChildWindows で探して BM_CLICK (= 0x00F5) を PostMessage で送る。
-//           Adobe ダイアログでは独自の WndProc で IDOK が無視されるケースが多いので、
-//           実際の OK ボタンを叩く方が確実。
-//   戦略 2: 並行して WM_COMMAND IDOK もダイアログ本体に送る (補助)。
+//           SendInput / WM_CLOSE / WM_COMMAND IDOK は保存中の正規モーダルを
+//           誤って確定・終了させうるため使わない。
 #[cfg(windows)]
+#[allow(dead_code)]
 fn start_scratch_dialog_auto_dismiss() {
     std::thread::spawn(|| {
         use std::time::{Duration, Instant};
@@ -741,6 +707,7 @@ fn start_scratch_dialog_auto_dismiss() {
 }
 
 #[cfg(not(windows))]
+#[allow(dead_code)]
 fn start_scratch_dialog_auto_dismiss() {}
 
 #[cfg(windows)]
@@ -801,18 +768,12 @@ fn photoshop_related_process_ids() -> Vec<u32> {
     }
 }
 
-// 【v2.x】常時バックグラウンド監視。アプリ起動時に一度だけ呼ぶ。Photoshop が
-// いつ起動されても (OPUS の保存処理経由以外も含む) 警告ダイアログを自動 OK する。
-// 2 秒間隔で polling、CPU 負荷は無視できるレベル。
+// 常時バックグラウンド監視は保存中の Photoshop に割り込むリスクがあるため起動しない。
 #[cfg(windows)]
 pub fn start_background_dialog_watcher() {
-    std::thread::spawn(|| {
-        use std::time::Duration;
-        loop {
-            let _ = dismiss_known_photoshop_dialogs();
-            std::thread::sleep(Duration::from_millis(2000));
-        }
-    });
+    // Do not keep a global watcher alive. It can collide with Photoshop saves
+    // that were started outside this module. Each read-only Photoshop launch
+    // starts a short, scoped scratch-warning watcher instead.
 }
 
 #[cfg(not(windows))]
@@ -823,10 +784,8 @@ fn dismiss_known_photoshop_dialogs() -> usize {
     use winapi::shared::minwindef::{BOOL, LPARAM};
     use winapi::shared::windef::HWND;
     use winapi::um::winuser::{
-        EnumChildWindows, EnumWindows, GetClassNameW, GetForegroundWindow, GetWindowTextLengthW,
-        GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, SendInput,
-        SetForegroundWindow, ShowWindow, BM_CLICK, INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP,
-        SW_SHOWNA, VK_RETURN, WM_CHAR, WM_CLOSE, WM_COMMAND, WM_KEYDOWN, WM_KEYUP,
+        EnumChildWindows, EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW,
+        GetWindowThreadProcessId, IsWindowVisible, PostMessageW, ShowWindow, BM_CLICK, SW_SHOWNA,
     };
 
     // OK ボタンのラベル候補 (Photoshop 言語別 + 半角全角)。
@@ -918,7 +877,7 @@ fn dismiss_known_photoshop_dialogs() -> usize {
             std::thread::sleep(std::time::Duration::from_millis(80));
         }
 
-        // 戦略 1: 子ウィンドウから OK ボタンを探して BM_CLICK。
+        // 子ウィンドウから OK ボタンを探して BM_CLICK。
         // 標準 Win32 Button が存在すれば確実。Adobe Skia UI ではボタンが
         // EnumChildWindows で見えないので null になる。
         let mut ok_btn: HWND = std::ptr::null_mut();
@@ -928,70 +887,11 @@ fn dismiss_known_photoshop_dialogs() -> usize {
             &mut ok_btn as *mut _ as LPARAM,
         );
         if !ok_btn.is_null() {
-            eprintln!("[ps-dismiss] strategy 1: BM_CLICK to ok_btn={:?}", ok_btn);
+            eprintln!("[ps-dismiss] BM_CLICK to ok_btn={:?}", ok_btn);
             let _ = PostMessageW(ok_btn, BM_CLICK, 0, 0);
         } else {
-            eprintln!("[ps-dismiss] strategy 1: no standard OK button found (Skia UI?)");
+            eprintln!("[ps-dismiss] no standard OK button found (Skia UI?)");
         }
-
-        // 戦略 2: ダイアログ本体に WM_COMMAND IDOK。
-        eprintln!("[ps-dismiss] strategy 2: WM_COMMAND IDOK to dialog");
-        let _ = PostMessageW(hwnd, WM_COMMAND, 1, 0);
-
-        // 戦略 3: VK_RETURN を WM_KEYDOWN/UP で送る (Skia UI 向け)。
-        // 多くの Adobe ダイアログは Enter キーで OK を確定する。
-        eprintln!("[ps-dismiss] strategy 3: WM_KEYDOWN/UP VK_RETURN to dialog");
-        let _ = PostMessageW(hwnd, WM_KEYDOWN, VK_RETURN as usize, 0);
-        let _ = PostMessageW(hwnd, WM_KEYUP, VK_RETURN as usize, 0);
-
-        // 戦略 4: WM_CHAR '\r' (一部の UI Framework はキー入力を WM_CHAR で受ける)。
-        eprintln!("[ps-dismiss] strategy 4: WM_CHAR \\r to dialog");
-        let _ = PostMessageW(hwnd, WM_CHAR, '\r' as usize, 0);
-
-        // 戦略 5: SetForegroundWindow + SendInput VK_RETURN (最後の手段)。
-        // フォーカスを一時的にダイアログへ移して、グローバルキー入力として Enter を送る。
-        // 確実だが、ユーザーが他のアプリで作業中だとフォーカスが奪われる副作用あり。
-        // 起動時警告中はユーザーは保存処理を待っているので実用上 OK と判断。
-        eprintln!("[ps-dismiss] strategy 5: SetForegroundWindow + SendInput Enter");
-        let orig_fg = GetForegroundWindow();
-        let _ = SetForegroundWindow(hwnd);
-        std::thread::sleep(std::time::Duration::from_millis(80));
-        // Enter キーを KEYDOWN + KEYUP で送る。
-        let mut inputs: [INPUT; 2] = std::mem::zeroed();
-        inputs[0].type_ = INPUT_KEYBOARD;
-        {
-            let ki = inputs[0].u.ki_mut();
-            ki.wVk = VK_RETURN as u16;
-            ki.wScan = 0;
-            ki.dwFlags = 0;
-            ki.time = 0;
-            ki.dwExtraInfo = 0;
-        }
-        inputs[1].type_ = INPUT_KEYBOARD;
-        {
-            let ki = inputs[1].u.ki_mut();
-            ki.wVk = VK_RETURN as u16;
-            ki.wScan = 0;
-            ki.dwFlags = KEYEVENTF_KEYUP;
-            ki.time = 0;
-            ki.dwExtraInfo = 0;
-        }
-        SendInput(
-            inputs.len() as u32,
-            inputs.as_mut_ptr(),
-            std::mem::size_of::<INPUT>() as i32,
-        );
-        // 元のフォアグラウンドウィンドウへ復帰 (奪ったフォーカスをユーザーに返す)。
-        if !orig_fg.is_null() && orig_fg != hwnd {
-            std::thread::sleep(std::time::Duration::from_millis(50));
-            let _ = SetForegroundWindow(orig_fg);
-        }
-
-        // 戦略 6: WM_CLOSE (× ボタン相当、最終手段)。Skia UI でも効きやすい。
-        // OK と等価ではないかもしれないが、Photoshop の起動警告ではダイアログを閉じる
-        // ことで処理続行になるケースが多い。
-        eprintln!("[ps-dismiss] strategy 6: WM_CLOSE to dialog");
-        let _ = PostMessageW(hwnd, WM_CLOSE, 0, 0);
 
         state.count += 1;
         1
@@ -1029,6 +929,7 @@ fn dismiss_known_photoshop_dialogs() -> usize {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 struct PhotoshopWindowTarget {
     hwnd: winapi::shared::windef::HWND,
 }
@@ -1041,15 +942,6 @@ const PHOTOSHOP_BLOCKING_DIALOG_KEYWORDS: &[&str] = &[
     "scratch disks",
     "容量不足",
     "空き容量",
-    "メモリ不足",
-    "メモリー不足",
-    "not enough ram",
-    "not enough memory",
-    "insufficient memory",
-    "out of memory",
-    "could not complete",
-    "cannot complete",
-    "要求された操作を完了できません",
 ];
 
 #[cfg(windows)]
@@ -1061,6 +953,7 @@ fn contains_photoshop_blocking_dialog_keyword(text: &str) -> bool {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn is_photoshop_dialog_hide_exempt(class_name: &str, title: &str) -> bool {
     let class_lower = class_name.trim().to_ascii_lowercase();
     let title_lower = title.trim().to_lowercase();
@@ -1072,6 +965,7 @@ fn is_photoshop_dialog_hide_exempt(class_name: &str, title: &str) -> bool {
 }
 
 #[cfg(windows)]
+#[allow(dead_code)]
 fn find_visible_photoshop_windows() -> Vec<PhotoshopWindowTarget> {
     use winapi::shared::minwindef::{BOOL, LPARAM};
     use winapi::shared::windef::HWND;

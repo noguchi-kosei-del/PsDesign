@@ -2567,7 +2567,7 @@ export function pickReuseFontSize({
     const punctSelect = document.createElement("select");
     punctSelect.className = "prompt-modal-input reuse-fontsize-punct-select";
     punctSelect.setAttribute("aria-label", "句読点「、」の半角スペース置換");
-    punctSelect.innerHTML = '<option value="on">適用</option><option value="off">適用しない</option>';
+    punctSelect.innerHTML = '<option value="on">句読点あり</option><option value="off">句読点なし</option>';
     punctSelect.value = defaultPunctuationSpaceReplacementEnabled === false ? "off" : "on";
 
     wrap.appendChild(fontLabel);

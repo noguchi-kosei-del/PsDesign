@@ -1,7 +1,8 @@
 const TEXT_SIZE_UNIT_KEY = "psdesign_text_size_unit";
+const PT_PER_PX = 72 / 96;
 const PT_PER_Q = 72 / 25.4 * 0.25;
 const PT_PER_MM = 72 / 25.4;
-const TEXT_SIZE_UNITS = ["pt", "q", "mm"];
+const TEXT_SIZE_UNITS = ["pt", "px", "q", "mm"];
 const listeners = new Set();
 
 export function normalizeTextSizeUnit(unit) {
@@ -39,6 +40,7 @@ export function onTextSizeUnitChange(fn) {
 
 export function textSizeUnitLabel(unit = getTextSizeUnit()) {
   const normalized = normalizeTextSizeUnit(unit);
+  if (normalized === "px") return "px";
   if (normalized === "q") return "級";
   if (normalized === "mm") return "mm";
   return "pt";
@@ -48,6 +50,7 @@ export function textSizePtToUnitValue(pt, unit = getTextSizeUnit()) {
   const n = Number(pt);
   if (!Number.isFinite(n)) return null;
   const normalized = normalizeTextSizeUnit(unit);
+  if (normalized === "px") return n / PT_PER_PX;
   if (normalized === "q") return n / PT_PER_Q;
   if (normalized === "mm") return n / PT_PER_MM;
   return n;
@@ -57,6 +60,7 @@ export function textSizeUnitValueToPt(value, unit = getTextSizeUnit()) {
   const n = Number(value);
   if (!Number.isFinite(n)) return null;
   const normalized = normalizeTextSizeUnit(unit);
+  if (normalized === "px") return n * PT_PER_PX;
   if (normalized === "q") return n * PT_PER_Q;
   if (normalized === "mm") return n * PT_PER_MM;
   return n;

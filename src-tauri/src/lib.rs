@@ -422,6 +422,68 @@ async fn read_binary_file(
     Ok(tauri::ipc::Response::new(bytes))
 }
 
+#[tauri::command]
+async fn rename_psd_file(
+    allowed: tauri::State<'_, AllowedPaths>,
+    path: String,
+    #[allow(non_snake_case)] newName: String,
+) -> Result<String, String> {
+    let real = ensure_allowed(&allowed, &path)?;
+    if !real.is_file() {
+        return Err(format!("not a file: {}", path));
+    }
+    let old_ext = real
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if old_ext != "psd" {
+        return Err("only PSD files can be renamed".to_string());
+    }
+
+    let new_name = newName.trim();
+    if new_name.is_empty()
+        || new_name.chars().any(|c| {
+            c.is_control() || matches!(c, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*')
+        })
+        || new_name.ends_with('.')
+        || new_name.ends_with(' ')
+    {
+        return Err("invalid file name".to_string());
+    }
+    let new_path = Path::new(new_name);
+    if new_path.file_name().and_then(|s| s.to_str()) != Some(new_name) {
+        return Err("file name must not include a folder".to_string());
+    }
+    let new_ext = new_path
+        .extension()
+        .and_then(|s| s.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if new_ext != "psd" {
+        return Err("new file name must end with .psd".to_string());
+    }
+
+    let parent = real
+        .parent()
+        .ok_or_else(|| "file has no parent folder".to_string())?;
+    let target = parent.join(new_name);
+    if target == real {
+        return Ok(real.to_string_lossy().to_string());
+    }
+    if target.exists() {
+        return Err(format!("target already exists: {}", target.display()));
+    }
+
+    fs::rename(&real, &target)
+        .map_err(|e| format!("rename failed ({} -> {}): {}", real.display(), target.display(), e))?;
+    let _ = allowed.register_path(&target);
+    if let Some(parent) = target.parent() {
+        let _ = allowed.register_path(parent);
+    }
+    Ok(target.to_string_lossy().to_string())
+}
+
 /// 見本画像 (JPEG / PNG) に埋め込まれた解像度 (dpi) を読む。取得できなければ None。
 /// JPEG: JFIF APP0 の density、PNG: pHYs チャンク。位置調整 mode1 で見本とPSDの解像度を
 /// 揃える (k = psd.dpi / 見本dpi) ために使う。
@@ -2272,10 +2334,9 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_process::init())
         .setup(|app| {
-            // 【v2.x】Photoshop 警告ダイアログ (仮想記憶ディスクの容量不足など) を
-            // アプリ起動時から常時バックグラウンドで監視し、見つけたら自動 OK する。
-            // 2 秒間隔で polling、CPU 負荷は無視できるレベル。OPUS の保存処理経由
-            // 以外 (例: ユーザーが直接 Photoshop を操作中) で警告が出ても拾える。
+            // 常時バックグラウンド監視は保存中の Photoshop に割り込むリスクがあるため、
+            // start_background_dialog_watcher は現在 no-op。Photoshop 起動直後に必要な
+            // スクラッチ警告処理は、読み取り系コマンドの短時間 watcher に限定する。
             photoshop::start_background_dialog_watcher();
 
             if let Some(main_window) = app.get_webview_window("main") {
@@ -2315,6 +2376,7 @@ pub fn run() {
             read_psd_text_layers_batch,
             list_fonts,
             read_binary_file,
+            rename_psd_file,
             read_reference_dpi,
             is_unsupported_bitmap_psd,
             read_text_file,

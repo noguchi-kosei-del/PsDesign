@@ -3426,6 +3426,16 @@ const OPENING_PUNCT_TSUME_CHAR_CODES = new Set([
   0x300C, // 「
   0x301D, // 〝
 ]);
+const OPENING_MANUAL_TSUME_CHAR_CODES = new Set([
+  0x300C, // 「
+  0x3010, // 【
+  0x3014, // 〔
+  0x3016, // 〖
+  0x3018, // 〘
+  0x301A, // 〚
+  0x301D, // 〝
+  0xFF08, // （
+]);
 function lineHasPunctTsumeChar(s) {
   if (typeof s !== "string") return false;
   for (let i = 0; i < s.length; i++) {
@@ -3957,11 +3967,19 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       ? { before: punctTsumeMag, after: 0 }
       : { before: 0, after: punctTsumeMag };
   }
+  function manualSpacingForChar(ch, trackingEm) {
+    const n = Number(trackingEm) || 0;
+    const cc = ch ? ch.charCodeAt(0) : 0;
+    if (n < 0 && OPENING_MANUAL_TSUME_CHAR_CODES.has(cc)) {
+      return { before: -n, after: 0 };
+    }
+    return { before: 0, after: n };
+  }
   let i = 0;
   while (i < segText.length) {
     const absIdx = lineStartIdx + segStartInLine + i;
     const sigSize = hasCharSizes ? charSizes[absIdx] : undefined;
-    const sigTrack = trackings[segStartInLine + i];
+    const sigManual = manualSpacingForChar(segText[i], trackings[segStartInLine + i]);
     const sigFont = effectiveFontAt(absIdx, segText[i]);
     // 【v1.22.0】per-char 合成太字 (charBolds[absIdx])。boolean があれば signature に含める。
     const sigBold = hasCharBolds ? charBolds[absIdx] : undefined;
@@ -3975,7 +3993,7 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     while (j < segText.length) {
       const absJ = lineStartIdx + segStartInLine + j;
       const s = hasCharSizes ? charSizes[absJ] : undefined;
-      const t = trackings[segStartInLine + j];
+      const manual = manualSpacingForChar(segText[j], trackings[segStartInLine + j]);
       const f = effectiveFontAt(absJ, segText[j]);
       const b = hasCharBolds ? charBolds[absJ] : undefined;
       const it = hasCharItalics ? charItalics[absJ] : undefined;
@@ -3984,7 +4002,9 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
       const vs = hasCharVerticalScales && Number.isFinite(charVerticalScales[absJ]) ? charVerticalScales[absJ] : layerVerticalScale;
       const tu = tsumeForChar(segText[j]);
       if (
-        s !== sigSize || t !== sigTrack || f !== sigFont || b !== sigBold || it !== sigItalic ||
+        s !== sigSize ||
+        manual.before !== sigManual.before || manual.after !== sigManual.after ||
+        f !== sigFont || b !== sigBold || it !== sigItalic ||
         fl !== sigFill ||
         hs !== sigHScale || vs !== sigVScale ||
         tu.before !== sigTsume.before || tu.after !== sigTsume.after
@@ -3993,8 +4013,9 @@ function appendStyledSegment(parentEl, segText, segStartInLine, lineStartIdx, tr
     }
     const text = segText.slice(i, j);
     // 後ろ詰めは letter-spacing、前詰めは margin-inline-start。連続記号ツメは letter-spacing に合算する。
-    const effectiveLetterSpacingEm = sigTrack + (sigTsume.after > 0 ? -sigTsume.after : 0);
-    const effectiveMarginInlineStartEm = sigTsume.before > 0 ? -sigTsume.before : 0;
+    const effectiveLetterSpacingEm = sigManual.after + (sigTsume.after > 0 ? -sigTsume.after : 0);
+    const effectiveMarginInlineStartEm = (sigManual.before > 0 ? -sigManual.before : 0)
+      + (sigTsume.before > 0 ? -sigTsume.before : 0);
     const fillCss = cssFillColor(sigFill);
     const needsSpan = Number.isFinite(sigSize) || effectiveLetterSpacingEm !== 0 || effectiveMarginInlineStartEm !== 0
       || (typeof sigFont === "string" && sigFont.length > 0)
@@ -4618,13 +4639,13 @@ function onPageWheel(e, ctx) {
 }
 
 function resizeSelectedLayersFromWheel(e) {
-  // 環境設定の「文字サイズの刻み」（0.1 / 0.5）を baseStep に、Shift で 10 倍。
+  // 環境設定の「文字サイズの刻み」（0.1 / 0.25 / 0.5 / 1）を baseStep に、Shift で 10 倍。
   // off-grid な値（例：0.5 刻み設定で 12.3）は最寄りグリッドにスナップする。
   const configuredStep = Number(getDefault("textSizeStep"));
-  const baseStep = configuredStep === 0.25 || configuredStep === 0.5 ? configuredStep : 0.1;
+  const baseStep = configuredStep === 0.25 || configuredStep === 0.5 || configuredStep === 1 ? configuredStep : 0.1;
   const sign = e.deltaY < 0 ? +1 : -1;
   const multiplier = e.shiftKey ? 10 : 1;
-  return resizeSelectedLayers(baseStep, sign, multiplier);
+  return resizeSelectedLayers(baseStep, sign, multiplier, { unit: getTextSizeUnit() });
 }
 
 // edit-font 欄 / スタイルパレットでユーザーがフォントを選んだ後（fontPickerStuck === true）、

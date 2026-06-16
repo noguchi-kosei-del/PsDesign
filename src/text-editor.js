@@ -82,6 +82,8 @@ const horizontalScaleInputEl = () => document.getElementById("horizontal-scale-i
 const verticalScaleInputEl = () => document.getElementById("vertical-scale-input");
 const trackingInputEl = () => document.getElementById("tracking-input");
 const kerningInputEl = () => document.getElementById("kerning-input");
+const trackingHeadBtnEl = () => document.getElementById("tracking-head-btn");
+const kerningHeadBtnEl = () => document.getElementById("kerning-head-btn");
 const tcyApplyBtnEl = () => document.getElementById("tcy-apply-btn");
 const tcyRemoveBtnEl = () => document.getElementById("tcy-remove-btn");
 const verticalHalfToFullSelectEl = () => document.getElementById("vertical-half-to-full-select");
@@ -300,6 +302,23 @@ function collectSpacingsForRange(ref, start, end, field) {
     for (let i = from; i < to; i++) add(spacingAt(ref, i, field));
   }
   return values;
+}
+
+function textForRef(ref) {
+  if (!ref) return "";
+  if (ref.kind === "existing") {
+    const edit = getEdit(ref.page.path, ref.layer.id) ?? {};
+    return String(edit.contents ?? ref.layer.text ?? "");
+  }
+  return String(ref.newLayer.contents ?? "");
+}
+
+function firstTextHeadIndex(text) {
+  const s = String(text ?? "");
+  for (let i = 0; i < s.length; i++) {
+    if (!/[\s\u3000]/u.test(s[i])) return i;
+  }
+  return -1;
 }
 
 function getTcyContext(sel = getLastInplaceSelection()) {
@@ -2176,6 +2195,44 @@ function commitTextSpacingField(field, mille) {
   return false;
 }
 
+function commitTextSpacingToTextHeads(field, mille) {
+  const value = clampTextSpacingMille(mille);
+  if (!Number.isFinite(value)) return false;
+  const selections = getSelectedLayers();
+  if (selections.length === 0) return false;
+
+  const mutated = withHistoryTransient(() => {
+    let any = false;
+    for (const sel of selections) {
+      const ref = resolveLayerRef(sel);
+      if (!ref) continue;
+      const index = firstTextHeadIndex(textForRef(ref));
+      if (index < 0) continue;
+      const targetId = ref.kind === "existing" ? ref.layer.id : ref.newLayer.tempId;
+      if (spacingAt(ref, index, field) === value) continue;
+      if (field === "trackingMille") {
+        setCharTrackingsRange(ref.page.path, targetId, index, index + 1, value);
+      } else {
+        setCharKerningsRange(ref.page.path, targetId, index, index + 1, value);
+      }
+      any = true;
+    }
+    return any || false;
+  });
+
+  if (mutated) {
+    const sel = getLastInplaceSelection();
+    if (sel) {
+      refreshActiveInPlaceEditPreview(sel);
+      showInplaceSelectionHighlightOnly(sel);
+      requestAnimationFrame(() => showInplaceSelectionHighlightOnly(sel));
+    }
+    rebuildLayerList();
+    refreshAllOverlays();
+  }
+  return !!mutated;
+}
+
 function commitTateChuYokoSelection(enabled) {
   const ctx = getTcyContext();
   if (!ctx) return false;
@@ -2283,7 +2340,7 @@ function bindTextScaleControls() {
 }
 
 function bindTextSpacingControls() {
-  const bind = (field, input, decBtn, incBtn) => {
+  const bind = (field, input, decBtn, incBtn, headBtn) => {
     if (!input) return;
     const applyValue = () => {
       const value = clampTextSpacingMille(input.value);
@@ -2316,18 +2373,28 @@ function bindTextSpacingControls() {
       incBtn.addEventListener("mousedown", (e) => e.preventDefault());
       incBtn.addEventListener("click", () => adjust(+10));
     }
+    if (headBtn) {
+      headBtn.addEventListener("mousedown", (e) => e.preventDefault());
+      headBtn.addEventListener("click", () => {
+        const value = clampTextSpacingMille(input.value || 0) ?? 0;
+        input.value = String(value);
+        commitTextSpacingToTextHeads(field, value);
+      });
+    }
   };
   bind(
     "kerningMille",
     kerningInputEl(),
     document.getElementById("kerning-dec-btn"),
     document.getElementById("kerning-inc-btn"),
+    kerningHeadBtnEl(),
   );
   bind(
     "trackingMille",
     trackingInputEl(),
     document.getElementById("tracking-dec-btn"),
     document.getElementById("tracking-inc-btn"),
+    trackingHeadBtnEl(),
   );
 }
 

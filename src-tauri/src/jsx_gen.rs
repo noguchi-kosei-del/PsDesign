@@ -15,6 +15,7 @@ pub fn generate_read_text_layers_script(
     let mut out = String::new();
     out.push_str("#target photoshop\n");
     out.push_str("app.displayDialogs = DialogModes.NO;\n");
+    out.push_str("try { app.playbackDisplayDialogs = DialogModes.NO; } catch (e) {}\n");
     out.push_str(
         "try { app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS; } catch (e) {}\n",
     );
@@ -42,6 +43,7 @@ pub fn generate_read_text_layers_batch_script(
     let mut out = String::new();
     out.push_str("#target photoshop\n");
     out.push_str("app.displayDialogs = DialogModes.NO;\n");
+    out.push_str("try { app.playbackDisplayDialogs = DialogModes.NO; } catch (e) {}\n");
     out.push_str(
         "try { app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS; } catch (e) {}\n",
     );
@@ -1048,6 +1050,7 @@ const HEADER: &str = r##"
 // 出しているので、ここから先で出る可能性のあるモーダルは保存処理を blocking させないために
 // 抑制してよい。エラー自体は executeAction の例外として catch され addWarning で記録される。
 try { app.displayDialogs = DialogModes.NO; } catch (_dlgErr) {}
+try { app.playbackDisplayDialogs = DialogModes.NO; } catch (_playbackDlgErr) {}
 try { app.userInteractionLevel = UserInteractionLevel.SUPPRESSALERTS; } catch (_uiErr) {}
 var PSDESIGN_WARNINGS = [];
 function addWarning(msg) {
@@ -1888,32 +1891,64 @@ function applyPerCharTextSpacing(layer, contents, charTrackings, charKernings) {
     var v = map ? map[String(idx)] : undefined;
     return (typeof v === "number") ? normalizeTextSpacingMille(v) : null;
   }
+  function isOpeningManualTsumeChar(idx) {
+    if (!contents || idx < 0 || idx >= contents.length) return false;
+    var c = String(contents).charCodeAt(idx);
+    return c === 0x300C || c === 0x3010 || c === 0x3014 ||
+           c === 0x3016 || c === 0x3018 || c === 0x301A ||
+           c === 0x301D || c === 0xFF08;
+  }
+  function openingTsumePct(idx) {
+    if (!isOpeningManualTsumeChar(idx)) return 0;
+    var total = 0;
+    var tv = readSpacing(charTrackings, idx);
+    var kv = readSpacing(charKernings, idx);
+    if (tv !== null && tv < 0) total += tv;
+    if (kv !== null && kv < 0) total += kv;
+    if (total >= 0) return 0;
+    return Math.max(0, Math.min(100, Math.round((-total) / 10)));
+  }
+  function trackingForStyle(idx) {
+    var v = readSpacing(charTrackings, idx);
+    return (v !== null && v < 0 && openingTsumePct(idx) > 0) ? null : v;
+  }
+  var hasOpeningTsume = false;
+  for (var oi = 0; oi < totalChars; oi++) {
+    if (openingTsumePct(oi) > 0) { hasOpeningTsume = true; break; }
+  }
   var newTextKey = cloneActionDescriptor(textKey);
-  if (hasT) {
+  if (hasT || hasOpeningTsume) {
     var newRangeList = new ActionList();
     if (typeof srcRangeIndex[0] !== "number") srcRangeIndex[0] = 0;
+    var keyTsume = sID("mojiZume");
+    var keyPctUnit = sID("percentUnit");
     var curStart = 0;
     var curSrc = srcRangeIndex[0];
-    var curT = readSpacing(charTrackings, 0);
+    var curT = trackingForStyle(0);
+    var curTsume = openingTsumePct(0);
     for (var p = 1; p <= totalChars; p++) {
-      var nextSrc, nextT, boundary;
+      var nextSrc, nextT, nextTsume, boundary;
       if (p === totalChars) {
-        boundary = true; nextSrc = curSrc; nextT = curT;
+        boundary = true; nextSrc = curSrc; nextT = curT; nextTsume = curTsume;
       } else {
         nextSrc = (typeof srcRangeIndex[p] === "number") ? srcRangeIndex[p] : curSrc;
-        nextT = readSpacing(charTrackings, p);
-        boundary = (nextSrc !== curSrc) || (nextT !== curT);
+        nextT = trackingForStyle(p);
+        nextTsume = openingTsumePct(p);
+        boundary = (nextSrc !== curSrc) || (nextT !== curT) || (nextTsume !== curTsume);
       }
       if (boundary) {
         var srcRange = oldRanges.getObjectValue(curSrc);
         var styleClone = cloneActionDescriptor(srcRange.getObjectValue(sID("textStyle")));
         putTrackingValue(styleClone, curT);
+        if (curTsume > 0) {
+          try { styleClone.putUnitDouble(keyTsume, keyPctUnit, curTsume / 100); } catch (eTs) {}
+        }
         var rangeDesc = new ActionDescriptor();
         rangeDesc.putInteger(sID("from"), curStart);
         rangeDesc.putInteger(sID("to"), p);
         rangeDesc.putObject(sID("textStyle"), sID("textStyle"), styleClone);
         newRangeList.putObject(sID("textStyleRange"), rangeDesc);
-        curStart = p; curSrc = nextSrc; curT = nextT;
+        curStart = p; curSrc = nextSrc; curT = nextT; curTsume = nextTsume;
       }
     }
     newTextKey.putList(sID("textStyleRange"), newRangeList);
@@ -1922,6 +1957,7 @@ function applyPerCharTextSpacing(layer, contents, charTrackings, charKernings) {
     var kernList = new ActionList();
     for (var k = Math.max(0, totalChars - 2); k >= 0; k--) {
       var kv = readSpacing(charKernings, k);
+      if (kv !== null && kv < 0 && openingTsumePct(k) > 0) continue;
       if (kv !== null) addKerningRange(kernList, k, k + 1, kv);
     }
     newTextKey.putList(sID("kerningRange"), kernList);
@@ -4052,8 +4088,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
   // saveAs 時に必ず合成画像が含まれる PSD が出力され、次回読込で
   // psd.canvas が正しい絵柄を持つ。
   // executeAction 経由で preferences の queryStateChangedAlertCheckbox 等を回避し、
-  // ダイアログを出さずに永続設定として書き込む。Photoshop プロセス全体の設定なので
-  // 他アプリ・他作業にも反映されるが、ユーザー体験的にも「最大化」が標準的なので問題なし。
+  // ダイアログを出さずに一時的に切り替え、保存後に元の設定へ戻す。
   var prevMaxCompat = null;
   try { prevMaxCompat = app.preferences.maximizeCompatibility; } catch (eMcGet) {}
   try { app.preferences.maximizeCompatibility = QueryStateType.ALWAYS; } catch (eMcSet) {
@@ -4788,9 +4823,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     doc.close(SaveOptions.DONOTSAVECHANGES);
     app.preferences.rulerUnits = prevUnits;
     app.preferences.typeUnits = prevTypeUnits;
-    // maximizeCompatibility は他作業にも影響するが、ユーザー要望が「常に最大化」のため
-    // 保存後も Always のままにしておく。前値復元はしない (副作用を許容)。
-    // どうしても元に戻したい場合は prevMaxCompat で復元する分岐を入れる。
+    if (prevMaxCompat !== null) {
+      try { app.preferences.maximizeCompatibility = prevMaxCompat; } catch (eMcRestore) {}
+    }
   }
 }
 "##;

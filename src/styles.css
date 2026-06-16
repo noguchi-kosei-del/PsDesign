@@ -4342,6 +4342,62 @@ body.editor-paragraph-reordering * {
 .prompt-modal-input:focus {
   border-color: var(--accent);
 }
+
+.psd-rename-card {
+  width: min(760px, calc(100vw - 56px));
+}
+
+.psd-rename-modal {
+  z-index: 11000;
+}
+
+.psd-rename-list {
+  display: grid;
+  gap: 6px;
+  max-height: min(48vh, 520px);
+  overflow: auto;
+  margin: 0;
+  padding: 16px var(--opus-dialog-pad-x, 28px) 4px;
+}
+
+.psd-rename-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--opus-dialog-inner-card-border, rgba(255, 255, 255, 0.22));
+  border-radius: 8px;
+  background: var(--opus-dialog-inner-card-bg, rgba(255, 255, 255, 0.08));
+}
+
+.psd-rename-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  color: var(--text, #f5f5f5);
+}
+
+.psd-rename-name-new {
+  color: var(--accent-hover, #67b7ff);
+}
+
+.psd-rename-arrow,
+.psd-rename-more {
+  color: var(--text-muted, rgba(255, 255, 255, 0.58));
+  font-size: 12px;
+}
+
+.psd-rename-more {
+  padding: 6px 10px 0;
+}
+
+.psd-rename-actions {
+  justify-content: flex-end;
+}
 /* 【写植再利用】統一フォント・サイズ選択ダイアログ */
 .reuse-fontsize-fields {
   display: grid;
@@ -8451,6 +8507,12 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 }
 .style-control-item .spacing-input {
   width: 62px;
+}
+.style-control-item .spacing-head-btn {
+  min-width: 36px;
+  padding: 4px 6px;
+  font-size: 11px;
+  font-weight: 700;
 }
 .editor-setting-row {
   display: flex;

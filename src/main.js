@@ -110,6 +110,7 @@ import {
   notifyUnsupportedBitmapPsdFiles,
   pickPsdFiles,
 } from "./services/psd-load.js";
+import { guardAmbiguousPsdFilenamesBeforeLoad } from "./services/psd-rename-guard.js";
 import { loadPsdFilesForReuse } from "./services/reuse.js";
 import { downscaleLoadedPageForCurrentMemory } from "./psd-loader.js";
 import { bindSaveMenu, handleSave } from "./bind/save.js";
@@ -1813,6 +1814,16 @@ function formatSizeInputValue(pt) {
   return formatTextSizePt(pt, getTextSizeUnit(), false);
 }
 
+function syncSizeStepOptions(stepSelect) {
+  if (!stepSelect) return;
+  const unit = getTextSizeUnit();
+  const label = textSizeUnitLabel(unit);
+  for (const option of stepSelect.options) {
+    option.textContent = `${option.value} ${label}`;
+  }
+  stepSelect.setAttribute("aria-label", `文字サイズの刻み (${label})`);
+}
+
 function stepTextSize(sign, multiplier = 1) {
   const baseStep = getSizeStep();
   const current = textSizePtToUnitValue(getTextSize(), getTextSizeUnit());
@@ -3358,7 +3369,11 @@ function bindSizeTool() {
   const syncStepControls = () => {
     const step = getSizeStep();
     input.step = String(step);
-    if (stepSelect) stepSelect.value = String(step);
+    if (stepSelect) {
+      syncSizeStepOptions(stepSelect);
+      stepSelect.value = String(step);
+      stepSelect.title = `文字サイズの刻み (${textSizeUnitLabel(getTextSizeUnit())})`;
+    }
     if (unitLabel) {
       const unit = getTextSizeUnit();
       unitLabel.textContent = textSizeUnitLabel(unit);
@@ -4413,6 +4428,7 @@ function openHomeTypesetDialog() {
     let referencePageCount = null;
     let hiddenReferencePages = new Set();
     let referenceLoading = false;
+    let referenceLoadError = null;
     let referenceCompressionProgress = null;
     let unsupportedBitmapPsdPaths = [];
     let psdPreflightChecking = false;
@@ -4529,8 +4545,8 @@ function openHomeTypesetDialog() {
       `<div class="home-typeset-setting home-typeset-punct-setting">
         <label class="home-typeset-setting-label" for="home-typeset-punct-space">句読点置換</label>
         <select id="home-typeset-punct-space" class="home-typeset-select">
-          <option value="on">適用</option>
-          <option value="off">適用しない</option>
+          <option value="on">句読点あり</option>
+          <option value="off">句読点なし</option>
         </select>
       </div>`
     );
@@ -4694,14 +4710,17 @@ function openHomeTypesetDialog() {
       const paths = [...referencePaths];
       if (paths.length === 0) {
         referencePageCount = null;
+        referenceLoadError = null;
         return 0;
       }
       if (referenceSelectionMatchesLoaded(paths, hiddenReferencePages)) {
         referencePageCount = Math.max(0, getPdfVirtualPageCount());
+        referenceLoadError = null;
         update();
         return getReferenceDisplayCount();
       }
       referenceLoading = true;
+      referenceLoadError = null;
       referenceCompressionProgress = null;
       update();
       try {
@@ -4712,7 +4731,9 @@ function openHomeTypesetDialog() {
           referencePaths = sizeCheck.acceptedPaths;
           referencePageCount = null;
           update();
-          if (referencePaths.length === 0) return 0;
+          if (referencePaths.length === 0) {
+            throw new Error("no accepted reference files");
+          }
         }
         const result = await loadReferenceFiles(referencePaths, {
           skipFirstBlankPage: false,
@@ -4720,6 +4741,9 @@ function openHomeTypesetDialog() {
           showProgress: false,
           notifyLargePdf: false,
         });
+        if (!Array.isArray(result?.paths) || result.paths.length === 0) {
+          throw new Error("loadReferenceFiles returned no loaded paths");
+        }
         const loadedPaths = Array.isArray(result?.paths) && result.paths.length > 0 ? result.paths : referencePaths;
         if (loadedPaths !== referencePaths) {
           referencePaths = loadedPaths;
@@ -4727,9 +4751,11 @@ function openHomeTypesetDialog() {
         referencePageCount = referenceSelectionMatchesLoaded(loadedPaths, hiddenReferencePages)
           ? Math.max(0, getPdfVirtualPageCount())
           : loadedPaths.length;
+        referenceLoadError = null;
       } catch (e) {
         console.error("loadReferenceFiles failed:", e);
-        referencePageCount = paths.length;
+        referenceLoadError = e;
+        referencePageCount = null;
       } finally {
         referenceLoading = false;
         referenceCompressionProgress = null;
@@ -4792,7 +4818,7 @@ function openHomeTypesetDialog() {
       }
       if (startBtn) {
         const lockedByUnsupportedPsd = unsupportedBitmapPsdPaths.length > 0 || psdPreflightChecking;
-        startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading || lockedByUnsupportedPsd;
+        startBtn.disabled = referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading || !!referenceLoadError || lockedByUnsupportedPsd;
         startBtn.title = unsupportedBitmapPsdPaths.length > 0
           ? "モノクロ2階調のPSDが含まれているため開始できません"
           : psdPreflightChecking
@@ -4813,7 +4839,9 @@ function openHomeTypesetDialog() {
       psdPreflightChecking = true;
       update();
       const unsupported = await findUnsupportedBitmapPsdFiles(paths);
-      if (serial !== psdPreflightSerial || settled) return;
+      if (serial !== psdPreflightSerial || settled) {
+        return;
+      }
       unsupportedBitmapPsdPaths = unsupported;
       psdPreflightChecking = false;
       update();
@@ -5020,7 +5048,33 @@ function openHomeTypesetDialog() {
       });
     }
     startBtn?.addEventListener("click", async () => {
-      if (referencePaths.length === 0 || psdPaths.length === 0 || referenceLoading || psdPreflightChecking || unsupportedBitmapPsdPaths.length > 0) return;
+      if (psdPaths.length === 0) {
+        return;
+      }
+      if (psdPreflightChecking) {
+        return;
+      }
+      if (unsupportedBitmapPsdPaths.length > 0) {
+        return;
+      }
+      const renamedPsdPaths = await guardAmbiguousPsdFilenamesBeforeLoad(psdPaths);
+      if (!renamedPsdPaths) return;
+      psdPaths = renamedPsdPaths;
+      update();
+      if (referencePaths.length === 0) {
+        return;
+      }
+      if (referenceLoading) {
+        return;
+      }
+      if (referenceLoadError) {
+        await notifyDialog({
+          title: "見本を読み込めません",
+          message: `見本の読み込みに失敗しています。\n別の見本ファイルを選択してください。\n\n${referenceLoadError?.message ?? referenceLoadError}`,
+          kind: "warning",
+        });
+        return;
+      }
       const referenceCount = getReferenceDisplayCount();
       if (referenceCount < psdPaths.length) {
         await notifyDialog({
