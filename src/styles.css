@@ -2671,8 +2671,8 @@ body.home-starting .home-screen {
   position: relative;
   z-index: 4;
   display: grid;
-  grid-template-columns: minmax(150px, 0.55fr) minmax(260px, 1fr);
-  gap: 18px;
+  grid-template-columns: minmax(150px, 0.58fr) minmax(260px, 1fr) minmax(170px, 0.66fr) minmax(170px, 0.66fr);
+  gap: 14px;
   margin: 0 52px 2px;
   padding: 14px 16px;
   border: 1px solid var(--home-card-border, rgba(255, 255, 255, 0.2));
@@ -10956,19 +10956,18 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 }
 #key-capture-modal { z-index: 320; }
 .settings-card {
-  width: 560px;
-  max-width: 92vw;
-  /* タブを切り替えてもダイアログサイズが揺れないよう固定高さ。
-     ショートカット一覧（最も縦長）が快適に収まる比率に合わせる。 */
-  height: 80vh;
-  max-height: 80vh;
-  min-height: 500px;
+  width: min(1120px, 94vw);
+  max-width: 94vw;
+  height: min(760px, 86vh);
+  max-height: 86vh;
+  min-height: 560px;
   background: var(--panel);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: 22px;
   box-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
   transform: scale(0.92);
   transition: transform 0.22s cubic-bezier(0.2, 0.7, 0.3, 1.0);
 }
@@ -10982,14 +10981,14 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--border);
+  padding: 22px 36px 12px;
   flex-shrink: 0;
 }
 .settings-title {
-  font-size: 13px;
-  font-weight: 700;
+  font-size: 20px;
+  font-weight: 900;
   color: var(--text);
+  letter-spacing: 0;
 }
 .settings-done-btn {
   padding: 6px 16px;
@@ -11008,35 +11007,63 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 }
 .settings-tabs {
   display: flex;
-  border-bottom: 1px solid var(--border);
-  padding: 0 16px;
+  flex: 0 0 270px;
+  flex-direction: column;
+  align-self: stretch;
+  padding: 18px 22px;
+  background: color-mix(in srgb, var(--panel-hover) 72%, var(--text) 6%);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 22px;
   flex-shrink: 0;
+  overflow: hidden;
 }
-.settings-tab {
-  flex: 1 1 0;
-  padding: 10px 18px;
+.settings-modal .settings-tabs .settings-tab {
+  width: 100%;
+  padding: 14px 16px;
   background: none;
   border: none;
-  border-bottom: 2px solid transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--border) 76%, transparent);
   color: var(--text-muted);
   cursor: pointer;
-  font-size: 12px;
+  font-size: 15px;
   font-family: inherit;
-  font-weight: 600;
-  text-align: center;
+  font-weight: 900;
+  line-height: 1.35;
+  text-align: left;
   white-space: nowrap;
-  transition: color 0.22s ease, border-color 0.15s;
+  border-radius: 12px;
+  transition: color 0.22s ease, background-color 0.15s;
 }
-.settings-tab:hover { color: var(--text); }
-.settings-tab.active {
-  color: var(--accent);
-  border-bottom-color: var(--accent);
+.settings-modal .settings-tabs .settings-tab:last-child {
+  border-bottom: none;
+}
+.settings-modal .settings-tabs .settings-tab:hover { color: var(--text); }
+.settings-modal .settings-tabs .settings-tab.active {
+  color: var(--text);
+  background: color-mix(in srgb, var(--bg) 42%, transparent);
+}
+.settings-body {
+  display: flex;
+  gap: 54px;
+  flex: 1;
+  min-height: 0;
+  padding: 8px 36px 24px;
+}
+.settings-panels {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+  background: color-mix(in srgb, var(--panel-hover) 72%, var(--text) 6%);
+  border: 1px solid color-mix(in srgb, var(--border) 70%, transparent);
+  border-radius: 22px;
 }
 .settings-tab-panel {
   display: none;
   flex: 1;
   overflow-y: auto;
-  padding: 14px 16px 16px;
+  height: 100%;
+  padding: 0;
   min-height: 0;
 }
 .settings-tab-panel.active {
@@ -11048,17 +11075,21 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-bottom: 6px;
+  padding: 8px 10px 10px;
   border-bottom: 1px solid var(--border);
   flex-shrink: 0;
 }
+.settings-section-header-sub {
+  margin-top: 18px;
+}
 .settings-section-header span {
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 900;
   color: var(--text);
 }
 .settings-section-desc {
   margin: 0;
+  padding: 0 10px;
   font-size: 11px;
   color: var(--text-muted);
   line-height: 1.5;
@@ -11079,11 +11110,12 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   flex: 1;
   overflow-y: auto;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 3px;
   min-height: 0;
+  background: var(--bg);
 }
 .shortcut-section-title {
-  padding: 7px 12px;
+  padding: 10px 14px;
   background: var(--panel);
   border-bottom: 1px solid var(--border);
   color: var(--text-muted);
@@ -11094,7 +11126,8 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
+  min-height: 42px;
+  padding: 8px 14px;
   border-bottom: 1px solid var(--border);
   gap: 12px;
 }
@@ -11110,7 +11143,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   align-items: center;
   justify-content: center;
   min-width: 140px;
-  padding: 5px 10px;
+  padding: 6px 10px;
   background: var(--bg);
   border: 1px solid var(--border);
   color: var(--text);
@@ -11137,21 +11170,31 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .settings-defaults-list {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 0;
   margin-top: 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--bg);
 }
 .settings-default-row {
   display: flex;
   align-items: center;
+  min-height: 44px;
+  padding: 8px 14px;
   gap: 12px;
+  border-bottom: 1px solid var(--border);
 }
+.settings-default-row:last-child { border-bottom: none; }
+.settings-default-row:nth-child(even) { background: var(--panel-hover); }
 .settings-default-label {
   flex: 1;
   font-size: 12px;
+  font-weight: 700;
   color: var(--text);
 }
 .settings-default-input {
-  width: 200px;
+  width: 250px;
   padding: 6px 10px;
   background: var(--bg);
   color: var(--text);
@@ -13170,7 +13213,7 @@ button.home-scan-engine-install-btn:hover:not(:disabled) {
 .home-typeset-modal .home-typeset-settings {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px 32px;
+  gap: 14px 20px;
   align-items: center;
   justify-content: center;
   margin: 14px var(--opus-dialog-pad-x) 6px !important;
@@ -13187,6 +13230,10 @@ button.home-scan-engine-install-btn:hover:not(:disabled) {
   gap: 10px;
   min-width: 0;
   grid-template-columns: none;
+}
+.home-typeset-modal .home-typeset-punct-setting {
+  flex-basis: 100%;
+  justify-content: flex-start;
 }
 .home-typeset-modal .home-typeset-size-field {
   display: inline-flex;
@@ -13211,8 +13258,8 @@ button.home-scan-engine-install-btn:hover:not(:disabled) {
   z-index: 90;
 }
 .home-typeset-modal .home-typeset-select {
-  width: 112px;
-  flex: 0 0 112px;
+  width: 132px;
+  flex: 0 0 132px;
 }
 .home-typeset-modal .home-typeset-select option {
   color: #111;

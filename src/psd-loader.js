@@ -436,6 +436,12 @@ function canvasDarknessStats(canvas) {
   let veryDark = 0;
   let bright = 0;
   let sum = 0;
+  let sampleTotal = 0;
+  let transparent = 0;
+  let translucent = 0;
+  let alphaSum = 0;
+  let minAlpha = 255;
+  let maxAlpha = 0;
 
   try {
     for (let row = 0; row < sampleRows; row++) {
@@ -444,7 +450,15 @@ function canvasDarknessStats(canvas) {
         const x = Math.min(canvas.width - 1, Math.floor((col + 0.5) * canvas.width / sampleCols));
         const data = ctx.getImageData(x, y, 1, 1).data;
         const alpha = data[3] ?? 255;
-        if (alpha < 16) continue;
+        sampleTotal += 1;
+        alphaSum += alpha;
+        minAlpha = Math.min(minAlpha, alpha);
+        maxAlpha = Math.max(maxAlpha, alpha);
+        if (alpha < 16) {
+          transparent += 1;
+          continue;
+        }
+        if (alpha < 240) translucent += 1;
         const lum = 0.2126 * data[0] + 0.7152 * data[1] + 0.0722 * data[2];
         count += 1;
         sum += lum;
@@ -457,12 +471,20 @@ function canvasDarknessStats(canvas) {
     return null;
   }
 
-  if (count === 0) return null;
+  if (sampleTotal === 0) return null;
   return {
-    average: sum / count,
-    darkRatio: dark / count,
-    veryDarkRatio: veryDark / count,
-    brightRatio: bright / count,
+    sampleTotal,
+    opaqueSamples: count,
+    average: count > 0 ? sum / count : null,
+    darkRatio: count > 0 ? dark / count : 0,
+    veryDarkRatio: count > 0 ? veryDark / count : 0,
+    brightRatio: count > 0 ? bright / count : 0,
+    transparentRatio: transparent / sampleTotal,
+    translucentRatio: translucent / sampleTotal,
+    opaqueRatio: count / sampleTotal,
+    averageAlpha: alphaSum / sampleTotal,
+    minAlpha,
+    maxAlpha,
   };
 }
 
@@ -472,19 +494,35 @@ function darkPreviewDecision(canvas, meta = {}) {
   const bitsPerChannel = Number(meta.bitsPerChannel ?? 0);
   const channels = Number(meta.channels ?? 0);
   const isRgb = !Number.isFinite(colorMode) || colorMode === 3;
+  const finalCanvasSource = String(meta.finalCanvasSource ?? "");
+  const isSyntheticPreview =
+    finalCanvasSource === "mask-rebuild"
+    || finalCanvasSource === "visible-non-text-preview";
   const highRisk =
     isRgb
-    && (dpi >= 300 || bitsPerChannel > 8 || channels > 3);
+    && (dpi >= 300 || bitsPerChannel > 8 || channels > 3 || isSyntheticPreview);
   const stats = canvasDarknessStats(canvas);
-  const suspicious = !!stats && highRisk && (
+  const hasLumStats = !!stats && stats.opaqueSamples > 0;
+  const suspiciousDark = hasLumStats && highRisk && (
     (stats.average < 82 && stats.darkRatio > 0.56 && stats.brightRatio < 0.28)
     || (stats.average < 64 && stats.darkRatio > 0.44)
     || (stats.veryDarkRatio > 0.72 && stats.brightRatio < 0.18)
   );
+  const suspiciousAlpha = !!stats
+    && isRgb
+    && channels > 3
+    && (
+      stats.transparentRatio > 0.08
+      || stats.translucentRatio > 0.2
+      || stats.averageAlpha < 245
+    );
+  const suspicious = suspiciousDark || suspiciousAlpha;
   let reason = "ok";
   if (!highRisk) reason = "not-high-risk";
   else if (!stats) reason = "no-stats";
-  else if (suspicious) reason = "suspicious-dark";
+  else if (!hasLumStats) reason = "no-opaque-samples";
+  else if (suspiciousAlpha) reason = "suspicious-alpha";
+  else if (suspiciousDark) reason = "suspicious-dark";
   else reason = "stats-not-suspicious";
   return {
     suspicious,
@@ -503,6 +541,8 @@ function darkPreviewDecision(canvas, meta = {}) {
       channels: Number.isFinite(channels) && channels > 0 ? channels : null,
       isRgb,
       highRisk,
+      isSyntheticPreview,
+      finalCanvasSource: finalCanvasSource || null,
     },
   };
 }
@@ -1365,6 +1405,8 @@ export async function loadPsdFromPath(path) {
           colorMode: parsed.colorMode,
           bitsPerChannel: parsed.bitsPerChannel,
           channels: parsed.channels,
+          source: "worker",
+          finalCanvasSource: parsed.finalCanvasSource ?? null,
         });
         previewScale = pageCanvasScale(canvas, parsed.width, parsed.height);
         return withPreviewMetadata({
@@ -1412,10 +1454,12 @@ export async function loadPsdFromPath(path) {
   // 置き換えるので、現状の見た目を維持しつつ非表示テキストの焼き付きが消える。
   // 旧 maskHiddenLayersOnComposite (案 A 白フィル) は frameFX 白フチが残る欠点があった。
   let canvas = psd.canvas;
+  let finalCanvasSource = psd.canvas ? "composite" : "blank";
   if (Array.isArray(psd.children) && !skipLayerImageData) {
     const rebuilt = await rebuildCanvasMaskingHidden(psd);
     if (rebuilt) {
       canvas = rebuilt;
+      finalCanvasSource = "mask-rebuild";
       console.info(`[psd-loader] canvas 部分再合成 OK | path=${path}`);
     }
   }
@@ -1429,6 +1473,7 @@ export async function loadPsdFromPath(path) {
       + `canvas=${canvas.width}x${canvas.height} expected=${psd.width}x${psd.height}`,
     );
     canvas = createBlankCanvas(psd.width, psd.height);
+    finalCanvasSource = "blank-size-mismatch";
   }
   canvas = await replaceDarkPreviewWithPhotoshopIfNeeded(canvas, {
     path,
@@ -1438,6 +1483,8 @@ export async function loadPsdFromPath(path) {
     colorMode: psd.colorMode,
     bitsPerChannel: psd.bitsPerChannel,
     channels: psd.channels,
+    source: "main",
+    finalCanvasSource,
   });
 
   const preview = createFinalPageCanvas(canvas, psd.width, psd.height);

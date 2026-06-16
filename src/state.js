@@ -1628,7 +1628,12 @@ export function setFonts(fonts) { state.fonts = fonts; }
 export function getFonts() { return state.fonts; }
 
 const FONT_DISPLAY_NAME_FALLBACKS = new Map([
-  ["DFGMaruGothic-Md", "ＤＦ中丸ゴシック体"],
+  ["DFMaruGothic-Md", "ＤＦ中丸ゴシック体"],
+  ["DFMaruGothic-Md-WIN-RKSJ-H", "ＤＦ中丸ゴシック体"],
+  ["DFGMaruGothic-Md", "ＤＦＧ中丸ゴシック体"],
+  ["DFMaruGothic-Md-WING-RKSJ-H", "ＤＦＧ中丸ゴシック体"],
+  ["DFPMaruGothic-Md", "ＤＦＰ中丸ゴシック体"],
+  ["DFMaruGothic-Md-WINP-RKSJ-H", "ＤＦＰ中丸ゴシック体"],
 ]);
 
 function containsJapaneseText(value) {

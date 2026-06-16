@@ -1735,6 +1735,7 @@ export async function runAutoPlace({
   forceRescan = false,
   positionOnlyScan = false,
   positionAdjustMode = null,
+  cloudShapeFontEnabled = null,
   punctuationSpaceReplacementEnabled = null,
   progressFlowId = null,
   // v2.2.x: 完了 → workspace の星空ディゾルブ演出を呼び出し側で実施したい場合は
@@ -1861,7 +1862,9 @@ export async function runAutoPlace({
       autoStrokeEnabled: getDefault("autoStrokeEnabled"),
       autoStrokeWhiteRatioThreshold: getDefault("autoStrokeWhiteRatioThreshold"),
       // 中丸ゴシック自動切替 (要件 ④, 背景 + ウニ合成スコア)
-      cloudShapeFontEnabled: getDefault("cloudShapeFontEnabled"),
+      cloudShapeFontEnabled: cloudShapeFontEnabled == null
+        ? getDefault("cloudShapeFontEnabled")
+        : cloudShapeFontEnabled !== false,
       cloudShapeScoreThreshold: getDefault("cloudShapeScoreThreshold"),
       cloudShapeFontPostScriptName: getDefault("cloudShapeFontPostScriptName"),
       punctuationSpaceReplacementEnabled: punctuationSpaceReplacementEnabled == null

@@ -1,5 +1,40 @@
 # PsDesign
 
+## 2026-06-16 変更メモ: v2.5.8 リリース（DynaFont 中丸ゴシック正式名対応 / 写植ダイアログに中丸自動切替 / 環境設定タブ再編 / 合成プレビューの透過暗転判定）
+
+v2.5.8 では、中丸ゴシック（DynaFont）の実インストール PostScript 名への対応、写植用ファイル選択ダイアログでの中丸ゴシック自動切替トグル、環境設定モーダルのタブ再編・大型化、PSD 合成プレビューが透過で暗く見えるケースの判定強化を中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.8` に更新済み。
+
+### A. 中丸ゴシック（DynaFont）の正式 PostScript 名対応
+
+- [src/settings.js](src/settings.js): 中丸ゴシック自動切替の既定 PostScript 名を `DFGMaruGothic-Md` から、Windows 実インストール名 `DFMaruGothic-Md-WIN-RKSJ-H` に変更。設定 version を `22` → `23` に上げ、旧デフォルト `DFGMaruGothic-Md` を保存していたユーザーは migrate で新デフォルトへ強制移行する（手動で別名を指定済みのユーザーはそのまま尊重）。
+- [src/state.js](src/state.js): `FONT_DISPLAY_NAME_FALLBACKS` に DynaFont 中丸ゴシックの WIN / WING / WINP 各バリアント（`DFMaruGothic-Md-WIN/WING/WINP-RKSJ-H`）と短縮名の表示名フォールバックを追加し、「ＤＦ／ＤＦＧ／ＤＦＰ中丸ゴシック体」を正しく表示する。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): `resolveDynaFontMaruGothicVariant` を新設し、`DFMaruGothic-Md` / `DFGMaruGothic-Md` / `DFPMaruGothic-Md` の短縮名を `-WIN/WING/WINP-RKSJ-H` の実インストール名へ解決。`resolvePhotoshopFontPS` の戦略 1〜5 の先頭でこの解決を試し、Photoshop 保存時に中丸ゴシックが他フォントへ化けないようにした。
+- [index.html](index.html): 中丸ゴシック PostScript 名入力欄の placeholder を `DFMaruGothic-Md-WIN-RKSJ-H` に更新。
+
+### B. 写植用ファイル選択ダイアログに「中丸ゴシック 自動切替」トグル
+
+- [src/main.js](src/main.js): ホーム写植フローのファイル選択ダイアログに「中丸ゴシック（自動切替あり / 自動切替なし）」セレクトを追加。選択値を `cloudShapeFontEnabled` の既定値へ書き戻し、`startHomeTypesetFlow` → `runAutoPlace` まで引き渡すようにした。
+- [src/auto-place.js](src/auto-place.js): `runAutoPlace` に `cloudShapeFontEnabled` 引数を追加。`null` のときは従来どおり環境設定値、明示指定時はその値で背景・ウニ合成スコアによる中丸ゴシック自動切替の ON/OFF を上書きする。
+- [src/styles.css](src/styles.css): 句読点置換セレクトを 100% 幅で左寄せにし、写植設定セレクトの幅を 132px に揃えた。
+
+### C. 環境設定モーダルのタブ再編・大型化
+
+- [index.html](index.html): タブを「ショートカット / テキスト設定 / 自動配置設定 / ユーザー設定 / テーマカラー」に再編。旧「写植設定」を「テキスト設定（新規テキスト初期値）」と「自動配置設定（白フチ自動付与・中丸ゴシック自動切替）」に分割し、旧「方向キー」と「エクスプローラー」を「ユーザー設定」へ統合した。
+- [src/styles.css](src/styles.css): 設定カードを横長（最大 1120px・角丸 22px）に拡大し、タブを上部の横並びから左サイドの縦並びリストへ変更。各初期値行をストライプ＋仕切り線のテーブル風表示にした。
+- [src/settings-ui.js](src/settings-ui.js): 「デフォルトに戻す」ボタンを単一 ID 参照から `data-settings-reset-defaults` 属性の複数対応に変更し、テキスト設定・自動配置設定どちらのリセットボタンからも初期化できるようにした。
+
+### D. PSD 合成プレビューの透過暗転判定
+
+- [src/psd-loader.js](src/psd-loader.js): `canvasDarknessStats` がアルファ統計（透過率・半透明率・平均アルファ・最小/最大アルファ）も返すようにし、`darkPreviewDecision` に「合成プレビュー（`mask-rebuild` / `visible-non-text-preview`）かつ RGB 多チャンネルで透過が多い」場合に Photoshop プレビューへ差し替える `suspicious-alpha` 判定を追加。`finalCanvasSource` を判定材料として渡すようにした。
+- [src/psd-parse-worker.js](src/psd-parse-worker.js): `parsePsd` の戻り値に `finalCanvasSource`（`composite` / `mask-rebuild` / `visible-non-text-preview` / `blank`）を追加。
+- [src/psd-loader.js](src/psd-loader.js) `loadPsdFromPath`: メインスレッド fallback 経路でも `finalCanvasSource` を追跡し、暗転判定とプレビュー差し替えへ渡す。
+
+### 検証
+
+- `npm run check`（`check:encoding` + `check:security` + `lint` + `build`）成功
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功
+- リリースはタグ `v2.5.8` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-16 変更メモ: v2.5.7 リリース（PSDファイル名リネームガード / 文頭約物ツメ / サイズ単位 px 対応）
 
 v2.5.7 では、巻数＋ページ番号を含む PSD ファイル名で写植ページ対応が崩れる問題を防ぐリネームガード、文頭の全角約物をカーニング/トラッキングで詰める操作、文字サイズ単位と刻みの `pt` / `px` / `級` / `mm` 対応を中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.7` に更新済み。

@@ -1181,13 +1181,15 @@
           <span class="settings-title">環境設定</span>
           <button type="button" id="settings-close-btn" class="settings-done-btn" title="閉じる" aria-label="完了">完了</button>
         </div>
-        <div class="settings-tabs" role="tablist">
-          <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
-          <button type="button" class="settings-tab" data-tab="pageDir" role="tab" aria-selected="false">方向キー</button>
-          <button type="button" class="settings-tab" data-tab="defaults" role="tab" aria-selected="false">写植設定</button>
-          <button type="button" class="settings-tab" data-tab="explorer" role="tab" aria-selected="false">エクスプローラー</button>
-          <button type="button" class="settings-tab" data-tab="themeColor" role="tab" aria-selected="false">テーマカラー</button>
-        </div>
+        <div class="settings-body">
+          <div class="settings-tabs" role="tablist" aria-label="環境設定のジャンル">
+            <button type="button" class="settings-tab active" data-tab="shortcuts" role="tab" aria-selected="true">ショートカット</button>
+            <button type="button" class="settings-tab" data-tab="textSettings" role="tab" aria-selected="false">テキスト設定</button>
+            <button type="button" class="settings-tab" data-tab="autoPlaceSettings" role="tab" aria-selected="false">自動配置設定</button>
+            <button type="button" class="settings-tab" data-tab="userSettings" role="tab" aria-selected="false">ユーザー設定</button>
+            <button type="button" class="settings-tab" data-tab="themeColor" role="tab" aria-selected="false">テーマカラー</button>
+          </div>
+          <div class="settings-panels">
         <div class="settings-tab-panel active" id="settings-tab-shortcuts" role="tabpanel">
           <div class="settings-section-header">
             <span>キーボードショートカット</span>
@@ -1195,7 +1197,7 @@
           </div>
           <div class="shortcut-list" id="shortcut-list"></div>
         </div>
-        <div class="settings-tab-panel" id="settings-tab-pageDir" role="tabpanel">
+        <div class="settings-tab-panel" id="settings-tab-userSettings" role="tabpanel">
           <div class="settings-section-header">
             <span>方向キーの設定</span>
           </div>
@@ -1220,11 +1222,31 @@
               </span>
             </label>
           </div>
+          <div class="settings-section-header settings-section-header-sub">
+            <span>ファイル選択画面</span>
+          </div>
+          <p class="settings-section-desc">PDF、PSD、テキスト、保存先などを選ぶときに使うエクスプローラー画面を選択します。</p>
+          <div class="settings-radio-list">
+            <label class="settings-radio-option" data-value="opus">
+              <input type="radio" name="file-dialog-mode" value="opus" />
+              <span class="settings-radio-body">
+                <span class="settings-radio-title">OPUSオリジナル</span>
+                <span class="settings-radio-desc">アプリ内のファイル選択画面を使います。</span>
+              </span>
+            </label>
+            <label class="settings-radio-option" data-value="native">
+              <input type="radio" name="file-dialog-mode" value="native" />
+              <span class="settings-radio-body">
+                <span class="settings-radio-title">Windows標準</span>
+                <span class="settings-radio-desc">OS標準のエクスプローラー画面を使います。</span>
+              </span>
+            </label>
+          </div>
         </div>
-        <div class="settings-tab-panel" id="settings-tab-defaults" role="tabpanel">
+        <div class="settings-tab-panel" id="settings-tab-textSettings" role="tabpanel">
           <div class="settings-section-header">
-            <span>新規テキストの初期値</span>
-            <button type="button" id="settings-reset-defaults-btn" class="settings-reset-btn">デフォルトに戻す</button>
+            <span>テキスト設定</span>
+            <button type="button" class="settings-reset-btn" data-settings-reset-defaults>デフォルトに戻す</button>
           </div>
           <p class="settings-section-desc">テキストツールで配置する新規テキストの初期値です。アプリ起動時とファイル切替時に反映されます。</p>
           <div class="settings-defaults-list">
@@ -1334,6 +1356,15 @@
                 <option value="off">適用しない</option>
               </select>
             </div>
+          </div>
+        </div>
+        <div class="settings-tab-panel" id="settings-tab-autoPlaceSettings" role="tabpanel">
+          <div class="settings-section-header">
+            <span>自動配置設定</span>
+            <button type="button" class="settings-reset-btn" data-settings-reset-defaults>デフォルトに戻す</button>
+          </div>
+          <p class="settings-section-desc">画像スキャン結果からテキストを自動配置するときの補正とフォント切替設定です。</p>
+          <div class="settings-defaults-list">
             <!-- 【v1.26.0 移植 (PsDesign-main v1.24.0)】自動配置の白フチ自動付与・中丸ゴシック自動切替 -->
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-auto-stroke-enabled">自動配置: 背景上に白フチを自動付与</label>
@@ -1351,30 +1382,8 @@
             </div>
             <div class="settings-default-row">
               <label class="settings-default-label" for="default-cloud-shape-font-postscript">中丸ゴシック PostScript 名 (空でフォント差し替えなし)</label>
-              <input id="default-cloud-shape-font-postscript" class="settings-default-input" type="text" list="default-font-list" placeholder="DFGMaruGothic-Md" />
+              <input id="default-cloud-shape-font-postscript" class="settings-default-input" type="text" list="default-font-list" placeholder="DFMaruGothic-Md-WIN-RKSJ-H" />
             </div>
-          </div>
-        </div>
-        <div class="settings-tab-panel" id="settings-tab-explorer" role="tabpanel">
-          <div class="settings-section-header">
-            <span>ファイル選択画面</span>
-          </div>
-          <p class="settings-section-desc">PDF、PSD、テキスト、保存先などを選ぶときに使うエクスプローラー画面を選択します。</p>
-          <div class="settings-radio-list">
-            <label class="settings-radio-option" data-value="opus">
-              <input type="radio" name="file-dialog-mode" value="opus" />
-              <span class="settings-radio-body">
-                <span class="settings-radio-title">OPUSオリジナル</span>
-                <span class="settings-radio-desc">アプリ内のファイル選択画面を使います。</span>
-              </span>
-            </label>
-            <label class="settings-radio-option" data-value="native">
-              <input type="radio" name="file-dialog-mode" value="native" />
-              <span class="settings-radio-body">
-                <span class="settings-radio-title">Windows標準</span>
-                <span class="settings-radio-desc">OS標準のエクスプローラー画面を使います。</span>
-              </span>
-            </label>
           </div>
         </div>
         <div class="settings-tab-panel" id="settings-tab-themeColor" role="tabpanel">
@@ -1435,6 +1444,8 @@
                 </span>
               </span>
             </label>
+          </div>
+        </div>
           </div>
         </div>
       </div>

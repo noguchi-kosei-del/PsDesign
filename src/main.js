@@ -4542,7 +4542,14 @@ function openHomeTypesetDialog() {
     );
     modal.querySelector(".home-typeset-settings")?.insertAdjacentHTML(
       "beforeend",
-      `<div class="home-typeset-setting home-typeset-punct-setting">
+      `<div class="home-typeset-setting home-typeset-nakamaru-setting">
+        <label class="home-typeset-setting-label" for="home-typeset-nakamaru-auto">中丸ゴシック</label>
+        <select id="home-typeset-nakamaru-auto" class="home-typeset-select">
+          <option value="on">自動切替あり</option>
+          <option value="off">自動切替なし</option>
+        </select>
+      </div>
+      <div class="home-typeset-setting home-typeset-punct-setting">
         <label class="home-typeset-setting-label" for="home-typeset-punct-space">句読点置換</label>
         <select id="home-typeset-punct-space" class="home-typeset-select">
           <option value="on">句読点あり</option>
@@ -4556,6 +4563,7 @@ function openHomeTypesetDialog() {
     const fontCombo = modal.querySelector("#home-typeset-font-combo");
     const fontToggle = modal.querySelector(".home-typeset-font-toggle");
     const fontList = modal.querySelector("#home-typeset-font-list");
+    const nakamaruAutoSelect = modal.querySelector("#home-typeset-nakamaru-auto");
     const punctSpaceSelect = modal.querySelector("#home-typeset-punct-space");
     const fontFamilyFor = (font) => {
       const parts = [];
@@ -4621,6 +4629,7 @@ function openHomeTypesetDialog() {
       if (font?.postScriptName) baseFontPs = font.postScriptName;
       setDefault("textSize", baseTextSize);
       setTextSize(baseTextSize);
+      setDefault("cloudShapeFontEnabled", nakamaruAutoSelect?.value !== "off");
       setDefault("punctuationSpaceReplacementEnabled", punctSpaceSelect?.value !== "off");
       if (baseFontPs) {
         setDefault("fontPostScriptName", baseFontPs);
@@ -4639,6 +4648,9 @@ function openHomeTypesetDialog() {
     syncFontInput();
     if (punctSpaceSelect) {
       punctSpaceSelect.value = getDefault("punctuationSpaceReplacementEnabled") === false ? "off" : "on";
+    }
+    if (nakamaruAutoSelect) {
+      nakamaruAutoSelect.value = getDefault("cloudShapeFontEnabled") === false ? "off" : "on";
     }
     window.addEventListener("psdesign:fonts-loaded", onFontsLoadedForTypeset);
     sizeInput?.addEventListener("change", () => {
@@ -5093,6 +5105,7 @@ function openHomeTypesetDialog() {
         hiddenReferencePages: [...hiddenReferencePages],
         baseTextSize,
         baseFontPs,
+        cloudShapeFontEnabled: nakamaruAutoSelect?.value !== "off",
         punctuationSpaceReplacementEnabled: punctSpaceSelect?.value !== "off",
       });
     });
@@ -5262,6 +5275,7 @@ async function startHomeTypesetFlow() {
       allowExtractText: true,
       preserveTxtDuringExtract: !!picked.txtPath,
       positionAdjustMode,
+      cloudShapeFontEnabled: picked.cloudShapeFontEnabled,
       punctuationSpaceReplacementEnabled: picked.punctuationSpaceReplacementEnabled,
       progressFlowId,
       skipFinalHide: true,

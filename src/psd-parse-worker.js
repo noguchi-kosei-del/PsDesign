@@ -507,6 +507,13 @@ function parsePsd(buffer, preview) {
   if (Array.isArray(psd.children)) {
     for (const child of psd.children) collectTextLayers(child, textLayers, true);
   }
+  const finalCanvasSource = criticalLowPreview && preserveLayerImages && Array.isArray(psd.children)
+    ? "visible-non-text-preview"
+    : Array.isArray(psd.children) && !skipLayerImageData
+      ? "mask-rebuild"
+      : psd.canvas
+        ? "composite"
+        : "blank";
   const finalCanvas = criticalLowPreview && preserveLayerImages && Array.isArray(psd.children)
     ? buildVisibleNonTextPreviewCanvas(psd, preview)
     : finalizeCanvasForPreview(
@@ -529,6 +536,7 @@ function parsePsd(buffer, preview) {
     bitmap,
     previewScale: finalCanvas.previewScale,
     guides: extractPsdGuides(psd),
+    finalCanvasSource,
   };
 }
 

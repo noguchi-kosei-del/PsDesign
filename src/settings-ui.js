@@ -510,8 +510,8 @@ function bindDefaultsInputs() {
     }
   }
 
-  const reset = $("settings-reset-defaults-btn");
-  if (reset) {
+  const resetButtons = document.querySelectorAll("[data-settings-reset-defaults]");
+  for (const reset of resetButtons) {
     reset.addEventListener("click", () => {
       resetDefaults();
       syncDefaultsUi();

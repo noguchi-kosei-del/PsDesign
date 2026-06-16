@@ -3720,6 +3720,17 @@ function transliterateJapaneseFontName(s) {
   return out;
 }
 
+function resolveDynaFontMaruGothicVariant(query) {
+  if (typeof query !== "string" || query.length === 0) return null;
+  var aliasMap = {
+    "DFMaruGothic-Md": "DFMaruGothic-Md-WIN-RKSJ-H",
+    "DFGMaruGothic-Md": "DFMaruGothic-Md-WING-RKSJ-H",
+    "DFPMaruGothic-Md": "DFMaruGothic-Md-WINP-RKSJ-H"
+  };
+  var resolved = aliasMap[query] || null;
+  return (resolved && __FONT_PS_SET[resolved]) ? resolved : null;
+}
+
 function resolvePhotoshopFontPS(wanted) {
   if (typeof wanted !== "string" || wanted.length === 0) return wanted;
   if (!__FONT_PS_SET) return wanted; // インデックス未構築なら素通し (フェイルセーフ)
@@ -3729,6 +3740,8 @@ function resolvePhotoshopFontPS(wanted) {
   // 戦略 1〜5 を一塊にしたヘルパー (transliteration 後にも再利用するため関数化)。
   function __tryFontStrategies(query) {
     if (__FONT_PS_SET[query]) return query;
+    var dynaMaru = resolveDynaFontMaruGothicVariant(query);
+    if (dynaMaru) return dynaMaru;
     var withSuffix = query + "-WIN-RKSJ-H";
     if (__FONT_PS_SET[withSuffix]) return withSuffix;
     if (__FONT_BY_PREFIX[query]) return __FONT_BY_PREFIX[query];
