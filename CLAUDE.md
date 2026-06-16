@@ -1,5 +1,46 @@
 # PsDesign
 
+## 2026-06-16 変更メモ: v2.5.6 リリース（OPUS移動耐性 / 写植モーダル改善 / テキスト文頭スナップ / PSD保存失敗時の修復再保存）
+
+v2.5.6 では、OPUSプロジェクトとリンクフォルダを別の場所へ移動した後でも開けるようにパス復元を強化し、写植用ファイル選択・フォントサイズ扱いのモーダル操作、テキスト移動時の文頭スナップ、PSD保存失敗時の自動修復リトライを中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.6` に更新済み。
+
+### A. OPUSプロジェクト移動後の再オープン対応
+
+- [src/services/project.js](src/services/project.js): プロジェクト保存時に記録された絶対パスが現在の保存場所とずれている場合でも、プロジェクトファイルの親フォルダを基準に `PSD` / `写植見本` / `テキスト` などの近い相対位置へリベースして復元するようにした。
+- [src-tauri/src/path_access.rs](src-tauri/src/path_access.rs) / [src-tauri/src/lib.rs](src-tauri/src/lib.rs): ファイル選択・ドラッグ&ドロップ・単一インスタンス起動で渡されたファイルの親フォルダも許可パスへ登録し、移動後フォルダの読み取りで `forbidden path` になりにくくした。
+
+### B. テキストプロパティ表示の Ctrl+左右トグル
+
+- [src/canvas-tools.js](src/canvas-tools.js): 選択中テキストレイヤーのサイズ専用プロパティ表示を ON/OFF できる `toggleSelectedLayerSizeOnlyBadges()` を追加。
+- [src/main.js](src/main.js) / [src/bind/editor-pane.js](src/bind/editor-pane.js): `Ctrl+Left` / `Ctrl+Right` を押すたびに、テキストプロパティ表示と非表示が切り替わるようにした。
+
+### C. 写植用ファイル選択・フォントサイズ扱いモーダルの操作改善
+
+- [src/styles.css](src/styles.css): 写植用ファイル選択モーダルとフォント・サイズ扱いモーダルの表示位置を調整し、上部ヘッダーを残してウィンドウ移動できるようにした。
+- [src/main.js](src/main.js) / [src/ui-feedback.js](src/ui-feedback.js): これらのモーダルは外側クリックで閉じないようにし、誤操作で選択フローが消えないようにした。
+
+### D. テキスト移動時の文頭スナップ
+
+- [src/canvas-tools.js](src/canvas-tools.js): Vツールでテキストをドラッグ移動するとき、近いテキストの文頭位置へ自動で揃えるスナップ判定を追加。複数選択中も移動量に同じ補正を適用する。
+- [src/styles.css](src/styles.css): スナップ中はマゼンタのガイド線を表示し、Photoshopに近い感覚で揃え位置を確認できるようにした。
+
+### E. 保存フローと PSD保存失敗時の自動修復
+
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): Photoshop `saveAs` の一時ファイル名を `.psd` 終端に変更し、`saveAs did not create file` が起きやすい一時拡張子問題を回避した。PSDごとの失敗情報をセンチネルへ返せるようにもした。
+- [src-tauri/src/psd_repair.rs](src-tauri/src/psd_repair.rs): 修復ツールのロジックをRust側へ取り込み、PSDの主要セクションを安全に再構成する修復処理を追加。
+- [src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs): PSD保存に失敗した場合、失敗PSDを一度修復してから元の保存先へ再保存するリトライ処理を追加。修復再保存が走った場合は警告としてユーザーに通知する。
+- [src/bind/save.js](src/bind/save.js): 「両方保存」時はPSD保存結果を受け取ってからプロジェクト保存を続け、PSD側に警告がある場合も最後にユーザーへ伝えるようにした。
+
+### F. 保存ドロップダウンの閉じ方
+
+- [src/bind/save.js](src/bind/save.js) / [src/styles.css](src/styles.css): 保存ボタンのドロップダウン表示中はヘッダーのドラッグ領域を一時的に外し、Viewメニューと同じようにヘッダークリックでも閉じられるようにした。
+
+### 検証
+
+- `npm run build` 成功（Viteの既存chunk warningのみ）
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功
+- リリースはタグ `v2.5.6` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-15 変更メモ: v2.5.5 リリース（位置調整の精度・速度改善 / 見本dpi自動取得(EXIF対応) / 配置後の全体フィット）
 
 v2.5.5 では、写植時の「見本との位置調整」3モード（位置調整1=確定式 / 位置調整2=画像差分 / 重ね調整=手動）の不具合と精度・速度を中心に修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.5` に更新済み。

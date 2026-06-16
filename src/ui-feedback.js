@@ -2391,7 +2391,6 @@ export function chooseReuseFontSizeMode() {
       if (settled) return;
       settled = true;
       hideModalAnimated(modal);
-      modal.removeEventListener("mousedown", onOverlay);
       document.removeEventListener("keydown", onKey);
       for (const btn of modal.querySelectorAll("[data-mode]")) {
         btn.removeEventListener("click", onModeClick);
@@ -2402,7 +2401,6 @@ export function chooseReuseFontSizeMode() {
     };
     const onModeClick = (e) => cleanup(e.currentTarget?.dataset?.mode || null);
     const onCancel = () => cleanup(null);
-    const onOverlay = (e) => { if (e.target === modal) cleanup(null); };
     const onKey = (e) => {
       if (e.key === "Escape") {
         e.preventDefault();
@@ -2414,7 +2412,6 @@ export function chooseReuseFontSizeMode() {
       btn.addEventListener("click", onModeClick);
     }
     modal.querySelector(".reuse-fontsize-mode-cancel")?.addEventListener("click", onCancel);
-    modal.addEventListener("mousedown", onOverlay);
     document.addEventListener("keydown", onKey);
     showModalAnimated(modal);
     requestAnimationFrame(() => modal.querySelector('[data-mode="reproduce"]')?.focus());

@@ -184,19 +184,19 @@ async function ensurePhotoshopScratchOk() {
   return proceed;
 }
 
-async function runSaveWithMode({ saveMode, targetDir }) {
+async function runSaveWithMode({ saveMode, targetDir, showResultDialog = true }) {
   if (saveInflight) {
     toast("保存処理中です。完了までお待ちください", { kind: "info", duration: 2200 });
-    return;
+    return { ok: false, skipped: true, reason: "inflight" };
   }
   flushActiveSidebarInputBeforeSave();
   if (getPages().length === 0) {
-    return;
+    return { ok: false, skipped: true, reason: "no-pages" };
   }
   // Photoshop 起動時のスクラッチディスク容量警告を事前にチェック。
   // 100GB 未満なら confirmDialog でユーザーに伝え、続行可否を確認する。
   const scratchOk = await ensurePhotoshopScratchOk();
-  if (!scratchOk) return;
+  if (!scratchOk) return { ok: false, cancelled: true, reason: "scratch-warning" };
   // 【v1.29.x UI-coord】payload 構築前に、全 page のルビ wrap 実描画位置を同期測定して
   // state に書き戻す。これがないと rAF 遅延で「新規に適用したばかりのルビの offsetX/Y が
   // payload に含まれない」事故が起き、JSX 側で計算式 fallback が使われて位置がズレる。
@@ -261,7 +261,7 @@ async function runSaveWithMode({ saveMode, targetDir }) {
       : parentDir(savedPaths[0]);
     // 保存完了は中央モーダルで通知。警告有無で kind を切替（warning=オレンジ + 警告 SVG / success=緑 + チェック SVG）。
     // 「PDF 化に進む」ボタンを併設し、保存した PSD を Tachimi (写植チェッカー / PDF 化機能あり) に流して開く。
-    await notifyDialog({
+    const dialogOptions = {
       title: hasWarn ? "保存完了（警告あり）" : "保存完了",
       message: `${result}${suffix}`,
       kind: hasWarn ? "warning" : "success",
@@ -291,11 +291,14 @@ async function runSaveWithMode({ saveMode, targetDir }) {
           onClick: () => launchTachimiWithPaths(savedPaths),
         },
       ],
-    });
+    };
+    if (showResultDialog) await notifyDialog(dialogOptions);
+    return { ok: true, hasWarn, result, suffix, dialogOptions, savedFolder, savedPaths };
   } catch (e) {
     console.error(e);
     await hideProgress();
     toast(`保存失敗: ${e.message ?? e}`, { kind: "error", duration: 5000 });
+    return { ok: false, error: e };
   } finally {
     if (typeof unlistenProgress === "function") {
       try { unlistenProgress(); } catch (_) {}
@@ -448,12 +451,12 @@ async function openSaveFolderDialog() {
   });
 }
 
-export async function handleSave() {
+export async function handleSave(options = {}) {
   if (getPages().length === 0) return;
 
   // ユーザーが「タイトル / 巻数 / 校数」を選ぶダイアログを表示。Cancel ならアボート。
   const params = await openSaveFolderDialog();
-  if (!params) return;
+  if (!params) return { ok: false, cancelled: true };
   const folderName = buildSaveFolderNameFromParams(params);
 
   // <Desktop>/Script_Output/OPUS写植/<folderName>/ で保存。
@@ -465,11 +468,11 @@ export async function handleSave() {
   } catch (e) {
     console.error("[save] script_output_dir failed:", e);
     toast(`保存先の取得に失敗しました: ${e?.message ?? e}`, { kind: "error", duration: 5000 });
-    return;
+    return { ok: false, error: e };
   }
   if (typeof scriptOutputDir !== "string" || !scriptOutputDir) {
     toast("Script_Output フォルダが見つかりません", { kind: "error", duration: 4000 });
-    return;
+    return { ok: false, error: new Error("Script_Output not found") };
   }
 
   const typesetOutputDir = joinPath(scriptOutputDir, "OPUS写植");
@@ -478,7 +481,11 @@ export async function handleSave() {
 
   // 中間フォルダ Script_Output / OPUS写植 / 終端 <folderName> は apply_edits_via_photoshop の
   // create_dir_all で再帰的に作られるので、フロント側での明示作成は不要。
-  await runSaveWithMode({ saveMode: "saveAs", targetDir });
+  return await runSaveWithMode({
+    saveMode: "saveAs",
+    targetDir,
+    showResultDialog: options.showResultDialog !== false,
+  });
 }
 
 // 指定 base 名を起点に空き番号フォルダ名を返す。BASE 自体が未使用なら BASE、
@@ -508,10 +515,18 @@ export function bindSaveMenu() {
   const psdItem = document.getElementById("save-psd-menu-item");
   const bothItem = document.getElementById("save-both-menu-item");
   if (!btn) return;
+  const toolbar = document.querySelector(".toolbar");
+  const toolbarWasDragRegion = toolbar?.hasAttribute("data-tauri-drag-region") === true;
   const setOpen = (open) => {
     if (!menu) return;
     menu.hidden = !open;
     btn.setAttribute("aria-expanded", open ? "true" : "false");
+    toolbar?.classList.toggle("save-menu-open", open);
+    if (open) {
+      toolbar?.removeAttribute("data-tauri-drag-region");
+    } else if (toolbar && toolbarWasDragRegion) {
+      toolbar.setAttribute("data-tauri-drag-region", "");
+    }
   };
   const closeMenu = () => setOpen(false);
   const runAndClose = async (fn) => {
@@ -538,11 +553,15 @@ export function bindSaveMenu() {
   bothItem?.addEventListener("click", () => {
     if (bothItem.disabled) return;
     void runAndClose(async () => {
-      await handleSave();
+      const psdResult = await handleSave({ showResultDialog: false });
+      if (psdResult?.cancelled) return;
       await saveProject();
+      if (psdResult?.dialogOptions && (psdResult.hasWarn || !psdResult.ok)) {
+        await notifyDialog(psdResult.dialogOptions);
+      }
     });
   });
-  document.addEventListener("click", (e) => {
+  document.addEventListener("mousedown", (e) => {
     if (!menu || menu.hidden) return;
     if (e.target?.closest?.(".save-container")) return;
     closeMenu();

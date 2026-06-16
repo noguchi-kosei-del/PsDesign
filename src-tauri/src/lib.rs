@@ -5,6 +5,7 @@ mod kenban;
 mod ocr;
 mod path_access;
 mod photoshop;
+mod psd_repair;
 mod tachimi;
 
 use image::codecs::jpeg::JpegEncoder;
@@ -101,7 +102,7 @@ pub struct RubyEntry {
     pub overlays: Vec<RubyOverlayEntry>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct LayerEdit {
     #[serde(rename = "layerId")]
     pub layer_id: i64,
@@ -170,7 +171,7 @@ pub struct LayerEdit {
     pub char_rubies: Option<HashMap<String, RubyEntry>>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct NewLayer {
     pub x: f64,
     pub y: f64,
@@ -238,10 +239,12 @@ pub struct NewLayer {
     pub reuse_src_cy: Option<f64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PsdEdits {
     #[serde(rename = "psdPath")]
     pub psd_path: String,
+    #[serde(rename = "savePath", default)]
+    pub save_path: Option<String>,
     #[serde(rename = "pageWidth", default)]
     pub page_width: Option<f64>,
     #[serde(rename = "pageHeight", default)]
@@ -256,7 +259,7 @@ pub struct PsdEdits {
     pub hide_layer_ids: Vec<i64>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct EditPayload {
     pub edits: Vec<PsdEdits>,
     #[serde(rename = "saveMode", default)]
@@ -1708,6 +1711,15 @@ fn register_native_dialog_path(allowed: &AllowedPaths, mode: &str, path: &str) {
     }
 }
 
+fn register_open_file_with_parent(allowed: &AllowedPaths, path: &Path) {
+    let _ = allowed.register_path(path);
+    if path.is_file() {
+        if let Some(parent) = path.parent() {
+            let _ = allowed.register_path(parent);
+        }
+    }
+}
+
 #[tauri::command]
 async fn native_file_dialog(
     app: tauri::AppHandle,
@@ -2236,7 +2248,7 @@ pub fn run() {
             if let tauri::WindowEvent::DragDrop(tauri::DragDropEvent::Drop { paths, .. }) = event {
                 let allowed = window.state::<AllowedPaths>();
                 for p in paths {
-                    let _ = allowed.register_path(p);
+                    register_open_file_with_parent(&allowed, p);
                 }
             }
         })
@@ -2245,7 +2257,7 @@ pub fn run() {
             {
                 let allowed = app.state::<AllowedPaths>();
                 for a in &args {
-                    let _ = allowed.register_real(a);
+                    register_open_file_with_parent(&allowed, Path::new(a));
                 }
             }
             if let Some(main_window) = app.get_webview_window("main") {

@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::Emitter;
 use thiserror::Error;
 
-use crate::{jsx_gen, path_access::AllowedPaths, EditPayload};
+use crate::{jsx_gen, path_access::AllowedPaths, psd_repair, EditPayload, PsdEdits};
 
 #[cfg(windows)]
 fn hide_console_window(cmd: &mut Command) {
@@ -34,6 +34,18 @@ struct PhotoshopProgress {
     detail: String,
 }
 
+#[derive(Debug, Clone)]
+struct FailedSaveEntry {
+    psd_path: String,
+    save_path: String,
+}
+
+#[derive(Debug)]
+struct ApplyRunOutcome {
+    message: String,
+    failed_entries: Vec<FailedSaveEntry>,
+}
+
 #[derive(Debug, Error)]
 pub enum PhotoshopError {
     #[error("Photoshop の実行ファイルが見つかりません")]
@@ -52,6 +64,37 @@ pub fn apply_edits(
     payload: &EditPayload,
     app: &tauri::AppHandle,
 ) -> Result<String, PhotoshopError> {
+    let first = run_apply_edits_once(payload, app)?;
+    if first.failed_entries.is_empty() {
+        return Ok(first.message);
+    }
+
+    match retry_failed_with_repaired_psds(payload, &first.failed_entries, app) {
+        Ok(Some(retry)) => {
+            if retry.failed_entries.is_empty() {
+                Ok(format!(
+                    "{}（警告: 保存失敗した PSD を修復して再保存しました: {}）",
+                    first.message, retry.message
+                ))
+            } else {
+                Ok(format!(
+                    "{}（警告: PSD 修復再保存後も一部失敗しました: {}）",
+                    first.message, retry.message
+                ))
+            }
+        }
+        Ok(None) => Ok(first.message),
+        Err(e) => Ok(format!(
+            "{}（警告: PSD 修復再保存に失敗しました: {}）",
+            first.message, e
+        )),
+    }
+}
+
+fn run_apply_edits_once(
+    payload: &EditPayload,
+    app: &tauri::AppHandle,
+) -> Result<ApplyRunOutcome, PhotoshopError> {
     let ps_path = find_photoshop_executable().ok_or(PhotoshopError::NotFound)?;
     let saved_psd_paths = saved_psd_paths_for_payload(payload);
     let ts = SystemTime::now()
@@ -126,17 +169,10 @@ pub fn apply_edits(
             let trimmed = content.trim().to_string();
             // "head" は OK ステータス本体（"OK" / "OK partial 7/10"）、
             // "warn_suffix" は addWarning 由来の警告群（失敗 PSD 詳細含む）。
-            let (head, warn_suffix) = if let Some(idx) = trimmed.find("|WARN ") {
-                (
-                    trimmed[..idx].to_string(),
-                    trimmed[idx + "|WARN ".len()..].trim().to_string(),
-                )
-            } else {
-                (trimmed.clone(), String::new())
-            };
+            let (head, warn_suffix, failed_entries) = parse_apply_sentinel(&trimmed);
             if head.starts_with("OK") {
                 let total = payload.edits.len();
-                let base = if let Some(rest) = head.strip_prefix("OK partial ") {
+                let mut message = if let Some(rest) = head.strip_prefix("OK partial ") {
                     // "<ok>/<total>" 形式を期待。パース失敗時は安全側で全件成功扱いに戻す。
                     if let Some((ok_str, _)) = rest.split_once('/') {
                         match ok_str.trim().parse::<usize>() {
@@ -160,9 +196,9 @@ pub fn apply_edits(
                     ));
                 }
                 if !warnings.is_empty() {
-                    return Ok(format!("{}（警告: {}）", base, warnings.join(" / ")));
+                    message = format!("{}（警告: {}）", message, warnings.join(" / "));
                 }
-                return Ok(base);
+                return Ok(ApplyRunOutcome { message, failed_entries });
             }
             let msg = head.strip_prefix("ERROR ").unwrap_or(&head).to_string();
             return Err(PhotoshopError::ScriptFailed(msg));
@@ -192,6 +228,133 @@ pub fn apply_edits(
 // 【写植再利用】Photoshop で PSD のテキストレイヤーを列挙し、テキスト非表示の合成画像
 // (JPG) を書き出す。戻り値は JSX が書いた JSON 文字列（フロントが parse して使う）。
 // PSD は保存しない。
+fn parse_apply_sentinel(text: &str) -> (String, String, Vec<FailedSaveEntry>) {
+    let (without_failed, failed_suffix) = split_marker(text, "|FAILED ");
+    let (head, warn_suffix) = split_marker(without_failed, "|WARN ");
+    (
+        head.trim().to_string(),
+        warn_suffix.trim().to_string(),
+        parse_failed_entries(failed_suffix),
+    )
+}
+
+fn split_marker<'a>(text: &'a str, marker: &str) -> (&'a str, &'a str) {
+    if let Some(idx) = text.find(marker) {
+        (&text[..idx], &text[idx + marker.len()..])
+    } else {
+        (text, "")
+    }
+}
+
+fn parse_failed_entries(text: &str) -> Vec<FailedSaveEntry> {
+    text.lines()
+        .filter_map(|line| {
+            let (psd_path, save_path) = line.split_once('\t')?;
+            let psd_path = psd_path.trim();
+            if psd_path.is_empty() {
+                return None;
+            }
+            Some(FailedSaveEntry {
+                psd_path: psd_path.to_string(),
+                save_path: save_path.trim().to_string(),
+            })
+        })
+        .collect()
+}
+
+fn retry_failed_with_repaired_psds(
+    payload: &EditPayload,
+    failed_entries: &[FailedSaveEntry],
+    app: &tauri::AppHandle,
+) -> Result<Option<ApplyRunOutcome>, String> {
+    if failed_entries.is_empty() {
+        return Ok(None);
+    }
+    emit_progress(
+        app,
+        0,
+        failed_entries.len(),
+        "PSD保存エラーを検出しました。PSDを修復して再保存します...",
+    );
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let repair_dir = std::env::temp_dir().join(format!("opus_psd_repair_{}", ts));
+    let mut retry_payload = payload.clone();
+    retry_payload.edits.clear();
+    retry_payload.save_mode = None;
+    retry_payload.target_dir = None;
+    let mut temp_paths = Vec::new();
+    let mut repair_warnings = Vec::new();
+
+    for (idx, failed) in failed_entries.iter().enumerate() {
+        let Some(original) = payload.edits.iter().find(|edit| edit.psd_path == failed.psd_path) else {
+            repair_warnings.push(format!("修復対象が見つかりません: {}", failed.psd_path));
+            continue;
+        };
+        let Some(save_path) = target_save_path_for_edit(payload, original, failed) else {
+            repair_warnings.push(format!("保存先を特定できません: {}", failed.psd_path));
+            continue;
+        };
+        let repaired_path = repair_dir.join(format!("repaired_{}.psd", idx + 1));
+        match psd_repair::repair_psd_to_file(Path::new(&failed.psd_path), &repaired_path) {
+            Ok(()) => {
+                let mut retry_edit = original.clone();
+                retry_edit.psd_path = repaired_path.to_string_lossy().into_owned();
+                retry_edit.save_path = Some(save_path);
+                retry_payload.edits.push(retry_edit);
+                temp_paths.push(repaired_path);
+            }
+            Err(e) => {
+                repair_warnings.push(format!("{}: {}", failed.psd_path, e));
+            }
+        }
+    }
+
+    if retry_payload.edits.is_empty() {
+        return Err(if repair_warnings.is_empty() {
+            "修復対象のPSDを作成できませんでした".to_string()
+        } else {
+            repair_warnings.join(" / ")
+        });
+    }
+
+    let mut outcome = run_apply_edits_once(&retry_payload, app).map_err(|e| e.to_string())?;
+    for path in temp_paths {
+        let _ = std::fs::remove_file(path);
+    }
+    let _ = std::fs::remove_dir(&repair_dir);
+    if !repair_warnings.is_empty() {
+        outcome.message = format!(
+            "{}（警告: 修復できなかったPSDがあります: {}）",
+            outcome.message,
+            repair_warnings.join(" / ")
+        );
+    }
+    Ok(Some(outcome))
+}
+
+fn target_save_path_for_edit(
+    payload: &EditPayload,
+    edit: &PsdEdits,
+    failed: &FailedSaveEntry,
+) -> Option<String> {
+    if !failed.save_path.is_empty() {
+        return Some(failed.save_path.clone());
+    }
+    if let Some(path) = edit.save_path.as_deref().filter(|s| !s.is_empty()) {
+        return Some(path.to_string());
+    }
+    if payload.save_mode.as_deref() == Some("saveAs") {
+        let dir = payload.target_dir.as_deref().filter(|s| !s.is_empty())?;
+        let name = Path::new(&edit.psd_path).file_name()?;
+        return Some(Path::new(dir).join(name).to_string_lossy().into_owned());
+    }
+    Some(edit.psd_path.clone())
+}
+
 pub fn read_text_layers(
     psd_path: &str,
     app: &tauri::AppHandle,
@@ -500,6 +663,9 @@ fn saved_psd_paths_for_payload(payload: &EditPayload) -> Vec<PathBuf> {
         .edits
         .iter()
         .filter_map(|psd| {
+            if let Some(save_path) = psd.save_path.as_deref().filter(|s| !s.is_empty()) {
+                return Some(PathBuf::from(save_path));
+            }
             if save_as {
                 let dir = target_dir?;
                 let name = Path::new(&psd.psd_path).file_name()?;

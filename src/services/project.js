@@ -431,6 +431,92 @@ function rewriteSnapshotPaths(snapshot, pathMap) {
   return copy;
 }
 
+function isAbsolutePath(path) {
+  return typeof path === "string" && (
+    /^[A-Za-z]:[\\/]/.test(path)
+    || /^[/\\]{2}/.test(path)
+    || /^\//.test(path)
+  );
+}
+
+function normalizePathKey(path) {
+  return String(path || "")
+    .replace(/\\/g, "/")
+    .replace(/\/+$/g, "")
+    .toLowerCase();
+}
+
+function rebaseBundledProjectPath(path, projectDir, bundleDirName = null) {
+  if (typeof path !== "string" || !path) return path;
+  if (!projectDir) return path;
+  const name = baseName(path);
+  if (!name) {
+    return isAbsolutePath(path) ? path : joinPath(projectDir, path);
+  }
+  if (bundleDirName) return joinPath(joinPath(projectDir, bundleDirName), name);
+  if (name === path && !isAbsolutePath(path)) return joinPath(projectDir, path);
+  return joinPath(projectDir, name);
+}
+
+function rebaseProjectSnapshotPaths(snapshot, projectDir, psdPathMap) {
+  const copy = JSON.parse(JSON.stringify(snapshot || {}));
+  const mapPsdPath = (path) => {
+    if (typeof path !== "string" || !path) return path;
+    const mapped = psdPathMap.get(path) || psdPathMap.get(normalizePathKey(path));
+    return mapped || rebaseBundledProjectPath(path, projectDir, "PSD");
+  };
+  copy.psdPaths = (copy.psdPaths || []).map(mapPsdPath);
+  for (const entry of copy.edits || []) {
+    if (entry && typeof entry.psdPath === "string") entry.psdPath = mapPsdPath(entry.psdPath);
+  }
+  for (const layer of copy.newLayers || []) {
+    if (layer && typeof layer.psdPath === "string") layer.psdPath = mapPsdPath(layer.psdPath);
+  }
+  for (const g of copy.guides || []) {
+    if (g && typeof g.psdPath === "string") g.psdPath = mapPsdPath(g.psdPath);
+  }
+  return copy;
+}
+
+function rebaseProjectDocumentForOpen(project, opusPath) {
+  const projectDir = parentDir(opusPath) || project.projectDir || null;
+  const psdPathMap = new Map();
+  const psdPaths = (project.psdPaths || []).map((oldPath) => {
+    const next = rebaseBundledProjectPath(oldPath, projectDir, "PSD");
+    psdPathMap.set(oldPath, next);
+    psdPathMap.set(normalizePathKey(oldPath), next);
+    return next;
+  });
+  const snapshot = rebaseProjectSnapshotPaths(
+    { ...(project.snapshot || {}), psdPaths: project.snapshot?.psdPaths || project.psdPaths || [] },
+    projectDir,
+    psdPathMap,
+  );
+  const refs = project.references && typeof project.references === "object"
+    ? {
+        ...project.references,
+        paths: (Array.isArray(project.references.paths) ? project.references.paths : [])
+          .map((p) => rebaseBundledProjectPath(p, projectDir, PROJECT_REFERENCE_DIR_NAME)),
+      }
+    : project.references;
+  const text = project.text && typeof project.text === "object"
+    ? {
+        ...project.text,
+        path: project.text.path
+          ? rebaseBundledProjectPath(project.text.path, projectDir, PROJECT_TEXT_DIR_NAME)
+          : project.text.path,
+      }
+    : project.text;
+  return {
+    ...project,
+    projectDir,
+    psdPaths,
+    snapshot,
+    references: refs,
+    text,
+  };
+}
+
 async function copyFilesToProject(paths, destDir, { prefix = "" } = {}) {
   const { invoke } = await import("@tauri-apps/api/core");
   const used = new Set();
@@ -875,7 +961,10 @@ export async function openProjectFromPath(path) {
       detail: "プロジェクトファイルを読み込み中…",
     });
     const text = await invoke("read_text_file", { path });
-    const project = normalizeProjectDocument(JSON.parse(text));
+    const project = rebaseProjectDocumentForOpen(
+      normalizeProjectDocument(JSON.parse(text)),
+      path,
+    );
     completeProgressFlowStep(
       { id: progressFlowId, stepId: "project-read" },
       { detail: "プロジェクト読込 完了" },

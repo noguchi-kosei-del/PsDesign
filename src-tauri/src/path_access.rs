@@ -523,6 +523,11 @@ pub async fn confirm_file_picker_selection(
             let real = std::fs::canonicalize(candidate)
                 .map_err(|_| "forbidden path: token no longer resolvable".to_string())?;
             allowed.insert_canonical(real.clone());
+            if real.is_file() {
+                if let Some(parent) = real.parent() {
+                    allowed.insert_canonical(parent.to_path_buf());
+                }
+            }
             out.push(real.to_string_lossy().to_string());
         }
         Ok(out)

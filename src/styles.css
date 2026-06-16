@@ -147,7 +147,8 @@ textarea,
      引き続きツールバーの上に表示される。 */
   z-index: 110;
 }
-.toolbar.view-mode-menu-open {
+.toolbar.view-mode-menu-open,
+.toolbar.save-menu-open {
   -webkit-app-region: no-drag;
 }
 .toolbar-fill-palette {
@@ -2286,7 +2287,8 @@ body.home-starting .home-screen {
 }
 .home-typeset-modal {
   position: fixed;
-  inset: 0;
+  --opus-modal-toolbar-height: 37px;
+  inset: var(--opus-modal-toolbar-height) 0 0;
   z-index: 260;
   display: flex;
   align-items: center;
@@ -4868,6 +4870,25 @@ body.editor-paragraph-reordering * {
   background: transparent !important;
   filter: none !important;
   mix-blend-mode: normal !important;
+}
+.text-head-snap-guide {
+  position: absolute;
+  pointer-events: none;
+  z-index: 20;
+}
+.text-head-snap-guide-vertical {
+  top: 0;
+  bottom: 0;
+  width: 0;
+  border-left: 1.5px solid #ff3bd4;
+  box-shadow: 0 0 5px rgba(255, 59, 212, 0.7);
+}
+.text-head-snap-guide-horizontal {
+  left: 0;
+  right: 0;
+  height: 0;
+  border-top: 1.5px solid #ff3bd4;
+  box-shadow: 0 0 5px rgba(255, 59, 212, 0.7);
 }
 /* Photoshop ポイントテキスト風: 未選択時はテキストのみ可視で、枠装飾は出さない。
    bbox は寸法を持ったまま絶対配置され、クリック判定 / マーキー / wheel サイズ /

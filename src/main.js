@@ -12,12 +12,12 @@ import {
   showRotationHandlesForSelectedLayers,
   refreshAllOverlays,
   revealLayerAdornmentsForTemporaryMultiSelection,
-  revealSelectedLayerSizeOnlyBadges,
   restoreSelectedLayerBadges,
   setSelectedLayerBadgesUserHidden,
   toggleSelectionCenterOnlyMode,
   toggleSelectionGridDisplayMode,
   toggleSelectionAdornmentsVisible,
+  toggleSelectedLayerSizeOnlyBadges,
   snapNextSize,
   clearInplaceSelection,
   getLastInplaceSelection,
@@ -596,7 +596,8 @@ function bindTools() {
       !e.shiftKey &&
       (e.key === "ArrowLeft" || e.key === "ArrowRight")
     ) {
-      if (revealSelectedLayerSizeOnlyBadges()) {
+      if (getSelectedLayers().length > 0) {
+        if (!e.repeat) toggleSelectedLayerSizeOnlyBadges();
         e.preventDefault();
         e.stopPropagation();
         return;
@@ -4963,10 +4964,6 @@ function openHomeTypesetDialog() {
       referencePageCount = null;
       update();
       await loadSelectedReference();
-    });
-    modal.addEventListener("mousedown", (e) => {
-      if (pickingFile) return;
-      if (e.target === modal) cleanup(null);
     });
     modal.addEventListener("click", async (e) => {
       const btn = e.target.closest("[data-pick]");

@@ -460,6 +460,7 @@ pub fn generate_apply_script(
             "false"
         }
     ));
+    out.push_str("var OPUS_FAILED_PSD_ENTRIES = [];\n");
     out.push_str("try {\n");
     out.push_str("  var __psver = photoshopVersion();\n");
     out.push_str("  if (__psver > 0 && __psver < 13) { addWarning(\"Photoshop \" + __psver + \" は動作未検証のバージョンです\"); }\n");
@@ -486,7 +487,9 @@ pub fn generate_apply_script(
             total,
             js_string(&status_msg)
         ));
-        let save_path = if save_as && !target_dir.is_empty() {
+        let save_path = if let Some(override_path) = psd.save_path.as_deref().filter(|s| !s.is_empty()) {
+            override_path.replace('\\', "/")
+        } else if save_as && !target_dir.is_empty() {
             let name = std::path::Path::new(&psd.psd_path)
                 .file_name()
                 .and_then(|s| s.to_str())
@@ -853,6 +856,11 @@ pub fn generate_apply_script(
         out.push_str("    __saveOk++;\n");
         out.push_str("  } catch (eFile) {\n");
         out.push_str(&format!(
+            "    OPUS_FAILED_PSD_ENTRIES.push({} + \"\\t\" + {});\n",
+            js_string(&psd.psd_path),
+            js_string(&save_path)
+        ));
+        out.push_str(&format!(
             "    __saveFail++;\n    addWarning(\"[保存失敗] \" + {} + \": \" + (eFile && eFile.toString ? eFile.toString() : String(eFile)));\n",
             js_string(file_name)
         ));
@@ -1130,6 +1138,9 @@ function writeSentinel(text) {
     var payload = String(text);
     if (PSDESIGN_WARNINGS.length > 0 && payload.indexOf("ERROR") !== 0) {
       payload = payload + "|WARN " + PSDESIGN_WARNINGS.join(" | ");
+    }
+    if (typeof OPUS_FAILED_PSD_ENTRIES !== "undefined" && OPUS_FAILED_PSD_ENTRIES.length > 0 && payload.indexOf("ERROR") !== 0) {
+      payload = payload + "|FAILED " + OPUS_FAILED_PSD_ENTRIES.join("\n");
     }
     var f = new File(SENTINEL_PATH);
     f.encoding = "UTF-8";
@@ -4731,8 +4742,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       try { opts.layers = true; } catch (eOpt3) {}
       try { opts.spotColors = true; } catch (eOpt4) {}
       var __stamp = (new Date()).getTime();
-      var tmpFile = new File(outFile.fsName + ".psdesign-tmp-" + __stamp);
-      var bakFile = new File(outFile.fsName + ".psdesign-bak-" + __stamp);
+      var __saveBase = outFile.fsName.replace(/\.psd$/i, "");
+      var tmpFile = new File(__saveBase + ".psdesign-tmp-" + __stamp + ".psd");
+      var bakFile = new File(__saveBase + ".psdesign-bak-" + __stamp + ".psd");
       var hadExisting = outFile.exists;
       var movedExisting = false;
       try {

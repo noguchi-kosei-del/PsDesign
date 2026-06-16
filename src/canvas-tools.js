@@ -67,6 +67,7 @@ const TEXT_BBOX_MULTI_LINE_THICK_SAFETY_EM = 0.4;
 const TEXT_BBOX_LONG_SAFETY_EM = 0.4;
 const TEXT_BBOX_HEURISTIC_LONG_SCALE = 1.05;
 const LAYER_DRAG_THRESHOLD_PX = 5;
+const TEXT_HEAD_SNAP_THRESHOLD_PX = 10;
 let hideSelectedLayerBadges = false;
 let userHiddenLayerBadges = false;
 let temporaryMultiSelectionAdornmentsVisible = false;
@@ -173,6 +174,15 @@ export function revealSelectedLayerSizeOnlyBadges() {
   if (getSelectedLayers().length <= 0) return false;
   temporaryMultiSelectionAdornmentsVisible = false;
   temporarySizeOnlyBadgesVisible = true;
+  hideSelectedLayerBadges = false;
+  refreshAllOverlays();
+  return true;
+}
+
+export function toggleSelectedLayerSizeOnlyBadges() {
+  if (getSelectedLayers().length <= 0) return false;
+  temporaryMultiSelectionAdornmentsVisible = false;
+  temporarySizeOnlyBadgesVisible = !temporarySizeOnlyBadgesVisible;
   hideSelectedLayerBadges = false;
   refreshAllOverlays();
   return true;
@@ -2189,7 +2199,7 @@ function renderOverlay(ctx) {
   // 持っているので破壊しない（再構築するとキャレット消失 + selectionchange が走って
   // editingContext が壊れる）。マーキー矩形は marqueeState の復元コードが drawMarquee() で再描画する。
   // 【v1.16.0】innerHTML = "" を撤廃し layer-box / marquee-rect だけ削除する。
-  for (const el of overlay.querySelectorAll(".layer-box, .marquee-rect")) {
+  for (const el of overlay.querySelectorAll(".layer-box, .marquee-rect, .text-head-snap-guide")) {
     if (el.classList.contains("editing")) continue;
     el.remove();
   }
@@ -4834,6 +4844,103 @@ function onNewLayerMouseDown(e, ctx, nl) {
   beginMultiLayerDrag(e, ctx);
 }
 
+function selectionSnapKey(sel) {
+  if (!sel) return null;
+  return typeof sel.layerId === "string"
+    ? `new:${sel.layerId}`
+    : `existing:${sel.layerId}`;
+}
+
+function dragItemSnapKey(item) {
+  if (!item) return null;
+  return item.kind === "existing"
+    ? `existing:${item.layer.id}`
+    : `new:${item.nl.tempId}`;
+}
+
+function rectForDragItem(ctx, item) {
+  if (!ctx || !item) return null;
+  if (item.kind === "existing") {
+    return layerRectForExisting(ctx.page, item.layer, getEdit(ctx.page.path, item.layer.id) ?? {});
+  }
+  return layerRectForNew(ctx.page, item.nl);
+}
+
+function textHeadPointForRect(rect) {
+  if (!rect) return null;
+  return { x: rect.left, y: rect.top };
+}
+
+function collectTextHeadSnapTargets(ctx, excludedKeys) {
+  const targets = [];
+  if (!ctx?.page) return targets;
+  for (const layer of ctx.page.textLayers ?? []) {
+    const key = `existing:${layer.id}`;
+    if (excludedKeys?.has(key)) continue;
+    const edit = getEdit(ctx.page.path, layer.id) ?? {};
+    if (edit.deleted === true) continue;
+    const head = textHeadPointForRect(layerRectForExisting(ctx.page, layer, edit));
+    if (head && Number.isFinite(head.x) && Number.isFinite(head.y)) targets.push(head);
+  }
+  for (const nl of getNewLayersForPsd(ctx.page.path)) {
+    const key = `new:${nl.tempId}`;
+    if (excludedKeys?.has(key)) continue;
+    const head = textHeadPointForRect(layerRectForNew(ctx.page, nl));
+    if (head && Number.isFinite(head.x) && Number.isFinite(head.y)) targets.push(head);
+  }
+  return targets;
+}
+
+function resolveTextHeadSnap(ddx, ddy, referenceHead, targets, scaleX, scaleY) {
+  if (!referenceHead || !targets?.length) return { ddx, ddy, snapX: null, snapY: null };
+  const thresholdX = TEXT_HEAD_SNAP_THRESHOLD_PX * scaleX;
+  const thresholdY = TEXT_HEAD_SNAP_THRESHOLD_PX * scaleY;
+  const proposedX = referenceHead.x + ddx;
+  const proposedY = referenceHead.y + ddy;
+  let bestX = null;
+  let bestY = null;
+  for (const target of targets) {
+    const offsetX = target.x - proposedX;
+    const offsetY = target.y - proposedY;
+    const absX = Math.abs(offsetX);
+    const absY = Math.abs(offsetY);
+    if (absX <= thresholdX && (!bestX || absX < bestX.abs)) {
+      bestX = { abs: absX, offset: offsetX, value: target.x };
+    }
+    if (absY <= thresholdY && (!bestY || absY < bestY.abs)) {
+      bestY = { abs: absY, offset: offsetY, value: target.y };
+    }
+  }
+  return {
+    ddx: ddx + (bestX?.offset ?? 0),
+    ddy: ddy + (bestY?.offset ?? 0),
+    snapX: bestX ? bestX.value : null,
+    snapY: bestY ? bestY.value : null,
+  };
+}
+
+function clearTextHeadSnapGuides(ctx) {
+  if (!ctx?.overlay) return;
+  for (const el of ctx.overlay.querySelectorAll(".text-head-snap-guide")) el.remove();
+}
+
+function showTextHeadSnapGuides(ctx, snap) {
+  clearTextHeadSnapGuides(ctx);
+  if (!ctx?.overlay || !snap) return;
+  if (Number.isFinite(snap.snapX)) {
+    const guide = document.createElement("div");
+    guide.className = "text-head-snap-guide text-head-snap-guide-vertical";
+    guide.style.left = `${(snap.snapX / ctx.page.width) * 100}%`;
+    ctx.overlay.appendChild(guide);
+  }
+  if (Number.isFinite(snap.snapY)) {
+    const guide = document.createElement("div");
+    guide.className = "text-head-snap-guide text-head-snap-guide-horizontal";
+    guide.style.top = `${(snap.snapY / ctx.page.height) * 100}%`;
+    ctx.overlay.appendChild(guide);
+  }
+}
+
 function beginMultiLayerDrag(e, ctx) {
   const selections = getSelectedLayers().filter((s) => s.pageIndex === ctx.pageIndex);
   if (selections.length === 0) return;
@@ -4972,6 +5079,14 @@ function beginMultiLayerDrag(e, ctx) {
     if (items.length === 0) return;
   }
 
+  const excludedSnapKeys = new Set(selections.map(selectionSnapKey).filter(Boolean));
+  for (const item of items) {
+    const key = dragItemSnapKey(item);
+    if (key) excludedSnapKeys.add(key);
+  }
+  const snapReferenceHead = textHeadPointForRect(rectForDragItem(ctx, items[0]));
+  const snapTargets = collectTextHeadSnapTargets(ctx, excludedSnapKeys);
+
   const startClientX = e.clientX;
   const startClientY = e.clientY;
   const rect = ctx.canvas.getBoundingClientRect();
@@ -5048,6 +5163,9 @@ function beginMultiLayerDrag(e, ctx) {
     );
     return { ddx: dx * scaleX, ddy: dy * scaleY };
   };
+  const snapPsdDelta = ({ ddx, ddy }) => (
+    resolveTextHeadSnap(ddx, ddy, snapReferenceHead, snapTargets, scaleX, scaleY)
+  );
 
   const suppressDefault = (ev) => ev.preventDefault();
   // overlay 自体が回転済みのため、translate() は PSD 空間（= 回転前ローカル）ピクセル量で与える。
@@ -5078,8 +5196,9 @@ function beginMultiLayerDrag(e, ctx) {
       }
       dragActivated = true;
     }
-    const { ddx, ddy } = computePsdDelta(ev);
+    const { ddx, ddy, snapX, snapY } = snapPsdDelta(computePsdDelta(ev));
     applyPreview(ddx, ddy);
+    showTextHeadSnapGuides(ctx, { snapX, snapY });
     if (!isSingleMoveDrag) return;
     const cx = aStartRect.left + aStartRect.width / 2 + ddx;
     const cy = aStartRect.top + aStartRect.height / 2 + ddy;
@@ -5101,12 +5220,13 @@ function beginMultiLayerDrag(e, ctx) {
     // swap モード中の hover ハイライト残骸を必ず掃除（refreshAllOverlays でも再構築されるが
     // 通常移動分岐では DOM が再生成されないため明示的に外す）。
     applySwapVisuals(null);
+    clearTextHeadSnapGuides(ctx);
     if (!dragActivated) {
       refreshAllOverlays();
       rebuildLayerList();
       return;
     }
-    const { ddx, ddy } = computePsdDelta(ev);
+    const { ddx, ddy } = snapPsdDelta(computePsdDelta(ev));
     if (isDuplicate) {
       // 複製は開始時点で beginHistoryTransient 済み。移動量があれば位置も確定し、
       // 移動量ゼロでも複製自体は残るため必ず commit して 1 つの履歴ステップにする。

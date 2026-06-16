@@ -3,6 +3,7 @@ import {
   getPages,
   getParallelViewMode,
   getPdfPageIndex,
+  getSelectedLayers,
   getTxtDirty,
   getTxtFilePath,
   getTxtSource,
@@ -39,7 +40,7 @@ import {
   appendTextWithStyleMarkers,
   getStyleOverrideRangesForTxtRef,
 } from "../text-style-markers.js";
-import { revealSelectedLayerSizeOnlyBadges } from "../canvas-tools.js";
+import { toggleSelectedLayerSizeOnlyBadges } from "../canvas-tools.js";
 import { openContainingFolder } from "../services/open-path.js";
 import { baseName } from "../utils/path.js";
 
@@ -1178,7 +1179,8 @@ function onEditorPageNavShortcut(e) {
   if (e.altKey || e.shiftKey) return;
   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
   if (getParallelViewMode() !== "editor") return;
-  if (revealSelectedLayerSizeOnlyBadges()) {
+  if (getSelectedLayers().length > 0) {
+    if (!e.repeat) toggleSelectedLayerSizeOnlyBadges();
     e.preventDefault();
     e.stopPropagation();
     e.stopImmediatePropagation();
