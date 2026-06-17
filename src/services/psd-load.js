@@ -65,6 +65,40 @@ export async function notifyUnsupportedBitmapPsdFiles(paths) {
   });
 }
 
+function formatPsdDiagnosticsLine(item) {
+  const d = item?.diagnostics ?? {};
+  const parts = [
+    `・${baseName(item.path)}`,
+    `レイヤー数: ${d.estimatedLayerCount ?? "不明"}`,
+    `テキスト: ${d.visibleTextLayerCount ?? "不明"}`,
+    `非表示テキスト: ${d.hiddenTextLayerCount ?? "不明"}`,
+    `プレビュー: ${d.finalCanvasSource ?? "不明"}`,
+  ];
+  if (d.skipLayerImageData) parts.push("レイヤー画像: 省略");
+  if (d.photoshopTextMetadataFallback === "ok") {
+    const matched = d.photoshopTextMetadataMatched ?? 0;
+    const imported = d.photoshopTextMetadataImported ?? 0;
+    parts.push(`PS補正: ${matched + imported}/${d.photoshopTextMetadataTotal ?? "不明"}`);
+  } else if (d.photoshopTextMetadataFallback === "failed") {
+    parts.push("PS補正: 失敗");
+  }
+  return parts.join(" / ");
+}
+
+async function notifyLightParseDiagnostics(items) {
+  if (!Array.isArray(items) || items.length === 0) return;
+  const shown = items.slice(0, 8).map(formatPsdDiagnosticsLine).join("\n");
+  const rest = items.length > 8 ? `\nほか ${items.length - 8} 件` : "";
+  await notifyDialog({
+    title: "多レイヤーPSDを軽量モードで読み込みました",
+    message:
+      "メモリ保護のため、レイヤー画像の一部を省略して読み込みました。"
+      + "表示プレビューや配置確認が通常読み込みより不正確になる場合があります。\n\n"
+      + `${shown}${rest}`,
+    kind: "warning",
+  });
+}
+
 export async function pickPsdFiles(opts = {}) {
   const { openFileDialog } = await import("../file-picker.js");
   const picked = await openFileDialog({
@@ -159,6 +193,7 @@ export async function loadPsdFilesByPaths(files, {
 
   const failures = [];
   const unsupportedBitmapFiles = [];
+  const lightParseDiagnostics = [];
   // 読み込めた PSD のパス一覧。塗り足し枠を全ページへ展開する際のコピー先に使う。
   const loadedPaths = [];
   // PSD 埋め込みガイドが塗り足し枠（縦2+横2）を成す最初のページのパス。
@@ -175,6 +210,9 @@ export async function loadPsdFilesByPaths(files, {
     }));
     try {
       const page = await loadPsdFromPath(path);
+      if (page?.psdDiagnostics?.lightParseUsed) {
+        lightParseDiagnostics.push({ path, diagnostics: page.psdDiagnostics });
+      }
       const viewPages = expandLandscapePsdPage(page);
       for (const viewPage of viewPages) addPage(viewPage);
       loadedPaths.push(page.path);
@@ -228,6 +266,9 @@ export async function loadPsdFilesByPaths(files, {
   }
   if (unsupportedBitmapFiles.length) {
     await notifyUnsupportedBitmapPsdFiles(unsupportedBitmapFiles);
+  }
+  if (lightParseDiagnostics.length) {
+    await notifyLightParseDiagnostics(lightParseDiagnostics);
   }
   if (failures.length) {
     const first = failures[0];

@@ -1,5 +1,39 @@
 # PsDesign
 
+## 2026-06-17 変更メモ: v2.5.9 リリース（多レイヤーPSD安定化 / 軽量パース診断とPhotoshop座標フォールバック / 検索・文字変換・フォント変換修正 / OPUS再リンク）
+
+v2.5.9 では、レイヤー数の多い PSD の読み込み・保存で壊れやすい箇所を中心に、保存対象の限定、Photoshop JSX の軽量化、軽量パース時の診断とテキスト座標補正、検索・文字変換・フォント変換の実行不具合、OPUS プロジェクト再リンクをまとめて更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.9` に更新済み。
+
+### A. PSD保存処理の多レイヤー安定化
+
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): 保存時の全レイヤー後処理を編集対象レイヤー・新規作成レイヤーだけに限定し、未編集の大量レイヤーを走査して状態を変えるリスクを下げた。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): Photoshop 側の `findLayerById` を PSD ごとに一括 index 化し、保存時にレイヤー ID 検索を繰り返す構造を避けた。
+- [src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs) / [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): 巨大な編集 payload を JSX へ直埋めせず、一時 JSON ファイル経由で読み込む方式に分離。多レイヤー・複数 PSD の保存で JSX 文字列が肥大化する問題を抑えた。
+
+### B. 多レイヤーPSD読み込み時の軽量パース診断と座標補正
+
+- [src/psd-loader.js](src/psd-loader.js) / [src/psd-parse-worker.js](src/psd-parse-worker.js) / [src/services/psd-load.js](src/services/psd-load.js): 軽量パースが発動した場合に、レイヤー数・テキスト数・省略された画像データ・発動理由を警告と診断情報として表示するようにした。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) / [src-tauri/src/photoshop.rs](src-tauri/src/photoshop.rs) / [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): 軽量パース時でもテキスト配置の信頼性を上げるため、Photoshop 側からテキストレイヤーの座標・サイズ・transform 情報だけを別取得するフォールバックを追加した。
+- [src/psd-loader.js](src/psd-loader.js) / [src/canvas-tools.js](src/canvas-tools.js): Photoshop 由来の座標・サイズ・transform を既存テキスト情報へマージし、プレビュー上の配置と保存時の座標がずれにくいよう補正した。
+
+### C. 検索・文字変換・フォント変換の修正
+
+- [src/find-change.js](src/find-change.js) / [src/styles.css](src/styles.css): 文字変換・フォント変換でボタンを押しても反応が分かりにくいケースを、モーダル内ステータス表示に変更。条件不足や同一フォント指定をその場で案内するようにした。
+- [src/find-change.js](src/find-change.js): フォント変換タブではフォント指定を自動で有効扱いにし、全レイヤー変換時は `fontPostScriptName` / `sizePt` 本体値も更新するようにした。
+- [src/find-change.js](src/find-change.js): DynaFont 中丸ゴシックなど、表示名・PostScript 名・alias・DF/DFG 系の差分を同一フォントとして照合できるようにし、実際に存在するフォントが「見つからない」判定になる問題を修正した。
+
+### D. OPUSプロジェクトとファイル選択の復旧
+
+- [src/services/project.js](src/services/project.js): 保存済み OPUS プロジェクト内のコピー PSD がリネーム等で見つからない場合、「プロジェクトを開けません。ファイルがリネームされた可能性があります。」と警告し、PSD を再リンクして OPUS を保存し直してから開けるようにした。
+- [src/file-picker.js](src/file-picker.js): OPUS のオリジナルファイル選択画面で `.opus` が読み込めないケースを修正。選択済みパスの token が失効している場合は `browse_path_info` で再取得し、フィルタ確認後に確定できるようにした。
+- [index.html](index.html) / [src/settings-ui.js](src/settings-ui.js) / [src/styles.css](src/styles.css): 環境設定ダイアログ再編時に落ちていた設定項目の復帰と表示調整を行った。
+
+### 検証
+
+- `npm run check` 成功（`check:encoding` / `check:security` / `lint` / `build`）。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。
+- リリースはタグ `v2.5.9` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-16 変更メモ: v2.5.8 リリース（DynaFont 中丸ゴシック正式名対応 / 写植ダイアログに中丸自動切替 / 環境設定タブ再編 / 合成プレビューの透過暗転判定）
 
 v2.5.8 では、中丸ゴシック（DynaFont）の実インストール PostScript 名への対応、写植用ファイル選択ダイアログでの中丸ゴシック自動切替トグル、環境設定モーダルのタブ再編・大型化、PSD 合成プレビューが透過で暗く見えるケースの判定強化を中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.8` に更新済み。

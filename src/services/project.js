@@ -478,6 +478,25 @@ function rebaseProjectSnapshotPaths(snapshot, projectDir, psdPathMap) {
   return copy;
 }
 
+function remapProjectSnapshotPaths(snapshot, psdPathMap) {
+  const copy = JSON.parse(JSON.stringify(snapshot || {}));
+  const mapPsdPath = (path) => {
+    if (typeof path !== "string" || !path) return path;
+    return psdPathMap.get(path) || psdPathMap.get(normalizePathKey(path)) || path;
+  };
+  copy.psdPaths = (copy.psdPaths || []).map(mapPsdPath);
+  for (const entry of copy.edits || []) {
+    if (entry && typeof entry.psdPath === "string") entry.psdPath = mapPsdPath(entry.psdPath);
+  }
+  for (const layer of copy.newLayers || []) {
+    if (layer && typeof layer.psdPath === "string") layer.psdPath = mapPsdPath(layer.psdPath);
+  }
+  for (const g of copy.guides || []) {
+    if (g && typeof g.psdPath === "string") g.psdPath = mapPsdPath(g.psdPath);
+  }
+  return copy;
+}
+
 function rebaseProjectDocumentForOpen(project, opusPath) {
   const projectDir = parentDir(opusPath) || project.projectDir || null;
   const psdPathMap = new Map();
@@ -515,6 +534,114 @@ function rebaseProjectDocumentForOpen(project, opusPath) {
     references: refs,
     text,
   };
+}
+
+async function projectPathExists(path) {
+  if (typeof path !== "string" || !path) return false;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("path_info", { path });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function findMissingProjectPsdPaths(project) {
+  const missing = [];
+  for (const path of project.psdPaths || []) {
+    if (!(await projectPathExists(path))) missing.push(path);
+  }
+  return missing;
+}
+
+function formatMissingPsdMessage(missing) {
+  const shown = missing
+    .slice(0, 8)
+    .map((path) => `・${baseName(path)}`)
+    .join("\n");
+  const rest = missing.length > 8 ? `\nほか ${missing.length - 8} 件` : "";
+  return [
+    "プロジェクトを開けません。ファイルがリネームされた可能性があります。",
+    "",
+    "PSD を再リンクしてプロジェクトを保存し直しますか？",
+    "",
+    shown + rest,
+  ].join("\n");
+}
+
+async function pickRelinkedPsdFiles(missing) {
+  const picked = await openFileDialog({
+    mode: "open",
+    multiple: true,
+    title: "PSDを再リンク",
+    filters: [{ name: "Photoshop Document", extensions: ["psd"] }],
+    defaultPath: parentDir(missing[0]) || null,
+    rememberKey: "project-psd-relink",
+  });
+  if (!picked) return null;
+  return Array.isArray(picked) ? picked : [picked];
+}
+
+async function relinkMissingProjectPsds(project, opusPath, missing) {
+  const ok = await confirmDialog({
+    title: "プロジェクトを開けません",
+    message: formatMissingPsdMessage(missing),
+    confirmLabel: "再リンクする",
+    cancelLabel: "キャンセル",
+    kind: "warning",
+  });
+  if (!ok) return null;
+
+  const picked = await pickRelinkedPsdFiles(missing);
+  if (!picked || picked.length === 0) return null;
+  if (picked.length !== missing.length) {
+    await notifyDialog({
+      title: "PSDの数が一致しません",
+      message: `見つからない PSD は ${missing.length} 件です。再リンクする PSD も同じ数だけ選択してください。`,
+      kind: "warning",
+    });
+    return null;
+  }
+
+  const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" });
+  const replacements = picked.length === 1
+    ? picked
+    : [...picked].sort((a, b) => collator.compare(baseName(a), baseName(b)));
+  const pathMap = new Map();
+  for (let i = 0; i < missing.length; i++) {
+    pathMap.set(missing[i], replacements[i]);
+    pathMap.set(normalizePathKey(missing[i]), replacements[i]);
+  }
+
+  const nextPsdPaths = (project.psdPaths || []).map((path) => (
+    pathMap.get(path) || pathMap.get(normalizePathKey(path)) || path
+  ));
+  const nextSnapshot = remapProjectSnapshotPaths(project.snapshot, pathMap);
+  const nextProject = {
+    ...project,
+    savedAt: new Date().toISOString(),
+    psdPaths: nextPsdPaths,
+    snapshot: {
+      ...nextSnapshot,
+      psdPaths: nextPsdPaths,
+    },
+  };
+
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("write_text_file", {
+    path: opusPath,
+    content: JSON.stringify(nextProject, null, 2),
+  });
+  toast("PSDを再リンクしてプロジェクトを保存しました", { kind: "success", duration: 2600 });
+  return nextProject;
+}
+
+async function ensureProjectPsdLinks(project, opusPath) {
+  const missing = await findMissingProjectPsdPaths(project);
+  if (missing.length === 0) return project;
+  await hideProgress();
+  return relinkMissingProjectPsds(project, opusPath, missing);
 }
 
 async function copyFilesToProject(paths, destDir, { prefix = "" } = {}) {
@@ -961,10 +1088,12 @@ export async function openProjectFromPath(path) {
       detail: "プロジェクトファイルを読み込み中…",
     });
     const text = await invoke("read_text_file", { path });
-    const project = rebaseProjectDocumentForOpen(
+    let project = rebaseProjectDocumentForOpen(
       normalizeProjectDocument(JSON.parse(text)),
       path,
     );
+    project = await ensureProjectPsdLinks(project, path);
+    if (!project) return;
     completeProgressFlowStep(
       { id: progressFlowId, stepId: "project-read" },
       { detail: "プロジェクト読込 完了" },

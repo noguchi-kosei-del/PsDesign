@@ -2,6 +2,7 @@ import {
   getEdit,
   getCurrentFont,
   getFillColor,
+  getFontDisplayName,
   getFonts,
   getNewLayersForPsd,
   getPages,
@@ -21,6 +22,7 @@ import {
 } from "./ui-feedback.js";
 import {
   createFontCombobox,
+  normalizeFontSearchText,
   resolveFontFromInput as resolveComboboxFontFromInput,
 } from "./font-combobox.js";
 
@@ -31,6 +33,22 @@ let fontCombo = null;
 let sourceFontCombo = null;
 
 function $(id) { return document.getElementById(id); }
+
+function showFindChangeMessage(message, kind = "info") {
+  const el = $("find-change-summary");
+  if (!el) return;
+  el.textContent = message;
+  el.dataset.kind = kind;
+  el.hidden = false;
+}
+
+function clearFindChangeMessage() {
+  const el = $("find-change-summary");
+  if (!el) return;
+  el.textContent = "";
+  delete el.dataset.kind;
+  el.hidden = true;
+}
 
 function searchMemoryKey(query, caseSensitive) {
   return `${caseSensitive ? "case" : "nocase"}\u0000${query}`;
@@ -367,6 +385,7 @@ function createModal() {
             </label>
           </div>
         </div>
+        <div id="find-change-summary" class="find-change-summary" role="status" aria-live="polite" hidden></div>
       </div>
       <div class="find-change-footer">
         <button id="find-change-cancel" class="find-change-btn" type="button">キャンセル</button>
@@ -452,6 +471,51 @@ function findFontByPostScriptName(ps) {
 
 function resolveFindChangeFontFromInput(value) {
   return resolveComboboxFontFromInput(getFonts(), value);
+}
+
+function normalizeFontIdentity(value) {
+  return normalizeFontSearchText(value).replace(/\s+/g, "");
+}
+
+function addFontIdentityKey(keys, value) {
+  const key = normalizeFontIdentity(value);
+  if (key) keys.add(key);
+}
+
+function addFontAliases(keys, font) {
+  if (!font) return;
+  addFontIdentityKey(keys, font.postScriptName);
+  addFontIdentityKey(keys, font.name);
+  addFontIdentityKey(keys, font.label);
+  addFontIdentityKey(keys, getFontDisplayName(font.postScriptName));
+  for (const alias of Array.isArray(font.aliases) ? font.aliases : []) {
+    addFontIdentityKey(keys, alias);
+  }
+}
+
+function fontIdentityKeys(value) {
+  const keys = new Set();
+  const raw = String(value ?? "").trim();
+  if (!raw) return keys;
+  addFontIdentityKey(keys, raw);
+  addFontIdentityKey(keys, getFontDisplayName(raw));
+  addFontAliases(keys, findFontByPostScriptName(raw));
+  addFontAliases(keys, resolveFindChangeFontFromInput(raw));
+  return keys;
+}
+
+function fontMatchesIdentity(value, targetKeys) {
+  if (!value || !(targetKeys?.size > 0)) return false;
+  for (const key of fontIdentityKeys(value)) {
+    if (targetKeys.has(key)) return true;
+  }
+  return false;
+}
+
+function fontValuesEquivalent(a, b) {
+  const aKeys = fontIdentityKeys(a);
+  if (!(aKeys.size > 0)) return false;
+  return fontMatchesIdentity(b, aKeys);
 }
 
 function setFindChangeFont(fontOrPs, { enable = false } = {}) {
@@ -577,8 +641,8 @@ function syncModalStyleDefaults() {
   const italic = document.querySelector(".italic-toggle-btn")?.getAttribute("aria-pressed") === "true";
   const boldSelect = $("find-change-bold");
   const italicSelect = $("find-change-italic");
-  if (boldSelect) boldSelect.value = bold ? "true" : "false";
-  if (italicSelect) italicSelect.value = italic ? "true" : "false";
+  if (boldSelect) boldSelect.checked = bold;
+  if (italicSelect) italicSelect.checked = italic;
 }
 
 function readOptions() {
@@ -592,7 +656,10 @@ function readOptions() {
   const sourceFontEnabled = activeTab === "font"
     || (activeTab === "convert" && $("find-change-source-font-enabled")?.checked === true);
   const sizeEnabled = styleAllowed && $("find-change-size-enabled")?.checked === true;
-  const fontEnabled = styleAllowed && $("find-change-font-enabled")?.checked === true;
+  const fontEnabled = styleAllowed && (
+    activeTab === "font"
+    || $("find-change-font-enabled")?.checked === true
+  );
   const sizePt = normalizeSizePt($("find-change-size")?.value);
   const sourceFontPostScriptName = $("find-change-source-font")?.value
     || resolveFindChangeFontFromInput($("find-change-source-font-search")?.value)?.postScriptName
@@ -643,15 +710,33 @@ function wholeTextRange(text) {
   return [{ start: 0, end: String(text ?? "").length }];
 }
 
+function rangesCoverWholeText(ranges, text) {
+  const len = String(text ?? "").length;
+  if (!Array.isArray(ranges) || ranges.length === 0) return false;
+  if (len === 0) return ranges.some((r) => r.start === 0 && r.end === 0);
+  let cursor = 0;
+  for (const range of [...ranges].sort((a, b) => a.start - b.start || a.end - b.end)) {
+    const start = Math.max(0, Math.min(len, Number(range.start)));
+    const end = Math.max(0, Math.min(len, Number(range.end)));
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) continue;
+    if (start > cursor) return false;
+    cursor = Math.max(cursor, end);
+    if (cursor >= len) return true;
+  }
+  return cursor >= len;
+}
+
 function findFontStyleRanges(text, charFonts, defaultFont, sourceFont) {
   if (!sourceFont) return [];
   const len = String(text ?? "").length;
   const fonts = charFonts && typeof charFonts === "object" ? charFonts : {};
+  const sourceKeys = fontIdentityKeys(sourceFont);
+  if (sourceKeys.size === 0) return [];
   const ranges = [];
   let start = null;
   for (let i = 0; i < len; i++) {
     const font = fonts[String(i)] ?? defaultFont ?? "";
-    if (font === sourceFont) {
+    if (fontMatchesIdentity(font, sourceKeys)) {
       if (start == null) start = i;
     } else if (start != null) {
       ranges.push({ start, end: i });
@@ -715,6 +800,7 @@ function transformLayer({
   const nextText = replaced?.text ?? text;
   const styleRanges = replaced?.ranges ?? matches;
   const changedText = replaceEnabled && nextText !== text;
+  const wholeLayerStyle = rangesCoverWholeText(styleRanges, nextText);
 
   const preserveReplacementStyle = { preserveMatchedValues: true };
   let charSizes = replaceEnabled ? shiftCharMap(maps.charSizes, matches, replacementLength, preserveReplacementStyle) : cloneMap(maps.charSizes);
@@ -735,6 +821,8 @@ function transformLayer({
   const remapNeeded = changedText;
   const changes = {
     ...(changedText ? { contents: nextText } : {}),
+    ...((sizeEnabled && wholeLayerStyle) ? { sizePt } : {}),
+    ...((fontEnabled && wholeLayerStyle) ? { fontPostScriptName } : {}),
     ...((remapNeeded || sizeEnabled) ? { charSizes } : {}),
     ...((remapNeeded || fontEnabled) ? { charFonts } : {}),
     ...(remapNeeded ? {
@@ -802,43 +890,54 @@ function hasDialogStyleEdits(style) {
 }
 
 function applyFindChange(options) {
+  clearFindChangeMessage();
   const applyWholeLayer = options.activeTab === "convert" && !options.query;
   const applyByFont = options.activeTab === "font";
   if (!options.query && !applyWholeLayer && !applyByFont) {
-    toast("検索文字を入力してください", { kind: "info", duration: 2200 });
+    showFindChangeMessage("検索文字を入力してください。", "info");
     return;
   }
   if (!options.replaceEnabled && !options.sizeEnabled && !options.fontEnabled && !hasDialogStyleEdits(options.dialogStyle)) {
-    toast("置換、文字サイズ、フォント、文字詳細のいずれかを有効にしてください", { kind: "info", duration: 2600 });
+    showFindChangeMessage("置換、文字サイズ、フォント、文字詳細のいずれかを有効にしてください。", "info");
     return;
   }
   if (options.sizeEnabled && options.sizePt == null) {
-    toast("文字サイズを 1〜999 pt で指定してください", { kind: "warning", duration: 2600 });
+    showFindChangeMessage("文字サイズを 1〜999 pt で指定してください。", "warning");
     return;
   }
   if (options.fontEnabled && !options.fontPostScriptName) {
-    toast("変換先フォントを選択してください", { kind: "warning", duration: 2600 });
+    showFindChangeMessage("変換先フォントを選択してください。", "warning");
     return;
   }
   if ((applyByFont || options.sourceFontEnabled) && !options.sourceFontPostScriptName) {
-    toast("変換元フォントを選択してください", { kind: "warning", duration: 2600 });
+    showFindChangeMessage("変換元フォントを選択してください。", "warning");
+    return;
+  }
+  if (
+    options.fontEnabled
+    && options.sourceFontEnabled
+    && fontValuesEquivalent(options.fontPostScriptName, options.sourceFontPostScriptName)
+    && !options.sizeEnabled
+    && !hasDialogStyleEdits(options.dialogStyle)
+  ) {
+    showFindChangeMessage("変換元と変換先が同じフォントです。変換先フォントを変更してください。", "info");
     return;
   }
   const s = options.dialogStyle;
   if (s?.strokeEnabled && s.strokeWidthPx == null) {
-    toast("フチ太さを 0〜999 px で指定してください", { kind: "warning", duration: 2600 });
+    showFindChangeMessage("フチ太さを 0〜999 px で指定してください。", "warning");
     return;
   }
   if (s?.horizontalScaleEnabled && s.horizontalScale == null) {
-    toast("長体を 10〜400% で指定してください", { kind: "warning", duration: 2600 });
+    showFindChangeMessage("長体を 10〜400% で指定してください。", "warning");
     return;
   }
   if (s?.verticalScaleEnabled && s.verticalScale == null) {
-    toast("平体を 10〜400% で指定してください", { kind: "warning", duration: 2600 });
+    showFindChangeMessage("平体を 10〜400% で指定してください。", "warning");
     return;
   }
   if ((s?.kerningEnabled && s.kerningMille == null) || (s?.trackingEnabled && s.trackingMille == null)) {
-    toast("字間を -1000〜1000 で指定してください", { kind: "warning", duration: 2600 });
+    showFindChangeMessage("字間を -1000〜1000 で指定してください。", "warning");
     return;
   }
 
@@ -935,7 +1034,12 @@ function applyFindChange(options) {
   });
 
   if (!mutated) {
-    toast("一致するテキストが見つかりませんでした", { kind: "info", duration: 2400 });
+    showFindChangeMessage(
+      applyByFont
+        ? "一致するフォントのテキストが見つかりませんでした。"
+        : "一致するテキストが見つかりませんでした。",
+      "info",
+    );
     return;
   }
 
@@ -952,6 +1056,7 @@ function applyFindChange(options) {
 
 function openModal() {
   const modal = createModal();
+  clearFindChangeMessage();
   populateFontSelect();
   populateSourceFontSelect();
   if (!modalDefaultsSynced) {
@@ -994,6 +1099,13 @@ function syncSourceFontControls(activeTab = getFindChangeActiveTab()) {
   else if (getSourceFontCombo()?.isOpen()) positionSourceFontCombo();
 }
 
+function syncTargetFontControls(activeTab = getFindChangeActiveTab()) {
+  const targetFontEnabled = $("find-change-font-enabled");
+  if (!targetFontEnabled) return;
+  if (activeTab === "font") targetFontEnabled.checked = true;
+  targetFontEnabled.disabled = activeTab === "font";
+}
+
 function commitSourceFontInput({ blur = true } = {}) {
   const input = $("find-change-source-font-search");
   if (!input) return;
@@ -1026,7 +1138,9 @@ function setFindChangeActiveTab(tab) {
     const panel = p.getAttribute("data-tab-panel");
     p.hidden = active === "font" ? panel !== "convert" : panel !== active;
   });
+  clearFindChangeMessage();
   syncSourceFontControls(active);
+  syncTargetFontControls(active);
   const queryField = $("find-change-query-field");
   const caseRow = $("find-change-case-row");
   if (queryField) {
@@ -1040,6 +1154,15 @@ function setFindChangeActiveTab(tab) {
   // 適用ボタンのラベル切替
   const applyBtn = $("find-change-apply");
   if (applyBtn) applyBtn.textContent = active === "replace" ? "置換" : active === "font" ? "フォント変換" : "文字変換";
+}
+
+function runFindChangeFromModal() {
+  try {
+    applyFindChange(readOptions());
+  } catch (error) {
+    console.error("[find-change] apply failed", error);
+    showFindChangeMessage("変換中にエラーが発生しました。入力内容を確認してください。", "warning");
+  }
 }
 
 function bindModalEvents() {
@@ -1077,7 +1200,7 @@ function bindModalEvents() {
   setFindChangeActiveTab("replace");
   $("find-change-cancel")?.addEventListener("click", closeModal);
   $("find-change-apply")?.addEventListener("click", () => {
-    applyFindChange(readOptions());
+    runFindChangeFromModal();
   });
   replaceInput?.addEventListener("input", () => { if (replaceEnabled) replaceEnabled.checked = true; });
   replaceInput?.addEventListener("focus", () => { if (replaceEnabled) replaceEnabled.checked = true; });
@@ -1205,7 +1328,7 @@ function bindModalEvents() {
     }
     if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
-      applyFindChange(readOptions());
+      runFindChangeFromModal();
     }
   });
   const repositionFontList = () => {

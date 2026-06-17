@@ -364,6 +364,266 @@ function shouldForceLightLayerParse(hints) {
   return hints?.forceLightLayerParse === true && isCriticalLowMemoryMode();
 }
 
+function collectLayerDiagnostics(layer, stats = {
+  parsedLayerCount: 0,
+  textLayerCount: 0,
+  visibleTextLayerCount: 0,
+  hiddenTextLayerCount: 0,
+}, parentVisible = true) {
+  if (!layer) return stats;
+  stats.parsedLayerCount += 1;
+  const effectiveVisible = parentVisible && !isLayerHidden(layer);
+  if (layer.text) {
+    stats.textLayerCount += 1;
+    if (effectiveVisible) stats.visibleTextLayerCount += 1;
+    else stats.hiddenTextLayerCount += 1;
+  }
+  if (Array.isArray(layer.children)) {
+    for (const child of layer.children) {
+      collectLayerDiagnostics(child, stats, effectiveVisible);
+    }
+  }
+  return stats;
+}
+
+function buildParseDiagnostics({
+  path,
+  hints,
+  stats,
+  parseMode,
+  forceLightLayerParse,
+  skipLayerImageData,
+  preserveLayerImages,
+  finalCanvasSource,
+  previewScale,
+}) {
+  const estimatedLayerCount = Number.isFinite(hints?.layerCount) ? hints.layerCount : null;
+  const textLayerCount = Number.isFinite(stats?.textLayerCount) ? stats.textLayerCount : null;
+  const visibleTextLayerCount = Number.isFinite(stats?.visibleTextLayerCount) ? stats.visibleTextLayerCount : null;
+  const hiddenTextLayerCount = Number.isFinite(stats?.hiddenTextLayerCount) ? stats.hiddenTextLayerCount : null;
+  const parsedLayerCount = Number.isFinite(stats?.parsedLayerCount) ? stats.parsedLayerCount : null;
+  const lightParseUsed = forceLightLayerParse === true || skipLayerImageData === true;
+  return {
+    path,
+    parseMode,
+    manyLayerThreshold: MANY_LAYER_LIGHT_PARSE_THRESHOLD,
+    estimatedLayerCount,
+    parsedLayerCount,
+    textLayerCount,
+    visibleTextLayerCount,
+    hiddenTextLayerCount,
+    forceLightLayerParse: forceLightLayerParse === true,
+    skipLayerImageData: skipLayerImageData === true,
+    preserveLayerImages: preserveLayerImages === true,
+    lightParseUsed,
+    lowMemoryMode: isLowMemoryMode(),
+    criticalLowMemoryMode: isCriticalLowMemoryMode(),
+    finalCanvasSource: finalCanvasSource ?? null,
+    previewScale: Number.isFinite(previewScale) ? previewScale : null,
+  };
+}
+
+function logParseDiagnostics(diagnostics) {
+  if (!diagnostics) return;
+  const level = diagnostics.lightParseUsed ? "warn" : "info";
+  console[level](
+    `[psd-loader] diagnostics | path=${diagnostics.path} | mode=${diagnostics.parseMode}`
+    + ` | layers=${diagnostics.estimatedLayerCount ?? "unknown"}`
+    + ` | parsed=${diagnostics.parsedLayerCount ?? "unknown"}`
+    + ` | text=${diagnostics.textLayerCount ?? "unknown"}`
+    + ` | visibleText=${diagnostics.visibleTextLayerCount ?? "unknown"}`
+    + ` | hiddenText=${diagnostics.hiddenTextLayerCount ?? "unknown"}`
+    + ` | light=${diagnostics.lightParseUsed}`
+    + ` | skipLayerImageData=${diagnostics.skipLayerImageData}`
+    + ` | psTextFallback=${diagnostics.photoshopTextMetadataFallback ?? "not-needed"}`
+    + ` | psTextMatched=${diagnostics.photoshopTextMetadataMatched ?? "n/a"}/${diagnostics.photoshopTextMetadataTotal ?? "n/a"}`
+    + ` | psTextImported=${diagnostics.photoshopTextMetadataImported ?? "n/a"}`
+    + ` | canvas=${diagnostics.finalCanvasSource ?? "unknown"}`,
+  );
+}
+
+function finiteNumber(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function normalizePsText(value) {
+  return String(value ?? "").replace(/\r\n?/g, "\n").trim();
+}
+
+function normalizeTextLayerName(value) {
+  return String(value ?? "").trim();
+}
+
+function isUsefulBounds(item) {
+  const left = finiteNumber(item?.left);
+  const top = finiteNumber(item?.top);
+  const right = finiteNumber(item?.right);
+  const bottom = finiteNumber(item?.bottom);
+  return left !== null && top !== null && right !== null && bottom !== null && right >= left && bottom >= top;
+}
+
+function normalizeTransform(transform) {
+  if (!Array.isArray(transform)) return null;
+  const values = transform.slice(0, 6).map(finiteNumber);
+  if (values.every((v) => v === null)) return null;
+  return values.map((v) => v ?? 0);
+}
+
+function photoshopTextMetadataSignature(item) {
+  const text = normalizePsText(item?.contents ?? item?.text);
+  const name = normalizeTextLayerName(item?.name);
+  return `${name}\u0000${text}`;
+}
+
+function visiblePhotoshopTextItems(psData) {
+  return (Array.isArray(psData?.textLayers) ? psData.textLayers : [])
+    .filter((item) => item && item.visible !== false);
+}
+
+function textLayerFromPhotoshopItem(item) {
+  if (!item || item.visible === false) return null;
+  const psId = finiteNumber(item.id);
+  if (psId === null || psId <= 0 || !isUsefulBounds(item)) return null;
+  const sizePt = finiteNumber(item.sizePt);
+  const transform = normalizeTransform(item.transform);
+  const effectiveSizePt = transform ? effectiveFontSize(sizePt, transform) : sizePt;
+  return {
+    id: psId,
+    photoshopLayerId: psId,
+    name: typeof item.name === "string" ? item.name : "",
+    text: normalizePsText(item.contents),
+    font: typeof item.font === "string" ? item.font : "",
+    rawFontSize: sizePt !== null && sizePt > 0 ? sizePt : null,
+    fontSize: effectiveSizePt !== null && effectiveSizePt > 0 ? effectiveSizePt : 12,
+    left: finiteNumber(item.left),
+    top: finiteNumber(item.top),
+    right: finiteNumber(item.right),
+    bottom: finiteNumber(item.bottom),
+    direction: item.direction === "vertical" ? "vertical" : "horizontal",
+    horizontalScale: 100,
+    verticalScale: 100,
+    trackingMille: 0,
+    kerningMille: 0,
+    strokeColor: "none",
+    strokeWidthPx: 20,
+    fillColor: typeof item.fillColor === "string" && item.fillColor ? item.fillColor : "default",
+    ...(transform ? { transform } : {}),
+    metadataSource: "photoshop",
+  };
+}
+
+function mergePhotoshopTextMetadata(textLayers, psData) {
+  const sourceLayers = Array.isArray(textLayers) ? textLayers : [];
+  const psItems = visiblePhotoshopTextItems(psData);
+  if (!psItems.length) {
+    return { textLayers: sourceLayers, matched: 0, imported: 0, total: 0 };
+  }
+
+  const byId = new Map();
+  const bySignature = new Map();
+  for (const item of psItems) {
+    const psId = finiteNumber(item.id);
+    if (psId !== null && psId > 0 && !byId.has(psId)) byId.set(psId, item);
+    const sig = photoshopTextMetadataSignature(item);
+    if (!bySignature.has(sig)) bySignature.set(sig, []);
+    bySignature.get(sig).push(item);
+  }
+
+  const used = new Set();
+  let matched = 0;
+  const merged = sourceLayers.map((layer) => {
+    const layerId = finiteNumber(layer?.id);
+    let item = layerId !== null ? byId.get(layerId) : null;
+    if (item && used.has(item)) item = null;
+
+    if (!item) {
+      const sig = photoshopTextMetadataSignature({
+        name: layer?.name,
+        contents: layer?.text,
+      });
+      const candidates = bySignature.get(sig) ?? [];
+      item = candidates.find((candidate) => !used.has(candidate)) ?? null;
+    }
+
+    if (!item) return layer;
+    used.add(item);
+    matched += 1;
+
+    const out = { ...layer };
+    const psId = finiteNumber(item.id);
+    if (psId !== null && psId > 0) {
+      out.id = psId;
+      out.photoshopLayerId = psId;
+    }
+    if (layerId !== null && psId !== null && layerId !== psId) out.agPsdLayerId = layerId;
+    if (typeof item.name === "string") out.name = item.name;
+    if (typeof item.contents === "string") out.text = normalizePsText(item.contents);
+    if (typeof item.font === "string" && item.font) out.font = item.font;
+    const sizePt = finiteNumber(item.sizePt);
+    const transform = normalizeTransform(item.transform);
+    if (sizePt !== null && sizePt > 0) {
+      out.rawFontSize = sizePt;
+      out.fontSize = transform ? effectiveFontSize(sizePt, transform) : sizePt;
+    }
+    if (isUsefulBounds(item)) {
+      out.left = finiteNumber(item.left);
+      out.top = finiteNumber(item.top);
+      out.right = finiteNumber(item.right);
+      out.bottom = finiteNumber(item.bottom);
+    }
+    if (item.direction === "vertical" || item.direction === "horizontal") out.direction = item.direction;
+    if (typeof item.fillColor === "string" && item.fillColor) out.fillColor = item.fillColor;
+    if (transform) out.transform = transform;
+    out.metadataSource = "photoshop";
+    return out;
+  });
+
+  let imported = 0;
+  for (const item of psItems) {
+    if (used.has(item)) continue;
+    const layer = textLayerFromPhotoshopItem(item);
+    if (!layer) continue;
+    merged.push(layer);
+    imported += 1;
+  }
+
+  return { textLayers: merged, matched, imported, total: psItems.length };
+}
+
+async function applyPhotoshopTextMetadataFallback(page, diagnostics) {
+  if (!page || diagnostics?.lightParseUsed !== true) return page;
+  diagnostics.photoshopTextMetadataFallback = "attempted";
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const json = await invoke("read_psd_text_layer_metadata", { psdPath: page.path });
+    const psData = JSON.parse(json);
+    const result = mergePhotoshopTextMetadata(page.textLayers, psData);
+    diagnostics.photoshopTextMetadataFallback = "ok";
+    diagnostics.photoshopTextMetadataMatched = result.matched;
+    diagnostics.photoshopTextMetadataImported = result.imported;
+    diagnostics.photoshopTextMetadataTotal = result.total;
+    console.info(
+      `[psd-loader] Photoshop text metadata fallback | path=${page.path}`
+      + ` | matched=${result.matched}/${result.total}`
+      + ` | imported=${result.imported}`,
+    );
+    return {
+      ...page,
+      textLayers: result.textLayers,
+      psdDiagnostics: diagnostics,
+    };
+  } catch (error) {
+    diagnostics.photoshopTextMetadataFallback = "failed";
+    diagnostics.photoshopTextMetadataError = error?.message ?? String(error);
+    console.warn("[psd-loader] Photoshop text metadata fallback failed:", page.path, error);
+    return {
+      ...page,
+      psdDiagnostics: diagnostics,
+    };
+  }
+}
+
 function getPsdParseWorker() {
   if (psdParseWorker) return psdParseWorker;
   psdParseWorker = new Worker(new URL("./psd-parse-worker.js", import.meta.url), { type: "module" });
@@ -1397,6 +1657,15 @@ export async function loadPsdFromPath(path) {
         previewScale = fallback.previewScale;
       }
       if (canvas) {
+        const psdDiagnostics = {
+          ...parsed.diagnostics,
+          path,
+          parseMode: parsed.diagnostics?.parseMode ?? "worker",
+          manyLayerThreshold: MANY_LAYER_LIGHT_PARSE_THRESHOLD,
+          estimatedLayerCount: Number.isFinite(parsed.diagnostics?.estimatedLayerCount)
+            ? parsed.diagnostics.estimatedLayerCount
+            : (Number.isFinite(hints.layerCount) ? hints.layerCount : null),
+        };
         canvas = await replaceDarkPreviewWithPhotoshopIfNeeded(canvas, {
           path,
           width: parsed.width,
@@ -1409,7 +1678,8 @@ export async function loadPsdFromPath(path) {
           finalCanvasSource: parsed.finalCanvasSource ?? null,
         });
         previewScale = pageCanvasScale(canvas, parsed.width, parsed.height);
-        return withPreviewMetadata({
+        psdDiagnostics.previewScale = previewScale;
+        let page = withPreviewMetadata({
           path,
           width: parsed.width,
           height: parsed.height,
@@ -1417,7 +1687,11 @@ export async function loadPsdFromPath(path) {
           textLayers: parsed.textLayers ?? [],
           dpi: parsed.dpi ?? 72,
           psdGuides: parsed.guides ?? { h: [], v: [] },
+          psdDiagnostics,
         }, previewScale);
+        page = await applyPhotoshopTextMetadataFallback(page, psdDiagnostics);
+        logParseDiagnostics(page.psdDiagnostics);
+        return page;
       }
     } catch (error) {
       if (error?.code === "UNSUPPORTED_BITMAP_PSD") {
@@ -1443,8 +1717,17 @@ export async function loadPsdFromPath(path) {
     throw new UnsupportedBitmapPsdError(path);
   }
   const textLayers = [];
+  let layerDiagnostics = {
+    parsedLayerCount: 0,
+    textLayerCount: 0,
+    visibleTextLayerCount: 0,
+    hiddenTextLayerCount: 0,
+  };
   if (Array.isArray(psd.children)) {
-    for (const child of psd.children) collectTextLayers(child, textLayers, true);
+    for (const child of psd.children) {
+      collectTextLayers(child, textLayers, true);
+      collectLayerDiagnostics(child, layerDiagnostics, true);
+    }
   }
   const dpi = psd.imageResources?.resolutionInfo?.horizontalResolution ?? 72;
 
@@ -1488,7 +1771,18 @@ export async function loadPsdFromPath(path) {
   });
 
   const preview = createFinalPageCanvas(canvas, psd.width, psd.height);
-  return withPreviewMetadata({
+  const psdDiagnostics = buildParseDiagnostics({
+    path,
+    hints,
+    stats: layerDiagnostics,
+    parseMode: "main",
+    forceLightLayerParse,
+    skipLayerImageData,
+    preserveLayerImages,
+    finalCanvasSource,
+    previewScale: preview.previewScale,
+  });
+  let page = withPreviewMetadata({
     path,
     width: psd.width,
     height: psd.height,
@@ -1496,7 +1790,11 @@ export async function loadPsdFromPath(path) {
     textLayers,
     dpi,
     psdGuides: extractPsdGuides(psd),
+    psdDiagnostics,
   }, preview.previewScale);
+  page = await applyPhotoshopTextMetadataFallback(page, psdDiagnostics);
+  logParseDiagnostics(page.psdDiagnostics);
+  return page;
 }
 
 async function readFileBytes(path) {

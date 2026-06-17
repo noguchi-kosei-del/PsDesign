@@ -65,6 +65,14 @@ function isWindowsShortcutPath(path) {
   return /\.lnk$/i.test(String(path ?? ""));
 }
 
+function pathMatchesOpenFilter(path) {
+  if (currentOpts?.mode !== "open") return true;
+  const extRe = currentOpts.__extRegex;
+  if (!extRe) return true;
+  if (isWindowsShortcutPath(path)) return true;
+  return extRe.test(baseName(path)) || extRe.test(path);
+}
+
 function readLastPath(rememberKey) {
   if (!rememberKey) return null;
   try {
@@ -601,6 +609,9 @@ async function navigateFromPathInput(rawPath) {
     }
 
     if (info?.isFile) {
+      if (!pathMatchesOpenFilter(target)) {
+        throw new Error("この種類のファイルは選択できません");
+      }
       const parent = parentDir(target);
       if (parent && parent !== currentPath) {
         await navigateInto(parent);
@@ -609,9 +620,20 @@ async function navigateFromPathInput(rawPath) {
         const input = $("file-picker-name-input");
         if (input) input.value = info.name || baseName(target);
       } else if (currentOpts?.mode === "open") {
+        const selectedPath = entries.find((entry) => (
+          entry?.isFile
+          && (
+            samePathLoose(entry.path, target)
+            || (info.name && entry.name === info.name)
+            || entry.name === baseName(target)
+          )
+        ))?.path ?? target;
+        if (info.token && !pathToToken.has(selectedPath)) {
+          pathToToken.set(selectedPath, info.token);
+        }
         selectedPaths.clear();
-        selectedPaths.add(target);
-        lastClickIndex = entries.findIndex((entry) => entry?.path === target);
+        selectedPaths.add(selectedPath);
+        lastClickIndex = entries.findIndex((entry) => entry?.path === selectedPath);
         syncRowSelectionDom();
       }
       updateConfirmState();
@@ -624,6 +646,15 @@ async function navigateFromPathInput(rawPath) {
     }
     renderPath();
   }
+}
+
+async function tokenForSelectedPath(path) {
+  const existing = pathToToken.get(path);
+  if (existing) return existing;
+  const info = await fetchPathInfo(path);
+  if (!info?.token) return null;
+  pathToToken.set(path, info.token);
+  return info.token;
 }
 
 async function goBack() {
@@ -685,10 +716,15 @@ async function confirm() {
   try {
     if (mode === "open") {
       if (selectedPaths.size === 0) return;
-      const tokens = [...selectedPaths]
-        .map((p) => pathToToken.get(p))
-        .filter(Boolean);
-      if (tokens.length === 0) return;
+      const selected = [...selectedPaths].filter(pathMatchesOpenFilter);
+      const tokens = [];
+      for (const path of selected) {
+        const token = await tokenForSelectedPath(path);
+        if (token) tokens.push(token);
+      }
+      if (tokens.length !== selected.length || tokens.length === 0) {
+        throw new Error("選択ファイルを確定できません");
+      }
       const reals = await invoke("confirm_file_picker_selection", {
         pickerSessionId,
         tokens,

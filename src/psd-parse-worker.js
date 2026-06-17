@@ -230,6 +230,28 @@ function collectTextLayers(layer, out = [], parentVisible = true) {
   return out;
 }
 
+function collectLayerDiagnostics(layer, stats = {
+  parsedLayerCount: 0,
+  textLayerCount: 0,
+  visibleTextLayerCount: 0,
+  hiddenTextLayerCount: 0,
+}, parentVisible = true) {
+  if (!layer) return stats;
+  stats.parsedLayerCount += 1;
+  const effectiveVisible = parentVisible && !isLayerHidden(layer);
+  if (layer.text) {
+    stats.textLayerCount += 1;
+    if (effectiveVisible) stats.visibleTextLayerCount += 1;
+    else stats.hiddenTextLayerCount += 1;
+  }
+  if (Array.isArray(layer.children)) {
+    for (const child of layer.children) {
+      collectLayerDiagnostics(child, stats, effectiveVisible);
+    }
+  }
+  return stats;
+}
+
 function collectHiddenLayersForMasking(layer, parentVisible, out) {
   const selfHidden = isLayerHidden(layer);
   const effectiveVisible = parentVisible && !selfHidden;
@@ -504,8 +526,17 @@ function parsePsd(buffer, preview) {
   }
 
   const textLayers = [];
+  let layerDiagnostics = {
+    parsedLayerCount: 0,
+    textLayerCount: 0,
+    visibleTextLayerCount: 0,
+    hiddenTextLayerCount: 0,
+  };
   if (Array.isArray(psd.children)) {
-    for (const child of psd.children) collectTextLayers(child, textLayers, true);
+    for (const child of psd.children) {
+      collectTextLayers(child, textLayers, true);
+      collectLayerDiagnostics(child, layerDiagnostics, true);
+    }
   }
   const finalCanvasSource = criticalLowPreview && preserveLayerImages && Array.isArray(psd.children)
     ? "visible-non-text-preview"
@@ -537,6 +568,22 @@ function parsePsd(buffer, preview) {
     previewScale: finalCanvas.previewScale,
     guides: extractPsdGuides(psd),
     finalCanvasSource,
+    diagnostics: {
+      parseMode: "worker",
+      estimatedLayerCount: Number.isFinite(preview?.layerCount) ? preview.layerCount : null,
+      parsedLayerCount: layerDiagnostics.parsedLayerCount,
+      textLayerCount: layerDiagnostics.textLayerCount,
+      visibleTextLayerCount: layerDiagnostics.visibleTextLayerCount,
+      hiddenTextLayerCount: layerDiagnostics.hiddenTextLayerCount,
+      forceLightLayerParse,
+      skipLayerImageData,
+      preserveLayerImages,
+      lightParseUsed: forceLightLayerParse || skipLayerImageData,
+      lowMemoryMode: lowPreview,
+      criticalLowMemoryMode: criticalLowPreview,
+      finalCanvasSource,
+      previewScale: finalCanvas.previewScale,
+    },
   };
 }
 

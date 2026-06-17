@@ -103,6 +103,7 @@ fn run_apply_edits_once(
         .unwrap_or(0);
     let sentinel_path = sentinel_path_for(ts);
     let progress_path = progress_path_for(ts);
+    let payload_path = write_temp_apply_payload(payload, ts)?;
     let _ = std::fs::remove_file(&sentinel_path);
     let _ = std::fs::remove_file(&progress_path);
     let quit_photoshop_after_finish = false;
@@ -110,6 +111,7 @@ fn run_apply_edits_once(
     emit_progress(app, 0, payload.edits.len(), "Photoshop を起動しています...");
     let jsx = jsx_gen::generate_apply_script(
         payload,
+        &path_for_jsx(&payload_path),
         &path_for_jsx(&sentinel_path),
         &path_for_jsx(&progress_path),
         quit_photoshop_after_finish,
@@ -119,9 +121,11 @@ fn run_apply_edits_once(
     let mut command = Command::new(&ps_path);
     command.arg("-r").arg(&jsx_path);
     hide_console_window(&mut command);
-    command
-        .spawn()
-        .map_err(|e| PhotoshopError::LaunchFailed(e.to_string()))?;
+    if let Err(e) = command.spawn() {
+        let _ = std::fs::remove_file(&jsx_path);
+        let _ = std::fs::remove_file(&payload_path);
+        return Err(PhotoshopError::LaunchFailed(e.to_string()));
+    }
     emit_progress(
         app,
         0,
@@ -147,6 +151,7 @@ fn run_apply_edits_once(
             let _ = std::fs::remove_file(&sentinel_path);
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
+            let _ = std::fs::remove_file(&payload_path);
             cleanup_adobe_crash_processors();
             let lock_warnings = release_saved_psd_locks(&saved_psd_paths);
             let trimmed = content.trim().to_string();
@@ -200,6 +205,7 @@ fn run_apply_edits_once(
         if now > deadline {
             let _ = std::fs::remove_file(&progress_path);
             let _ = std::fs::remove_file(&jsx_path);
+            let _ = std::fs::remove_file(&payload_path);
             cleanup_adobe_crash_processors();
             return Err(PhotoshopError::Timeout);
         }
@@ -424,6 +430,77 @@ pub fn read_text_layers(
 // 【写植再利用・一括】複数 PSD を 1 回の Photoshop セッションで処理する。
 // 戻り値は {"pages":[...]} の JSON 文字列。1 枚ごとに Photoshop を起動し直さず、
 // ウィンドウ非表示を全体で 1 度だけ行い、完了後は前面化せずに非表示解除する。
+pub fn read_text_layer_metadata(
+    psd_path: &str,
+    app: &tauri::AppHandle,
+) -> Result<String, PhotoshopError> {
+    let ps_path = find_photoshop_executable().ok_or(PhotoshopError::NotFound)?;
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    let sentinel_path = sentinel_path_for(ts);
+    let mut out_json_path = std::env::temp_dir();
+    out_json_path.push(format!("psdesign_textmeta_{}.json", ts));
+    let _ = std::fs::remove_file(&sentinel_path);
+    let _ = std::fs::remove_file(&out_json_path);
+
+    emit_progress(app, 0, 1, "Photoshop でテキスト位置を読み取っています...");
+    let jsx = jsx_gen::generate_read_text_layer_metadata_script(
+        &path_for_jsx(Path::new(psd_path)),
+        &path_for_jsx(&out_json_path),
+        &path_for_jsx(&sentinel_path),
+    );
+    let mut jsx_path = std::env::temp_dir();
+    jsx_path.push(format!("psdesign_readtextmeta_{}.jsx", ts));
+    std::fs::write(&jsx_path, &jsx)?;
+
+    let mut command = Command::new(&ps_path);
+    command.arg("-r").arg(&jsx_path);
+    hide_console_window(&mut command);
+    command
+        .spawn()
+        .map_err(|e| PhotoshopError::LaunchFailed(e.to_string()))?;
+
+    for _ in 0..160 {
+        if sentinel_path.exists() {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(25));
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(SENTINEL_TIMEOUT_SECS);
+    loop {
+        if sentinel_path.exists() {
+            let content = std::fs::read_to_string(&sentinel_path).unwrap_or_default();
+            let _ = std::fs::remove_file(&sentinel_path);
+            let _ = std::fs::remove_file(&jsx_path);
+            cleanup_adobe_crash_processors();
+            let trimmed = content.trim().to_string();
+            if trimmed.starts_with("OK") {
+                let json = std::fs::read_to_string(&out_json_path).map_err(|e| {
+                    PhotoshopError::ScriptFailed(format!("結果JSONの読み込みに失敗: {}", e))
+                })?;
+                let _ = std::fs::remove_file(&out_json_path);
+                return Ok(json);
+            }
+            let _ = std::fs::remove_file(&out_json_path);
+            let msg = trimmed
+                .strip_prefix("ERROR ")
+                .unwrap_or(&trimmed)
+                .to_string();
+            return Err(PhotoshopError::ScriptFailed(msg));
+        }
+        if Instant::now() > deadline {
+            let _ = std::fs::remove_file(&jsx_path);
+            let _ = std::fs::remove_file(&out_json_path);
+            cleanup_adobe_crash_processors();
+            return Err(PhotoshopError::Timeout);
+        }
+        std::thread::sleep(Duration::from_millis(SENTINEL_POLL_MS));
+    }
+}
+
 pub fn read_text_layers_batch(
     psd_paths: &[String],
     app: &tauri::AppHandle,
@@ -1033,6 +1110,15 @@ fn write_temp_jsx(jsx: &str, ts: u128) -> std::io::Result<PathBuf> {
     let mut path = std::env::temp_dir();
     path.push(format!("psdesign_apply_{}.jsx", ts));
     std::fs::write(&path, jsx)?;
+    Ok(path)
+}
+
+fn write_temp_apply_payload(payload: &EditPayload, ts: u128) -> std::io::Result<PathBuf> {
+    let mut path = std::env::temp_dir();
+    path.push(format!("psdesign_apply_payload_{}.json", ts));
+    let bytes = serde_json::to_vec(payload)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    std::fs::write(&path, bytes)?;
     Ok(path)
 }
 

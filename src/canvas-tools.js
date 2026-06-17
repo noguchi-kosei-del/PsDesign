@@ -1888,7 +1888,7 @@ function applyToolAttrs(ctx) {
 // declared と bounds-derived の小さい方を採用（過大値を抑える）。
 export function getExistingLayerEffectiveSizePt(page, layer, edit) {
   if (edit && Number.isFinite(edit.sizePt) && edit.sizePt > 0) return edit.sizePt;
-  const declaredSizePt = layer?.fontSize ?? null;
+  const declaredSizePt = layerDeclaredSizePt(layer);
   const dpi = page?.dpi ?? 72;
   const rawWidth = Math.max(0, (layer?.right ?? 0) - (layer?.left ?? 0));
   const rawHeight = Math.max(0, (layer?.bottom ?? 0) - (layer?.top ?? 0));
@@ -1914,6 +1914,25 @@ export function getExistingLayerEffectiveSizePt(page, layer, edit) {
     }
   }
   return declaredSizePt ?? 24;
+}
+
+function layerTransformScale(layer) {
+  const transform = layer?.transform;
+  if (!Array.isArray(transform) || transform.length < 4) return null;
+  const [a, b, c, d] = transform.map((v) => Number(v));
+  if (![a, b, c, d].every(Number.isFinite)) return null;
+  const det = Math.abs((a * d) - (b * c));
+  if (!(det > 0)) return null;
+  const scale = Math.sqrt(det);
+  return scale > 0.01 && scale < 10 ? scale : null;
+}
+
+function layerDeclaredSizePt(layer) {
+  const raw = Number(layer?.rawFontSize);
+  const scale = layerTransformScale(layer);
+  if (Number.isFinite(raw) && raw > 0 && scale !== null) return raw * scale;
+  const size = Number(layer?.fontSize);
+  return Number.isFinite(size) && size > 0 ? size : null;
 }
 
 export function layerRectForExisting(page, layer, edit) {

@@ -227,12 +227,15 @@ const DEFAULT_SCHEMA = [
   { id: "default-tilde-run-kerning",    key: "tildeRunKerningMille",      type: "number",           applyTool: true },
   { id: "default-tcy-enabled",          key: "tateChuYokoEnabled",        type: "bool-onoff",       applyTool: false },
   { id: "default-symbol-font-enabled",  key: "symbolFontReplaceEnabled",  type: "bool-onoff",       applyTool: false },
+  { id: "default-symbol-font-postscript", key: "symbolFontPostScriptName", type: "text-trim",        applyTool: false },
   { id: "default-punct-tsume",          key: "punctuationTsumePercent",   type: "bool-onoff-num50", applyTool: false },
   { id: "default-punct-space-replacement", key: "punctuationSpaceReplacementEnabled", type: "bool-onoff", applyTool: false },
   { id: "default-vertical-half-to-full", key: "verticalHalfToFullEnabled", type: "bool-onoff",       applyTool: false },
   // 【v1.26.0 移植 (PsDesign-main v1.24.0)】白フチ自動付与 / 中丸ゴシック自動切替。
   { id: "default-auto-stroke-enabled",          key: "autoStrokeEnabled",            type: "bool-onoff",     applyTool: false },
+  { id: "default-auto-stroke-white-ratio-threshold", key: "autoStrokeWhiteRatioThreshold", type: "number",     applyTool: false },
   { id: "default-cloud-shape-font-enabled",     key: "cloudShapeFontEnabled",        type: "bool-onoff",     applyTool: false },
+  { id: "default-cloud-shape-score-threshold",  key: "cloudShapeScoreThreshold",     type: "number",         applyTool: false },
   { id: "default-cloud-shape-font-postscript",  key: "cloudShapeFontPostScriptName", type: "text-trim",      applyTool: false },
 ];
 

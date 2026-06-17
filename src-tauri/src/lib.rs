@@ -380,6 +380,16 @@ async fn read_psd_text_layers(
 // 【写植再利用・一括】複数 PSD を 1 回の Photoshop セッションで読み取る。戻り値は
 // {"pages":[{ok,psdPath,docWidth,docHeight,dpi,refImage,bgImage,textLayers},...]} の JSON。
 #[tauri::command]
+async fn read_psd_text_layer_metadata(
+    app: tauri::AppHandle,
+    allowed: tauri::State<'_, AllowedPaths>,
+    psd_path: String,
+) -> Result<String, String> {
+    ensure_allowed(&allowed, &psd_path)?;
+    photoshop::read_text_layer_metadata(&psd_path, &app).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 async fn read_psd_text_layers_batch(
     app: tauri::AppHandle,
     allowed: tauri::State<'_, AllowedPaths>,
@@ -2373,6 +2383,7 @@ pub fn run() {
             close_splash,
             apply_edits_via_photoshop,
             read_psd_text_layers,
+            read_psd_text_layer_metadata,
             read_psd_text_layers_batch,
             list_fonts,
             read_binary_file,

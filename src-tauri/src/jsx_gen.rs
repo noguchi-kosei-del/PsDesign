@@ -1,5 +1,3 @@
-use crate::EditPayload;
-
 // 【写植再利用】Photoshop で PSD を開き、全テキストレイヤーの内容・フォント・サイズ・
 // 座標・組方向を JSON に書き出し、さらに「テキストレイヤーを全て非表示にした合成画像」を
 // JPG で書き出す read-only スクリプトを生成する。ag-psd が CSP 由来等の PSD のライブ
@@ -66,6 +64,229 @@ pub fn generate_read_text_layers_batch_script(
     out
 }
 
+pub fn generate_read_text_layer_metadata_script(
+    psd_path: &str,
+    out_json_path: &str,
+    sentinel_path: &str,
+) -> String {
+    let mut out = String::new();
+    out.push_str("#target photoshop\n");
+    out.push_str("app.displayDialogs = DialogModes.NO;\n");
+    out.push_str("try { app.playbackDisplayDialogs = DialogModes.NO; } catch (e) {}\n");
+    out.push_str(
+        "try { app.userInteractionLevel = UserInteractionLevel.DONTDISPLAYALERTS; } catch (e) {}\n",
+    );
+    out.push_str(&format!("var PSD_PATH = {};\n", js_string(psd_path)));
+    out.push_str(&format!("var OUT_JSON = {};\n", js_string(out_json_path)));
+    out.push_str(&format!(
+        "var SENTINEL_PATH = {};\n",
+        js_string(sentinel_path)
+    ));
+    out.push_str(READ_TEXT_METADATA_BODY);
+    out
+}
+
+const READ_TEXT_METADATA_BODY: &str = r####"
+function writeSentinel(text) {
+  try {
+    var f = new File(SENTINEL_PATH);
+    f.encoding = "UTF-8";
+    f.open("w");
+    f.write(text);
+    f.close();
+  } catch (e) {}
+}
+function jsonStr(s) {
+  if (s === null || s === undefined) return '""';
+  s = String(s);
+  var out = '"';
+  for (var i = 0; i < s.length; i++) {
+    var c = s.charAt(i);
+    var code = s.charCodeAt(i);
+    if (c === '"') out += '\\"';
+    else if (c === '\\') out += '\\\\';
+    else if (c === '\n') out += '\\n';
+    else if (c === '\r') out += '\\r';
+    else if (c === '\t') out += '\\t';
+    else if (code < 0x20) {
+      var h = code.toString(16);
+      while (h.length < 4) h = '0' + h;
+      out += '\\u' + h;
+    } else { out += c; }
+  }
+  return out + '"';
+}
+function jsonNum(n) {
+  if (n === null || n === undefined || isNaN(n)) return '0';
+  return String(n);
+}
+function jsonNullableNum(n) {
+  if (n === null || n === undefined || isNaN(n)) return 'null';
+  return String(n);
+}
+function jsonBool(b) { return b ? 'true' : 'false'; }
+function jsonNumArray(arr) {
+  if (!arr || !arr.length) return 'null';
+  var out = [];
+  for (var i = 0; i < arr.length; i++) out.push(jsonNullableNum(arr[i]));
+  return '[' + out.join(',') + ']';
+}
+function fillColorNameFromTextItem(ti) {
+  try {
+    var c = ti.color;
+    var r = c.rgb.red;
+    var g = c.rgb.green;
+    var b = c.rgb.blue;
+    r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
+    g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
+    b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
+    if (r > 240 && g > 240 && b > 240) return "white";
+    if (r < 15 && g < 15 && b < 15) return "black";
+    function hx(v) {
+      var s = v.toString(16);
+      return s.length < 2 ? "0" + s : s;
+    }
+    return "#" + hx(r) + hx(g) + hx(b);
+  } catch (e) {
+    return "default";
+  }
+}
+function asPx(uv) {
+  try { return uv.as("px"); } catch (e) {
+    try { return Number(uv); } catch (e2) { return 0; }
+  }
+}
+function layerIdOf(L) {
+  try {
+    var id = Number(L.id);
+    return isNaN(id) ? 0 : id;
+  } catch (e) {
+    return 0;
+  }
+}
+function descriptorNumber(desc, key) {
+  try {
+    var id = stringIDToTypeID(key);
+    if (!desc.hasKey(id)) return null;
+    try { return desc.getDouble(id); } catch (e1) {}
+    try { return desc.getUnitDoubleValue(id); } catch (e2) {}
+    try { return desc.getInteger(id); } catch (e3) {}
+  } catch (e) {}
+  return null;
+}
+function textTransformForLayer(L) {
+  try {
+    var layerId = layerIdOf(L);
+    if (!layerId) return null;
+    var ref = new ActionReference();
+    ref.putIdentifier(charIDToTypeID("Lyr "), layerId);
+    var desc = executeActionGet(ref);
+    var textKey = stringIDToTypeID("textKey");
+    if (!desc.hasKey(textKey)) return null;
+    var textDesc = desc.getObjectValue(textKey);
+    var transformKey = stringIDToTypeID("transform");
+    if (!textDesc.hasKey(transformKey)) return null;
+    var tr = textDesc.getObjectValue(transformKey);
+    var xx = descriptorNumber(tr, "xx");
+    var xy = descriptorNumber(tr, "xy");
+    var yx = descriptorNumber(tr, "yx");
+    var yy = descriptorNumber(tr, "yy");
+    var tx = descriptorNumber(tr, "tx");
+    var ty = descriptorNumber(tr, "ty");
+    if (xx === null && xy === null && yx === null && yy === null && tx === null && ty === null) return null;
+    return [xx, xy, yx, yy, tx, ty];
+  } catch (e) {
+    return null;
+  }
+}
+function collectTextLayers(container, out) {
+  for (var i = 0; i < container.layers.length; i++) {
+    var L = container.layers[i];
+    var isSet = false;
+    try { isSet = (L.typename === "LayerSet"); } catch (e) {}
+    if (isSet) {
+      collectTextLayers(L, out);
+      continue;
+    }
+    var isText = false;
+    try { isText = (L.kind == LayerKind.TEXT); } catch (e) {}
+    if (isText) out.push(L);
+  }
+}
+try {
+  var prevRuler = app.preferences.rulerUnits;
+  var prevType = app.preferences.typeUnits;
+  app.preferences.rulerUnits = Units.PIXELS;
+  app.preferences.typeUnits = TypeUnits.POINTS;
+  var file = new File(PSD_PATH);
+  if (!file.exists) {
+    writeSentinel("ERROR PSD not found: " + PSD_PATH);
+  } else {
+    var doc = app.open(file);
+    app.activeDocument = doc;
+    var textLayers = [];
+    collectTextLayers(doc, textLayers);
+    var items = [];
+    for (var i = 0; i < textLayers.length; i++) {
+      var L = textLayers[i];
+      var ti = null;
+      try { ti = L.textItem; } catch (e) {}
+      var contents = "";
+      var font = "";
+      var sizePt = 0;
+      var dir = "horizontal";
+      var fillColor = "default";
+      var visible = true;
+      try { visible = L.visible; } catch (e) {}
+      if (ti) {
+        try { contents = ti.contents; } catch (e) {}
+        try { font = ti.font; } catch (e) {}
+        try { sizePt = (ti.size && ti.size.as) ? ti.size.as("pt") : Number(ti.size); } catch (e) {}
+        try { dir = (ti.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (e) {}
+        fillColor = fillColorNameFromTextItem(ti);
+      }
+      var b = null;
+      try { b = L.bounds; } catch (e) {}
+      var left = 0, top = 0, right = 0, bottom = 0;
+      if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
+      var layerId = layerIdOf(L);
+      var transform = textTransformForLayer(L);
+      if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
+      items.push(
+        '{"idx":' + jsonNum(i)
+        + ',"id":' + jsonNum(layerId)
+        + ',"name":' + jsonStr(L.name)
+        + ',"contents":' + jsonStr(contents)
+        + ',"font":' + jsonStr(font)
+        + ',"sizePt":' + jsonNum(sizePt)
+        + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
+        + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
+        + ',"transform":' + jsonNumArray(transform)
+        + ',"direction":' + jsonStr(dir)
+        + ',"fillColor":' + jsonStr(fillColor)
+        + ',"visible":' + jsonBool(visible)
+        + '}'
+      );
+    }
+    var json = '{"docWidth":' + jsonNum(doc.width.as ? doc.width.as("px") : doc.width)
+      + ',"docHeight":' + jsonNum(doc.height.as ? doc.height.as("px") : doc.height)
+      + ',"dpi":' + jsonNum(doc.resolution)
+      + ',"textLayers":[' + items.join(",") + ']}';
+    var jf = new File(OUT_JSON);
+    jf.encoding = "UTF-8";
+    jf.open("w");
+    jf.write(json);
+    jf.close();
+    doc.close(SaveOptions.DONOTSAVECHANGES);
+    app.preferences.rulerUnits = prevRuler;
+    app.preferences.typeUnits = prevType;
+    writeSentinel("OK " + items.length);
+  }
+} catch (err) {
+  writeSentinel("ERROR " + (err && err.toString ? err.toString() : String(err)));
+}
+"####;
+
 const READ_TEXT_BATCH_BODY: &str = r####"
 function writeSentinel(text) {
   try {
@@ -101,6 +322,59 @@ function jsonNum(n) {
   return String(n);
 }
 function jsonBool(b) { return b ? 'true' : 'false'; }
+function jsonNullableNum(n) {
+  if (n === null || n === undefined || isNaN(n)) return 'null';
+  return String(n);
+}
+function jsonNumArray(arr) {
+  if (!arr || !arr.length) return 'null';
+  var out = [];
+  for (var i = 0; i < arr.length; i++) out.push(jsonNullableNum(arr[i]));
+  return '[' + out.join(',') + ']';
+}
+function layerIdOf(L) {
+  try {
+    var id = Number(L.id);
+    return isNaN(id) ? 0 : id;
+  } catch (e) {
+    return 0;
+  }
+}
+function descriptorNumber(desc, key) {
+  try {
+    var id = stringIDToTypeID(key);
+    if (!desc.hasKey(id)) return null;
+    try { return desc.getDouble(id); } catch (e1) {}
+    try { return desc.getUnitDoubleValue(id); } catch (e2) {}
+    try { return desc.getInteger(id); } catch (e3) {}
+  } catch (e) {}
+  return null;
+}
+function textTransformForLayer(L) {
+  try {
+    var layerId = layerIdOf(L);
+    if (!layerId) return null;
+    var ref = new ActionReference();
+    ref.putIdentifier(charIDToTypeID("Lyr "), layerId);
+    var desc = executeActionGet(ref);
+    var textKey = stringIDToTypeID("textKey");
+    if (!desc.hasKey(textKey)) return null;
+    var textDesc = desc.getObjectValue(textKey);
+    var transformKey = stringIDToTypeID("transform");
+    if (!textDesc.hasKey(transformKey)) return null;
+    var tr = textDesc.getObjectValue(transformKey);
+    var xx = descriptorNumber(tr, "xx");
+    var xy = descriptorNumber(tr, "xy");
+    var yx = descriptorNumber(tr, "yx");
+    var yy = descriptorNumber(tr, "yy");
+    var tx = descriptorNumber(tr, "tx");
+    var ty = descriptorNumber(tr, "ty");
+    if (xx === null && xy === null && yx === null && yy === null && tx === null && ty === null) return null;
+    return [xx, xy, yx, yy, tx, ty];
+  } catch (e) {
+    return null;
+  }
+}
 
 function fillColorNameFromTextItem(ti) {
   try {
@@ -187,22 +461,26 @@ function processOnePsd(psdPath, refImg, bgImg) {
       try { dir = (ti.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (e) {}
       fillColor = fillColorNameFromTextItem(ti);
     }
-    var b = null;
-    try { b = L.bounds; } catch (e) {}
-    var left = 0, top = 0, right = 0, bottom = 0;
-    if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
-    if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
-    items.push(
-      '{"idx":' + jsonNum(i)
-      + ',"name":' + jsonStr(L.name)
-      + ',"contents":' + jsonStr(contents)
-      + ',"font":' + jsonStr(font)
-      + ',"sizePt":' + jsonNum(sizePt)
-      + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
-      + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
-      + ',"direction":' + jsonStr(dir)
-      + ',"fillColor":' + jsonStr(fillColor)
-      + ',"visible":' + jsonBool(visible)
+      var b = null;
+      try { b = L.bounds; } catch (e) {}
+      var left = 0, top = 0, right = 0, bottom = 0;
+      if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
+      var layerId = layerIdOf(L);
+      var transform = textTransformForLayer(L);
+      if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
+      items.push(
+        '{"idx":' + jsonNum(i)
+        + ',"id":' + jsonNum(layerId)
+        + ',"name":' + jsonStr(L.name)
+        + ',"contents":' + jsonStr(contents)
+        + ',"font":' + jsonStr(font)
+        + ',"sizePt":' + jsonNum(sizePt)
+        + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
+        + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
+        + ',"transform":' + jsonNumArray(transform)
+        + ',"direction":' + jsonStr(dir)
+        + ',"fillColor":' + jsonStr(fillColor)
+        + ',"visible":' + jsonBool(visible)
       + '}'
     );
   }
@@ -439,6 +717,7 @@ try {
 
 pub fn generate_apply_script(
     payload: &EditPayload,
+    payload_path: &str,
     sentinel_path: &str,
     progress_path: &str,
     quit_photoshop_after_finish: bool,
@@ -455,6 +734,10 @@ pub fn generate_apply_script(
         js_string(progress_path)
     ));
     out.push_str(&format!(
+        "var PAYLOAD_PATH = {};\n",
+        js_string(payload_path)
+    ));
+    out.push_str(&format!(
         "var OPUS_QUIT_PHOTOSHOP_AFTER_FINISH = {};\n",
         if quit_photoshop_after_finish {
             "true"
@@ -468,6 +751,158 @@ pub fn generate_apply_script(
     out.push_str("  if (__psver > 0 && __psver < 13) { addWarning(\"Photoshop \" + __psver + \" は動作未検証のバージョンです\"); }\n");
 
     let total = payload.edits.len();
+    if !payload_path.is_empty() {
+        out.push_str(
+            r####"
+  function __readUtf8(path) {
+    var f = new File(path);
+    f.encoding = "UTF-8";
+    if (!f.exists) throw new Error("payload file not found: " + path);
+    if (!f.open("r")) throw new Error("payload file open failed: " + path);
+    var s = f.read();
+    f.close();
+    return s;
+  }
+  function __parseJsonText(s) {
+    if (typeof JSON !== "undefined" && JSON && JSON.parse) return JSON.parse(s);
+    return eval("(" + s + ")");
+  }
+  function __has(o, k) { return o && typeof o[k] !== "undefined" && o[k] !== null; }
+  function __copy(o, k, out, to) { if (__has(o, k)) out[to || k] = o[k]; }
+  function __rubies(raw) {
+    if (!raw) return raw;
+    var out = {};
+    for (var k in raw) {
+      if (!raw.hasOwnProperty(k)) continue;
+      var e = raw[k];
+      if (!e) continue;
+      var c = {};
+      for (var p in e) if (e.hasOwnProperty(p)) c[p] = e[p];
+      if (typeof c.rubyType === "undefined" && typeof c.type !== "undefined") c.rubyType = c.type;
+      if (c.overlays && c.overlays.length) {
+        var ov = [];
+        for (var i = 0; i < c.overlays.length; i++) {
+          var src = c.overlays[i];
+          if (!src) continue;
+          var dst = {};
+          for (var op in src) if (src.hasOwnProperty(op)) dst[op] = src[op];
+          if (typeof dst.rubyType === "undefined" && typeof dst.type !== "undefined") dst.rubyType = dst.type;
+          ov.push(dst);
+        }
+        c.overlays = ov;
+      }
+      out[k] = c;
+    }
+    return out;
+  }
+  function __layer(raw) {
+    var out = {};
+    __copy(raw, "layerId", out, "id");
+    __copy(raw, "contents", out);
+    __copy(raw, "deleted", out);
+    __copy(raw, "fontPostScriptName", out, "font");
+    __copy(raw, "sizePt", out, "size");
+    __copy(raw, "dx", out);
+    __copy(raw, "dy", out);
+    __copy(raw, "direction", out);
+    __copy(raw, "strokeColor", out);
+    __copy(raw, "strokeWidthPx", out, "strokeWidth");
+    __copy(raw, "fillColor", out);
+    __copy(raw, "rotation", out);
+    __copy(raw, "leadingPct", out);
+    __copy(raw, "horizontalScale", out);
+    __copy(raw, "verticalScale", out);
+    __copy(raw, "trackingMille", out);
+    __copy(raw, "kerningMille", out);
+    __copy(raw, "lineLeadings", out);
+    __copy(raw, "charSizes", out);
+    __copy(raw, "charFonts", out);
+    __copy(raw, "charHorizontalScales", out);
+    __copy(raw, "charVerticalScales", out);
+    __copy(raw, "charTrackings", out);
+    __copy(raw, "charKernings", out);
+    __copy(raw, "charTateChuYokos", out);
+    __copy(raw, "charFillColors", out);
+    __copy(raw, "syntheticBold", out);
+    __copy(raw, "syntheticItalic", out);
+    __copy(raw, "charBolds", out);
+    __copy(raw, "charItalics", out);
+    if (__has(raw, "charRubies")) out.charRubies = __rubies(raw.charRubies);
+    return out;
+  }
+  function __newLayer(raw) {
+    var out = __layer(raw);
+    __copy(raw, "x", out);
+    __copy(raw, "y", out);
+    __copy(raw, "reuseSrcCx", out);
+    __copy(raw, "reuseSrcCy", out);
+    return out;
+  }
+  function __mapLayers(list, fn) {
+    var out = [];
+    if (!list || !list.length) return out;
+    for (var i = 0; i < list.length; i++) out.push(fn(list[i] || {}));
+    return out;
+  }
+  function __baseName(path) {
+    var s = String(path || "");
+    var a = s.split(/[\/\\]/);
+    return a.length ? (a[a.length - 1] || "output.psd") : "output.psd";
+  }
+  function __normPath(path) { return String(path || "").replace(/\\/g, "/"); }
+  function __savePath(payload, psd) {
+    if (psd && typeof psd.savePath === "string" && psd.savePath.length > 0) return __normPath(psd.savePath);
+    if (payload && payload.saveMode === "saveAs" && typeof payload.targetDir === "string" && payload.targetDir.length > 0) {
+      var dir = payload.targetDir;
+      var sep = (dir.charAt(dir.length - 1) === "/" || dir.charAt(dir.length - 1) === "\\") ? "" : "/";
+      return __normPath(dir + sep + __baseName(psd.psdPath));
+    }
+    return "";
+  }
+  var __payload = __parseJsonText(__readUtf8(PAYLOAD_PATH));
+  if (!__payload) __payload = {};
+  var __edits = (__payload && __payload.edits && __payload.edits.length) ? __payload.edits : [];
+  var __total = __edits.length;
+  initProgress(__total);
+  var __saveOk = 0;
+  var __saveFail = 0;
+  var __symbolFontPS = (__payload.symbolFontReplaceEnabled && __payload.symbolFontPostScriptName) ? __payload.symbolFontPostScriptName : "";
+  var __rubyFontPS = __payload.rubyFontPostScriptName || "";
+  for (var __idx = 0; __idx < __edits.length; __idx++) {
+    var __psd = __edits[__idx];
+    var __fileName = __baseName(__psd.psdPath);
+    var __outPath = __savePath(__payload, __psd);
+    setProgress(__idx + 1, __total, __fileName + " processing (" + (__idx + 1) + "/" + __total + ")");
+    try {
+      applyToPsd(
+        __psd.psdPath,
+        __mapLayers(__psd.layers, __layer),
+        __mapLayers(__psd.newLayers, __newLayer),
+        __outPath,
+        __payload.dashTrackingMille || 0,
+        __payload.tildeTrackingMille || 0,
+        __payload.tateChuYokoEnabled === true,
+        __symbolFontPS,
+        __payload.punctuationTsumePercent || 0,
+        __payload.rubyLeadingPct || 150,
+        __rubyFontPS,
+        __payload.rubyPhotoshopOffsetEm || 0,
+        __payload.rubyPhotoshopBiasPx || 0,
+        (__psd.pageWidth && isFinite(__psd.pageWidth)) ? __psd.pageWidth : 0,
+        (__psd.pageHeight && isFinite(__psd.pageHeight)) ? __psd.pageHeight : 0,
+        (__psd.hideLayerIds && __psd.hideLayerIds.length) ? __psd.hideLayerIds : [],
+        __payload.reuseHideOriginalText === true
+      );
+      __saveOk++;
+    } catch (eFile) {
+      OPUS_FAILED_PSD_ENTRIES.push(String(__psd.psdPath || "") + "\t" + String(__outPath || ""));
+      __saveFail++;
+      addWarning("[save failed] " + __fileName + ": " + (eFile && eFile.toString ? eFile.toString() : String(eFile)));
+    }
+  }
+"####,
+        );
+    } else {
     out.push_str(&format!("  initProgress({});\n", total));
     // 個別 PSD の保存失敗を集計するカウンタ。ループの途中で例外が出ても残りの PSD を
     // 処理し続け、最終的に "OK partial N/M" として Rust に返す。
@@ -869,6 +1304,7 @@ pub fn generate_apply_script(
         out.push_str("  }\n\n");
     }
 
+    }
     out.push_str(&format!("  setProgress({0}, {0}, \"完了\");\n", total));
     // 1 件以上失敗した場合は "OK partial <ok>/<total>" を返し、Rust 側で
     // 「N / M 個の PSD を更新」表示に切替える。失敗詳細は |WARN suffix。
@@ -1239,6 +1675,40 @@ function findLayerById(doc, id) {
     return null;
   }
   return walk(doc);
+}
+
+function rememberLayerInIdIndex(index, layer) {
+  if (!index || !layer) return;
+  try {
+    var id = layer.id;
+    if (typeof id !== "number") return;
+    var key = String(id);
+    if (typeof index[key] === "undefined") index[key] = layer;
+  } catch (eIdx) {}
+}
+
+function buildLayerIdIndex(doc) {
+  var index = {};
+  function walk(parent) {
+    if (!parent || !parent.layers) return;
+    for (var i = 0; i < parent.layers.length; i++) {
+      var l = parent.layers[i];
+      rememberLayerInIdIndex(index, l);
+      try {
+        if (l.typename === "LayerSet") walk(l);
+      } catch (eWalk) {}
+    }
+  }
+  walk(doc);
+  return index;
+}
+
+function findLayerByIdIndexed(doc, index, id) {
+  if (index && typeof id === "number") {
+    var key = String(id);
+    if (typeof index[key] !== "undefined") return index[key];
+  }
+  return findLayerById(doc, id);
 }
 
 // PsDesign で配置した新規テキストレイヤーは、毎回ドキュメント直下に
@@ -3904,10 +4374,46 @@ function visitVisibleTextLayers(doc, fn) {
   walk(doc, true);
 }
 
-// PsDesign が保存する PSD 内の **表示中** テキストレイヤーに、共通設定を適用する。
+function rememberTextLayerForPhaseB(out, seen, layer) {
+  if (!out || !seen || !layer) return;
+  var isText = false;
+  try { isText = (layer.kind === LayerKind.TEXT); } catch (eKind) {}
+  if (!isText) return;
+  var key = null;
+  try {
+    if (typeof layer.id === "number") key = "id:" + layer.id;
+  } catch (eId) {}
+  if (key) {
+    if (seen[key]) return;
+    seen[key] = true;
+  }
+  out.push(layer);
+}
+
+function rememberTextLayersForPhaseB(out, seen, layers) {
+  if (!layers || !layers.length) return;
+  for (var i = 0; i < layers.length; i++) {
+    rememberTextLayerForPhaseB(out, seen, layers[i]);
+  }
+}
+
+function visitPhaseBTextLayers(layers, fn) {
+  if (!layers || !layers.length) return;
+  for (var i = 0; i < layers.length; i++) {
+    var l = layers[i];
+    if (!l) continue;
+    var isText = false;
+    try {
+      isText = (l.kind === LayerKind.TEXT);
+    } catch (eVisitKind) {}
+    if (!isText) continue;
+    fn(l);
+  }
+}
+
+// Phase B 対象として収集済みのテキストレイヤーに、共通設定を適用する。
 //   - autoKerning = MANUAL (= UI の「カーニング: 0」、自動カーニング無効)
 //   - antiAliasMethod = SHARP (= 「シャープ」)
-// 非表示レイヤーは visitVisibleTextLayers が自動的にスキップする (ユーザー意図保全)。
 //
 // 【v2.x 修正】Photoshop の DOM `textItem.autoKerning = MANUAL` 代入は
 // textStyleRange を flatten して font 等の per-character 属性をリセットすることがある
@@ -3917,8 +4423,8 @@ function visitVisibleTextLayers(doc, fn) {
 // に置換 → 結果として全テキストが小塚化、というシナリオを再発させていた。
 // 対策: autoKerning / antiAliasMethod 設定の **前後で font を保存・復元** する。
 // flatten が起きてもユーザー指定のフォントを温存する。
-function applyDefaultTextSettingsToAllLayers(doc) {
-  visitVisibleTextLayers(doc, function (l) {
+function applyDefaultTextSettingsToPhaseBLayers(layers) {
+  visitPhaseBTextLayers(layers, function (l) {
     // 【v2.x 最適化 B】現状の autoKerning / antiAliasMethod を先に読み、既に望ましい値なら
     // 何もせずに早期 return。書込みコスト + autoKerning flatten + font 保存・復元の一連を
     // まるごと回避できる。PsDesign で過去に保存した PSD を再保存する典型ケース (= 既に
@@ -3958,12 +4464,12 @@ function applyDefaultTextSettingsToAllLayers(doc) {
   });
 }
 
-// 【v1.22.0】applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定後に、句読点ツメを
-// 表示中テキストレイヤーに再適用する safety net。DOM access が一部の per-char 属性を flatten で
+// 【v1.22.0】DOM autoKerning 設定後に、句読点ツメを
+// Phase B 対象テキストレイヤーに再適用する safety net。DOM access が一部の per-char 属性を flatten で
 // 落とすケースに対応。冪等（既に正しい値が入っていれば動作変化なし）。
-function reapplyPunctuationTsumeForAllLayers(doc, tsumePct) {
+function reapplyPunctuationTsumeForPhaseBLayers(layers, tsumePct) {
   if (!tsumePct || tsumePct <= 0) return;
-  visitVisibleTextLayers(doc, function (l) {
+  visitPhaseBTextLayers(layers, function (l) {
     try {
       var ct = l.textItem.contents;
       if (typeof ct === "string" && ct.length > 0) {
@@ -3992,12 +4498,12 @@ function hideAllTextLayers(container) {
   }
 }
 
-// 【v1.31.x】applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定後に、
-// 連続記号ツメ (dash / tilde) を表示中テキストレイヤーへ再適用する safety net。
-function reapplyRepeatedTrackingForAllLayers(doc, dashMille, tildeMille) {
+// 【v1.31.x】DOM autoKerning 設定後に、
+// 連続記号ツメ (dash / tilde) を Phase B 対象テキストレイヤーへ再適用する safety net。
+function reapplyRepeatedTrackingForPhaseBLayers(layers, dashMille, tildeMille) {
   var dashTrack = (typeof dashMille === "number" && isFinite(dashMille)) ? dashMille : 0;
   var tildeTrack = (typeof tildeMille === "number" && isFinite(tildeMille)) ? tildeMille : 0;
-  visitVisibleTextLayers(doc, function (l) {
+  visitPhaseBTextLayers(layers, function (l) {
     try {
       var ct = l.textItem.contents;
       if (typeof ct === "string" && ct.length > 0) {
@@ -4008,12 +4514,12 @@ function reapplyRepeatedTrackingForAllLayers(doc, dashMille, tildeMille) {
 }
 
 // 【写植再利用バグ修正】縦中横 (!! / !? / 半角2桁) の Phase B safety net。
-// applyDefaultTextSettingsToAllLayers の autoKerning DOM 設定が textStyleRange を flatten して
-// baselineDirection=cross を落とすため、保存直前に全テキストレイヤーへ再適用する。
+// autoKerning DOM 設定が textStyleRange を flatten して
+// baselineDirection=cross を落とすため、保存直前に Phase B 対象テキストレイヤーへ再適用する。
 // レイヤーの組方向は PS から読み取り、縦書きのみ対象。冪等（半角化・cross 付与とも再実行安全）。
-function reapplyTateChuYokoForAllLayers(doc, enabled) {
+function reapplyTateChuYokoForPhaseBLayers(layers, enabled) {
   if (!enabled) return;
-  visitVisibleTextLayers(doc, function (l) {
+  visitPhaseBTextLayers(layers, function (l) {
     try {
       var ct = l.textItem.contents;
       if (typeof ct !== "string" || ct.length === 0) return;
@@ -4025,14 +4531,14 @@ function reapplyTateChuYokoForAllLayers(doc, enabled) {
   });
 }
 
-// 【v1.22.0】記号フォント置換の Phase B safety net。表示中の新規・既存・未編集すべての
-// テキストレイヤーに再適用。charFonts は null（未編集レイヤーには manual override 情報が無いため）。
+// 【v1.22.0】記号フォント置換の Phase B safety net。Phase B 対象テキストレイヤーに再適用。
+// charFonts は null（この段階では payload 側の manual override 情報を参照しないため）。
 // 【v2.x 修正】旧仕様で取得していた layerFont (l.textItem.font) は applySymbolFont 内部の
 // skip 判定撤去に伴い不要になった。コミックフォント等の記号未収録レイヤーで ♡ が壊れる
 // 事故を防ぐため、per-char 手動指定がない記号は **常に symbolFontPS で置換** する方針。
-function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
+function reapplySymbolFontForPhaseBLayers(layers, symbolFontPS) {
   if (typeof symbolFontPS !== "string" || symbolFontPS.length === 0) return;
-  visitVisibleTextLayers(doc, function (l) {
+  visitPhaseBTextLayers(layers, function (l) {
     try {
       var ct = l.textItem.contents;
       if (typeof ct === "string" && ct.length > 0) {
@@ -4042,7 +4548,7 @@ function reapplySymbolFontForAllLayers(doc, symbolFontPS) {
   });
 }
 
-function reapplyManualTextSpacingForPayload(doc, edits, newLayers) {
+function reapplyManualTextSpacingForPayload(doc, layerIdIndex, edits, newLayers) {
   function hasNonZeroNumber(v) {
     return typeof v === "number" && isFinite(v) && Math.round(v) !== 0;
   }
@@ -4076,12 +4582,12 @@ function reapplyManualTextSpacingForPayload(doc, edits, newLayers) {
   for (var i = 0; i < edits.length; i++) {
     var e = edits[i];
     if (!hasManualSpacing(e)) continue;
-    reapply(findLayerById(doc, e.id), e, "layer " + e.id);
+    reapply(findLayerByIdIndexed(doc, layerIdIndex, e.id), e, "layer " + e.id);
   }
   for (var j = 0; j < newLayers.length; j++) {
     var nl = newLayers[j];
     if (!hasManualSpacing(nl)) continue;
-    var layer = (typeof nl.__createdLayerId === "number") ? findLayerById(doc, nl.__createdLayerId) : null;
+    var layer = (typeof nl.__createdLayerId === "number") ? findLayerByIdIndexed(doc, layerIdIndex, nl.__createdLayerId) : null;
     reapply(layer, nl, "new layer " + j);
   }
 }
@@ -4119,6 +4625,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     } catch (eMcFallback) {}
   }
   var doc = app.open(file);
+  var __layerIdIndex = buildLayerIdIndex(doc);
   try {
     // 【写植再利用】reuseHideOriginalText: 元からあるテキストレイヤーを全て非表示にする。
     // 新規レイヤー (newLayers) はこの後に作成されるので隠れない。抽出テキストで写植し直す。
@@ -4134,6 +4641,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     }
     var __rubyAbsScaleX = 1;
     var __rubyAbsScaleY = 1;
+    var __phaseBTextLayers = [];
+    var __phaseBTextLayerIds = {};
     try {
       var __docW = doc.width.as("px");
       var __docH = doc.height.as("px");
@@ -4148,7 +4657,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     } catch (eRubyAbsScale) {}
     for (var i = 0; i < edits.length; i++) {
       var e = edits[i];
-      var layer = findLayerById(doc, e.id);
+      var layer = findLayerByIdIndexed(doc, __layerIdIndex, e.id);
       if (!layer) { $.writeln("[OPUS] layer " + e.id + " not found in " + psdPath); continue; }
       if (layer.kind !== LayerKind.TEXT) { $.writeln("[OPUS] layer " + e.id + " is not text"); continue; }
       if (e.deleted === true) {
@@ -4157,6 +4666,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         }
         continue;
       }
+      rememberTextLayerForPhaseB(__phaseBTextLayers, __phaseBTextLayerIds, layer);
       var ti = layer.textItem;
       if (typeof e.direction === "string") {
         try {
@@ -4307,8 +4817,9 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           // ことで、親-ルビ間の相対距離 (ビューアーで見ていた値) が維持される。
           // override を渡すとシフト分ルビが前の行寄りに離れすぎる事故が起きる。
           var __rubiesScaled = scaleRubyAbsoluteCoords(e.charRubies, __rubyAbsScaleX, __rubyAbsScaleY);
-          applyRubies(layer, ti.contents, __rubiesScaled, __szR, __dirR, __rubyFontR, __colR, null,
+          var __rlE = applyRubies(layer, ti.contents, __rubiesScaled, __szR, __dirR, __rubyFontR, __colR, null,
                       rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
+          rememberTextLayersForPhaseB(__phaseBTextLayers, __phaseBTextLayerIds, __rlE);
         } catch (eRuby) {
           addWarning("ルビの適用に失敗 (layer " + e.id + "): " + eRuby);
         }
@@ -4390,6 +4901,8 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         var nl = newLayers[j];
         var layerRef = doc.artLayers.add();
         layerRef.kind = LayerKind.TEXT;
+        rememberLayerInIdIndex(__layerIdIndex, layerRef);
+        rememberTextLayerForPhaseB(__phaseBTextLayers, __phaseBTextLayerIds, layerRef);
         try { nl.__createdLayerId = layerRef.id; } catch (eNewLayerId) {}
         var nti = layerRef.textItem;
         if (nl.direction === "vertical") {
@@ -4595,7 +5108,10 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             var __rubiesScaledN = scaleRubyAbsoluteCoords(nl.charRubies, __rubyAbsScaleX, __rubyAbsScaleY);
             var __rl = applyRubies(layerRef, nti.contents, __rubiesScaledN, __szRN, __dirRN, __rubyFontRN, __colRN, null,
                         rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx);
-            if (__rl && __rl.length) __rubyLayersNL = __rl;
+            if (__rl && __rl.length) {
+              __rubyLayersNL = __rl;
+              rememberTextLayersForPhaseB(__phaseBTextLayers, __phaseBTextLayerIds, __rl);
+            }
           } catch (eRubyN) {
             addWarning("新規レイヤーのルビ適用に失敗: " + eRubyN);
           }
@@ -4727,39 +5243,38 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         try { __textGroup.visible = true; } catch (eVisG) {}
       }
     }
-    // 保存する PSD 内の全テキストレイヤーをカーニング 0 (MANUAL) + アンチエイリアス
-    // シャープに揃える。新規 / 既存問わず、書き出される PSD のテキスト設定を統一する。
-    try { applyDefaultTextSettingsToAllLayers(doc); } catch (eDefSet) {
+    // Phase B は今回編集・生成したテキストレイヤーだけに限定する。
+    // 未編集の既存テキストへ autoKerning / per-char 再適用が波及すると、
+    // 多レイヤー PSD ほど保存時の副作用と処理時間が大きくなる。
+    try { applyDefaultTextSettingsToPhaseBLayers(__phaseBTextLayers); } catch (eDefSet) {
       addWarning("テキスト共通設定 (kerning/antialias) の適用に失敗: " + eDefSet);
     }
-    // 【v1.22.0】Phase B: applyDefaultTextSettingsToAllLayers の DOM autoKerning 設定が
-    // textStyleRange を flatten してマイナーな per-char 属性（tsume / 記号フォント）を
-    // 落とすことがあるため、保存直前に全テキストレイヤーへ再適用する safety net。
-    // 既存・新規・PsDesign が触っていないレイヤーすべてが対象。再適用は冪等（既に正しい
-    // 値が入っていれば動作変化なし）。
+    // 【v1.22.0】Phase B: autoKerning 設定が textStyleRange を flatten してマイナーな
+    // per-char 属性（tsume / 記号フォント）を落とすことがあるため、保存直前に再適用する
+    // safety net。対象は __phaseBTextLayers に収集済みの編集・生成レイヤーだけ。
     if (typeof punctuationTsumePercent === "number" && punctuationTsumePercent > 0) {
-      try { reapplyPunctuationTsumeForAllLayers(doc, punctuationTsumePercent); }
+      try { reapplyPunctuationTsumeForPhaseBLayers(__phaseBTextLayers, punctuationTsumePercent); }
       catch (eRTs) { addWarning("句読点ツメ再適用に失敗: " + eRTs); }
     }
-    try { reapplyRepeatedTrackingForAllLayers(doc, dashTrackingMille, tildeTrackingMille); }
+    try { reapplyRepeatedTrackingForPhaseBLayers(__phaseBTextLayers, dashTrackingMille, tildeTrackingMille); }
     catch (eRTr) { addWarning("連続記号のツメ再適用に失敗: " + eRTr); }
     if (typeof symbolFontPostScriptName === "string" && symbolFontPostScriptName.length > 0) {
-      try { reapplySymbolFontForAllLayers(doc, symbolFontPostScriptName); }
+      try { reapplySymbolFontForPhaseBLayers(__phaseBTextLayers, symbolFontPostScriptName); }
       catch (eRSym) { addWarning("記号フォント置換再適用に失敗: " + eRSym); }
     }
-    try { reapplyManualTextSpacingForPayload(doc, edits, newLayers); }
+    try { reapplyManualTextSpacingForPayload(doc, __layerIdIndex, edits, newLayers); }
     catch (eRManualSpacing) { addWarning("manual text spacing reapply failed: " + eRManualSpacing); }
     // 【写植再利用バグ修正】縦中横 (!! / !?) は autoKerning flatten で消えるため再適用する。
     // 他の per-char 再適用（記号フォント / manual spacing）が textStyleRange を再構築して
     // cross を落とさないよう、Phase B の最後に実行する。
     if (tateChuYokoEnabled) {
-      try { reapplyTateChuYokoForAllLayers(doc, tateChuYokoEnabled); }
+      try { reapplyTateChuYokoForPhaseBLayers(__phaseBTextLayers, tateChuYokoEnabled); }
       catch (eRTcy) { addWarning("縦中横の再適用に失敗: " + eRTcy); }
     }
     for (var __delI = 0; __delI < edits.length; __delI++) {
       if (edits[__delI] && edits[__delI].deleted === true) {
         try {
-          var __deletedLayer = findLayerById(doc, edits[__delI].id);
+          var __deletedLayer = findLayerByIdIndexed(doc, __layerIdIndex, edits[__delI].id);
           if (__deletedLayer) __deletedLayer.visible = false;
         } catch (eDeletedHideFinal) {
           addWarning("cut layer final hide failed (layer " + edits[__delI].id + "): " + eDeletedHideFinal);
@@ -4771,7 +5286,7 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
     if (hideLayerIds && hideLayerIds.length) {
       for (var __hi = 0; __hi < hideLayerIds.length; __hi++) {
         try {
-          var __hideLayer = findLayerById(doc, hideLayerIds[__hi]);
+          var __hideLayer = findLayerByIdIndexed(doc, __layerIdIndex, hideLayerIds[__hi]);
           if (__hideLayer) __hideLayer.visible = false;
         } catch (eHide) {
           addWarning("元テキストレイヤー非表示化に失敗 (id " + hideLayerIds[__hi] + "): " + eHide);
@@ -4842,3 +5357,4 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
   }
 }
 "##;
+use crate::EditPayload;

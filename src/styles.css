@@ -10868,9 +10868,21 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
   align-items: center;
 }
 .find-change-summary {
-  padding-top: 2px;
+  padding: 7px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
   color: var(--text-muted);
   font-size: 11px;
+  line-height: 1.45;
+}
+.find-change-summary[hidden] {
+  display: none;
+}
+.find-change-summary[data-kind="warning"] {
+  border-color: color-mix(in srgb, #d97706 40%, var(--border));
+  background: color-mix(in srgb, #d97706 12%, transparent);
+  color: var(--text);
 }
 /* タブ UI: 検索置換 / 文字変換 / フォント変換 を切替える segment ボタン */
 .find-change-tabs {
@@ -11170,6 +11182,7 @@ button.favorite-style-delete:hover:not(:disabled) svg * {
 .settings-defaults-list {
   display: flex;
   flex-direction: column;
+  flex: 0 0 auto;
   gap: 0;
   margin-top: 8px;
   border: 1px solid var(--border);
