@@ -1,5 +1,40 @@
 # PsDesign
 
+## 2026-06-17 変更メモ: v2.6.0 リリース（自動配置の長音・ガイドフィット / OCR誤配置抑止 / リサイクル白フチ復帰 / テキストフィット設定）
+
+v2.6.0 では、自動配置時の長音記号配置、PSDガイドへのテキストフィット、OCR由来の短い漢字語の誤配置抑止、リサイクル時の白フチ復帰、環境設定からのテキストフィットON/OFFを中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.0` に更新済み。
+
+### A. 自動配置・ガイドフィット
+
+- [src/auto-place.js](src/auto-place.js): 「―」「ー」「｜」など長音・罫線系の記号だけで構成された短いテキストでも、自動配置の照合から落ちにくいよう正規化と低スコアしきい値を調整した。
+- [src/auto-place.js](src/auto-place.js): PSDに定規ガイドが2本以上ずつある場合、自動配置した新規テキストをガイドで囲まれた枠内へ収めるようにした。枠を超える場合は文字サイズを縮小し、枠外へ出た場合は内側へ押し戻す。
+- [src/canvas-tools.js](src/canvas-tools.js): 手動で新規テキストを配置・確定した場合も、ガイド枠内へフィットするようにした。ドラッグ時はテキスト頭揃えスナップに加え、ガイド線の左右上下端にも吸着できる。
+- [src/canvas-tools.js](src/canvas-tools.js) / [src/styles.css](src/styles.css): テキストを別テキスト上にドラッグした際に位置が入れ替わる swap 機能を削除した。
+
+### B. 選択・表示・白フチまわり
+
+- [src/canvas-tools.js](src/canvas-tools.js) / [src/styles.css](src/styles.css): ダブルクリックでテキストを選択した直後、一部の行間が開いて見えるケースを抑えるため、初期全選択時の表示クラスを追加して選択ハイライトを安定させた。
+- [src/styles.css](src/styles.css): 白フチを太くしたテキストでも選択枠・ハンドルが白フチの下に隠れないよう、選択表示の重なり順を調整した。
+- [src/services/reuse.js](src/services/reuse.js): リサイクルの「写植見本を再現」モードで、元PSDからフチ情報が取れない場合でも周辺解析から白フチを自動復元するように戻した。元PSDに明示的な白/黒フチがある場合はその値を優先する。
+
+### C. OCR誤配置リスクの抑止
+
+- [src/utils/ocr-risk.js](src/utils/ocr-risk.js): 「小暮」→「小春」のような、短い漢字語で画数や形が近い文字に置き換わるOCR誤認を検出する軽量なリスク判定を追加した。
+- [src/auto-place.js](src/auto-place.js): OCRリスクが高い一致候補は吹き出し確定配置から除外し、中央配置に回すことで誤った吹き出しへ入るリスクを下げた。確認モーダルにはリスク件数と例を表示する。
+- [src/scan-extract.js](src/scan-extract.js) / [src/txt-source.js](src/txt-source.js) / [src/styles.css](src/styles.css): 画像スキャン結果と原稿テキストの照合表示で、OCR差分疑いを「要確認」として見分けられるようにした。
+
+### D. 環境設定
+
+- [index.html](index.html) / [src/settings-ui.js](src/settings-ui.js) / [src/settings.js](src/settings.js): 環境設定の「テキスト設定」に「テキストフィット」を追加し、ガイド枠へのフィットを「適用 / 適用しない」で切り替えられるようにした。既定は従来どおり適用。
+- [src/settings.js](src/settings.js): 設定スキーマ version を `24` に更新し、`textFitEnabled` を既存設定から移行できるようにした。
+
+### 検証
+
+- `npm run check` 成功（`check:encoding` / `check:security` / `lint` / `build`）。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。
+- `git diff --check` 成功（CRLF警告のみ）。
+- リリースはタグ `v2.6.0` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-17 変更メモ: v2.5.9 リリース（多レイヤーPSD安定化 / 軽量パース診断とPhotoshop座標フォールバック / 検索・文字変換・フォント変換修正 / OPUS再リンク）
 
 v2.5.9 では、レイヤー数の多い PSD の読み込み・保存で壊れやすい箇所を中心に、保存対象の限定、Photoshop JSX の軽量化、軽量パース時の診断とテキスト座標補正、検索・文字変換・フォント変換の実行不具合、OPUS プロジェクト再リンクをまとめて更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.5.9` に更新済み。

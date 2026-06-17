@@ -4966,16 +4966,29 @@ body.editor-paragraph-reordering * {
 .layer-box.selected,
 .layer-box-new.selected {
   box-shadow: none;
-  outline: 2px solid var(--accent);
-  outline-offset: 0;
+  outline: none;
 }
 /* 複数選択 (2 件以上) のとき: 枠を水色 (cyan) の点線に切替。バッジ色は単一選択と同じ青。
    .layer-box-new / .layer-box-existing 両方に同じスタイルを適用する。 */
 .layer-box.multi-selected,
 .layer-box-new.multi-selected {
   box-shadow: none;
-  outline: 2px dashed #4fc3f7;
-  outline-offset: 0;
+  outline: none;
+}
+.page-overlay:not(.selection-center-only):not(.selection-grid-display) .layer-box.selected:not(.editing)::after,
+.page-overlay:not(.selection-center-only):not(.selection-grid-display) .layer-box.multi-selected:not(.editing)::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  pointer-events: none;
+  z-index: 10;
+}
+.page-overlay:not(.selection-center-only):not(.selection-grid-display) .layer-box.selected:not(.editing)::after {
+  border: 2px solid var(--accent);
+}
+.page-overlay:not(.selection-center-only):not(.selection-grid-display) .layer-box.multi-selected:not(.editing)::after {
+  border: 2px dashed #4fc3f7;
 }
 .page-overlay.selection-center-only .layer-box.selected,
 .page-overlay.selection-center-only .layer-box-new.selected,
@@ -5078,6 +5091,10 @@ body.editor-paragraph-reordering * {
   box-shadow: none;
   outline: none;
 }
+.page-overlay.selection-adornments-hidden .layer-box.selected::after,
+.page-overlay.selection-adornments-hidden .layer-box.multi-selected::after {
+  display: none;
+}
 .page-overlay.selection-adornments-hidden .layer-size-badge,
 .page-overlay.selection-adornments-hidden .layer-rotate-handle {
   display: none;
@@ -5129,42 +5146,6 @@ body.editor-paragraph-reordering * {
 .page-overlay.selection-center-only .layer-box-new.auto-font-switched.selected,
 .page-overlay.selection-center-only .layer-box-new.auto-font-switched.multi-selected {
   box-shadow: none;
-}
-/* V ツール swap 中、入れ替え対象 B（A の元位置に移動するフレーム）を緑で強調。
-   A 側はそのまま通常の選択枠を維持し、B と点線 ghost のみ緑で操作意図を示す。 */
-.layer-box.swap-target,
-.layer-box-new.swap-target {
-  border-color: #10b981;
-  box-shadow: 0 0 0 3px #10b981, 0 0 0 5px rgba(255, 255, 255, 0.6);
-  background: rgba(16, 185, 129, 0.28);
-}
-/* B が入れ替え後に着地する位置（A の元中心 + B のサイズ）の点線プレビュー。
-   4 本の linear-gradient で四辺の dash を構成し、各辺の background-position を
-   右回りに animate して marching ants 風に流す。 */
-.swap-ghost {
-  position: absolute;
-  pointer-events: none;
-  box-sizing: border-box;
-  z-index: 5;
-  background-color: transparent;
-  background-image:
-    linear-gradient(90deg, #10b981 50%, transparent 50%), /* 上辺 */
-    linear-gradient(90deg, #10b981 50%, transparent 50%), /* 下辺 */
-    linear-gradient(0deg, #10b981 50%, transparent 50%),  /* 左辺 */
-    linear-gradient(0deg, #10b981 50%, transparent 50%);  /* 右辺 */
-  background-repeat: repeat-x, repeat-x, repeat-y, repeat-y;
-  background-position: 0 0, 0 100%, 0 0, 100% 0;
-  background-size: 8px 2px, 8px 2px, 2px 8px, 2px 8px;
-  animation: swap-ghost-march 0.6s linear infinite;
-}
-@keyframes swap-ghost-march {
-  to {
-    background-position:
-      8px 0,      /* 上辺：右へ */
-      -8px 100%,  /* 下辺：左へ */
-      0 -8px,     /* 左辺：上へ */
-      100% 8px;   /* 右辺：下へ */
-  }
 }
 .new-layer-text,
 .existing-layer-text {
@@ -5497,7 +5478,7 @@ body.editor-paragraph-reordering * {
    表示せず、テキスト本体に caret だけが入る Photoshop 風の見た目にする。
    floating textarea は廃止し、レイヤー DOM の text element を直接編集する方式へ移行。 */
 .layer-box.editing {
-  /* 編集中は selection ring (.selected) も swap-target もすべて隠す。
+  /* 編集中は selection ring (.selected) を隠す。
      box-shadow を none で打ち消し、選択フィードバックは caret のみに統一。 */
   box-shadow: none !important;
   background: rgba(255, 255, 255, 0.6);
@@ -5509,6 +5490,9 @@ body.editor-paragraph-reordering * {
   --layer-edit-scale: 2;
   transform: scale(var(--layer-edit-scale));
   transform-origin: center center;
+}
+.layer-box.editing.editing-initial-select-all {
+  background: rgba(var(--accent-rgb), 0.08);
 }
 /* 編集中レイヤーの回転ハンドル・サイズバッジ（フォント名・pt 表示）は非表示。
    テキスト本体への入力に集中できるよう装飾を排除する。 */
@@ -5538,6 +5522,13 @@ body.editor-paragraph-reordering * {
 .layer-box.editing .new-layer-text *::selection,
 .layer-box.editing .existing-layer-text *::selection {
   background: rgba(0, 122, 255, 0.1);
+  color: inherit;
+}
+.layer-box.editing.editing-initial-select-all .new-layer-text::selection,
+.layer-box.editing.editing-initial-select-all .existing-layer-text::selection,
+.layer-box.editing.editing-initial-select-all .new-layer-text *::selection,
+.layer-box.editing.editing-initial-select-all .existing-layer-text *::selection {
+  background: transparent;
   color: inherit;
 }
 /* 既存レイヤーは通常 opacity 0.35 で canvas-baked 上の薄い重ね。
@@ -7348,6 +7339,10 @@ body.extract-source-resizing {
 .extract-source-block.changed,
 .extract-source-block.missing-extract {
   border-left-color: var(--danger);
+}
+.extract-source-block.ocr-risk {
+  border-left-color: #f59e0b;
+  background: color-mix(in srgb, #f59e0b 12%, var(--panel-body) 88%);
 }
 .extract-source-block.extra-extract {
   border-left-color: var(--accent);

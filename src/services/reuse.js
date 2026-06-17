@@ -91,6 +91,36 @@ function computeAutoStyleFromMetrics(metrics, baseFont) {
   return out;
 }
 
+function normalizeReuseStrokeColor(value) {
+  return value === "white" || value === "black" ? value : "none";
+}
+
+function hasReuseStroke(color, width) {
+  return (color === "white" || color === "black") && Number.isFinite(width) && width > 0;
+}
+
+function resolveReuseStrokeFromSourceOrMetrics(sourceColor, sourceWidthPx, metrics, baseFont) {
+  const color = normalizeReuseStrokeColor(sourceColor);
+  const width = Number.isFinite(sourceWidthPx) ? sourceWidthPx : 20;
+  if (hasReuseStroke(color, width)) {
+    return {
+      strokeColor: color,
+      strokeWidthPx: width,
+      autoFontPostScriptName: baseFont || null,
+      autoFontSwitched: false,
+      autoFontSwitchBucket: -1,
+    };
+  }
+  const auto = computeAutoStyleFromMetrics(metrics, baseFont);
+  return {
+    strokeColor: auto.strokeColor,
+    strokeWidthPx: auto.strokeWidthPx,
+    autoFontPostScriptName: auto.fontPostScriptName,
+    autoFontSwitched: auto.autoFontSwitched,
+    autoFontSwitchBucket: auto.autoFontSwitchBucket,
+  };
+}
+
 function reuseRegionVariantsForItem(it, dpi) {
   const sizePt = Number(it.sizePt);
   const fontSizePx = Number.isFinite(sizePt) && sizePt > 0 ? (sizePt * (Number(dpi) || 72)) / 72 : 24;
@@ -247,9 +277,9 @@ async function extractTextLayersToNewLayers(
   const defaultSizePt = unify && Number.isFinite(sizeRaw) && sizeRaw > 0 ? sizeRaw : null;
   const psItems = Array.isArray(page?.reusePsTextItems) ? page.reusePsTextItems : null;
   if (psItems && psItems.length > 0) {
-    // 周辺解析は「指定フォント・サイズ」モードだけで使う。
-    // 「写植見本を再現」は元 PSD の値をそのまま優先し、OCR/背景判定の色付けを混ぜない。
-    const metricsList = unify ? await analyzeReuseRegions(page.reuseBgImagePath, psItems, page.dpi) : null;
+    // 周辺解析（テキスト非表示の背景画像で白率 / ウニを計測）。
+    // 「写植見本を再現」でも、元 PSD からフチ情報が取れない場合は白フチ自動付与を復帰させる。
+    const metricsList = await analyzeReuseRegions(page.reuseBgImagePath, psItems, page.dpi);
     let count = 0;
     for (let i = 0; i < psItems.length; i++) {
       const it = psItems[i];
@@ -279,18 +309,17 @@ async function extractTextLayersToNewLayers(
       }
       const auto = unify
         ? computeAutoStyleFromMetrics(metricsList ? metricsList[i] : null, it.font || null)
-        : {
-            strokeColor: it.strokeColor ?? "none",
-            strokeWidthPx: Number.isFinite(it.strokeWidthPx) ? it.strokeWidthPx : 20,
-            fontPostScriptName: it.font || null,
-            autoFontSwitched: false,
-            autoFontSwitchBucket: -1,
-          };
+        : resolveReuseStrokeFromSourceOrMetrics(
+            it.strokeColor,
+            it.strokeWidthPx,
+            metricsList ? metricsList[i] : null,
+            it.font || null,
+          );
       const layerFont = resolveReuseFont({
         unify,
         defaultFont,
-        autoFont: auto.fontPostScriptName,
-        autoFontSwitched: auto.autoFontSwitched,
+        autoFont: unify ? auto.fontPostScriptName : auto.autoFontPostScriptName,
+        autoFontSwitched: unify ? auto.autoFontSwitched : false,
         sourceFont: it.font || null,
       });
       const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: sizePt });
@@ -308,8 +337,8 @@ async function extractTextLayersToNewLayers(
         strokeWidthPx: auto.strokeWidthPx,
         fillColor: normalizeReuseFillColor(it.fillColor),
         leadingPct: 125,
-        autoFontSwitched: auto.autoFontSwitched,
-        autoFontSwitchBucket: auto.autoFontSwitchBucket,
+        autoFontSwitched: unify ? auto.autoFontSwitched : false,
+        autoFontSwitchBucket: unify ? auto.autoFontSwitchBucket : -1,
         sourceTxtRef,
       });
       // 元レイヤーの実 bbox 中心に新規枠の中心を合わせる（auto-place と同じ中心固定方式）。

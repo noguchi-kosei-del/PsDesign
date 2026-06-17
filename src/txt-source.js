@@ -50,6 +50,7 @@ import {
 import { getDefault } from "./settings.js";
 import { openContainingFolder } from "./services/open-path.js";
 import { baseName } from "./utils/path.js";
+import { assessOcrRisk } from "./utils/ocr-risk.js";
 
 const $ = (id) => document.getElementById(id);
 const RUNTIME_TOKEN = "a" + "i";
@@ -558,7 +559,16 @@ function buildExtractDisplayRows(textBlocks, extractBlocks, pageNumber) {
     if (extractIndex != null) usedExtract.add(extractIndex);
     const scanned = extractIndex != null ? (extractBlocks[extractIndex] ?? "") : "";
     const changed = compareExtractKeyText(textBlocks[textIndex]) !== compareExtractKeyText(scanned);
-    rows.push({ type: changed ? "changed" : "matched", textIndex, extractIndex, expected: textBlocks[textIndex], scanned, score });
+    const risk = changed ? assessOcrRisk(textBlocks[textIndex], scanned) : { risky: false };
+    rows.push({
+      type: risk.risky ? "ocr-risk" : changed ? "changed" : "matched",
+      textIndex,
+      extractIndex,
+      expected: textBlocks[textIndex],
+      scanned,
+      score,
+      ocrRiskReason: risk.reason ?? "",
+    });
   }
   for (let i = 0; i < extractBlocks.length; i += 1) {
     if (usedExtract.has(i)) continue;
@@ -622,12 +632,13 @@ function renderExtractSourceViewer() {
     label.className = "extract-source-block-label";
     label.textContent = row.type === "extra-extract"
       ? `テキスト照合結果のみ #${(row.extractIndex ?? 0) + 1}`
-      : `#${(row.textIndex ?? 0) + 1}${Number.isFinite(row.score) ? ` / ${Math.round(row.score * 100)}%` : ""}`;
+      : `#${(row.textIndex ?? 0) + 1}${Number.isFinite(row.score) ? ` / ${Math.round(row.score * 100)}%` : ""}${row.type === "ocr-risk" ? " / 要確認" : ""}`;
     const body = document.createElement("div");
     body.className = "extract-source-block-body";
     if (row.type === "matched" || row.type === "extra-extract") {
       appendExtractSourceLine(body, "OCR", row.scanned, "extract-source-line-label-ocr", "extract-source-line-value-ocr");
     } else {
+      if (row.type === "ocr-risk") appendExtractSourceLine(body, "注意", row.ocrRiskReason || "短い漢字語のOCR差分疑い");
       appendExtractSourceLine(body, "txt", row.expected);
       appendExtractSourceLine(body, "OCR", row.scanned, "extract-source-line-label-ocr", "extract-source-line-value-ocr");
     }

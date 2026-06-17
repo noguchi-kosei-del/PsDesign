@@ -49,7 +49,7 @@ export const DEFAULT_SETTINGS = {
   // v8: 中丸ゴシック自動切替の閾値を 0.5 (50%) に設定 + UI 側で 10% 刻みの
   //     6 段階バケット (50-59 / 60-69 / 70-79 / 80-89 / 90-99 / 100) で色分け。
   //     旧 v7 以前 (デフォルト閾値 0.9 だった想定) の保存値を破棄して新デフォルト 0.5 を強制反映。
-  version: 23,
+  version: 24,
   themeColor: "tealGreen",
   fileDialogMode: "opus",
   // ←/→ 反転。true のとき → が前ページ、← が次ページになる（縦書き右綴じ漫画など）。
@@ -106,6 +106,7 @@ export const DEFAULT_SETTINGS = {
     // V ツールでテキストフレームに一定時間ホバーしたとき、自動で選択するか。
     // scope: interaction-only
     hoverSelectEnabled: true,
+    textFitEnabled: true,
     // ‰（千分率）。連続記号のツメ量を group 別に保持。0 = OFF、負値（または絶対値）で詰まる。
     // 連続ランの最後の 1 文字は常に 0 のまま（後続文字との字間が詰まりすぎないように）。
     // scope: render-all + save（プレビューと Photoshop 保存両方に反映）
@@ -280,6 +281,9 @@ function migrate(old) {
     }
     if (typeof d.hoverSelectEnabled === "boolean") {
       out.defaults.hoverSelectEnabled = d.hoverSelectEnabled;
+    }
+    if (typeof d.textFitEnabled === "boolean") {
+      out.defaults.textFitEnabled = d.textFitEnabled;
     }
     // 【v1.30.2 リセット】version 9 以前で保存された dashTrackingMille / tildeTrackingMille は
     // バグで両方が同じ値 (例: 両方 -300) になっているケースがあるため強制リセット。

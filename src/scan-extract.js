@@ -34,6 +34,7 @@ import { applyRules, loadSettings as loadNormalizeSettings } from "./normalize.j
 import { checkScanModelsStatus } from "./scan-install.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 import { baseName } from "./utils/path.js";
+import { assessOcrRisk } from "./utils/ocr-risk.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -110,13 +111,16 @@ async function pickInputFiles() {
 }
 
 // ReferenceScanDocument → COMIC-POT 風のテキスト本文 (ページマーカー付き)
+const COMPARE_DASH_MARK = "\uE000";
+const COMPARE_DASH_LIKE_RE = /[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D\uFF70\u30FC\u2500-\u2503|｜]/g;
+
 function compareKeyText(value) {
   return String(value ?? "")
     .normalize("NFKC")
     .replace(/\{([^{}]+)\}\(([^()]+)\)/g, "$1")
     .replace(/\r\n?/g, "\n")
     .replace(/[\s\u3000]+/g, "")
-    .replace(/[\uFE63\uFF0D\uFF70\u2010-\u2015\u2212]/g, "\u30fc")
+    .replace(COMPARE_DASH_LIKE_RE, COMPARE_DASH_MARK)
     .replace(/[、。，．.,!?！？・…ー\-()（）「」『』【】［］\[\]〈〉《》]/g, "")
     .trim();
 }
@@ -224,7 +228,19 @@ function buildExtractTextDiffs(authoritativeContent, extractContent) {
       }
       const scanned = extractBlocks[match.extractIndex] ?? "";
       if (compareKeyText(expected) !== compareKeyText(scanned)) {
-        diffs.push({ type: "changed", pageNumber, blockIndex: textIndex, textIndex, extractIndex: match.extractIndex, expected, scanned, score: match.score });
+        const risk = assessOcrRisk(expected, scanned);
+        diffs.push({
+          type: "changed",
+          pageNumber,
+          blockIndex: textIndex,
+          textIndex,
+          extractIndex: match.extractIndex,
+          expected,
+          scanned,
+          score: match.score,
+          ocrRisk: risk.risky === true,
+          ocrRiskReason: risk.reason,
+        });
       }
     }
     for (let extractIndex = 0; extractIndex < extractBlocks.length; extractIndex += 1) {

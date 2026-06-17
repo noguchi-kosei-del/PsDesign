@@ -54,6 +54,7 @@ import {
   renderTxtSourceViewer,
   syncPlacedLayerTextToSource,
 } from "./txt-source.js";
+import { getGuides } from "./rulers.js";
 
 const mounts = new Map();
 const resizeObservers = new Set();
@@ -75,6 +76,62 @@ let temporarySizeOnlyBadgesVisible = false;
 let rotateHandlesVisible = false;
 let selectionAdornmentsVisible = true;
 const SELECTION_CENTER_ONLY_MODE_KEY = "psdesign_selection_center_only_mode";
+
+function clampNumber(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  if (max < min) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function isTextFitEnabled() {
+  return getDefault("textFitEnabled") !== false;
+}
+
+function guideFrameForPage(page) {
+  if (!page?.path) return null;
+  const guides = getGuides(page.path);
+  const h = (Array.isArray(guides?.h) ? guides.h : [])
+    .filter(Number.isFinite)
+    .map((v) => clampNumber(v, 0, page.height))
+    .sort((a, b) => a - b);
+  const v = (Array.isArray(guides?.v) ? guides.v : [])
+    .filter(Number.isFinite)
+    .map((x) => clampNumber(x, 0, page.width))
+    .sort((a, b) => a - b);
+  if (h.length < 2 || v.length < 2) return null;
+  const top = h[0];
+  const bottom = h[h.length - 1];
+  const left = v[0];
+  const right = v[v.length - 1];
+  if (!(right > left && bottom > top)) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function guideLinesForPage(page) {
+  if (!page?.path) return { h: [], v: [] };
+  const guides = getGuides(page.path);
+  return {
+    h: (Array.isArray(guides?.h) ? guides.h : [])
+      .filter(Number.isFinite)
+      .map((y) => clampNumber(y, 0, page.height)),
+    v: (Array.isArray(guides?.v) ? guides.v : [])
+      .filter(Number.isFinite)
+      .map((x) => clampNumber(x, 0, page.width)),
+  };
+}
+
+function clampRectTopLeftToGuideFrame(page, left, top, width, height) {
+  if (!isTextFitEnabled()) return { x: left, y: top };
+  const frame = guideFrameForPage(page);
+  if (!frame) return { x: left, y: top };
+  const x = width <= frame.width
+    ? clampNumber(left, frame.left, frame.right - width)
+    : frame.left;
+  const y = height <= frame.height
+    ? clampNumber(top, frame.top, frame.bottom - height)
+    : frame.top;
+  return { x, y };
+}
 
 function readSelectionCenterOnlyMode() {
   try {
@@ -4633,7 +4690,48 @@ function endPan() {
 // クリック位置がレイヤー矩形の中央になるよう top-left をオフセットする。
 export function centerTopLeft(page, { contents, sizePt, direction, leadingPct, ...rest }, clickX, clickY) {
   const r = layerRectForNew(page, { x: 0, y: 0, contents, sizePt, direction, leadingPct, ...rest });
-  return { x: clickX - r.width / 2, y: clickY - r.height / 2 };
+  return clampRectTopLeftToGuideFrame(
+    page,
+    clickX - r.width / 2,
+    clickY - r.height / 2,
+    r.width,
+    r.height,
+  );
+}
+
+function fitNewLayerToGuideFrame(page, nl, { resizeToFrame = false } = {}) {
+  if (!isTextFitEnabled()) return false;
+  const frame = guideFrameForPage(page);
+  if (!frame || !nl) return false;
+  let next = { ...nl };
+  let rect = layerRectForNew(page, next);
+  if (resizeToFrame && Number.isFinite(next.sizePt) && next.sizePt > 6) {
+    const scale = Math.min(
+      1,
+      frame.width / Math.max(rect.width, 1),
+      frame.height / Math.max(rect.height, 1),
+    );
+    if (scale < 0.999) {
+      const centerX = rect.left + rect.width / 2;
+      const centerY = rect.top + rect.height / 2;
+      const fittedSize = Math.max(6, Math.round(next.sizePt * scale * 10) / 10);
+      next = { ...next, sizePt: fittedSize };
+      rect = layerRectForNew(page, next);
+      next.x = centerX - rect.width / 2;
+      next.y = centerY - rect.height / 2;
+      rect = layerRectForNew(page, next);
+    }
+  }
+  const pos = clampRectTopLeftToGuideFrame(page, rect.left, rect.top, rect.width, rect.height);
+  const changes = {};
+  if (Math.abs(pos.x - nl.x) > 0.01) changes.x = pos.x;
+  if (Math.abs(pos.y - nl.y) > 0.01) changes.y = pos.y;
+  if (Number.isFinite(next.sizePt) && Math.abs(next.sizePt - (nl.sizePt ?? next.sizePt)) > 0.001) {
+    changes.sizePt = next.sizePt;
+  }
+  if (Object.keys(changes).length === 0) return false;
+  updateNewLayer(nl.tempId, changes);
+  return true;
 }
 
 function onLayerWheel(e, ctx, layerId) {
@@ -4931,24 +5029,46 @@ function collectTextHeadSnapTargets(ctx, excludedKeys) {
   return targets;
 }
 
-function resolveTextHeadSnap(ddx, ddy, referenceHead, targets, scaleX, scaleY) {
-  if (!referenceHead || !targets?.length) return { ddx, ddy, snapX: null, snapY: null };
+function resolveTextHeadSnap(ddx, ddy, referenceHead, targets, scaleX, scaleY, referenceRect = null, guideLines = null) {
+  if (!referenceHead) return { ddx, ddy, snapX: null, snapY: null };
   const thresholdX = TEXT_HEAD_SNAP_THRESHOLD_PX * scaleX;
   const thresholdY = TEXT_HEAD_SNAP_THRESHOLD_PX * scaleY;
   const proposedX = referenceHead.x + ddx;
   const proposedY = referenceHead.y + ddy;
   let bestX = null;
   let bestY = null;
-  for (const target of targets) {
-    const offsetX = target.x - proposedX;
-    const offsetY = target.y - proposedY;
+  const considerX = (lineX, edgeX = proposedX) => {
+    if (!Number.isFinite(lineX) || !Number.isFinite(edgeX)) return;
+    const offsetX = lineX - edgeX;
     const absX = Math.abs(offsetX);
-    const absY = Math.abs(offsetY);
     if (absX <= thresholdX && (!bestX || absX < bestX.abs)) {
-      bestX = { abs: absX, offset: offsetX, value: target.x };
+      bestX = { abs: absX, offset: offsetX, value: lineX };
     }
+  };
+  const considerY = (lineY, edgeY = proposedY) => {
+    if (!Number.isFinite(lineY) || !Number.isFinite(edgeY)) return;
+    const offsetY = lineY - edgeY;
+    const absY = Math.abs(offsetY);
     if (absY <= thresholdY && (!bestY || absY < bestY.abs)) {
-      bestY = { abs: absY, offset: offsetY, value: target.y };
+      bestY = { abs: absY, offset: offsetY, value: lineY };
+    }
+  };
+  for (const target of targets ?? []) {
+    considerX(target.x);
+    considerY(target.y);
+  }
+  if (referenceRect && guideLines) {
+    const left = referenceRect.left + ddx;
+    const right = referenceRect.right + ddx;
+    const top = referenceRect.top + ddy;
+    const bottom = referenceRect.bottom + ddy;
+    for (const x of guideLines.v ?? []) {
+      considerX(x, left);
+      considerX(x, right);
+    }
+    for (const y of guideLines.h ?? []) {
+      considerY(y, top);
+      considerY(y, bottom);
     }
   }
   return {
@@ -5126,6 +5246,8 @@ function beginMultiLayerDrag(e, ctx) {
   }
   const snapReferenceHead = textHeadPointForRect(rectForDragItem(ctx, items[0]));
   const snapTargets = collectTextHeadSnapTargets(ctx, excludedSnapKeys);
+  const snapReferenceRect = rectForDragItem(ctx, items[0]);
+  const guideSnapLines = guideLinesForPage(ctx.page);
 
   const startClientX = e.clientX;
   const startClientY = e.clientY;
@@ -5145,55 +5267,7 @@ function beginMultiLayerDrag(e, ctx) {
   if (isDuplicate) document.body.style.cursor = "copy";
   ctx.overlay.classList.add("layers-moving");
 
-  // swap モード判定用：単一選択 + Alt 複製でないときのみ swap 可能。
-  const isSingleMoveDrag = !isDuplicate && items.length === 1;
-  const dragged = isSingleMoveDrag ? items[0] : null;
-  // ドラッグ開始時点の被ドラッグレイヤーの絶対 PSD rect（aStart）。
-  // 既存レイヤーの edit.dx/dy は開始時の値で固定される（layerRectForExisting が反映済み）。
-  const aStartRect = dragged
-    ? (dragged.kind === "existing"
-      ? layerRectForExisting(ctx.page, dragged.layer, getEdit(ctx.page.path, dragged.layer.id) ?? {})
-      : layerRectForNew(ctx.page, dragged.nl))
-    : null;
-  const draggedKey = dragged
-    ? (dragged.kind === "existing"
-      ? { kind: "existing", id: dragged.layer.id }
-      : { kind: "new", id: dragged.nl.tempId })
-    : null;
-  let lastSwapTarget = null;
-  let swapGhostEl = null;
   let dragActivated = false;
-  const swapTargetKey = (t) => (
-    t ? `${t.kind}:${t.kind === "existing" ? t.layer.id : t.nl.tempId}` : null
-  );
-
-  // 入れ替え対象 B が存在するときの視覚フィードバックを適用/解除。
-  //   - 既存の `.swap-target` リング（緑）を B 側に付ける
-  //   - A の元位置中心 + B のサイズで点線 ghost を表示（B の入れ替え後 着地位置）
-  const applySwapVisuals = (target) => {
-    setSwapTargetHighlight(ctx, target);
-    if (target) {
-      const bRect = target.kind === "existing"
-        ? layerRectForExisting(ctx.page, target.layer, getEdit(ctx.page.path, target.layer.id) ?? {})
-        : layerRectForNew(ctx.page, target.nl);
-      const aCenterX = aStartRect.left + aStartRect.width / 2;
-      const aCenterY = aStartRect.top + aStartRect.height / 2;
-      const ghostLeft = aCenterX - bRect.width / 2;
-      const ghostTop = aCenterY - bRect.height / 2;
-      if (!swapGhostEl) {
-        swapGhostEl = document.createElement("div");
-        swapGhostEl.className = "swap-ghost";
-        ctx.overlay.appendChild(swapGhostEl);
-      }
-      swapGhostEl.style.left = `${(ghostLeft / ctx.page.width) * 100}%`;
-      swapGhostEl.style.top = `${(ghostTop / ctx.page.height) * 100}%`;
-      swapGhostEl.style.width = `${(bRect.width / ctx.page.width) * 100}%`;
-      swapGhostEl.style.height = `${(bRect.height / ctx.page.height) * 100}%`;
-    } else if (swapGhostEl) {
-      swapGhostEl.remove();
-      swapGhostEl = null;
-    }
-  };
 
   const computePsdDelta = (ev) => {
     const { dx, dy } = inverseRotateDelta(
@@ -5204,7 +5278,7 @@ function beginMultiLayerDrag(e, ctx) {
     return { ddx: dx * scaleX, ddy: dy * scaleY };
   };
   const snapPsdDelta = ({ ddx, ddy }) => (
-    resolveTextHeadSnap(ddx, ddy, snapReferenceHead, snapTargets, scaleX, scaleY)
+    resolveTextHeadSnap(ddx, ddy, snapReferenceHead, snapTargets, scaleX, scaleY, snapReferenceRect, guideSnapLines)
   );
 
   const suppressDefault = (ev) => ev.preventDefault();
@@ -5239,15 +5313,6 @@ function beginMultiLayerDrag(e, ctx) {
     const { ddx, ddy, snapX, snapY } = snapPsdDelta(computePsdDelta(ev));
     applyPreview(ddx, ddy);
     showTextHeadSnapGuides(ctx, { snapX, snapY });
-    if (!isSingleMoveDrag) return;
-    const cx = aStartRect.left + aStartRect.width / 2 + ddx;
-    const cy = aStartRect.top + aStartRect.height / 2 + ddy;
-    const next = findSwapTarget(ctx, draggedKey, cx, cy);
-    if (swapTargetKey(next) !== swapTargetKey(lastSwapTarget)) {
-      applySwapVisuals(next);
-      document.body.style.cursor = next ? "alias" : prevCursor;
-      lastSwapTarget = next;
-    }
   };
   const onUp = (ev) => {
     window.removeEventListener("mousemove", onMove);
@@ -5256,10 +5321,7 @@ function beginMultiLayerDrag(e, ctx) {
     window.removeEventListener("selectstart", suppressDefault, true);
     document.body.style.userSelect = prevUserSelect;
     ctx.overlay.classList.remove("layers-moving");
-    if (isDuplicate || lastSwapTarget) document.body.style.cursor = prevCursor;
-    // swap モード中の hover ハイライト残骸を必ず掃除（refreshAllOverlays でも再構築されるが
-    // 通常移動分岐では DOM が再生成されないため明示的に外す）。
-    applySwapVisuals(null);
+    if (isDuplicate) document.body.style.cursor = prevCursor;
     clearTextHeadSnapGuides(ctx);
     if (!dragActivated) {
       refreshAllOverlays();
@@ -5277,22 +5339,6 @@ function beginMultiLayerDrag(e, ctx) {
         }
       }
       commitHistoryTransient();
-    } else if (isSingleMoveDrag && (ddx !== 0 || ddy !== 0)) {
-      // mouseup 時点で再判定（mousemove 最終フレームと mouseup の差を吸収）。
-      const cx = aStartRect.left + aStartRect.width / 2 + ddx;
-      const cy = aStartRect.top + aStartRect.height / 2 + ddy;
-      const target = findSwapTarget(ctx, draggedKey, cx, cy);
-      if (target) {
-        performSwap(ctx, dragged, aStartRect, target);
-      } else {
-        beginHistoryTransient();
-        if (dragged.kind === "existing") {
-          addEditOffset(ctx.page.path, dragged.layer.id, ddx, ddy);
-        } else {
-          updateNewLayer(dragged.nl.tempId, { x: dragged.startX + ddx, y: dragged.startY + ddy });
-        }
-        commitHistoryTransient();
-      }
     } else if (ddx !== 0 || ddy !== 0) {
       beginHistoryTransient();
       for (const item of items) {
@@ -5432,94 +5478,6 @@ function collectLayerHits(ctx, selRect) {
     if (rectsIntersect(selRect, lrect)) hits.push({ pageIndex, layerId: nl.tempId });
   }
   return hits;
-}
-
-// V ツールでテキストフレームを別フレームの上にドロップしたとき、両者の位置を
-// 入れ替える（swap）ためのヘルパ群。単一選択ドラッグ（Alt 複製ではない）の
-// ときだけ有効化される。
-
-// ドラッグ中レイヤーの中心点 (centerXPsd, centerYPsd) を含むレイヤーを探す。
-// draggedKey と一致するレイヤーは自己除外。最初のヒット 1 件を返す（既存→新規の順）。
-function findSwapTarget(ctx, draggedKey, centerXPsd, centerYPsd) {
-  const tinyRect = {
-    left: centerXPsd - 0.5,
-    top: centerYPsd - 0.5,
-    right: centerXPsd + 0.5,
-    bottom: centerYPsd + 0.5,
-  };
-  for (const layer of ctx.page.textLayers) {
-    if (draggedKey.kind === "existing" && layer.id === draggedKey.id) continue;
-    const edit = getEdit(ctx.page.path, layer.id) ?? {};
-    if (edit.deleted === true) continue;
-    const lrect = layerRectForExisting(ctx.page, layer, edit);
-    if (rectsIntersect(tinyRect, lrect)) return { kind: "existing", layer };
-  }
-  for (const nl of getNewLayersForPsd(ctx.page.path)) {
-    if (draggedKey.kind === "new" && nl.tempId === draggedKey.id) continue;
-    const lrect = layerRectForNew(ctx.page, nl);
-    if (rectsIntersect(tinyRect, lrect)) return { kind: "new", nl };
-  }
-  return null;
-}
-
-// hover 中の swap ターゲットに `.swap-target` クラスを付ける/外す。
-// refreshAllOverlays は呼ばず、対象 box の DOM だけを直接触る。
-function setSwapTargetHighlight(ctx, target) {
-  const prev = ctx.overlay.querySelector(".layer-box.swap-target");
-  if (prev) prev.classList.remove("swap-target");
-  if (!target) return;
-  let el = null;
-  if (target.kind === "existing") {
-    el = ctx.overlay.querySelector(`.layer-box-existing[data-layer-id="${target.layer.id}"]`);
-  } else {
-    el = ctx.overlay.querySelector(`.layer-box-new[data-temp-id="${target.nl.tempId}"]`);
-  }
-  if (el) el.classList.add("swap-target");
-}
-
-// 被ドラッグレイヤー A とターゲット B の位置を交換する。
-// aStartRect は A のドラッグ開始時点の絶対 PSD rect、target は最新の B 情報。
-// A と B でサイズ（幅・高さ）が異なる場合、左上 (left/top) ではなく
-// **中心 (center)** を入れ替える。これによりサイズ差があっても各フレームが
-// 元々あった位置の中央に収まる（吹き出し中央同士のスワップとして自然）。
-// 既存レイヤーは差分加算 (addEditOffset)、新規レイヤーは絶対値上書き (updateNewLayer)
-// を用い、begin/commitHistoryTransient で 1 history snapshot に集約する。
-function performSwap(ctx, dragged, aStartRect, target) {
-  const path = ctx.page.path;
-  // ターゲット B の現在 rect（最新の絶対座標 + 幅高さ）を取得。
-  let bRect;
-  if (target.kind === "existing") {
-    const bEdit = getEdit(path, target.layer.id) ?? {};
-    bRect = layerRectForExisting(ctx.page, target.layer, bEdit);
-  } else {
-    bRect = layerRectForNew(ctx.page, target.nl);
-  }
-  // 中心点（A は開始時、B は現在）。
-  const aCenterX = aStartRect.left + aStartRect.width / 2;
-  const aCenterY = aStartRect.top + aStartRect.height / 2;
-  const bCenterX = bRect.left + bRect.width / 2;
-  const bCenterY = bRect.top + bRect.height / 2;
-  // A の新 left/top（中心を B の中心に揃える → A 自身の半サイズを引く）。
-  const aNewLeft = bCenterX - aStartRect.width / 2;
-  const aNewTop = bCenterY - aStartRect.height / 2;
-  // B の新 left/top（中心を A の元中心に揃える → B 自身の半サイズを引く）。
-  const bNewLeft = aCenterX - bRect.width / 2;
-  const bNewTop = aCenterY - bRect.height / 2;
-
-  beginHistoryTransient();
-  // A → B の中心へ
-  if (dragged.kind === "existing") {
-    addEditOffset(path, dragged.layer.id, aNewLeft - aStartRect.left, aNewTop - aStartRect.top);
-  } else {
-    updateNewLayer(dragged.nl.tempId, { x: aNewLeft, y: aNewTop });
-  }
-  // B → A の元中心へ
-  if (target.kind === "existing") {
-    addEditOffset(path, target.layer.id, bNewLeft - bRect.left, bNewTop - bRect.top);
-  } else {
-    updateNewLayer(target.nl.tempId, { x: bNewLeft, y: bNewTop });
-  }
-  commitHistoryTransient();
 }
 
 // 【v1.21.0】contenteditable ベースの in-place 編集ヘルパ。
@@ -5699,6 +5657,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
 
   // 4. 編集モード ON
   box.classList.add("editing");
+  if (options.selectAll && startContents) box.classList.add("editing-initial-select-all");
   applyInPlaceEditZoomClass(box);
   inner.contentEditable = "true";
   inner.spellcheck = false;
@@ -6099,6 +6058,10 @@ function startContentEditableEdit(ctx, target, options = {}) {
   // 注入する（getSelRange は inner.focus 直後のブラウザ内部状態によって
   // range が collapse として返ってくることがあり不安定）。
   let initialSelectAllPending = !!(options.selectAll && startContents && startContents.length > 0);
+  const clearInitialSelectAllVisual = () => {
+    initialSelectAllPending = false;
+    box.classList.remove("editing-initial-select-all");
+  };
   if (initialSelectAllPending) {
     setLastInplaceSelection({
       start: 0,
@@ -6143,7 +6106,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
         return;
       }
       // ユーザー操作で選択範囲が変化した。pending を下ろして reportCursor 経路に戻す。
-      initialSelectAllPending = false;
+      clearInitialSelectAllVisual();
     }
     reportCursor();
   };
@@ -6287,6 +6250,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
 
   // input ハンドラ: 差分を計算 → state に反映 + per-char index re-mapping
   const onInput = () => {
+    if (initialSelectAllPending) clearInitialSelectAllVisual();
     if (imeComposing) {
       // IME 候補表示中は state.contents を書き換えない（preedit が確定値として残ってしまうため）。
       // ただし visible text を使って bbox は visual update する。これにより IME で長文を
@@ -6367,6 +6331,9 @@ function startContentEditableEdit(ctx, target, options = {}) {
 
   // Esc / Ctrl+Enter / 通常 Enter
   const onKeydown = (e) => {
+    if (initialSelectAllPending && !["Shift", "Control", "Alt", "Meta"].includes(e.key)) {
+      clearInitialSelectAllVisual();
+    }
     if (e.key === "Escape") {
       e.preventDefault();
       e.stopPropagation();
@@ -6420,7 +6387,7 @@ function startContentEditableEdit(ctx, target, options = {}) {
     inner.removeEventListener("blur", onBlur);
     inner.removeEventListener("mousedown", onRubyMouseDown, true);
 
-    box.classList.remove("editing", "editing-zoomed");
+    box.classList.remove("editing", "editing-zoomed", "editing-initial-select-all");
     inner.removeAttribute("contenteditable");
     inner.removeAttribute("spellcheck");
     box.__finalize = null;
@@ -6573,6 +6540,8 @@ function startTextInput(ctx, x, y, direction = "vertical") {
         removeNewLayer(created.tempId);
         return false; // abort: 履歴に残さない
       }
+      const latest = getNewLayersForPsd(page.path).find((l) => l.tempId === created.tempId);
+      if (latest) fitNewLayerToGuideFrame(page, latest, { resizeToFrame: true });
     },
     onCancel: () => {
       // Esc: 編集前の startContents (空) に巻き戻った後の onCancel。

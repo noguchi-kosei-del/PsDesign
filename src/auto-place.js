@@ -51,6 +51,8 @@ import { rebuildLayerList } from "./text-editor.js";
 import { getDefault } from "./settings.js";
 import { sortBlocksMangaOrder } from "./utils/manga-order.js";
 import { baseName } from "./utils/path.js";
+import { assessOcrRisk } from "./utils/ocr-risk.js";
+import { getGuides } from "./rulers.js";
 
 const $ = (id) => document.getElementById(id);
 const SOURCE_DOC_KEY = "mo" + "kuro";
@@ -845,7 +847,7 @@ function mapBlockToNewLayer(block, referenceScanPage, psdPage, contents, default
     `[scan-place] surround page=${(sourceTxtRef?.pageNumber ?? "?")} idx=${sourceTxtRef?.paragraphIndex ?? "?"} white=${wrStr} edge=${ecStr} minSeg=${msStr} bg=${bgScore.toFixed(2)} uni=${uniScore.toFixed(2)} ${tags.length ? "[" + tags.join(", ") + "]" : "[default]"}`,
   );
 
-  return {
+  const layer = {
     psdPath: psdPage.path,
     x,
     y,
@@ -863,6 +865,7 @@ function mapBlockToNewLayer(block, referenceScanPage, psdPage, contents, default
     autoFontSwitched,        // UI で色強調するためのフラグ
     autoFontSwitchBucket,    // 0..5 の 10% 刻みバケット (UI 色分け用)、-1 は未切替
   };
+  return fitAutoPlaceLayerToGuideFrame(psdPage, layer);
 }
 
 // 吹き出しに対応しない「余り TXT 段落」を PSD ページの幾何中心 (width/2, height/2)
@@ -885,7 +888,7 @@ function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
   // PSD ページの幾何中心 (width/2, height/2) を bbox 中央に合わせる top-left に変換。
   const x = psdPage.width / 2 - width / 2;
   const y = psdPage.height / 2 - height / 2;
-  return {
+  const layer = {
     psdPath: psdPage.path,
     x,
     y,
@@ -901,6 +904,7 @@ function mapTxtToPageCenter(psdPage, contents, defaults, sourceTxtRef) {
     charRubies,
     lineLeadings: rubyLineLeadingsForText(text, charRubies),
   };
+  return fitAutoPlaceLayerToGuideFrame(psdPage, layer);
 }
 
 // ============================================================
@@ -1097,14 +1101,22 @@ function rubyLineLeadingsForText(text, charRubies) {
   return out;
 }
 
+const PLACEMENT_DASH_MARK = "\uE000";
+const PLACEMENT_DASH_LIKE_RE = /[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D\uFF70\u30FC\u2500-\u2503|｜]/g;
+
 function normalizePlacementText(value) {
   return parseRubyAnnotatedText(value).text
     .normalize("NFKC")
     .replace(/\r\n?/g, "\n")
     .replace(/[\s\u3000]+/g, "")
-    .replace(/[\uFE63\uFF0D\uFF70\u2010-\u2015\u2212]/g, "\u30fc")
+    .replace(PLACEMENT_DASH_LIKE_RE, PLACEMENT_DASH_MARK)
     .replace(/[、。，．.,!?！？・…ー\-()（）「」『』【】［］\[\]〈〉《》]/g, "")
     .trim();
+}
+
+function isDashOnlyPlacementText(value) {
+  const normalized = normalizePlacementText(value);
+  return normalized.length > 0 && [...normalized].every((ch) => ch === PLACEMENT_DASH_MARK);
 }
 
 function getBlockText(block) {
@@ -1160,6 +1172,7 @@ function textSimilarityScore(aRaw, bRaw) {
 
 function lowPlacementMatchScore(txt, extract) {
   const len = Math.min(normalizePlacementText(txt).length, normalizePlacementText(extract).length);
+  if (isDashOnlyPlacementText(txt)) return 0.9;
   if (len <= 2) return 0.72;
   if (len <= 4) return 0.58;
   if (len <= 8) return 0.46;
@@ -1189,9 +1202,25 @@ function assignBlocksToTxt(txtBlocks, sortedBlocks) {
   const usedTxt = new Set();
   const usedBlock = new Set();
   const assigned = new Array(txtBlocks.length).fill(null);
+  const rejectedMatches = [];
+  const rejectedTxt = new Set();
   for (const candidate of candidates) {
     if (usedTxt.has(candidate.txtIndex) || usedBlock.has(candidate.entry.index)) continue;
     const lowThreshold = lowPlacementMatchScore(txtBlocks[candidate.txtIndex], candidate.entry.text);
+    if (isDashOnlyPlacementText(txtBlocks[candidate.txtIndex]) && candidate.score < lowThreshold) continue;
+    const risk = assessOcrRisk(txtBlocks[candidate.txtIndex], candidate.entry.text);
+    if (risk.risky) {
+      if (!rejectedTxt.has(candidate.txtIndex) && candidate.score >= lowThreshold) {
+        rejectedTxt.add(candidate.txtIndex);
+        rejectedMatches.push({
+          txtIndex: candidate.txtIndex,
+          entry: candidate.entry,
+          score: candidate.score,
+          risk,
+        });
+      }
+      continue;
+    }
     assigned[candidate.txtIndex] = {
       ...candidate.entry,
       score: candidate.score,
@@ -1200,7 +1229,7 @@ function assignBlocksToTxt(txtBlocks, sortedBlocks) {
     usedTxt.add(candidate.txtIndex);
     usedBlock.add(candidate.entry.index);
   }
-  return assigned;
+  return { assigned, rejectedMatches };
 }
 
 // 配置用の「見開きグループ」を返す。各 group = { key, pageNumbers:[..], blocks:[..] }。
@@ -1249,6 +1278,12 @@ function buildPsdPageMap(psdPages, referencePageCount = 0) {
     if (nums.length >= 2 && psd?.splitSide === "left") return [nums[1]];
     return nums;
   });
+  const logicalPageNumbers = [...new Set(
+    pageNumbersByPsdIndex.flat().filter((n) => Number.isInteger(n) && n > 0),
+  )].sort((a, b) => a - b);
+  const referenceIndexByLogicalPage = new Map(
+    logicalPageNumbers.map((pageNumber, index) => [pageNumber, index]),
+  );
   const pageToPsdIndices = new Map();
   let logicalMaxPage = 0;
   let hasSpreadPsd = false;
@@ -1280,13 +1315,120 @@ function buildPsdPageMap(psdPages, referencePageCount = 0) {
   }
   return {
     pageNumbersByPsdIndex,
+    logicalPageNumbers,
     pageToPsdIndices,
     logicalMaxPage,
     hasSpreadPsd,
     hasLogicalMismatch,
     usedPsdIndices,
-    referenceUsesLogicalPages: referencePageCount >= logicalMaxPage && (hasSpreadPsd || hasLogicalMismatch),
+    referencePageCountByOrder: logicalPageNumbers.length || psdPages.length,
+    referenceIndexByLogicalPage,
+    referenceUsesLogicalPages: referencePageCount >= (logicalPageNumbers.length || psdPages.length)
+      && (hasSpreadPsd || hasLogicalMismatch),
   };
+}
+
+function clampNumber(value, min, max) {
+  if (!Number.isFinite(value)) return min;
+  if (max < min) return min;
+  return Math.max(min, Math.min(max, value));
+}
+
+function isTextFitEnabled() {
+  return getDefault("textFitEnabled") !== false;
+}
+
+function guideFrameForPage(page) {
+  if (!page?.path) return null;
+  const guides = getGuides(page.path);
+  const h = (Array.isArray(guides?.h) ? guides.h : [])
+    .filter(Number.isFinite)
+    .map((v) => clampNumber(v, 0, page.height))
+    .sort((a, b) => a - b);
+  const v = (Array.isArray(guides?.v) ? guides.v : [])
+    .filter(Number.isFinite)
+    .map((x) => clampNumber(x, 0, page.width))
+    .sort((a, b) => a - b);
+  if (h.length < 2 || v.length < 2) return null;
+  const top = h[0];
+  const bottom = h[h.length - 1];
+  const left = v[0];
+  const right = v[v.length - 1];
+  if (!(right > left && bottom > top)) return null;
+  return { left, top, right, bottom, width: right - left, height: bottom - top };
+}
+
+function autoPlaceLayerRect(psdPage, layer) {
+  const size = estimateLayerSize(
+    psdPage,
+    layer.sizePt ?? 24,
+    layer.contents ?? "",
+    layer.leadingPct ?? 125,
+    layer.direction ?? "vertical",
+  );
+  return {
+    left: layer.x ?? 0,
+    top: layer.y ?? 0,
+    right: (layer.x ?? 0) + size.width,
+    bottom: (layer.y ?? 0) + size.height,
+    width: size.width,
+    height: size.height,
+  };
+}
+
+function fitAutoPlaceLayerToGuideFrame(psdPage, layer) {
+  if (!isTextFitEnabled()) return layer;
+  const frame = guideFrameForPage(psdPage);
+  if (!frame || !layer) return layer;
+  let next = { ...layer };
+  let rect = autoPlaceLayerRect(psdPage, next);
+  const scale = Math.min(
+    1,
+    frame.width / Math.max(rect.width, 1),
+    frame.height / Math.max(rect.height, 1),
+  );
+  if (scale < 0.999 && Number.isFinite(next.sizePt) && next.sizePt > 6) {
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    next.sizePt = Math.max(6, snapHalfOrFull(next.sizePt * scale));
+    rect = autoPlaceLayerRect(psdPage, next);
+    next.x = centerX - rect.width / 2;
+    next.y = centerY - rect.height / 2;
+    rect = autoPlaceLayerRect(psdPage, next);
+  }
+  next.x = rect.width <= frame.width
+    ? clampNumber(rect.left, frame.left, frame.right - rect.width)
+    : frame.left;
+  next.y = rect.height <= frame.height
+    ? clampNumber(rect.top, frame.top, frame.bottom - rect.height)
+    : frame.top;
+  return next;
+}
+
+function txtGroupsUseReferenceOrder(txtGroups, psdPageMap) {
+  if (!psdPageMap?.hasLogicalMismatch) return false;
+  const logicalPages = psdPageMap.logicalPageNumbers ?? [];
+  if (logicalPages.length === 0 || logicalPages[0] <= 1) return false;
+  for (const group of Array.isArray(txtGroups) ? txtGroups : []) {
+    const nums = Array.isArray(group?.pageNumbers) && group.pageNumbers.length
+      ? group.pageNumbers
+      : [group?.key];
+    if (nums.some((n) => n === 1)) return true;
+  }
+  return false;
+}
+
+function resolveReferenceOrderPageNumbers(pageNumbers, psdPageMap, useReferenceOrder) {
+  if (!useReferenceOrder) return pageNumbers;
+  const logicalPages = psdPageMap.logicalPageNumbers ?? [];
+  return pageNumbers
+    .map((n) => {
+      const idx = Number(n) - 1;
+      return Number.isInteger(idx) && idx >= 0 && idx < logicalPages.length
+        ? logicalPages[idx]
+        : null;
+    })
+    .filter((n) => Number.isInteger(n) && n > 0);
 }
 
 function uniquePsdIndicesForPageNumbers(pageNumbers, psdPageMap, psdCount) {
@@ -1307,9 +1449,16 @@ function uniquePsdIndicesForPageNumbers(pageNumbers, psdPageMap, psdCount) {
 function referenceIndexForPsdRow(psdPageMap, rowIndex) {
   const logicalPages = psdPageMap.pageNumbersByPsdIndex[rowIndex] ?? [rowIndex + 1];
   if (psdPageMap.referenceUsesLogicalPages) {
-    return Math.max(0, (logicalPages[0] ?? rowIndex + 1) - 1);
+    const referenceIndex = psdPageMap.referenceIndexByLogicalPage?.get(logicalPages[0]);
+    return Number.isInteger(referenceIndex) ? referenceIndex : rowIndex;
   }
   return rowIndex;
+}
+
+function referenceScanForLogicalPage(referenceScanDoc, psdPageMap, pageNumber) {
+  const referenceIndex = psdPageMap.referenceIndexByLogicalPage?.get(pageNumber);
+  if (!Number.isInteger(referenceIndex)) return null;
+  return referenceScanDoc?.pages?.[referenceIndex] ?? null;
 }
 
 function originalIndexBlock(block, originalIndex) {
@@ -1394,8 +1543,8 @@ function referenceScanForSpreadPage(referenceScanDoc, rowReferenceScan, logicalP
   if (logicalPages.length < 2) return withOriginalBlockIndices(rowReferenceScan);
   const side = spreadSideForLogicalPage(logicalPages, pageNumber);
   if (psdPageMap.referenceUsesLogicalPages) {
-    const firstPageScan = referenceScanDoc?.pages?.[(logicalPages[0] ?? 1) - 1] ?? null;
-    const secondPageScan = referenceScanDoc?.pages?.[(logicalPages[1] ?? 1) - 1] ?? null;
+    const firstPageScan = referenceScanForLogicalPage(referenceScanDoc, psdPageMap, logicalPages[0]);
+    const secondPageScan = referenceScanForLogicalPage(referenceScanDoc, psdPageMap, logicalPages[1]);
     if (wholeSpread && firstPageScan && secondPageScan) {
       const leftWidth = Math.max(1, Number(secondPageScan.img_width) || 1);
       const rightWidth = Math.max(1, Number(firstPageScan.img_width) || 1);
@@ -1452,7 +1601,7 @@ function placementEntriesForGroup(referenceScanDoc, rows, pageNumbers, psdPageMa
 }
 
 function getAutoPlaceScanPageLimit(psdPages) {
-  return buildPsdPageMap(psdPages).logicalMaxPage;
+  return buildPsdPageMap(psdPages).referencePageCountByOrder;
 }
 
 function referenceScanForLayerAdjustment(referenceScanDoc, psdPageMap, psdIndex, sourceTxtRef = null) {
@@ -1478,6 +1627,7 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
   const M = psdPages.length;
   const R = referenceScanDoc.pages.length;
   const psdPageMap = buildPsdPageMap(psdPages, R);
+  const useReferenceOrderForTxtPages = txtGroupsUseReferenceOrder(txtGroups, psdPageMap);
   const out = { pages: [], totals: { placed: 0, leftoverTxt: 0, leftoverBubbles: 0 } };
 
   // PSD ページごとの行。各見開きグループの配置結果を、bubble が属する単ページ PSD の行へ溜める。
@@ -1494,6 +1644,7 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
     txtCount: 0,
     usedLocal: new Set(),
     centeredCount: 0,
+    ocrRiskWarnings: [],
   }));
 
   for (const group of txtGroups) {
@@ -1501,8 +1652,14 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
     const pageNumbers = Array.isArray(group.pageNumbers) && group.pageNumbers.length
       ? group.pageNumbers
       : [group.key];
+    const placementPageNumbers = resolveReferenceOrderPageNumbers(
+      pageNumbers,
+      psdPageMap,
+      useReferenceOrderForTxtPages,
+    );
+    if (placementPageNumbers.length === 0) continue;
     // この見開きに属する単ページ PSD のうち、OCR 結果がある index を集める。
-    const memberEntries = placementEntriesForGroup(referenceScanDoc, rows, pageNumbers, psdPageMap)
+    const memberEntries = placementEntriesForGroup(referenceScanDoc, rows, placementPageNumbers, psdPageMap)
       .filter((entry) => rows[entry.rowIdx]?.referenceScan && entry.referenceScan);
     // 構成ページの吹き出しを結合（各 bubble に所属行 + 連結グループ情報を記録）。
     const combined = [];
@@ -1530,7 +1687,21 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
     // 全 TXT 段落を配置: 結合バブルに内容マッチすれば所属単ページの吹き出し中央へ。
     // マッチしなかった段落（＝吹き出しが検出されない / 段落数 > 吹き出し数）は、
     // 読み順で見開きの構成ページへ振り分け、中央に重なって見えなくなるのを防ぐため段組みでずらす。
-    const assigned = assignBlocksToTxt(txt, combined);
+    const { assigned, rejectedMatches } = assignBlocksToTxt(txt, combined);
+    for (const rejected of rejectedMatches) {
+      if (assigned[rejected.txtIndex]) continue;
+      const m = rejected?.entry && Number.isInteger(rejected.entry.index) ? meta[rejected.entry.index] : null;
+      const row = m ? rows[m.rowIdx] : null;
+      if (!row) continue;
+      row.ocrRiskWarnings.push({
+        pageNumber: group.key,
+        paragraphIndex: rejected.txtIndex,
+        expected: txt[rejected.txtIndex] ?? "",
+        scanned: rejected.entry.text ?? "",
+        score: rejected.score,
+        reason: rejected.risk?.reason ?? "OCR差分疑い",
+      });
+    }
     for (let j = 0; j < txt.length; j++) {
       const a = assigned[j];
       const m = a && Number.isInteger(a.index) ? meta[a.index] : null;
@@ -1557,7 +1728,8 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
           const frac = txt.length > 1 ? j / txt.length : 0;
           tgtIdx = memberEntries[Math.min(memberEntries.length - 1, Math.floor(frac * memberEntries.length))].rowIdx;
         } else {
-          tgtIdx = uniquePsdIndicesForPageNumbers([group.key], psdPageMap, M)[0] ?? (group.key - 1);
+          const fallbackPageNumber = placementPageNumbers[0] ?? group.key;
+          tgtIdx = uniquePsdIndicesForPageNumbers([fallbackPageNumber], psdPageMap, M)[0] ?? (fallbackPageNumber - 1);
         }
         const row = rows[tgtIdx];
         if (row && row.psd) {
@@ -1601,19 +1773,21 @@ function buildPlacementPlan(referenceScanDoc, psdPages, txtGroups, defaults, opt
       layers: row.layers,
       leftoverTxt: [],
       leftoverBubbles,
+      ocrRiskWarnings: row.ocrRiskWarnings,
     });
     out.totals.placed += row.placedCount;
     out.totals.leftoverBubbles += leftoverBubbles.length;
+    out.totals.ocrRiskSkipped = (out.totals.ocrRiskSkipped ?? 0) + row.ocrRiskWarnings.length;
   }
   // PSD 数 / 画像スキャン ページ数の不一致を末尾に warning として記録
-  const logicalPsdCount = psdPageMap.logicalMaxPage;
-  if (logicalPsdCount > R) out.unmappedPsdCount = logicalPsdCount - R;
-  if (R > logicalPsdCount) out.unmappedReferenceScanCount = R - logicalPsdCount;
+  const expectedReferenceCount = psdPageMap.referencePageCountByOrder;
+  if (expectedReferenceCount > R) out.unmappedPsdCount = expectedReferenceCount - R;
+  if (R > expectedReferenceCount) out.unmappedReferenceScanCount = R - expectedReferenceCount;
   return out;
 }
 
 // ============================================================
-// 確認モーダル UI（PSD と 画像スキャン ページ数が不一致のときだけ表示）
+// 確認モーダル UI（ページ数不一致 / OCR 危険一致があるときだけ表示）
 // ============================================================
 function renderPlanReviewTable(plan) {
   const warning = $("scan-place-review-warning");
@@ -1621,13 +1795,21 @@ function renderPlanReviewTable(plan) {
   if (!warning || !warningDetail) return;
   const psdExtra = plan.unmappedPsdCount ?? 0;
   const extractExtra = plan.unmappedReferenceScanCount ?? 0;
-  if (psdExtra > 0 || extractExtra > 0) {
+  const ocrRiskCount = plan.totals?.ocrRiskSkipped ?? 0;
+  if (psdExtra > 0 || extractExtra > 0 || ocrRiskCount > 0) {
     const psdTotal = plan.pages.length + psdExtra;
     const extractTotal = plan.pages.length + extractExtra;
     const parts = [];
-    parts.push(`PSD: ${psdTotal} 枚 / 画像スキャン: ${extractTotal} ページ`);
+    if (psdExtra > 0 || extractExtra > 0) parts.push(`PSD: ${psdTotal} 枚 / 画像スキャン: ${extractTotal} ページ`);
     if (psdExtra > 0) parts.push(`末尾の PSD ${psdExtra} 枚にはテキストが配置されません。`);
     if (extractExtra > 0) parts.push(`末尾の 画像スキャン ${extractExtra} ページ分は使用されません。`);
+    if (ocrRiskCount > 0) {
+      const examples = (plan.pages ?? [])
+        .flatMap((page) => page.ocrRiskWarnings ?? [])
+        .slice(0, 3)
+        .map((w) => `「${String(w.expected ?? "").replace(/\s+/g, " ").slice(0, 12)}」←OCR「${String(w.scanned ?? "").replace(/\s+/g, " ").slice(0, 12)}」`);
+      parts.push(`短い漢字語のOCR差分疑い ${ocrRiskCount} 件は、誤配置を避けるため吹き出し確定せず中央配置にしました。${examples.length ? `例: ${examples.join(" / ")}` : ""}`);
+    }
     warningDetail.textContent = parts.join(" ");
     warning.hidden = false;
   } else {
@@ -1925,10 +2107,12 @@ export async function runAutoPlace({
       }
     }
 
-    // 5. 確認モーダル（PSD と 画像スキャン ページ数が不一致のときだけ表示）
-    const hasMismatch =
-      (plan.unmappedPsdCount ?? 0) > 0 || (plan.unmappedReferenceScanCount ?? 0) > 0;
-    if (hasMismatch) {
+    // 5. 確認モーダル（ページ数不一致 / OCR 危険一致があるときだけ表示）
+    const needsReview =
+      (plan.unmappedPsdCount ?? 0) > 0
+      || (plan.unmappedReferenceScanCount ?? 0) > 0
+      || (plan.totals?.ocrRiskSkipped ?? 0) > 0;
+    if (needsReview) {
       const ok = await showPlanReviewModal(plan);
       if (!ok) {
         await closeAutoPlaceProgress();
