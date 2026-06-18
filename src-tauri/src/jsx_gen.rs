@@ -5015,6 +5015,68 @@ function reapplyManualTextSpacingForPayload(doc, layerIdIndex, edits, newLayers)
   }
 }
 
+// 【新規レイヤー位置補正】per-char フォント/サイズ・合成太字・行ごと行間・スケールなど、
+// Photoshop 内でテキストを再フローして bbox を変える処理がすべて終わった後・ルビ生成の直前に呼ぶ。
+// layerRef の「最終 実 bounds」を読み、UI 基準（uiAnchorCx/Cy → reuseSrcCx/Cy）に中心合わせ、
+// または通常テキストの top-left（横書き）/ top-right（縦書き）アンカーへ揃える。
+// 早すぎる補正（再フロー前の bbox を中心合わせ）が太字/per-char で下方向にずれる問題を解消する。
+function applyNewLayerPositionAnchor(layerRef, nl, doc) {
+  try {
+    var _b = layerRef.bounds;
+    var _actualLeft  = _b[0].as("px");
+    var _actualTop   = _b[1].as("px");
+    var _actualRight = _b[2].as("px");
+    var _actualBottom = _b[3].as("px");
+    var _dpi = doc.resolution;
+    var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
+    var _ptInPx = _sizePt * (_dpi / 72);
+    var _fixDx, _fixDy;
+    // 中心合わせの基準: uiAnchorCx/Cy（保存直前に算出した現在の UI グリフ中心）を最優先。
+    // 無ければ reuseSrcCx/Cy（抽出時の元中心）へフォールバック。
+    var _anchorCx = (typeof nl.uiAnchorCx === "number") ? nl.uiAnchorCx
+      : ((typeof nl.reuseSrcCx === "number") ? nl.reuseSrcCx : null);
+    var _anchorCy = (typeof nl.uiAnchorCy === "number") ? nl.uiAnchorCy
+      : ((typeof nl.reuseSrcCy === "number") ? nl.reuseSrcCy : null);
+    if (_anchorCx !== null && _anchorCy !== null) {
+      // 【中心基準】実 bounds 中心を UI 中心（or 元中心）に合わせる。
+      var _actCx = (_actualLeft + _actualRight) / 2;
+      var _actCy = (_actualTop + _actualBottom) / 2;
+      _fixDx = _anchorCx - _actCx;
+      _fixDy = _anchorCy - _actCy;
+    } else if (nl.direction === "vertical") {
+      // 縦書き: bounds.top-right を (nl.x + thick, nl.y) に揃える（vertical-rl の右端アンカー）。
+      var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
+      var _contentsForCount = String(nl.contents || "");
+      var _lc = _contentsForCount.split(/\r\n|\r|\n/).length;
+      if (_lc < 1) _lc = 1;
+      var _thickSafetyEm = 0;
+      var _thickBase = 1 + Math.max(0, _lc - 1) * _lpFactor;
+      var _thickCanvas = _ptInPx * (_thickBase + _thickSafetyEm);
+      if (_thickCanvas < 24) _thickCanvas = 24;
+      var _boxRight = nl.x + _thickCanvas;
+      var _actualWidth = _actualRight - _actualLeft;
+      var _columnWidth = (_ptInPx > 0) ? _ptInPx : _thickCanvas;
+      var _rightEdgePunctuation = isVerticalRightEdgePunctuationText(_contentsForCount);
+      var _shouldCenterSingleColumn = (_lc === 1 && _actualWidth > 0 && _columnWidth > 0 &&
+        ((!_rightEdgePunctuation && _actualWidth < _columnWidth * 0.82) ||
+          isVerticalSingleColumnCenterRiskText(_contentsForCount)));
+      if (_shouldCenterSingleColumn) {
+        _fixDx = (_boxRight - (_columnWidth / 2)) - ((_actualLeft + _actualRight) / 2);
+      } else {
+        _fixDx = _boxRight - _actualRight;
+      }
+      _fixDy = nl.y - _actualTop;
+    } else {
+      // 横書き: bounds.top-left を (nl.x, nl.y) に揃える。
+      _fixDx = nl.x - _actualLeft;
+      _fixDy = nl.y - _actualTop;
+    }
+    if (_fixDx !== 0 || _fixDy !== 0) {
+      layerRef.translate(new UnitValue(_fixDx, "px"), new UnitValue(_fixDy, "px"));
+    }
+  } catch (eBounds) {}
+}
+
 function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tildeTrackingMille, tateChuYokoEnabled, symbolFontPostScriptName, punctuationTsumePercent, rubyLeadingPct, rubyFontPostScriptName, rubyPhotoshopOffsetEm, rubyPhotoshopBiasPx, uiPageWidth, uiPageHeight, hideLayerIds, reuseHideOriginalText) {
   var file = new File(psdPath);
   if (!file.exists) { $.writeln("[OPUS] skip missing: " + psdPath); return; }
@@ -5367,81 +5429,11 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           nti.color = nfc ? nfc : blackColor();
         } catch (eColor) {}
         nti.position = [new UnitValue(nl.x, "px"), new UnitValue(nl.y, "px")];
-        // Photoshop の textItem.position はテキストアンカー（横書き=ベースライン左、
-        // 縦書き=1 文字目の右上）であり、PsDesign 側の nl.x/nl.y は bounding-box の
-        // top-left を意図している。さらに編集画面の縦書き CSS は writing-mode: vertical-rl
-        // で 1 列目（最右列）が box.right から始まるため、
-        //   - 横書き: 配置後の bounds.top-left を (nl.x, nl.y) に揃える。
-        //   - 縦書き: bounds.top-right を (nl.x + thick, nl.y) に揃える。
-        //     ここで thick = ptInPsdPx * (1 + (lineCount - 1) * leadingFactor) は編集側 layerRectForNew と同じ式。
-        try {
-          var _b = layerRef.bounds;
-          var _actualLeft  = _b[0].as("px");
-          var _actualTop   = _b[1].as("px");
-          var _actualRight = _b[2].as("px");
-          var _actualBottom = _b[3].as("px");
-          var _dpi = doc.resolution;
-          var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
-          var _ptInPx = _sizePt * (_dpi / 72);
-          var _fixDx, _fixDy;
-          // 中心合わせの基準: uiAnchorCx/Cy（保存直前に算出した現在の UI グリフ中心）を最優先。
-          // これによりユーザーが UI 上で動かした位置がそのまま保存に反映される。
-          // uiAnchor が無ければ reuseSrcCx/Cy（抽出時の元中心）へフォールバック。
-          var _anchorCx = (typeof nl.uiAnchorCx === "number") ? nl.uiAnchorCx
-            : ((typeof nl.reuseSrcCx === "number") ? nl.reuseSrcCx : null);
-          var _anchorCy = (typeof nl.uiAnchorCy === "number") ? nl.uiAnchorCy
-            : ((typeof nl.reuseSrcCy === "number") ? nl.reuseSrcCy : null);
-          if (_anchorCx !== null && _anchorCy !== null) {
-            // 【中心基準】作り直したテキストの「実 bounds 中心」を UI 中心 (or 元中心) に合わせる。
-            // UI の枠幅推定や CSS/Photoshop のジオメトリ差・複数行の左余白に依存せず一致させる。
-            var _actCx = (_actualLeft + _actualRight) / 2;
-            var _actCy = (_actualTop + _actualBottom) / 2;
-            _fixDx = _anchorCx - _actCx;
-            _fixDy = _anchorCy - _actCy;
-          } else if (nl.direction === "vertical") {
-            // 【v2.x】縦書き位置補正:
-            // canvas-tools.js layerRectForNew の bbox 幅 (thick) は:
-            //   thick = ptInPx × (1 + leadingFactor × (lineCount - 1) + thickSafetyEm)
-            // 【fix】縦書きは thickSafetyEm を 0 に統一した（layerRectForNew /
-            //   auto-place.js estimateLayerSize と同方針）。理由: vertical-rl は content が
-            //   box の右端 (block-start) に寄り box 左端 = nl.x は固定のため、safety を足すと
-            //   余白が必ず box の「左側」に溜まる（自動配置テキスト左の余分な余白の原因）。
-            //   ここを 0 にしないと UI (safety 無し) と PSD (safety 有り) で text 右端が
-            //   0.4em ズレるため、JS 側の bbox 計算と必ず一致させる。
-            // CSS .new-layer-text には padding は無く (width/height: 100% + box-sizing: border-box のみ)、
-            // vertical-rl の自然挙動で first column が bbox 右端に揃う。
-            // つまり PsDesign canvas での text 右端 = bbox.right = nl.x + thickCanvas。
-            // PSD でも同じ位置に揃えればプレビューと完全一致する。
-            var _lpFactor = ((typeof nl.leadingPct === "number") ? nl.leadingPct : 125) / 100;
-            var _contentsForCount = String(nl.contents || "");
-            var _lc = _contentsForCount.split(/\r\n|\r|\n/).length;
-            if (_lc < 1) _lc = 1;
-            var _thickSafetyEm = 0;
-            var _thickBase = 1 + Math.max(0, _lc - 1) * _lpFactor;
-            var _thickCanvas = _ptInPx * (_thickBase + _thickSafetyEm);
-            if (_thickCanvas < 24) _thickCanvas = 24;
-            var _boxRight = nl.x + _thickCanvas;
-            var _actualWidth = _actualRight - _actualLeft;
-            var _columnWidth = (_ptInPx > 0) ? _ptInPx : _thickCanvas;
-            var _rightEdgePunctuation = isVerticalRightEdgePunctuationText(_contentsForCount);
-            var _shouldCenterSingleColumn = (_lc === 1 && _actualWidth > 0 && _columnWidth > 0 &&
-              ((!_rightEdgePunctuation && _actualWidth < _columnWidth * 0.82) ||
-                isVerticalSingleColumnCenterRiskText(_contentsForCount)));
-            if (_shouldCenterSingleColumn) {
-              _fixDx = (_boxRight - (_columnWidth / 2)) - ((_actualLeft + _actualRight) / 2);
-            } else {
-              _fixDx = _boxRight - _actualRight;
-            }
-            _fixDy = nl.y - _actualTop;
-          } else {
-            // 横書きも CSS padding なしなので、bbox.left = text 左端 / bbox.top = text 上端。
-            _fixDx = nl.x - _actualLeft;
-            _fixDy = nl.y - _actualTop;
-          }
-          if (_fixDx !== 0 || _fixDy !== 0) {
-            layerRef.translate(new UnitValue(_fixDx, "px"), new UnitValue(_fixDy, "px"));
-          }
-        } catch (eBounds) {}
+        // 【位置補正は再フロー後へ移動】per-char フォント/サイズ・合成太字・行ごと行間などは
+        // Photoshop 内でテキストを再フローして bbox を変える。それらより前に bounds を読んで
+        // 中心合わせしても、後段で文字がずれてしまう（特に太字/per-char で下方向）。そのため
+        // 位置補正は下の applyNewLayerPositionAnchor() で「再フロー処理の後・ルビ生成の直前」に
+        // 行う（ルビは補正後の親 bounds + uiOffset 基準で配置されるので追従する）。
         // フチはルビ生成後に一括適用する。ここで先に付けると、
         // Photoshop の bounds が変わり、ルビ位置計算がぶれる。
         // 【v1.29.x】ルビあり時は paragraphStyleRange の autoLeadingPercentage、
@@ -5514,6 +5506,11 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             addWarning("新規レイヤーの合成斜体適用に失敗: " + eItalicNew);
           }
         }
+        // 【位置補正】per-char フォント/サイズ・合成太字・行間・スケールなど、テキストを再フロー
+        // して bbox を変える処理がすべて終わったこの地点で位置補正する（再フロー前に補正すると
+        // 太字/per-char で下方向にずれる）。ルビは下の applyRubies が補正後の親 bounds 基準で
+        // 配置するため、補正→ルビの順で親に追従する。フチ（stroke）はさらに後（対称なので中心不変）。
+        applyNewLayerPositionAnchor(layerRef, nl, doc);
         // 【v1.26.0】ルビ（新規レイヤー）。親 layer の textKey 上書きが完了してから呼ぶ。
         // ルビレイヤーは親の直前に追加され、新規 text グループ (__textGroup) 内に居る。
         var __rubyLayersNL = [];
