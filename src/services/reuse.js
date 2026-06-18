@@ -353,7 +353,6 @@ async function collectReuseDraftsForPage(
         sourceFont: it.font || null,
       });
       const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: sizePt });
-      const useSourceBounds = !unify && hasBounds;
       const reuseFillColor = normalizeReuseFillColor(it.fillColor);
       const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
       const create = {
@@ -377,28 +376,21 @@ async function collectReuseDraftsForPage(
       let centerFromRect = null;
       let alignTarget = null;
       // 元レイヤーの実 bbox 中心に新規枠の中心を合わせる（auto-place と同じ中心固定方式）。
-      // reuseSrcCx/Cy = 元レイヤー中心（保存時に実 bounds 中心をここへ合わせ位置を厳密再現）。
-      // reuseTightThick = 枠の厚み方向を実テキスト幅に詰める（左余白を作らない）。
+      // 【v2.x fix】再現/指定モードを問わず「中心合わせ」に統一する。旧実装は再現モード
+      // (useSourceBounds) のみ元 bounds を左上アンカーで枠に当てていたが、保存側 jsx_gen は
+      // 常に「実描画 bbox 中心を元中心(reuseSrcCx/Cy)へ合わせる」中心基準のため、
+      // ビューアー(左上基準)と PSD(中心基準)で位置が食い違い、さらに元サイズ枠が実テキストを
+      // 満たさず「枠と実テキストのズレ」も生んでいた。両モードとも中心合わせ＋tight 枠にして
+      // 保存と一致させる（reuseSrcLeft/Top/... reuseSource* は廃止）。
+      // reuseSrcCx/Cy = 元レイヤー中心（保存時に実 bbox 中心をここへ合わせ位置を厳密再現）。
+      // reuseTightThick = 枠の厚み方向を実テキスト幅に詰める（tight 枠が実テキストを抱く）。
       if (hasBounds) {
         const cx = (it.left + it.right) / 2;
         const cy = (it.top + it.bottom) / 2;
         updates = { reuseSrcCx: cx, reuseSrcCy: cy, reuseTightThick: true };
-        if (useSourceBounds) {
-          Object.assign(updates, {
-            x: it.left,
-            y: it.top,
-            reuseSrcLeft: it.left,
-            reuseSrcTop: it.top,
-            reuseSrcRight: it.right,
-            reuseSrcBottom: it.bottom,
-            reuseSourceContents: contents,
-            reuseSourceSizePt: layerSize,
-          });
-        } else {
-          // 反映側で layerRectForNew(page, created) を使い中心合わせ + フォントロード後の厳密補正対象。
-          centerFromRect = { cx, cy };
-          alignTarget = { cx, cy, font: layerFont || null };
-        }
+        // 反映側で layerRectForNew(page, created) を使い中心合わせ + フォントロード後の厳密補正対象。
+        centerFromRect = { cx, cy };
+        alignTarget = { cx, cy, font: layerFont || null };
       }
       drafts.push({ create, updates, centerFromRect, alignTarget });
     }
@@ -451,6 +443,8 @@ async function collectReuseDraftsForPage(
     let centerFromRect = null;
     let alignTarget = null;
     // 元レイヤーの実 bbox 中心に合わせて再配置（Photoshop 経路と同じ中心固定）。
+    // 【v2.x fix】再現/指定モードを問わず中心合わせに統一（psItems 経路と同じ。保存側と一致。
+    // 旧 !unify の元 bounds 左上アンカー＋reuseSource* は廃止）。
     const hasBounds = [tl.left, tl.top, tl.right, tl.bottom].every((v) => Number.isFinite(v))
       && tl.right > tl.left && tl.bottom > tl.top;
     if (hasBounds) {
@@ -459,19 +453,8 @@ async function collectReuseDraftsForPage(
       updates.reuseSrcCx = cx;
       updates.reuseSrcCy = cy;
       updates.reuseTightThick = true;
-      if (!unify) {
-        updates.x = tl.left;
-        updates.y = tl.top;
-        updates.reuseSrcLeft = tl.left;
-        updates.reuseSrcTop = tl.top;
-        updates.reuseSrcRight = tl.right;
-        updates.reuseSrcBottom = tl.bottom;
-        updates.reuseSourceContents = contents;
-        updates.reuseSourceSizePt = layerSize;
-      } else {
-        centerFromRect = { cx, cy };
-        alignTarget = { cx, cy, font: layerFont || null };
-      }
+      centerFromRect = { cx, cy };
+      alignTarget = { cx, cy, font: layerFont || null };
     }
     drafts.push({
       create,
