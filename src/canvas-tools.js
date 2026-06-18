@@ -16,6 +16,7 @@ import {
   getNewLayersForPsd,
   getNewTextDirection,
   getPages,
+  setNewLayerUiAnchors,
   getPsdRotation,
   getSelectedLayers,
   getStrokeColor,
@@ -2912,6 +2913,48 @@ export function alignReuseLayersToSourceCenters(targets, pages) {
     moved += 1;
   }
   return moved;
+}
+
+// 【UI実測アンカー】新規レイヤーの「現在の UI グリフ中心」を PSD px で算出する（決定論的・DOM 非依存）。
+// alignReuseLayersToSourceCenters の forward 式（target center → nl.x）を逆算したもの。
+// nl.x/nl.y を動かす（ドラッグ等）と中心も追従する。textLongPx/textThickPx は measureText 由来の
+// 実グリフ寸法（layerRectForNew が返す）。DOM は内側＝枠を測ってしまうため使わない（同関数の注記参照）。
+function computeNewLayerUiGlyphCenter(page, nl) {
+  const rect = layerRectForNew(page, nl);
+  if (!rect || !(rect.width > 0) || !(rect.height > 0)) return null;
+  const longPx = Number.isFinite(rect.textLongPx) && rect.textLongPx > 0
+    ? rect.textLongPx : (rect.isVertical ? rect.height : rect.width);
+  const thickPx = Number.isFinite(rect.textThickPx) && rect.textThickPx > 0
+    ? rect.textThickPx : (rect.isVertical ? rect.width : rect.height);
+  let cx;
+  let cy;
+  if (rect.isVertical) {
+    cx = rect.left + rect.width - thickPx / 2;
+    cy = rect.top + longPx / 2;
+  } else {
+    cx = rect.left + longPx / 2;
+    cy = rect.top + thickPx / 2;
+  }
+  if (!Number.isFinite(cx) || !Number.isFinite(cy)) return null;
+  return { cx, cy };
+}
+
+// 保存直前に呼ぶ。全ページのリサイクルレイヤー (reuseTightThick) について現在の UI グリフ中心を
+// 算出し、uiAnchorCx/Cy として保存する。これにより「UI で調整した位置」が保存へ反映される
+// （保存側 jsx_gen は uiAnchorCx/Cy に実描画 bbox 中心を合わせる）。通常レイヤーは対象外。
+// 注: リサイクルはページ分割しないため split offset は考慮不要（page 座標 = source 座標）。
+export function measureNewLayerUiAnchorsForSave() {
+  const pages = getPages();
+  for (const page of (Array.isArray(pages) ? pages : [])) {
+    if (!page || !page.path) continue;
+    const anchors = [];
+    for (const nl of getNewLayersForPsd(page.path)) {
+      if (nl.reuseTightThick !== true) continue;
+      const c = computeNewLayerUiGlyphCenter(page, nl);
+      if (c) anchors.push({ tempId: nl.tempId, cx: c.cx, cy: c.cy });
+    }
+    if (anchors.length) setNewLayerUiAnchors(page.path, anchors);
+  }
 }
 
 // 1 ctx 分の ruby 位置測定 (同期、副作用は state 書き戻しのみ)。

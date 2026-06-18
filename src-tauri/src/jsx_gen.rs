@@ -1201,6 +1201,8 @@ pub fn generate_apply_script(
     __copy(raw, "y", out);
     __copy(raw, "reuseSrcCx", out);
     __copy(raw, "reuseSrcCy", out);
+    __copy(raw, "uiAnchorCx", out);
+    __copy(raw, "uiAnchorCy", out);
     return out;
   }
   function __mapLayers(list, fn) {
@@ -1466,6 +1468,12 @@ pub fn generate_apply_script(
             }
             if let Some(cy) = nl.reuse_src_cy {
                 out.push_str(&format!(", reuseSrcCy: {}", cy));
+            }
+            if let Some(cx) = nl.ui_anchor_cx {
+                out.push_str(&format!(", uiAnchorCx: {}", cx));
+            }
+            if let Some(cy) = nl.ui_anchor_cy {
+                out.push_str(&format!(", uiAnchorCy: {}", cy));
             }
             out.push_str(&format!(", contents: {}", js_string(&nl.contents)));
             if let Some(ref f) = nl.font_post_script_name {
@@ -5376,14 +5384,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
           var _sizePt = (typeof nl.size === "number") ? nl.size : 24;
           var _ptInPx = _sizePt * (_dpi / 72);
           var _fixDx, _fixDy;
-          if (typeof nl.reuseSrcCx === "number" && typeof nl.reuseSrcCy === "number") {
-            // 【写植再利用】作り直したテキストの「実 bounds 中心」を元レイヤー中心に合わせる。
-            // UI の枠幅推定や CSS/Photoshop のジオメトリ差・複数行の左余白に依存せず、
-            // 元の位置を厳密に再現する（左余白による右ずれを解消）。
+          // 中心合わせの基準: uiAnchorCx/Cy（保存直前に算出した現在の UI グリフ中心）を最優先。
+          // これによりユーザーが UI 上で動かした位置がそのまま保存に反映される。
+          // uiAnchor が無ければ reuseSrcCx/Cy（抽出時の元中心）へフォールバック。
+          var _anchorCx = (typeof nl.uiAnchorCx === "number") ? nl.uiAnchorCx
+            : ((typeof nl.reuseSrcCx === "number") ? nl.reuseSrcCx : null);
+          var _anchorCy = (typeof nl.uiAnchorCy === "number") ? nl.uiAnchorCy
+            : ((typeof nl.reuseSrcCy === "number") ? nl.reuseSrcCy : null);
+          if (_anchorCx !== null && _anchorCy !== null) {
+            // 【中心基準】作り直したテキストの「実 bounds 中心」を UI 中心 (or 元中心) に合わせる。
+            // UI の枠幅推定や CSS/Photoshop のジオメトリ差・複数行の左余白に依存せず一致させる。
             var _actCx = (_actualLeft + _actualRight) / 2;
             var _actCy = (_actualTop + _actualBottom) / 2;
-            _fixDx = nl.reuseSrcCx - _actCx;
-            _fixDy = nl.reuseSrcCy - _actCy;
+            _fixDx = _anchorCx - _actCx;
+            _fixDy = _anchorCy - _actCy;
           } else if (nl.direction === "vertical") {
             // 【v2.x】縦書き位置補正:
             // canvas-tools.js layerRectForNew の bbox 幅 (thick) は:

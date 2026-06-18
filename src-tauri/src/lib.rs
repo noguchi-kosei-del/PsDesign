@@ -237,6 +237,13 @@ pub struct NewLayer {
     pub reuse_src_cx: Option<f64>,
     #[serde(rename = "reuseSrcCy", default)]
     pub reuse_src_cy: Option<f64>,
+    // 【UI実測アンカー】保存直前に算出した「現在の UI グリフ中心」(PSD px)。指定があれば
+    // 保存時に Photoshop 実描画 bbox 中心をこの座標へ合わせる（UI の位置をそのまま再現）。
+    // reuseSrcCx/Cy より優先。ユーザーが UI 上で動かした位置を保存へ反映するために使う。
+    #[serde(rename = "uiAnchorCx", default)]
+    pub ui_anchor_cx: Option<f64>,
+    #[serde(rename = "uiAnchorCy", default)]
+    pub ui_anchor_cy: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

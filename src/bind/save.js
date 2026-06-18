@@ -30,7 +30,7 @@ import { saveProject } from "../services/project.js";
 // 【v1.29.x UI-coord】保存前に全 page のルビ wrap 実描画位置を同期測定して state に書き戻す。
 // これにより exportEdits が「最新の UI 上の位置」を含む payload を返し、JSX 側 createRubyLayer が
 // ビューアーと完全一致した位置にルビレイヤーを配置できる (rAF 遅延を待たずに済む)。
-import { measureAllRubyOffsetsSync } from "../canvas-tools.js";
+import { measureAllRubyOffsetsSync, measureNewLayerUiAnchorsForSave } from "../canvas-tools.js";
 
 // PSD 読込時に false にリセットされ、保存成功で true になる。
 // 旧: 初回 Ctrl+S を別名保存にフォールバックさせるためのフラグ。
@@ -201,6 +201,10 @@ async function runSaveWithMode({ saveMode, targetDir, showResultDialog = true })
   // state に書き戻す。これがないと rAF 遅延で「新規に適用したばかりのルビの offsetX/Y が
   // payload に含まれない」事故が起き、JSX 側で計算式 fallback が使われて位置がズレる。
   try { measureAllRubyOffsetsSync(); } catch (e) { console.warn("[save] ruby offset measure failed:", e); }
+  // 【UI実測アンカー】リサイクルレイヤーの「現在の UI グリフ中心」を uiAnchorCx/Cy として
+  // 保存する。これにより UI 上でドラッグ調整した位置が保存（PSD）へそのまま反映される
+  // （JSX 側は uiAnchorCx/Cy に実描画 bbox 中心を合わせる）。
+  try { measureNewLayerUiAnchorsForSave(); } catch (e) { console.warn("[save] ui anchor measure failed:", e); }
   // 仕上がりチェック（showFinishReviewDialog）は保存フローから除去。確認ダイアログを挟まず
   // 直接 Photoshop へ反映する。実際の保存は JSX 経由で行われ page.canvas（アプリ内プレビュー）に
   // 依存しないため、出力 PSD の品質には影響しない。

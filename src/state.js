@@ -1783,6 +1783,21 @@ export function updateNewLayer(tempId, changes) {
   pushHistorySnapshot();
 }
 
+// 【UI実測アンカー】保存直前に算出した「現在の UI グリフ中心」(PSD px) を新規レイヤーへ書き込む。
+// 計測扱いなので pushHistorySnapshot しない（ルビ offset 計測と同方針）。anchors:
+// [{ tempId, cx, cy }]。exportEdits は ...rest で uiAnchorCx/Cy を自動的に payload へ通す。
+export function setNewLayerUiAnchors(psdPath, anchors) {
+  if (!Array.isArray(anchors) || anchors.length === 0) return;
+  const byId = new Map(anchors.map((a) => [a.tempId, a]));
+  for (const l of state.newLayers) {
+    if (l.psdPath !== psdPath) continue;
+    const a = byId.get(l.tempId);
+    if (!a) continue;
+    if (Number.isFinite(a.cx)) l.uiAnchorCx = a.cx;
+    if (Number.isFinite(a.cy)) l.uiAnchorCy = a.cy;
+  }
+}
+
 export function removeNewLayer(tempId) {
   const before = state.newLayers.length;
   state.newLayers = state.newLayers.filter((l) => l.tempId !== tempId);
