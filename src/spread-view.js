@@ -8,7 +8,7 @@ import {
   onPsdRotationChange,
   onPsdZoomChange,
 } from "./state.js";
-import { mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
+import { commitActiveInPlaceEdit, mountPageInteraction, refreshAllOverlays, unmountAll } from "./canvas-tools.js";
 import { requestRulerRedraw } from "./rulers.js";
 import {
   applyOverscrollMargin,
@@ -111,6 +111,12 @@ export function resetPsdViewportToStart() {
 export function renderAllSpreads() {
   const root = container();
   if (!root) return;
+  // 進行中の in-place 編集を、DOM を破棄する前に確定する。これを怠ると、編集セッションが
+  // 呼んだ beginHistoryTransient() が finalize されないまま root.innerHTML = "" で .layer-box.editing
+  // が消え、historyTransientDepth が戻らず詰まる。以降 pushHistorySnapshot() が無言で no-op になり、
+  // Ctrl+Z が数手分まとめて戻る不具合（編集中にページ送り/表示切替/再描画が走ると発生）の根因。
+  // commitActiveInPlaceEdit は .editing 解除と __finalize=null を先に行うため再入しても安全。
+  try { commitActiveInPlaceEdit(); } catch (_) { /* noop */ }
   if (!zoomSubscribed) {
     zoomSubscribed = true;
     onPsdZoomChange(() => {

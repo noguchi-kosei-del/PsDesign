@@ -1325,7 +1325,20 @@ export function applyProjectSnapshot(snapshot, options = {}) {
   resetHistoryBaseline();
 }
 
+// 安全網: in-place 編集や transient が DOM 破棄等で finalize されず historyTransientDepth が
+// 詰まった場合に、開いている transient が無いはずの地点（undo/redo の直前）で 0 に戻す。
+// 詰まっていた間の現在状態を 1 件として確定してから 0 化するので、それまでの変更は失わない
+// （ただし詰まり中の中間 snapshot 粒度は復元できない）。これにより詰まりが次操作以降へ
+// 持ち越されず、Ctrl+Z が数手分まとめて戻り続ける症状を断ち切る。depth が 0 のときは no-op。
+export function healLeakedHistoryTransient() {
+  if (state.historyTransientDepth === 0) return false;
+  state.historyTransientDepth = 0;
+  pushHistorySnapshot();
+  return true;
+}
+
 export function undo() {
+  healLeakedHistoryTransient();
   if (!canUndo()) return false;
   state.historyIndex--;
   restoreSnapshot(state.history[state.historyIndex]);
@@ -1333,6 +1346,7 @@ export function undo() {
 }
 
 export function redo() {
+  healLeakedHistoryTransient();
   if (!canRedo()) return false;
   state.historyIndex++;
   restoreSnapshot(state.history[state.historyIndex]);

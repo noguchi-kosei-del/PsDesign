@@ -3806,6 +3806,48 @@ function bindRulerToggle() {
   );
 }
 
+// WebView2 のリロード系ショートカット（ハードリロード）を捕捉する。
+// 押すとページが再読み込みされてメモリ上の状態（PSD / 見本 / テキスト / 編集）が
+// すべて消えるため、警告ダイアログを挟んでから再読み込みする。
+// Ctrl+R 単体は定規トグルへ割当済み（既に preventDefault されリロードしない）ので対象外。
+function isReloadShortcut(e) {
+  if (e.key === "F5") return true; // F5 / Ctrl+F5 ともにリロード
+  const ctrlLike = e.ctrlKey || e.metaKey;
+  // Ctrl+Shift+R / Cmd+Shift+R = ハードリロード
+  if (ctrlLike && e.shiftKey && (e.key === "r" || e.key === "R")) return true;
+  return false;
+}
+
+function bindReloadGuard() {
+  let confirmingReload = false;
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (!isReloadShortcut(e)) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (confirmingReload) return;
+      confirmingReload = true;
+      void (async () => {
+        try {
+          const ok = await confirmDialog({
+            title: "再読み込みしますか？",
+            message:
+              "再読み込みすると、開いているファイルや編集中の内容がすべてリセットされます。続行しますか？",
+            confirmLabel: "再読み込み",
+            cancelLabel: "キャンセル",
+            kind: "warning",
+          });
+          if (ok) window.location.reload();
+        } finally {
+          confirmingReload = false;
+        }
+      })();
+    },
+    { capture: true },
+  );
+}
+
 const NEW_TEXT_DIR_LS_KEY = "psdesign_new_text_direction";
 function bindNewTextDirectionToggle() {
   const sw = document.getElementById("new-text-dir-switch");
@@ -4550,11 +4592,10 @@ function openHomeTypesetDialog() {
         </select>
       </div>
       <div class="home-typeset-setting home-typeset-punct-setting">
-        <label class="home-typeset-setting-label" for="home-typeset-punct-space">句読点置換</label>
-        <select id="home-typeset-punct-space" class="home-typeset-select">
-          <option value="on">句読点あり</option>
-          <option value="off">句読点なし</option>
-        </select>
+        <label class="home-typeset-check-label">
+          <input type="checkbox" id="home-typeset-punct-space" class="home-typeset-checkbox" />
+          <span class="home-typeset-setting-label">句読点→スペース</span>
+        </label>
       </div>`
     );
     const startBtn = modal.querySelector(".home-typeset-start");
@@ -4564,7 +4605,7 @@ function openHomeTypesetDialog() {
     const fontToggle = modal.querySelector(".home-typeset-font-toggle");
     const fontList = modal.querySelector("#home-typeset-font-list");
     const nakamaruAutoSelect = modal.querySelector("#home-typeset-nakamaru-auto");
-    const punctSpaceSelect = modal.querySelector("#home-typeset-punct-space");
+    const punctSpaceCheck = modal.querySelector("#home-typeset-punct-space");
     const fontFamilyFor = (font) => {
       const parts = [];
       const add = (name) => {
@@ -4630,7 +4671,7 @@ function openHomeTypesetDialog() {
       setDefault("textSize", baseTextSize);
       setTextSize(baseTextSize);
       setDefault("cloudShapeFontEnabled", nakamaruAutoSelect?.value !== "off");
-      setDefault("punctuationSpaceReplacementEnabled", punctSpaceSelect?.value !== "off");
+      setDefault("punctuationSpaceReplacementEnabled", !!punctSpaceCheck?.checked);
       if (baseFontPs) {
         setDefault("fontPostScriptName", baseFontPs);
         setCurrentFont(baseFontPs);
@@ -4646,8 +4687,8 @@ function openHomeTypesetDialog() {
     };
     syncSizeInput();
     syncFontInput();
-    if (punctSpaceSelect) {
-      punctSpaceSelect.value = getDefault("punctuationSpaceReplacementEnabled") === false ? "off" : "on";
+    if (punctSpaceCheck) {
+      punctSpaceCheck.checked = getDefault("punctuationSpaceReplacementEnabled") !== false;
     }
     if (nakamaruAutoSelect) {
       nakamaruAutoSelect.value = getDefault("cloudShapeFontEnabled") === false ? "off" : "on";
@@ -5106,7 +5147,7 @@ function openHomeTypesetDialog() {
         baseTextSize,
         baseFontPs,
         cloudShapeFontEnabled: nakamaruAutoSelect?.value !== "off",
-        punctuationSpaceReplacementEnabled: punctSpaceSelect?.value !== "off",
+        punctuationSpaceReplacementEnabled: !!punctSpaceCheck?.checked,
       });
     });
     window.addEventListener("keydown", onKeyDown, true);
@@ -5586,6 +5627,7 @@ function init() {
   bindGlobalBlurOnOutsideClick();
   initRulers();
   bindRulerToggle();
+  bindReloadGuard();
   bindNewTextDirectionToggle();
   bindViewerMode();
   window.addEventListener("psdesign:psd-loaded", () => {

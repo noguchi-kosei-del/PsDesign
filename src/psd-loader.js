@@ -182,8 +182,11 @@ function baseNameForPageNumber(path) {
 }
 
 function parseExplicitSpreadPageNumbers(path) {
-  const name = stripFileExtForPageNumber(baseNameForPageNumber(path));
-  const match = name.match(/(?:^|_)(\d{1,4})(?:[_\s]+(\d{1,4}))$/)
+  const name = stripFileExtForPageNumber(baseNameForPageNumber(path)).normalize("NFKC");
+  // 「2,3」「2、3」「2，3」のカンマ/読点区切り（後続文字可）に加え、
+  // 旧来の「004_005」「2-3」「2 3」（アンダースコア/ハイフン/空白区切り）にも対応。
+  const match = name.match(/^\s*(\d{1,4})\s*[,，、]\s*(\d{1,4})/)
+    ?? name.match(/(?:^|_)(\d{1,4})(?:[_\s]+(\d{1,4}))$/)
     ?? name.match(/^(\d{1,4})(?:[\-\s]+(\d{1,4}))$/);
   if (!match) return null;
   const nums = [match[1], match[2]]

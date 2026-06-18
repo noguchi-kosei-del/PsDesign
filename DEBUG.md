@@ -34,6 +34,41 @@
 
 ## エントリ（新しい順）
 
+### [BUG-20260618-07] Ctrl+Z が 3〜4 手分まとめて戻る（historyTransientDepth リーク）
+
+- **日付**: 2026-06-18
+- **関連バージョン**: v2.6.2（未リリース作業）
+- **症状**: 写植を読み込んである程度作業し、途中でプロジェクト保存して作業を続けると、Ctrl+Z を 1 回押すと 3〜4 手前の状態まで一気に戻ることがある。プロジェクトから開き直すと起きない（再現性は不明瞭）。
+- **再現手順**: 1. 写植を自動配置して作業 2. テキストを in-place 編集（ダブルクリック）した状態のまま、ページ送り / 表示モード切替 / 再描画が走る 3. 以降の数手が個別 undo できず、Ctrl+Z で一気に戻る。
+- **根本原因**: in-place 編集は開始時に `beginHistoryTransient()`（`historyTransientDepth++`）を呼び、`finalize()`（blur/Enter/Esc/外部呼び出し）で `commit/abortHistoryTransient()` して depth を戻す設計。しかし `spread-view.js renderAllSpreads()` は `root.innerHTML = ""` で全 DOM（`.layer-box.editing` 含む）を破棄するのに、破棄前に `__finalize` を呼んでいなかった。編集中にページ送り・表示モード切替・各種再描画が走ると編集 DOM が finalize されず消え、`historyTransientDepth` が 1 のまま詰まる。以降 `pushHistorySnapshot()` が `if (depth > 0) return;` で無言の no-op になり、詰まり中の変更が snapshot されず、Ctrl+Z がそれらをまとめて 1 手で戻る。プロジェクト再オープンは `resetHistoryBaseline()` が depth を 0 に戻すため起きない（保存では戻らない）。CLAUDE.md v2.5.1 の undo/redo 断続失敗と同系の詰まり機構。
+- **対策**:
+  1. **根因**: `renderAllSpreads()` の冒頭（`root.innerHTML = ""` の前）で `commitActiveInPlaceEdit()` を呼び、DOM 破棄前に進行中の in-place 編集を必ず finalize（= transient を確定）する。`commitActiveInPlaceEdit` は `.editing` 解除と `__finalize=null` を先に行うため、finalize 内の `refreshAllOverlays`/`rebuildLayerList` から再入しても二重発火しない。auto-place の transient は全て `renderAllSpreads` 呼出前に commit/abort 済みなので干渉しない。
+  2. **安全網**: `state.js` に `healLeakedHistoryTransient()` を追加し、`undo()` / `redo()` の先頭で呼ぶ。transient が開いていないはずの undo/redo 地点で depth>0 を検出したら、現在状態を 1 件 snapshot してから depth=0 に戻す。既に失われた粒度は復元できないが、詰まりが次操作以降へ持ち越されず（= Ctrl+Z が戻り続ける症状を断ち切る）、未保存の現在状態も失わない。depth=0 のときは no-op。
+- **影響ファイル**: `src/spread-view.js`, `src/state.js`
+- **関連 RDD 要件**: 該当なし（履歴 / in-place 編集ライフサイクル）
+- **検証方法**: 履歴機構の単体シミュレーション（通常 undo は 1 手ずつ / リーク時は初回 undo でバッチ復帰後に自己回復して以降は粒度維持）、`npm run check`（encoding / security / lint / build）成功。
+- **備考 / 再発防止**: in-place 編集の `beginHistoryTransient` を伴う long-lived transient は、編集 DOM を破棄するあらゆる全再描画の前に必ず finalize すること。新たに DOM を全消去する経路を足すときは `commitActiveInPlaceEdit()` を先に呼ぶ。
+
+### [BUG-20260618-06] 途中見開きPSD（"2,3.psd"・"4修正版.psd" 等）でテキストが別ページへ流し込まれる
+
+- **日付**: 2026-06-18
+- **関連バージョン**: v2.6.2（未リリース作業）
+- **症状**: 途中に見開き（1 ファイルに 2 ページ）が混在する PSD 群（例: `1p修正版.psd` / `2,3.psd` / `4修正版.psd` …）を読み込み、見開き部分を非表示にすると、ページ番号がずれてテキストが正しいページに流し込まれない。
+- **再現手順**: 1. `1p修正版.psd`・`2,3.psd`（見開き）・`4修正版.psd`…のように「先頭数字＋後続文字」やカンマ区切りのファイル名 PSD を読み込む 2. 自動配置すると、見開き以降のページでテキストが 1 ページぶんずれて配置される。
+- **根本原因**: 3 つの要因が重なっていた。
+  - (a) `psd-loader.js parseExplicitSpreadPageNumbers` がカンマ/読点区切り（`2,3` `2、3` `２，３`）を解釈できず、横長見開き PSD が左右ページへ分割されなかった（見開き PSD をそのまま読み込むケース）。
+  - (b) `auto-place.js parsePsdPageNumbersFromPath` が「先頭数字＋日本語」（`4修正版`→4）やカンマ区切りを解釈できず `fallbackPageNumber = index+1` に落ち、論理ページ番号がずれた。
+  - (c) **本命**: 見開き相当ページを見本で非表示にして単ページ PSD だけ（例: `1p修正版` `4修正版` `5修正版` `6` `7`）で写植する運用では、画像スキャン由来 TXT が「見本順の連番」`<<1Page>>..<<5Page>>`（`referenceScanDocToText`）で出るのに対し、`pageToPsdIndices` は実ページ番号（`4修正版`→4）で引くため番号系が食い違う。TXT 連番 P4（実ページ6=サッカー）が `pageToPsdIndices.get(4)`=「4修正版」へ流れ、本来の `6.psd` は空になり、`4修正版` にバスシーン文と重なって配置された。(b) のパース修正でこの食い違いが顕在化した（修正前は parse 失敗の fallback で偶然 1:1 になっていた）。この読み替えを行う `txtGroupsUseReferenceOrder` が `logicalPages[0] > 1` のときしか発火せず、ページ 1 が存在し途中に飛番（見開きスキップ）があるケースを取りこぼしていた。
+- **対策**:
+  1. `parseExplicitSpreadPageNumbers`（psd-loader.js）: NFKC 正規化 + カンマ/読点（`,` `，` `、`）区切りの見開き表記に対応 → `2,3.psd`（横長）が右(p2)/左(p3)へ正しく分割。
+  2. `parsePsdPageNumbersFromPath`（auto-place.js）: NFKC 正規化後、「先頭の見開き表記」→「先頭の単ページ数字（後続文字許容）」→「旧来の末尾アンカー」の順で解釈。`4修正版`→[4]、`1p修正版`→[1]、`2,3`→[2,3]。
+  3. `buildPsdPageMap`（auto-place.js）: 枚数一致（見本=PSD）時は位置対応(1:1)を最優先。論理マッピングは見開き/論理ずれ＋枚数不一致のときに限定し、見本がフル（≥ 論理最大ページ）なら割り当てを実ページ番号 **N→index N-1**、圧縮見本ならランクに分岐。
+  4. **`txtGroupsUseReferenceOrder`（auto-place.js）の発火条件を拡張**: 「論理ページが 1..K 連番でない（飛番/歯抜け）」かつ「TXT のページ番号が 1..K の連番（= 見本順 / 画像スキャン由来）」のときに、TXT ページ N → `logicalPages[N-1]`（見本順 N 番目の実ページ）へ読み替える。原稿テキストが実ページ番号（飛番あり）で書かれている場合（連番でない）は読み替えない。これでサッカー文が `6.psd`、バス文が `4修正版.psd` へ正しく配置される。
+- **影響ファイル**: `src/psd-loader.js`, `src/auto-place.js`
+- **関連 RDD 要件**: 該当なし（見開きページ対応 / 自動配置ページ対応ロジック）
+- **検証方法**: ①実ファイル名の `parsePsdPageNumbersFromPath` / `parseExplicitSpreadPageNumbers` 単体確認、②非表示見開き運用（単ページ PSD 5 件 + 見本 2,3 非表示 + 画像スキャン連番 TXT）の配置マッピング全経路シミュレーション（TXT P2→4修正版/p4・TXT P4→6.psd/p6 を確認）、③連番分割(18)/実番号 TXT 飛番/開始>1 の各回帰シミュレーション、④`npm run check`（encoding / security / lint / build）成功。
+- **備考 / 再発防止**: PSD ファイル名のページ番号は「先頭数字＋日本語」「カンマ区切り見開き」「全角数字」が現場で頻出する。新たな命名に対応するときは psd-loader.js（分割判定）と auto-place.js（ページ対応）の両方を必ず揃える。
+
 ### [BUG-20260618-05] 「！」「…」等の細グリフが配置/保存で右へ大きくずれる
 
 - **日付**: 2026-06-18

@@ -1251,21 +1251,45 @@ function stripFileExt(name) {
   return String(name ?? "").replace(/\.[^.\\/]+$/, "");
 }
 
+// PSD ファイル名からページ番号を推定する。NFKC 正規化（全角数字/全角カンマ→半角）後、
+//  1) 先頭の見開き表記「数字 + 区切り(, ， 、 _ - 空白) + 数字」（後続文字可。例: "2,3" "2、3" "004_005" "2-3"）
+//  2) 先頭の単ページ表記「数字」（後続に日本語等が付いてもよい。例: "4修正版" "1p修正版" "11"）
+//  3) 旧来の末尾アンカー（"page_05" / "ch_04_05" など数字が末尾にある命名）
+// の順で解釈し、いずれも外れたら fallback ページ番号を返す。
 function parsePsdPageNumbersFromPath(path, fallbackPageNumber) {
-  const name = stripFileExt(baseName(path ?? ""));
-  const match = name.match(/(?:^|_)(\d{1,4})(?:[_\s]+(\d{1,4}))?$/)
-    ?? name.match(/^(\d{1,4})(?:[\-\s]+(\d{1,4}))?$/);
-  if (!match) return [fallbackPageNumber];
-  const nums = [match[1], match[2]]
-    .filter(Boolean)
-    .map((v) => parseInt(v, 10))
-    .filter((v) => Number.isInteger(v) && v > 0);
-  if (nums.length === 2) {
-    if (nums[0] === nums[1]) return [nums[0]];
-    if (Math.abs(nums[1] - nums[0]) === 1) return nums;
-    return [fallbackPageNumber];
+  const name = stripFileExt(baseName(path ?? "")).normalize("NFKC");
+  // 1) 先頭の見開き表記。
+  const spread = name.match(/^\s*(\d{1,4})\s*[,，、_\-\s]\s*(\d{1,4})/);
+  if (spread) {
+    const a = parseInt(spread[1], 10);
+    const b = parseInt(spread[2], 10);
+    if (Number.isInteger(a) && a > 0 && Number.isInteger(b) && b > 0) {
+      if (a === b) return [a];
+      if (Math.abs(b - a) === 1) return [a, b];
+    }
   }
-  return nums.length === 1 ? nums : [fallbackPageNumber];
+  // 2) 先頭の単ページ表記（"4修正版" のように先頭数字＋後続文字を拾う）。
+  const leading = name.match(/^\s*(\d{1,4})/);
+  if (leading) {
+    const n = parseInt(leading[1], 10);
+    if (Number.isInteger(n) && n > 0) return [n];
+  }
+  // 3) 旧来: 数字が末尾にある命名。
+  const tail = name.match(/(?:^|_)(\d{1,4})(?:[_\s]+(\d{1,4}))?$/)
+    ?? name.match(/^(\d{1,4})(?:[\-\s]+(\d{1,4}))?$/);
+  if (tail) {
+    const nums = [tail[1], tail[2]]
+      .filter(Boolean)
+      .map((v) => parseInt(v, 10))
+      .filter((v) => Number.isInteger(v) && v > 0);
+    if (nums.length === 2) {
+      if (nums[0] === nums[1]) return [nums[0]];
+      if (Math.abs(nums[1] - nums[0]) === 1) return nums;
+      return [fallbackPageNumber];
+    }
+    if (nums.length === 1) return nums;
+  }
+  return [fallbackPageNumber];
 }
 
 function buildPsdPageMap(psdPages, referencePageCount = 0) {
@@ -1281,9 +1305,6 @@ function buildPsdPageMap(psdPages, referencePageCount = 0) {
   const logicalPageNumbers = [...new Set(
     pageNumbersByPsdIndex.flat().filter((n) => Number.isInteger(n) && n > 0),
   )].sort((a, b) => a - b);
-  const referenceIndexByLogicalPage = new Map(
-    logicalPageNumbers.map((pageNumber, index) => [pageNumber, index]),
-  );
   const pageToPsdIndices = new Map();
   let logicalMaxPage = 0;
   let hasSpreadPsd = false;
@@ -1313,6 +1334,26 @@ function buildPsdPageMap(psdPages, referencePageCount = 0) {
     pageToPsdIndices.set(pageNumber, [preferred]);
     usedPsdIndices.add(preferred);
   }
+  // 見本（referenceScanDoc.pages）と PSD/論理ページの対応付け方針:
+  //  - 枚数一致（見本=PSD）のときは位置対応(1:1)を最優先し、論理マッピングは使わない。
+  //    （途中見開きが両側で同数に分割される通常ケースはこれで正しく揃う）
+  //  - 論理マッピングを使うのは見開き/論理ずれがあり、かつ枚数が一致せず、見本が
+  //    「論理最大ページまでの連番（フル）」または「現存ページぶんに圧縮」されているとき。
+  //  - 見本がフル（>= 論理最大ページ）なら割り当ては実ページ番号 N→index N-1。
+  //    見本が圧縮（飛番なし連番の現存ぶん）なら従来どおりランク（logicalPageNumbers 内の順位）。
+  //    これにより「見本が飛番」「PSD が歯抜け（欠番）」でも誤対応しにくくする。
+  const psdCount = psdPages.length;
+  const referenceCoversLogicalMax = logicalMaxPage > 0 && referencePageCount >= logicalMaxPage;
+  const referenceCoversCompacted = referencePageCount >= (logicalPageNumbers.length || psdCount);
+  const countsMatch = psdCount > 0 && referencePageCount === psdCount;
+  const referenceIndexByLogicalPage = new Map(
+    referenceCoversLogicalMax
+      ? logicalPageNumbers.map((pageNumber) => [pageNumber, pageNumber - 1])
+      : logicalPageNumbers.map((pageNumber, index) => [pageNumber, index]),
+  );
+  const referenceUsesLogicalPages = !countsMatch
+    && (hasSpreadPsd || hasLogicalMismatch)
+    && (referenceCoversLogicalMax || referenceCoversCompacted);
   return {
     pageNumbersByPsdIndex,
     logicalPageNumbers,
@@ -1323,8 +1364,7 @@ function buildPsdPageMap(psdPages, referencePageCount = 0) {
     usedPsdIndices,
     referencePageCountByOrder: logicalPageNumbers.length || psdPages.length,
     referenceIndexByLogicalPage,
-    referenceUsesLogicalPages: referencePageCount >= (logicalPageNumbers.length || psdPages.length)
-      && (hasSpreadPsd || hasLogicalMismatch),
+    referenceUsesLogicalPages,
   };
 }
 
@@ -1405,17 +1445,35 @@ function fitAutoPlaceLayerToGuideFrame(psdPage, layer) {
   return next;
 }
 
+// TXT のページ番号を「見本順の連番」とみなして論理ページ順へ読み替えるべきか判定する。
+// 画像スキャン由来の TXT は、非表示ページを除いた見本の並び順で <<1Page>>..<<KPage>> の
+// 連番が振られる（referenceScanDocToText）。一方 PSD は実ページ番号（"4修正版"→4 等）で
+// 解釈されるため、見開きや非表示で飛番が出ると TXT 連番と PSD 実番号が食い違う。
+// TXT が 1..K の連番で、かつ PSD 論理ページがそれと異なる（飛番/歯抜け）ときに限り、
+// TXT ページ N → logicalPages[N-1]（見本順の N 番目の実ページ）へ読み替える。
+// 原稿テキストが実ページ番号（飛番あり）で書かれている場合は連番にならないので読み替えない。
 function txtGroupsUseReferenceOrder(txtGroups, psdPageMap) {
   if (!psdPageMap?.hasLogicalMismatch) return false;
   const logicalPages = psdPageMap.logicalPageNumbers ?? [];
-  if (logicalPages.length === 0 || logicalPages[0] <= 1) return false;
+  if (logicalPages.length === 0) return false;
+  // 論理ページが既に 1..K の連番（飛番なし）なら、TXT 連番をそのまま使えるので読み替え不要。
+  if (logicalPages.every((p, i) => p === i + 1)) return false;
+  const txtPageSet = new Set();
   for (const group of Array.isArray(txtGroups) ? txtGroups : []) {
     const nums = Array.isArray(group?.pageNumbers) && group.pageNumbers.length
       ? group.pageNumbers
       : [group?.key];
-    if (nums.some((n) => n === 1)) return true;
+    for (const n of nums) {
+      if (Number.isInteger(n) && n > 0) txtPageSet.add(n);
+    }
   }
-  return false;
+  const txtPages = [...txtPageSet].sort((a, b) => a - b);
+  if (txtPages.length === 0) return false;
+  // TXT が 1..K の連番（= 見本順 / 画像スキャン由来）で、かつ TXT のページ数が論理ページ数と
+  // 一致する（= 見本順 N 番目 ⇔ 論理ページ N 番目 の 1:1 読み替えが成立する）ときだけ読み替える。
+  // 連番でない（原稿が実ページ番号）または個数が合わない場合は、誤った読み替えを避けて素通しする。
+  const txtIsContiguousFrom1 = txtPages[0] === 1 && txtPages[txtPages.length - 1] === txtPages.length;
+  return txtIsContiguousFrom1 && txtPages.length === logicalPages.length;
 }
 
 function resolveReferenceOrderPageNumbers(pageNumbers, psdPageMap, useReferenceOrder) {

@@ -1,5 +1,36 @@
 # PsDesign
 
+## 2026-06-18 変更メモ: v2.6.3 リリース（リロード警告ダイアログ / 句読点→スペースのチェックボックス化 / Ctrl+Z 複数手戻り修正 / 途中見開きPSDのページ流し込みずれ修正）
+
+v2.6.3 では、誤操作によるリロード（=リセット）防止の警告ダイアログ、写植用ファイル選択の句読点置換 UI 改善に加え、v2.6.2 リリース後の作業ブランチに溜まっていた 2 件の不具合修正（履歴 transient リーク / 途中見開きPSDのページ対応）をまとめてリリースした。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.3` に更新済み。
+
+### A. Ctrl+Shift+R / F5 のリロードに警告ダイアログ
+
+- [src/main.js](src/main.js): `bindReloadGuard()` を新設し、WebView2 のリロード系ショートカット（`Ctrl+Shift+R` / `Cmd+Shift+R` のハードリロード、`F5` / `Ctrl+F5`）を capture フェーズの keydown で捕捉して `preventDefault + stopPropagation`。`confirmDialog({ kind: "warning" })` で「再読み込みすると、開いているファイルや編集中の内容がすべてリセットされます。続行しますか？」を表示し、「再読み込み」を選んだときだけ `window.location.reload()` を実行する。`confirmingReload` フラグで二重表示を防止。
+- 従来 `Ctrl+Shift+R` は捕捉されず WebView2 がページをリロード → メモリ上の状態（PSD / 見本 / テキスト / 編集）が警告なく全消えになっていた。`Ctrl+R` 単体は既に定規トグル（`bindRulerToggle` の `toggleRulers`）へ割当済みで `preventDefault` されておりリロードしないため対象外。`init()` の `bindRulerToggle()` 直後で `bindReloadGuard()` を呼ぶ。
+
+### B. 句読点置換ドロップダウンをチェックボックス化（「句読点→スペース」）
+
+- [src/main.js](src/main.js): 写植用ファイル選択ダイアログ（`openHomeTypesetDialog`）の「句読点置換」`<select>`（句読点あり / 句読点なし）を、`<input type="checkbox">` + ラベル「句読点→スペース」に変更。変数 `punctSpaceSelect` → `punctSpaceCheck` にリネームし、読み書きを `.checked` ベースへ更新（開いたとき `getDefault("punctuationSpaceReplacementEnabled") !== false`、適用/確定時は `!!punctSpaceCheck?.checked` を `setDefault` と cleanup payload の 2 箇所で反映）。
+- [src/styles.css](src/styles.css): `.home-typeset-check-label` / `.home-typeset-checkbox`（`accent-color: var(--accent)` でテーマ追従）を追加。
+- 内部処理（[src/txt-source.js](src/txt-source.js) の `normalizePunctuationSpaceReplacement`：`enabled !== false` のとき読点「、」をスペースに置換）は無変更。チェック ON = 句読点を排除してスペースで置き換え、OFF = 句読点を保持。既定は ON。
+
+### C. Ctrl+Z が 3〜4 手分まとめて戻る不具合（履歴 transient リーク）
+
+- [src/spread-view.js](src/spread-view.js): `renderAllSpreads()` の冒頭（`root.innerHTML = ""` の前）で進行中の in-place 編集を `commitActiveInPlaceEdit()` で必ず finalize するようにした。in-place 編集は開始時に `beginHistoryTransient()`（`historyTransientDepth++`）、finalize で commit/abort して depth を戻す設計だが、全 DOM を破棄する `renderAllSpreads()` が編集 DOM（`.layer-box.editing`）を finalize せず消すと depth が 1 のまま詰まり、以降 `pushHistorySnapshot()` が no-op になって数手が 1 スナップショットに丸まり、Ctrl+Z で一気に戻っていた。
+- [src/state.js](src/state.js): 安全網として `healLeakedHistoryTransient()` を追加し、`undo()` / `redo()` の先頭で呼ぶ。transient が開いていないはずの地点で depth>0 を検出したら、現在状態を 1 件 snapshot してから depth=0 に戻す（未保存の現在状態を失わず、詰まりを次操作へ持ち越さない）。詳細は [DEBUG.md](DEBUG.md) `[BUG-20260618-07]`。
+
+### D. 途中見開きPSD（"2,3.psd" / "4修正版.psd" 等）でテキストが別ページへ流し込まれる不具合
+
+- [src/psd-loader.js](src/psd-loader.js): `parseExplicitSpreadPageNumbers` を NFKC 正規化 + カンマ/読点（`,` `，` `、`）区切りの見開き表記に対応させ、`2,3.psd`（横長）を右(p2)/左(p3)へ正しく分割。
+- [src/auto-place.js](src/auto-place.js): `parsePsdPageNumbersFromPath` を NFKC 正規化後「先頭の見開き表記」→「先頭の単ページ数字（後続文字許容）」→「旧来の末尾アンカー」の順で解釈（`4修正版`→[4]、`1p修正版`→[1]、`2,3`→[2,3]）。`buildPsdPageMap` は枚数一致時の位置対応(1:1)を最優先にし、論理マッピングは見開き/論理ずれ＋枚数不一致時に限定。`txtGroupsUseReferenceOrder` の発火条件を「論理ページが 1..K 連番でない（飛番/歯抜け）かつ TXT ページ番号が 1..K の連番（=見本順/画像スキャン由来）」へ拡張し、見開きを非表示にした単ページ運用でも TXT ページ N → `logicalPages[N-1]`（見本順 N 番目の実ページ）へ正しく読み替える。詳細は [DEBUG.md](DEBUG.md) `[BUG-20260618-06]`。
+
+### 検証
+
+- `npm run check` 成功（`check:encoding` / `check:security` / `lint` / `build`）。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功（本リリースの Rust コンテンツ変更はなし）。
+- リリースはタグ `v2.6.3` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-18 変更メモ: v2.6.2 リリース（リサイクルの非表示レイヤー除外 / 白フチ復元の堅牢化 / 白文字の白フチ抑止 / 空行による配置ずれ / 細グリフの右ずれ）
 
 v2.6.2 では、リサイクル写植で報告された 5 件の不具合をまとめて修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.2` に更新済み。
