@@ -131,6 +131,91 @@ function jsonNumArray(arr) {
   for (var i = 0; i < arr.length; i++) out.push(jsonNullableNum(arr[i]));
   return '[' + out.join(',') + ']';
 }
+function descriptorBool(desc, key) {
+  try {
+    var id = stringIDToTypeID(key);
+    if (!desc.hasKey(id)) return null;
+    return desc.getBoolean(id);
+  } catch (e) {}
+  return null;
+}
+function descriptorNumberAny(desc, stringKey, charKey) {
+  try {
+    var id = stringIDToTypeID(stringKey);
+    if (desc.hasKey(id)) {
+      try { return desc.getDouble(id); } catch (e1) {}
+      try { return desc.getUnitDoubleValue(id); } catch (e2) {}
+      try { return desc.getInteger(id); } catch (e3) {}
+    }
+  } catch (e) {}
+  if (charKey) {
+    try {
+      var cid = charIDToTypeID(charKey);
+      if (desc.hasKey(cid)) {
+        try { return desc.getDouble(cid); } catch (e4) {}
+        try { return desc.getUnitDoubleValue(cid); } catch (e5) {}
+        try { return desc.getInteger(cid); } catch (e6) {}
+      }
+    } catch (e7) {}
+  }
+  return null;
+}
+function strokeFromFrameFx(fx) {
+  if (!fx) return null;
+  var enabled = descriptorBool(fx, "enabled");
+  var present = descriptorBool(fx, "present");
+  if (enabled === false || present === false) return null;
+  var colorDesc = null;
+  try {
+    var colorKey = stringIDToTypeID("color");
+    if (fx.hasKey(colorKey)) colorDesc = fx.getObjectValue(colorKey);
+  } catch (e) {}
+  if (!colorDesc) return null;
+  var r = descriptorNumberAny(colorDesc, "red", "Rd  ");
+  var g = descriptorNumberAny(colorDesc, "green", "Grn ");
+  var b = descriptorNumberAny(colorDesc, "blue", "Bl  ");
+  if (r === null || g === null || b === null) return null;
+  if (r <= 1 && g <= 1 && b <= 1 && (r > 0 || g > 0 || b > 0)) {
+    r *= 255;
+    g *= 255;
+    b *= 255;
+  }
+  r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
+  g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
+  b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
+  var strokeColor = "none";
+  if (r > 240 && g > 240 && b > 240) strokeColor = "white";
+  else if (r < 15 && g < 15 && b < 15) strokeColor = "black";
+  if (strokeColor === "none") return null;
+  var size = descriptorNumberAny(fx, "size", "Sz  ");
+  return { strokeColor: strokeColor, strokeWidthPx: (typeof size === "number" && isFinite(size) && size > 0) ? size : 20 };
+}
+function strokeFromLayerEffects(L) {
+  try {
+    var layerId = layerIdOf(L);
+    if (!layerId) return { strokeColor: "none", strokeWidthPx: 20 };
+    var ref = new ActionReference();
+    ref.putProperty(stringIDToTypeID("property"), stringIDToTypeID("layerEffects"));
+    ref.putIdentifier(charIDToTypeID("Lyr "), layerId);
+    var desc = executeActionGet(ref);
+    var effectsKey = stringIDToTypeID("layerEffects");
+    var effects = desc.hasKey(effectsKey) ? desc.getObjectValue(effectsKey) : desc;
+    var frameKey = stringIDToTypeID("frameFX");
+    if (effects.hasKey(frameKey)) {
+      var single = strokeFromFrameFx(effects.getObjectValue(frameKey));
+      if (single) return single;
+    }
+    var multiKey = stringIDToTypeID("frameFXMulti");
+    if (effects.hasKey(multiKey)) {
+      var list = effects.getList(multiKey);
+      for (var i = 0; i < list.count; i++) {
+        var item = strokeFromFrameFx(list.getObjectValue(i));
+        if (item) return item;
+      }
+    }
+  } catch (e) {}
+  return { strokeColor: "none", strokeWidthPx: 20 };
+}
 function fillColorNameFromTextItem(ti) {
   try {
     var c = ti.color;
@@ -251,6 +336,7 @@ try {
       if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
       var layerId = layerIdOf(L);
       var transform = textTransformForLayer(L);
+      var stroke = strokeFromLayerEffects(L);
       if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
       items.push(
         '{"idx":' + jsonNum(i)
@@ -264,6 +350,8 @@ try {
         + ',"transform":' + jsonNumArray(transform)
         + ',"direction":' + jsonStr(dir)
         + ',"fillColor":' + jsonStr(fillColor)
+        + ',"strokeColor":' + jsonStr(stroke.strokeColor)
+        + ',"strokeWidthPx":' + jsonNum(stroke.strokeWidthPx)
         + ',"visible":' + jsonBool(visible)
         + '}'
       );
@@ -331,6 +419,91 @@ function jsonNumArray(arr) {
   var out = [];
   for (var i = 0; i < arr.length; i++) out.push(jsonNullableNum(arr[i]));
   return '[' + out.join(',') + ']';
+}
+function descriptorBool(desc, key) {
+  try {
+    var id = stringIDToTypeID(key);
+    if (!desc.hasKey(id)) return null;
+    return desc.getBoolean(id);
+  } catch (e) {}
+  return null;
+}
+function descriptorNumberAny(desc, stringKey, charKey) {
+  try {
+    var id = stringIDToTypeID(stringKey);
+    if (desc.hasKey(id)) {
+      try { return desc.getDouble(id); } catch (e1) {}
+      try { return desc.getUnitDoubleValue(id); } catch (e2) {}
+      try { return desc.getInteger(id); } catch (e3) {}
+    }
+  } catch (e) {}
+  if (charKey) {
+    try {
+      var cid = charIDToTypeID(charKey);
+      if (desc.hasKey(cid)) {
+        try { return desc.getDouble(cid); } catch (e4) {}
+        try { return desc.getUnitDoubleValue(cid); } catch (e5) {}
+        try { return desc.getInteger(cid); } catch (e6) {}
+      }
+    } catch (e7) {}
+  }
+  return null;
+}
+function strokeFromFrameFx(fx) {
+  if (!fx) return null;
+  var enabled = descriptorBool(fx, "enabled");
+  var present = descriptorBool(fx, "present");
+  if (enabled === false || present === false) return null;
+  var colorDesc = null;
+  try {
+    var colorKey = stringIDToTypeID("color");
+    if (fx.hasKey(colorKey)) colorDesc = fx.getObjectValue(colorKey);
+  } catch (e) {}
+  if (!colorDesc) return null;
+  var r = descriptorNumberAny(colorDesc, "red", "Rd  ");
+  var g = descriptorNumberAny(colorDesc, "green", "Grn ");
+  var b = descriptorNumberAny(colorDesc, "blue", "Bl  ");
+  if (r === null || g === null || b === null) return null;
+  if (r <= 1 && g <= 1 && b <= 1 && (r > 0 || g > 0 || b > 0)) {
+    r *= 255;
+    g *= 255;
+    b *= 255;
+  }
+  r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
+  g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
+  b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
+  var strokeColor = "none";
+  if (r > 240 && g > 240 && b > 240) strokeColor = "white";
+  else if (r < 15 && g < 15 && b < 15) strokeColor = "black";
+  if (strokeColor === "none") return null;
+  var size = descriptorNumberAny(fx, "size", "Sz  ");
+  return { strokeColor: strokeColor, strokeWidthPx: (typeof size === "number" && isFinite(size) && size > 0) ? size : 20 };
+}
+function strokeFromLayerEffects(L) {
+  try {
+    var layerId = layerIdOf(L);
+    if (!layerId) return { strokeColor: "none", strokeWidthPx: 20 };
+    var ref = new ActionReference();
+    ref.putProperty(stringIDToTypeID("property"), stringIDToTypeID("layerEffects"));
+    ref.putIdentifier(charIDToTypeID("Lyr "), layerId);
+    var desc = executeActionGet(ref);
+    var effectsKey = stringIDToTypeID("layerEffects");
+    var effects = desc.hasKey(effectsKey) ? desc.getObjectValue(effectsKey) : desc;
+    var frameKey = stringIDToTypeID("frameFX");
+    if (effects.hasKey(frameKey)) {
+      var single = strokeFromFrameFx(effects.getObjectValue(frameKey));
+      if (single) return single;
+    }
+    var multiKey = stringIDToTypeID("frameFXMulti");
+    if (effects.hasKey(multiKey)) {
+      var list = effects.getList(multiKey);
+      for (var i = 0; i < list.count; i++) {
+        var item = strokeFromFrameFx(list.getObjectValue(i));
+        if (item) return item;
+      }
+    }
+  } catch (e) {}
+  return { strokeColor: "none", strokeWidthPx: 20 };
 }
 function layerIdOf(L) {
   try {
@@ -467,6 +640,7 @@ function processOnePsd(psdPath, refImg, bgImg) {
       if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
       var layerId = layerIdOf(L);
       var transform = textTransformForLayer(L);
+      var stroke = strokeFromLayerEffects(L);
       if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
       items.push(
         '{"idx":' + jsonNum(i)
@@ -480,6 +654,8 @@ function processOnePsd(psdPath, refImg, bgImg) {
         + ',"transform":' + jsonNumArray(transform)
         + ',"direction":' + jsonStr(dir)
         + ',"fillColor":' + jsonStr(fillColor)
+        + ',"strokeColor":' + jsonStr(stroke.strokeColor)
+        + ',"strokeWidthPx":' + jsonNum(stroke.strokeWidthPx)
         + ',"visible":' + jsonBool(visible)
       + '}'
     );
@@ -572,6 +748,99 @@ function jsonNum(n) {
   return String(n);
 }
 function jsonBool(b) { return b ? 'true' : 'false'; }
+function layerIdOf(L) {
+  try {
+    var id = Number(L.id);
+    return isNaN(id) ? 0 : id;
+  } catch (e) {
+    return 0;
+  }
+}
+function descriptorBool(desc, key) {
+  try {
+    var id = stringIDToTypeID(key);
+    if (!desc.hasKey(id)) return null;
+    return desc.getBoolean(id);
+  } catch (e) {}
+  return null;
+}
+function descriptorNumberAny(desc, stringKey, charKey) {
+  try {
+    var id = stringIDToTypeID(stringKey);
+    if (desc.hasKey(id)) {
+      try { return desc.getDouble(id); } catch (e1) {}
+      try { return desc.getUnitDoubleValue(id); } catch (e2) {}
+      try { return desc.getInteger(id); } catch (e3) {}
+    }
+  } catch (e) {}
+  if (charKey) {
+    try {
+      var cid = charIDToTypeID(charKey);
+      if (desc.hasKey(cid)) {
+        try { return desc.getDouble(cid); } catch (e4) {}
+        try { return desc.getUnitDoubleValue(cid); } catch (e5) {}
+        try { return desc.getInteger(cid); } catch (e6) {}
+      }
+    } catch (e7) {}
+  }
+  return null;
+}
+function strokeFromFrameFx(fx) {
+  if (!fx) return null;
+  var enabled = descriptorBool(fx, "enabled");
+  var present = descriptorBool(fx, "present");
+  if (enabled === false || present === false) return null;
+  var colorDesc = null;
+  try {
+    var colorKey = stringIDToTypeID("color");
+    if (fx.hasKey(colorKey)) colorDesc = fx.getObjectValue(colorKey);
+  } catch (e) {}
+  if (!colorDesc) return null;
+  var r = descriptorNumberAny(colorDesc, "red", "Rd  ");
+  var g = descriptorNumberAny(colorDesc, "green", "Grn ");
+  var b = descriptorNumberAny(colorDesc, "blue", "Bl  ");
+  if (r === null || g === null || b === null) return null;
+  if (r <= 1 && g <= 1 && b <= 1 && (r > 0 || g > 0 || b > 0)) {
+    r *= 255;
+    g *= 255;
+    b *= 255;
+  }
+  r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
+  g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
+  b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
+  var strokeColor = "none";
+  if (r > 240 && g > 240 && b > 240) strokeColor = "white";
+  else if (r < 15 && g < 15 && b < 15) strokeColor = "black";
+  if (strokeColor === "none") return null;
+  var size = descriptorNumberAny(fx, "size", "Sz  ");
+  return { strokeColor: strokeColor, strokeWidthPx: (typeof size === "number" && isFinite(size) && size > 0) ? size : 20 };
+}
+function strokeFromLayerEffects(L) {
+  try {
+    var layerId = layerIdOf(L);
+    if (!layerId) return { strokeColor: "none", strokeWidthPx: 20 };
+    var ref = new ActionReference();
+    ref.putProperty(stringIDToTypeID("property"), stringIDToTypeID("layerEffects"));
+    ref.putIdentifier(charIDToTypeID("Lyr "), layerId);
+    var desc = executeActionGet(ref);
+    var effectsKey = stringIDToTypeID("layerEffects");
+    var effects = desc.hasKey(effectsKey) ? desc.getObjectValue(effectsKey) : desc;
+    var frameKey = stringIDToTypeID("frameFX");
+    if (effects.hasKey(frameKey)) {
+      var single = strokeFromFrameFx(effects.getObjectValue(frameKey));
+      if (single) return single;
+    }
+    var multiKey = stringIDToTypeID("frameFXMulti");
+    if (effects.hasKey(multiKey)) {
+      var list = effects.getList(multiKey);
+      for (var i = 0; i < list.count; i++) {
+        var item = strokeFromFrameFx(list.getObjectValue(i));
+        if (item) return item;
+      }
+    }
+  } catch (e) {}
+  return { strokeColor: "none", strokeWidthPx: 20 };
+}
 
 function fillColorNameFromTextItem(ti) {
   try {
@@ -669,6 +938,7 @@ try {
       if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
       // contents が空（取得失敗）ならレイヤー名で補完（PS はテキストレイヤーを内容で自動命名する）。
       if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
+      var stroke = strokeFromLayerEffects(L);
       items.push(
         '{"idx":' + jsonNum(i)
         + ',"name":' + jsonStr(L.name)
@@ -679,6 +949,8 @@ try {
         + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
         + ',"direction":' + jsonStr(dir)
         + ',"fillColor":' + jsonStr(fillColor)
+        + ',"strokeColor":' + jsonStr(stroke.strokeColor)
+        + ',"strokeWidthPx":' + jsonNum(stroke.strokeWidthPx)
         + ',"visible":' + jsonBool(visible)
         + '}'
       );
@@ -1660,6 +1932,56 @@ function normalizeFullWidthToHalfTcy(s, tcyEnabled) {
     .replace(/！？/g, "!?")
     .replace(/？！/g, "?!")
     .replace(/？？/g, "??");
+}
+
+function isVerticalSingleColumnCenterRiskCharCode(c) {
+  if (c === 0x0021 || c === 0x003F || c === 0xFF01 || c === 0xFF1F) return true;
+  if (c === 0x003A || c === 0x003B || c === 0xFF1A || c === 0xFF1B ||
+      c === 0x30FB || c === 0x2025 ||
+      c === 0x2026) return true;
+  if (c === 0x0028 || c === 0x0029 || c === 0x005B || c === 0x005D ||
+      c === 0x007B || c === 0x007D || c === 0xFF08 || c === 0xFF09 ||
+      c === 0x300C || c === 0x300D || c === 0x300E || c === 0x300F ||
+      c === 0x3010 || c === 0x3011 || c === 0x3014 || c === 0x3015 ||
+      c === 0x3016 || c === 0x3017 || c === 0x3018 || c === 0x3019 ||
+      c === 0x301A || c === 0x301B || c === 0x301D || c === 0x301F) return true;
+  if (c === 0x2010 || c === 0x2011 || c === 0x2012 || c === 0x2013 ||
+      c === 0x2014 || c === 0x2015 || c === 0x2212 || c === 0x2500 ||
+      c === 0x2501 || c === 0x30FC || c === 0x301C || c === 0xFF0D ||
+      c === 0xFF5E || c === 0x007E) return true;
+  if ((c >= 0x2190 && c <= 0x2193) ||
+      (c >= 0x25A0 && c <= 0x25EF) ||
+      (c >= 0x2600 && c <= 0x26FF)) return true;
+  if (c === 0x3041 || c === 0x3043 || c === 0x3045 || c === 0x3047 ||
+      c === 0x3049 || c === 0x3063 || c === 0x3083 || c === 0x3085 ||
+      c === 0x3087 || c === 0x308E || c === 0x30A1 || c === 0x30A3 ||
+      c === 0x30A5 || c === 0x30A7 || c === 0x30A9 || c === 0x30C3 ||
+      c === 0x30E3 || c === 0x30E5 || c === 0x30E7 || c === 0x30EE ||
+      c === 0x30F5 || c === 0x30F6) return true;
+  return false;
+}
+
+function isVerticalRightEdgePunctuationCharCode(c) {
+  return c === 0x002C || c === 0x002E || c === 0x3001 || c === 0x3002 ||
+    c === 0xFF0C || c === 0xFF0E || c === 0xFF64 || c === 0xFF61;
+}
+
+function isVerticalRightEdgePunctuationText(s) {
+  var text = String(s || "").replace(/\r\n?/g, "\n");
+  if (text.length === 0 || text.indexOf("\n") >= 0) return false;
+  for (var i = 0; i < text.length; i++) {
+    if (!isVerticalRightEdgePunctuationCharCode(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
+function isVerticalSingleColumnCenterRiskText(s) {
+  var text = String(s || "").replace(/\r\n?/g, "\n");
+  if (text.length === 0 || text.indexOf("\n") >= 0) return false;
+  for (var i = 0; i < text.length; i++) {
+    if (!isVerticalSingleColumnCenterRiskCharCode(text.charCodeAt(i))) return false;
+  }
+  return true;
 }
 
 function findLayerById(doc, id) {
@@ -4992,7 +5314,17 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             var _thickCanvas = _ptInPx * (_thickBase + _thickSafetyEm);
             if (_thickCanvas < 24) _thickCanvas = 24;
             var _boxRight = nl.x + _thickCanvas;
-            _fixDx = _boxRight - _actualRight;
+            var _actualWidth = _actualRight - _actualLeft;
+            var _columnWidth = (_ptInPx > 0) ? _ptInPx : _thickCanvas;
+            var _rightEdgePunctuation = isVerticalRightEdgePunctuationText(_contentsForCount);
+            var _shouldCenterSingleColumn = (_lc === 1 && _actualWidth > 0 && _columnWidth > 0 &&
+              ((!_rightEdgePunctuation && _actualWidth < _columnWidth * 0.82) ||
+                isVerticalSingleColumnCenterRiskText(_contentsForCount)));
+            if (_shouldCenterSingleColumn) {
+              _fixDx = (_boxRight - (_columnWidth / 2)) - ((_actualLeft + _actualRight) / 2);
+            } else {
+              _fixDx = _boxRight - _actualRight;
+            }
             _fixDy = nl.y - _actualTop;
           } else {
             // 横書きも CSS padding なしなので、bbox.left = text 左端 / bbox.top = text 上端。

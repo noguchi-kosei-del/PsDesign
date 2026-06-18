@@ -36,6 +36,7 @@ import {
   UnsupportedBitmapPsdError,
   loadPsdForReuse,
   buildReusePageFromPsData,
+  mergeReuseStrokeHintsFromAgPsd,
 } from "../psd-loader.js";
 import { refreshMemoryStatus } from "../memory-mode.js";
 import { buildReferenceDocFromCanvases } from "../pdf-loader.js";
@@ -307,14 +308,15 @@ async function extractTextLayersToNewLayers(
         );
         if (Number.isFinite(boundsSize) && boundsSize > 0) sizePt = boundsSize;
       }
+      const sourceOrAutoStroke = resolveReuseStrokeFromSourceOrMetrics(
+        it.strokeColor,
+        it.strokeWidthPx,
+        metricsList ? metricsList[i] : null,
+        it.font || null,
+      );
       const auto = unify
         ? computeAutoStyleFromMetrics(metricsList ? metricsList[i] : null, it.font || null)
-        : resolveReuseStrokeFromSourceOrMetrics(
-            it.strokeColor,
-            it.strokeWidthPx,
-            metricsList ? metricsList[i] : null,
-            it.font || null,
-          );
+        : sourceOrAutoStroke;
       const layerFont = resolveReuseFont({
         unify,
         defaultFont,
@@ -333,8 +335,8 @@ async function extractTextLayersToNewLayers(
         fontPostScriptName: layerFont,
         sizePt: layerSize,
         direction,
-        strokeColor: auto.strokeColor,
-        strokeWidthPx: auto.strokeWidthPx,
+        strokeColor: sourceOrAutoStroke.strokeColor,
+        strokeWidthPx: sourceOrAutoStroke.strokeWidthPx,
         fillColor: normalizeReuseFillColor(it.fillColor),
         leadingPct: 125,
         autoFontSwitched: unify ? auto.autoFontSwitched : false,
@@ -565,6 +567,7 @@ export async function loadPsdFilesForReuse(files, {
       const r = batchPages ? batchPages[i] : null;
       if (r && r.ok) {
         page = await buildReusePageFromPsData(path, r);
+        if (page) page = await mergeReuseStrokeHintsFromAgPsd(page, path);
       }
       // バッチ未取得 / 不完全なページは個別読み取りにフォールバック。
       if (!page) page = await loadPsdForReuse(path);

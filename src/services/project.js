@@ -58,6 +58,7 @@ import {
 } from "../state.js";
 import { loadPsdFilesByPaths } from "./psd-load.js";
 import { loadPsdFilesForReuse } from "./reuse.js";
+import { getFontBookProjectState, restoreFontBookProjectState } from "../font-book.js";
 import { baseName, joinPath, parentDir } from "../utils/path.js";
 import { endLoadOperation, tryBeginLoadOperation } from "./load-guard.js";
 import {
@@ -73,6 +74,8 @@ const PROJECT_KIND = "opus-project";
 const PROJECT_SCHEMA_VERSION = 1;
 const PROJECT_TEXT_DIR_NAME = "\u30c6\u30ad\u30b9\u30c8";
 const PROJECT_REFERENCE_DIR_NAME = "\u5199\u690d\u898b\u672c";
+const PROJECT_REFERENCE_FILE_RE = /\.(pdf|jpe?g|png)$/i;
+const PROJECT_REFERENCE_PDF_RE = /\.pdf$/i;
 let projectSaveInflight = false;
 let projectLoadInProgress = false;
 let currentProjectPath = null;
@@ -83,6 +86,35 @@ let currentProjectVolume = "";
 let currentProjectTextPath = null;
 let currentProjectPsdPathMap = new Map();
 let currentProjectReferencePathMap = new Map();
+
+function projectReferenceDebug(stage, detail = {}) {
+  try {
+    if (localStorage.getItem("opus_debug_project_reference") !== "1") return;
+    const entry = {
+      at: new Date().toISOString(),
+      stage,
+      detail,
+    };
+    window.__projectReferenceDebugLogs = Array.isArray(window.__projectReferenceDebugLogs)
+      ? window.__projectReferenceDebugLogs
+      : [];
+    window.__projectReferenceDebugLogs.push(entry);
+    console.info("[project-reference-debug]", stage, detail);
+  } catch (_) {
+    // Debug logging must never block project open/save.
+  }
+}
+
+function compactReferenceState(refs) {
+  return {
+    paths: Array.isArray(refs?.paths) ? refs.paths : [],
+    originalPaths: Array.isArray(refs?.originalPaths) ? refs.originalPaths : [],
+    excludedPages: refs?.excludedPages,
+    splitMode: refs?.splitMode,
+    splitPageNumbers: refs?.splitPageNumbers,
+    skipFirstBlank: refs?.skipFirstBlank,
+  };
+}
 
 function setCurrentProject(path, options = {}) {
   currentProjectPath = typeof path === "string" && path ? path : null;
@@ -128,6 +160,18 @@ function buildSnapshot() {
 
 function makeProjectDocument() {
   const snapshot = buildSnapshot();
+  const references = {
+    paths: getPdfPaths(),
+    excludedPages: Array.from(getPdfExcludedReferencePages()),
+    splitMode: getPdfSplitMode(),
+    splitPageNumbers: Array.from(getPdfSplitPageNumbers()),
+    skipFirstBlank: getPdfSkipFirstBlank(),
+  };
+  const fontBook = getFontBookProjectState();
+  projectReferenceDebug("make-project-document", {
+    references: compactReferenceState(references),
+    fontBook,
+  });
   return {
     kind: PROJECT_KIND,
     schemaVersion: PROJECT_SCHEMA_VERSION,
@@ -135,13 +179,8 @@ function makeProjectDocument() {
     savedAt: new Date().toISOString(),
     psdPaths: snapshot.psdPaths,
     snapshot,
-    references: {
-      paths: getPdfPaths(),
-      excludedPages: Array.from(getPdfExcludedReferencePages()),
-      splitMode: getPdfSplitMode(),
-      splitPageNumbers: Array.from(getPdfSplitPageNumbers()),
-      skipFirstBlank: getPdfSkipFirstBlank(),
-    },
+    references,
+    fontBook,
     view: {
       psdPageIndex: getCurrentPageIndex(),
       pdfPageIndex: getPdfPageIndex(),
@@ -181,6 +220,7 @@ function normalizeProjectDocument(raw) {
     },
     psdPaths: normalizedPsdPaths,
     references: raw.references && typeof raw.references === "object" ? raw.references : null,
+    fontBook: raw.fontBook && typeof raw.fontBook === "object" ? raw.fontBook : null,
     view: raw.view && typeof raw.view === "object" ? raw.view : null,
   };
 }
@@ -526,6 +566,22 @@ function rebaseProjectDocumentForOpen(project, opusPath) {
           : project.text.path,
       }
     : project.text;
+  const fontBook = project.fontBook && typeof project.fontBook === "object"
+    ? {
+        ...project.fontBook,
+        selectedJsonPath: project.fontBook.selectedJsonPath && !isAbsolutePath(project.fontBook.selectedJsonPath)
+          ? rebaseBundledProjectPath(project.fontBook.selectedJsonPath, projectDir)
+          : project.fontBook.selectedJsonPath,
+      }
+    : project.fontBook;
+  projectReferenceDebug("rebase-project-open", {
+    opusPath,
+    projectDir,
+    originalReferences: compactReferenceState(project.references),
+    rebasedReferences: compactReferenceState(refs),
+    originalFontBook: project.fontBook,
+    rebasedFontBook: fontBook,
+  });
   return {
     ...project,
     projectDir,
@@ -533,6 +589,7 @@ function rebaseProjectDocumentForOpen(project, opusPath) {
     snapshot,
     references: refs,
     text,
+    fontBook,
   };
 }
 
@@ -545,6 +602,173 @@ async function projectPathExists(path) {
   } catch {
     return false;
   }
+}
+
+async function resolveProjectReferencePaths(refs) {
+  if (!refs || typeof refs !== "object") {
+    projectReferenceDebug("resolve-reference-paths-skip", { reason: "empty-or-invalid", refs });
+    return refs;
+  }
+  const paths = Array.isArray(refs.paths) ? refs.paths : [];
+  if (paths.length === 0) {
+    projectReferenceDebug("resolve-reference-paths-skip", { reason: "no-paths", refs: compactReferenceState(refs) });
+    return refs;
+  }
+  const originalPaths = Array.isArray(refs.originalPaths) ? refs.originalPaths : [];
+  projectReferenceDebug("resolve-reference-paths-start", {
+    refs: compactReferenceState(refs),
+  });
+  let changed = false;
+  const resolved = [];
+  for (let i = 0; i < paths.length; i += 1) {
+    const path = paths[i];
+    const pathExists = await projectPathExists(path);
+    if (pathExists) {
+      resolved.push(path);
+      projectReferenceDebug("resolve-reference-path", {
+        index: i,
+        savedPath: path,
+        chosenPath: path,
+        reason: "saved-path-exists",
+        pathExists,
+      });
+      continue;
+    }
+    const original = originalPaths[i];
+    const originalExists = await projectPathExists(original);
+    if (originalExists) {
+      resolved.push(original);
+      changed = true;
+      projectReferenceDebug("resolve-reference-path", {
+        index: i,
+        savedPath: path,
+        originalPath: original,
+        chosenPath: original,
+        reason: "original-path-exists",
+        pathExists,
+        originalExists,
+      });
+      continue;
+    }
+    const byName = originalPaths.find((candidate) =>
+      baseName(candidate) && baseName(candidate) === baseName(path),
+    );
+    const byNameExists = await projectPathExists(byName);
+    if (byNameExists) {
+      resolved.push(byName);
+      changed = true;
+      projectReferenceDebug("resolve-reference-path", {
+        index: i,
+        savedPath: path,
+        originalPath: original,
+        basenameFallback: byName,
+        chosenPath: byName,
+        reason: "basename-fallback-exists",
+        pathExists,
+        originalExists,
+        byNameExists,
+      });
+      continue;
+    }
+    resolved.push(path);
+    projectReferenceDebug("resolve-reference-path", {
+      index: i,
+      savedPath: path,
+      originalPath: original,
+      basenameFallback: byName,
+      chosenPath: path,
+      reason: "no-existing-path-found",
+      pathExists,
+      originalExists,
+      byNameExists,
+    });
+  }
+  const result = changed ? { ...refs, paths: resolved } : refs;
+  projectReferenceDebug("resolve-reference-paths-finish", {
+    changed,
+    result: compactReferenceState(result),
+  });
+  return result;
+}
+
+function sortProjectReferenceFiles(paths) {
+  return [...paths].sort((a, b) => {
+    const aPdf = PROJECT_REFERENCE_PDF_RE.test(a);
+    const bPdf = PROJECT_REFERENCE_PDF_RE.test(b);
+    if (aPdf !== bPdf) return aPdf ? -1 : 1;
+    return baseName(a).localeCompare(baseName(b), "ja", { numeric: true, sensitivity: "base" });
+  });
+}
+
+async function listBundledProjectReferenceFiles(projectDir) {
+  if (!projectDir) return [];
+  const refDir = joinPath(projectDir, PROJECT_REFERENCE_DIR_NAME);
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    const entries = await invoke("list_directory_entries", { path: refDir });
+    const files = (Array.isArray(entries) ? entries : [])
+      .filter((entry) => entry?.isFile && PROJECT_REFERENCE_FILE_RE.test(entry.name || entry.path || ""))
+      .map((entry) => String(entry.path || joinPath(refDir, entry.name || "")))
+      .filter(Boolean);
+    const sorted = sortProjectReferenceFiles(files);
+    const pdfs = sorted.filter((path) => PROJECT_REFERENCE_PDF_RE.test(path));
+    const result = pdfs.length > 0 ? pdfs : sorted;
+    projectReferenceDebug("bundled-reference-files", {
+      projectDir,
+      refDir,
+      total: files.length,
+      chosen: result,
+    });
+    return result;
+  } catch (e) {
+    projectReferenceDebug("bundled-reference-files-error", {
+      projectDir,
+      refDir,
+      error: e?.message ?? String(e),
+    });
+    return [];
+  }
+}
+
+async function recoverProjectReferencesFromBundle(refs, projectDir) {
+  const baseRefs = refs && typeof refs === "object" ? refs : {};
+  const paths = Array.isArray(refs?.paths) ? refs.paths.filter((p) => typeof p === "string") : [];
+  if (paths.length > 0) {
+    let existingCount = 0;
+    for (const path of paths) {
+      if (await projectPathExists(path)) existingCount += 1;
+    }
+    if (existingCount > 0) {
+      projectReferenceDebug("recover-references-skip", {
+        reason: "some-reference-paths-exist",
+        existingCount,
+        total: paths.length,
+      });
+      return refs;
+    }
+  }
+  const bundled = await listBundledProjectReferenceFiles(projectDir);
+  if (bundled.length === 0) {
+    projectReferenceDebug("recover-references-skip", {
+      reason: "no-bundled-reference-files",
+      projectDir,
+      total: paths.length,
+    });
+    return refs;
+  }
+  const recovered = {
+    ...baseRefs,
+    paths: bundled,
+    originalPaths: Array.isArray(refs?.originalPaths) && refs.originalPaths.length > 0
+      ? refs.originalPaths
+      : paths,
+  };
+  projectReferenceDebug("recover-references-from-bundle", {
+    projectDir,
+    oldPaths: paths,
+    recovered: compactReferenceState(recovered),
+  });
+  return recovered;
 }
 
 async function findMissingProjectPsdPaths(project) {
@@ -1021,9 +1245,21 @@ function leaveHomeScreen() {
 
 async function restoreProjectReferences(refs, options = {}) {
   const paths = Array.isArray(refs?.paths) ? refs.paths.filter((p) => typeof p === "string") : [];
-  if (paths.length === 0) return;
+  if (paths.length === 0) {
+    projectReferenceDebug("restore-references-skip", {
+      reason: "no-paths",
+      refs: compactReferenceState(refs),
+      options,
+    });
+    return;
+  }
+  projectReferenceDebug("restore-references-start", {
+    paths,
+    refs: compactReferenceState(refs),
+    options,
+  });
   try {
-    await loadReferenceFiles(paths, {
+    const result = await loadReferenceFiles(paths, {
       title: "プロジェクトを読み込み中",
       variant: "place",
       keepProgressOpen: true,
@@ -1031,10 +1267,24 @@ async function restoreProjectReferences(refs, options = {}) {
       excludedPages: refs.excludedPages,
       skipFirstBlankPage: refs.skipFirstBlank,
     });
+    projectReferenceDebug("restore-references-loaded", {
+      result,
+      statePdfPaths: getPdfPaths(),
+    });
     if (Array.isArray(refs.splitPageNumbers)) setPdfSplitPageNumbers(refs.splitPageNumbers);
     if (typeof refs.splitMode === "boolean") setPdfSplitMode(refs.splitMode);
     if (typeof refs.skipFirstBlank === "boolean") setPdfSkipFirstBlank(refs.skipFirstBlank);
+    projectReferenceDebug("restore-references-finish", {
+      splitPageNumbers: Array.from(getPdfSplitPageNumbers()),
+      splitMode: getPdfSplitMode(),
+      skipFirstBlank: getPdfSkipFirstBlank(),
+      statePdfPaths: getPdfPaths(),
+    });
   } catch (e) {
+    projectReferenceDebug("restore-references-error", {
+      paths,
+      error: e?.message ?? String(e),
+    });
     console.error("[project] reference restore failed:", e);
     toast(`見本の復元に失敗しました: ${e?.message ?? e}`, { kind: "warning", duration: 4500 });
   }
@@ -1044,6 +1294,25 @@ async function restoreProjectReferences(refs, options = {}) {
 // snapshot.guides の psdPath は保存時にコピー先パスへ remap 済みで、再開時に
 // ロードした PSD のパスと一致する。ロード済み PSD 分だけ流し込み、ルーラー表示と
 // ロック状態（= 外側ディム = 塗り足し表示）を復元する。
+async function restoreProjectFontBook(fontBook) {
+  if (!fontBook || typeof fontBook !== "object") {
+    projectReferenceDebug("restore-font-book-skip", { fontBook });
+    return;
+  }
+  projectReferenceDebug("restore-font-book-start", { fontBook });
+  try {
+    const restored = await restoreFontBookProjectState(fontBook);
+    projectReferenceDebug("restore-font-book-finish", { restored, fontBook });
+  } catch (e) {
+    projectReferenceDebug("restore-font-book-error", {
+      fontBook,
+      error: e?.message ?? String(e),
+    });
+    console.error("[project] font book restore failed:", e);
+    toast(`フォント帳の復元に失敗しました: ${e?.message ?? e}`, { kind: "warning", duration: 4500 });
+  }
+}
+
 function restoreProjectGuides(snapshot) {
   const guides = Array.isArray(snapshot?.guides) ? snapshot.guides : [];
   const loadedPaths = new Set(getPages().map((p) => p.path));
@@ -1092,6 +1361,13 @@ export async function openProjectFromPath(path) {
       normalizeProjectDocument(JSON.parse(text)),
       path,
     );
+    projectReferenceDebug("open-project-parsed", {
+      opusPath: path,
+      projectDir: project.projectDir,
+      psdPaths: project.psdPaths,
+      references: compactReferenceState(project.references),
+      fontBook: project.fontBook,
+    });
     project = await ensureProjectPsdLinks(project, path);
     if (!project) return;
     completeProgressFlowStep(
@@ -1128,9 +1404,20 @@ export async function openProjectFromPath(path) {
     if (getPages().length === 0) {
       throw new Error("プロジェクト内の PSD を読み込めませんでした");
     }
+    projectReferenceDebug("open-project-before-reference-restore", {
+      references: compactReferenceState(project.references),
+      currentPdfPaths: getPdfPaths(),
+    });
+    project.references = await resolveProjectReferencePaths(project.references);
+    project.references = await recoverProjectReferencesFromBundle(project.references, project.projectDir);
+    projectReferenceDebug("open-project-after-reference-resolve", {
+      references: compactReferenceState(project.references),
+      currentPdfPaths: getPdfPaths(),
+    });
     await restoreProjectReferences(project.references, {
       progressFlow: { id: progressFlowId, stepId: "reference-load" },
     });
+    await restoreProjectFontBook(project.fontBook);
     if (!Array.isArray(project.references?.paths) || project.references.paths.length === 0) {
       completeProgressFlowStep(
         { id: progressFlowId, stepId: "reference-load" },

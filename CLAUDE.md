@@ -1,5 +1,46 @@
 # PsDesign
 
+## 2026-06-18 変更メモ: v2.6.1 リリース（リサイクル白フチ / 全角記号の保存位置補正 / フォント帳検索 / プロジェクト見本PDF復元）
+
+v2.6.1 では、リサイクル PSD の白フチ復元、単文字・全角記号テキストの PSD 保存位置ずれ対策、フォント帳の作品選択検索、OPUS プロジェクトから開いたときの写植見本 PDF 復元を中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.1` に更新済み。
+
+### A. リサイクル PSD の白フチ復元
+
+- [src/psd-loader.js](src/psd-loader.js) / [src/services/reuse.js](src/services/reuse.js): リサイクル元 PSD に既存のレイヤースタイルがある場合、ag-psd 側の layerEffects と Photoshop 読み取り結果を統合して、白フチの有無・色・太さを OPUS 側へ反映するようにした。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): 保存時に既存レイヤーの stroke style を正しく再適用し、PSD 上で白だったフチが黒など別色に変わるケースを補正した。
+- 調査用に追加していた白フチログは通常出力されない状態に整理済み。
+
+### B. 全角記号・単文字テキストの位置ずれ対策
+
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): 「！」など全角記号 1 文字のように Photoshop 側の bounds 推定が偏りやすいテキストで、PSD 保存時に右へ大きくずれるリスクを抑える補正を追加した。
+- 文字種に依存した同種のずれに備え、単文字・短いテキストでも保存後座標が安定するようにした。
+
+### C. 文字詳細 UI の整理
+
+- [index.html](index.html) / [src/text-editor.js](src/text-editor.js) / [src/styles.css](src/styles.css): カーニング、トラッキングの「文頭」ボタンを削除し、不要な操作入口をなくした。
+
+### D. フォント帳の作品選択検索
+
+- [src/font-book.js](src/font-book.js) / [src/styles.css](src/styles.css): フォント帳の「作品情報を選択」ダイアログに検索欄を追加し、入力中の IME・英字入力を妨げないようにした。
+- [src/font-book.js](src/font-book.js): 検索語に対して子フォルダも再帰的に探し、入力しても結果が変わらない問題を修正した。
+- [src/font-book.js](src/font-book.js) / [src/services/project.js](src/services/project.js): OPUS プロジェクトにフォント帳の選択状態を保存・復元できるようにした。
+- 調査ログは `localStorage.opus_debug_font_book = "1"` のときだけ出力する。
+
+### E. プロジェクトから開いた写植見本 PDF の復元
+
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs): `.opus` を開いたときに、その親フォルダを読み取り許可へ登録し、プロジェクト内の写植見本・テキスト・PSD を復元しやすくした。
+- [src/services/project.js](src/services/project.js): 保存済みの見本パスが別環境の JPG などで見つからない場合でも、プロジェクト内の `写植見本` フォルダを探索し、PDF を優先して復元するフォールバックを追加した。
+- [src/pdf-loader.js](src/pdf-loader.js): 見本 PDF / JPEG / PNG の読み込み経路を整理し、復元時も通常の見本読み込みと同じ処理を通るようにした。
+- 調査ログは `localStorage.opus_debug_project_reference = "1"` / `localStorage.opus_debug_reference_load = "1"` のときだけ出力する。
+
+### 検証
+
+- `npm run lint` 成功。
+- `npm run build` 成功。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。
+- `git diff --check` 成功。
+- リリースはタグ `v2.6.1` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-17 変更メモ: v2.6.0 リリース（自動配置の長音・ガイドフィット / OCR誤配置抑止 / リサイクル白フチ復帰 / テキストフィット設定）
 
 v2.6.0 では、自動配置時の長音記号配置、PSDガイドへのテキストフィット、OCR由来の短い漢字語の誤配置抑止、リサイクル時の白フチ復帰、環境設定からのテキストフィットON/OFFを中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.0` に更新済み。

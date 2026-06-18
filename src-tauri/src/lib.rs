@@ -678,6 +678,9 @@ async fn read_text_file(
     path: String,
 ) -> Result<String, String> {
     let real = ensure_allowed(&allowed, &path)?;
+    if let Some(parent) = real.parent() {
+        let _ = allowed.register_path(parent);
+    }
     std::fs::read_to_string(&real).map_err(|e| format!("{}: {}", path, e))
 }
 

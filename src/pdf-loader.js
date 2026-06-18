@@ -18,6 +18,24 @@ const PDF_EXT_REGEX = /\.pdf$/i;
 const REFERENCE_PDF_MAX_SIZE_BYTES = 100_000_000;
 const largeReferencePdfCompressionCache = new Map();
 
+function referenceLoadDebug(stage, detail = {}) {
+  try {
+    if (localStorage.getItem("opus_debug_reference_load") !== "1") return;
+    const entry = {
+      at: new Date().toISOString(),
+      stage,
+      detail,
+    };
+    window.__referenceLoadDebugLogs = Array.isArray(window.__referenceLoadDebugLogs)
+      ? window.__referenceLoadDebugLogs
+      : [];
+    window.__referenceLoadDebugLogs.push(entry);
+    console.info("[reference-load-debug]", stage, detail);
+  } catch (_) {
+    // Debug logging must never interrupt reference loading.
+  }
+}
+
 let workerConfigured = false;
 function ensureWorker() {
   if (workerConfigured) return;
@@ -182,6 +200,11 @@ export async function rejectLargeReferencePdfFiles(paths, { notify = true, onCom
         compressedPaths.set(p, result.outputPaths);
         acceptedPaths.push(...result.outputPaths);
       } catch (e) {
+        referenceLoadDebug("load-reference-file-error", {
+          path: p,
+          name: basename(p),
+          error: e?.message ?? String(e),
+        });
         console.error("[pdf-loader] reference PDF compression failed:", p, e);
         rejectedPaths.add(p);
         if (notify) {
@@ -577,7 +600,23 @@ export async function pickPdfFile() {
 // - 画像は 1 ファイル = 1 ページ
 // - 並び順はファイル名の自然順（page1.jpg → page2.jpg → page10.jpg）
 export async function loadReferenceFiles(paths, options = {}) {
-  if (!Array.isArray(paths) || paths.length === 0) return;
+  referenceLoadDebug("load-reference-files-start", {
+    paths,
+    options: {
+      title: options.title,
+      label: options.label,
+      variant: options.variant,
+      keepProgressOpen: !!options.keepProgressOpen,
+      showProgress: options.showProgress,
+      excludedPages: options.excludedPages ?? options.hiddenReferencePages,
+      skipFirstBlankPage: options.skipFirstBlankPage ?? options.skipFirstPdfPage,
+      hasProgressFlow: !!options.progressFlow,
+    },
+  });
+  if (!Array.isArray(paths) || paths.length === 0) {
+    referenceLoadDebug("load-reference-files-skip", { reason: "no-paths", paths });
+    return;
+  }
   const keepProgressOpen = !!options.keepProgressOpen;
   const shouldShowProgress = options.showProgress !== false;
   const progressFlow = options.progressFlow || null;
@@ -589,7 +628,19 @@ export async function loadReferenceFiles(paths, options = {}) {
   });
   const filtered = sizeCheck.acceptedPaths.filter((p) => REFERENCE_EXT_REGEX.test(p));
   const hasPdf = filtered.some((p) => !IMAGE_EXT_REGEX.test(p)) || sizeCheck.compressedPaths?.size > 0;
+  referenceLoadDebug("load-reference-files-filtered", {
+    requestedCount: paths.length,
+    acceptedPaths: sizeCheck.acceptedPaths,
+    rejectedPaths: Array.from(sizeCheck.rejectedPaths || []),
+    compressedPaths: Array.from(sizeCheck.compressedPaths?.entries?.() || []),
+    filtered,
+    hasPdf,
+  });
   if (filtered.length === 0) {
+    referenceLoadDebug("load-reference-files-empty", {
+      rejectedCount: sizeCheck.rejectedPaths.size,
+      acceptedPaths: sizeCheck.acceptedPaths,
+    });
     toast(sizeCheck.rejectedPaths.size > 0 ? "100MB以上の見本PDFは読み込めません" : "PDF / JPEG / PNG ファイルを指定してください", { kind: "error", duration: 4000 });
     return;
   }
@@ -637,24 +688,45 @@ export async function loadReferenceFiles(paths, options = {}) {
           if (excludedPages.has(sourceIndex)) continue;
           const bitmap = await readImageBitmap(p);
           sources.push({ type: "image", bitmap, path: p });
+          referenceLoadDebug("load-reference-file-success", {
+            kind: "image",
+            path: p,
+            sourceIndex,
+            totalSources: sources.length,
+          });
         } else {
           const source = await readPdfDocumentSource(p);
           const doc = source.doc;
           const sourcePath = source.path || p;
           effectivePaths.push(sourcePath);
           let addedFromDoc = false;
+          let addedPageCount = 0;
           for (let pn = 1; pn <= doc.numPages; pn++) {
             sourceIndex += 1;
             if (excludedPages.has(sourceIndex)) continue;
             sources.push({ type: "pdf", doc, pageNum: pn, path: sourcePath });
             addedFromDoc = true;
+            addedPageCount += 1;
           }
+          referenceLoadDebug("load-reference-file-success", {
+            kind: "pdf",
+            path: p,
+            sourcePath,
+            numPages: doc.numPages,
+            addedPageCount,
+            totalSources: sources.length,
+          });
           if (!addedFromDoc) {
             try { if (typeof doc?.destroy === "function") doc.destroy(); } catch (_) {}
           }
         }
       } catch (e) {
         console.error(`見本ファイル読込失敗 (${name}):`, e);
+        referenceLoadDebug("load-reference-file-error", {
+          path: p,
+          name,
+          error: e?.message ?? String(e),
+        });
         failures.push({ name, error: e });
       }
     }
@@ -663,6 +735,14 @@ export async function loadReferenceFiles(paths, options = {}) {
     }
 
     if (sources.length === 0) {
+      referenceLoadDebug("load-reference-files-no-sources", {
+        filtered,
+        effectivePaths,
+        failures: failures.map((failure) => ({
+          name: failure.name,
+          error: failure.error?.message ?? String(failure.error),
+        })),
+      });
       toast("有効な見本ファイルがありませんでした", { kind: "error", duration: 5000 });
       return;
     }
@@ -682,8 +762,26 @@ export async function loadReferenceFiles(paths, options = {}) {
     // path は先頭ファイルパス（getPdfPath() の互換用）。pdfPaths に sorted 全件を渡し、
     // 画像スキャンや自動配置が複数ファイルを 画像スキャン 対象にできるようにする。
     const loadedPaths = effectivePaths.length > 0 ? effectivePaths : sorted;
+    referenceLoadDebug("load-reference-files-before-set-pdf", {
+      loadedPaths,
+      sorted,
+      sourceCount: sources.length,
+      landscapePages: Array.from(landscapePages),
+      shouldSplitPages,
+      firstRightBlank,
+      skipFirstBlankPage,
+      excludedPages: Array.from(excludedPages),
+    });
     setPdf(compositeDoc, loadedPaths[0] ?? sorted[0], loadedPaths);
     setPdfExcludedReferencePages(excludedPages);
+    referenceLoadDebug("load-reference-files-finish", {
+      loadedPaths,
+      sourceCount: sources.length,
+      failures: failures.map((failure) => ({
+        name: failure.name,
+        error: failure.error?.message ?? String(failure.error),
+      })),
+    });
     if (shouldShowProgress) {
       updateProgress(withProgressFlow(progressFlow, { detail: headLabel, current: progressTotal, total: progressTotal, taskIndex: 2, taskProgress: 100 }));
     }

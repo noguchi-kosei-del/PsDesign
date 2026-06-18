@@ -455,6 +455,24 @@ function normalizeTextLayerName(value) {
   return String(value ?? "").trim();
 }
 
+function normalizeExtractedStrokeColor(value) {
+  return value === "white" || value === "black" ? value : "none";
+}
+
+function normalizeExtractedStrokeWidth(value) {
+  const width = finiteNumber(value);
+  return width !== null && width > 0 ? width : 20;
+}
+
+function strokeFromPhotoshopItem(item) {
+  const strokeColor = normalizeExtractedStrokeColor(item?.strokeColor);
+  const strokeWidthPx = normalizeExtractedStrokeWidth(item?.strokeWidthPx);
+  return {
+    strokeColor,
+    strokeWidthPx: strokeColor === "none" ? 20 : strokeWidthPx,
+  };
+}
+
 function isUsefulBounds(item) {
   const left = finiteNumber(item?.left);
   const top = finiteNumber(item?.top);
@@ -488,6 +506,7 @@ function textLayerFromPhotoshopItem(item) {
   const sizePt = finiteNumber(item.sizePt);
   const transform = normalizeTransform(item.transform);
   const effectiveSizePt = transform ? effectiveFontSize(sizePt, transform) : sizePt;
+  const stroke = strokeFromPhotoshopItem(item);
   return {
     id: psId,
     photoshopLayerId: psId,
@@ -505,8 +524,8 @@ function textLayerFromPhotoshopItem(item) {
     verticalScale: 100,
     trackingMille: 0,
     kerningMille: 0,
-    strokeColor: "none",
-    strokeWidthPx: 20,
+    strokeColor: stroke.strokeColor,
+    strokeWidthPx: stroke.strokeWidthPx,
     fillColor: typeof item.fillColor === "string" && item.fillColor ? item.fillColor : "default",
     ...(transform ? { transform } : {}),
     metadataSource: "photoshop",
@@ -574,6 +593,11 @@ function mergePhotoshopTextMetadata(textLayers, psData) {
     }
     if (item.direction === "vertical" || item.direction === "horizontal") out.direction = item.direction;
     if (typeof item.fillColor === "string" && item.fillColor) out.fillColor = item.fillColor;
+    const stroke = strokeFromPhotoshopItem(item);
+    if (stroke.strokeColor !== "none") {
+      out.strokeColor = stroke.strokeColor;
+      out.strokeWidthPx = stroke.strokeWidthPx;
+    }
     if (transform) out.transform = transform;
     out.metadataSource = "photoshop";
     return out;
@@ -886,6 +910,55 @@ function readStrokeSizePx(fx) {
   return null;
 }
 
+function readColorChannelValue(value) {
+  if (typeof value === "number") return value;
+  if (value && typeof value === "object") {
+    if (typeof value.value === "number") return value.value;
+    if (value.value && typeof value.value === "object" && typeof value.value.value === "number") return value.value.value;
+  }
+  const n = Number(value);
+  return Number.isFinite(n) ? n : 0;
+}
+
+function normalizeRgbChannels(r, g, b) {
+  r = readColorChannelValue(r);
+  g = readColorChannelValue(g);
+  b = readColorChannelValue(b);
+  if (r <= 1 && g <= 1 && b <= 1 && (r > 0 || g > 0 || b > 0)) {
+    r *= 255;
+    g *= 255;
+    b *= 255;
+  }
+  return [
+    Math.max(0, Math.min(255, Math.round(Number(r) || 0))),
+    Math.max(0, Math.min(255, Math.round(Number(g) || 0))),
+    Math.max(0, Math.min(255, Math.round(Number(b) || 0))),
+  ];
+}
+
+function normalizeCmykChannel(value) {
+  const n = readColorChannelValue(value);
+  if (!Number.isFinite(n)) return 0;
+  if (n <= 1) return Math.max(0, Math.min(1, n));
+  return Math.max(0, Math.min(1, n / 100));
+}
+
+function cmykObjectToRgb(c) {
+  if (!c || typeof c !== "object") return null;
+  const hasCmyk = c.k != null || c.black != null || c.c != null || c.cyan != null ||
+    c.m != null || c.magenta != null || c.y != null || c.yellow != null;
+  if (!hasCmyk) return null;
+  const cyan = normalizeCmykChannel(c.c ?? c.cyan ?? 0);
+  const magenta = normalizeCmykChannel(c.m ?? c.magenta ?? 0);
+  const yellow = normalizeCmykChannel(c.y ?? c.yellow ?? 0);
+  const black = normalizeCmykChannel(c.k ?? c.black ?? 0);
+  return [
+    255 * (1 - cyan) * (1 - black),
+    255 * (1 - magenta) * (1 - black),
+    255 * (1 - yellow) * (1 - black),
+  ];
+}
+
 function readStrokeColor(fx) {
   if (!fx) return "none";
   // fx.enabled / fx.visible のどちらかが明示 false なら切られた扱い。
@@ -896,9 +969,14 @@ function readStrokeColor(fx) {
   if (Array.isArray(c) && c.length >= 3) {
     [r, g, b] = c;
   } else if (c && typeof c === "object") {
-    r = c.r ?? c.red ?? 0;
-    g = c.g ?? c.green ?? 0;
-    b = c.b ?? c.blue ?? 0;
+    const cmykRgb = cmykObjectToRgb(c);
+    if (cmykRgb) {
+      [r, g, b] = cmykRgb;
+    } else {
+      r = c.r ?? c.red ?? 0;
+      g = c.g ?? c.green ?? 0;
+      b = c.b ?? c.blue ?? 0;
+    }
   } else if (typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c)) {
     r = parseInt(c.slice(1, 3), 16);
     g = parseInt(c.slice(3, 5), 16);
@@ -906,6 +984,7 @@ function readStrokeColor(fx) {
   } else {
     return "none";
   }
+  [r, g, b] = normalizeRgbChannels(r, g, b);
   if (r > 240 && g > 240 && b > 240) return "white";
   if (r < 15 && g < 15 && b < 15) return "black";
   // 白/黒 に分類できない色は保存時に壊さないよう "none" ではなく一旦読むが、
@@ -923,9 +1002,14 @@ function extractFillColor(layer) {
   if (Array.isArray(c) && c.length >= 3) {
     [r, g, b] = c;
   } else if (typeof c === "object") {
-    r = c.r ?? c.red ?? 0;
-    g = c.g ?? c.green ?? 0;
-    b = c.b ?? c.blue ?? 0;
+    const cmykRgb = cmykObjectToRgb(c);
+    if (cmykRgb) {
+      [r, g, b] = cmykRgb;
+    } else {
+      r = c.r ?? c.red ?? 0;
+      g = c.g ?? c.green ?? 0;
+      b = c.b ?? c.blue ?? 0;
+    }
   } else if (typeof c === "string" && /^#[0-9a-fA-F]{6}$/.test(c)) {
     r = parseInt(c.slice(1, 3), 16);
     g = parseInt(c.slice(3, 5), 16);
@@ -933,9 +1017,7 @@ function extractFillColor(layer) {
   } else {
     return "default";
   }
-  r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
-  g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
-  b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
+  [r, g, b] = normalizeRgbChannels(r, g, b);
   if (r > 240 && g > 240 && b > 240) return "white";
   if (r < 15 && g < 15 && b < 15) return "black";
   return `#${[r, g, b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
@@ -947,9 +1029,9 @@ function extractStroke(layer) {
   const fx = pickActiveStrokeFx(effects.stroke);
   if (!fx) return { strokeColor: "none", strokeWidthPx: 20 };
   const strokeColor = readStrokeColor(fx);
-  if (strokeColor === "none") return { strokeColor: "none", strokeWidthPx: 20 };
   const sz = readStrokeSizePx(fx);
   const strokeWidthPx = typeof sz === "number" && sz > 0 ? sz : 20;
+  if (strokeColor === "none") return { strokeColor: "none", strokeWidthPx: 20 };
   return { strokeColor, strokeWidthPx };
 }
 
@@ -960,6 +1042,120 @@ function extractStroke(layer) {
 // なので実効 pt = 100 × 0.2 = 20pt。
 // 行列式 = (a*d - b*c) は scale^2（回転は scale を変えないので det は等価）。
 // その平方根 = 等価 uniform scale。漫画写植では基本 uniform scale なのでこの近似で十分。
+function hasVisibleExtractedStroke(stroke) {
+  return (stroke?.strokeColor === "white" || stroke?.strokeColor === "black")
+    && Number.isFinite(stroke.strokeWidthPx)
+    && stroke.strokeWidthPx > 0;
+}
+
+function collectReuseStrokeHintsFromAgPsd(layer, out = [], parentVisible = true) {
+  const effectiveVisible = parentVisible && !isLayerHidden(layer);
+  if (effectiveVisible && typeof layer?.id === "number") {
+    const stroke = extractStroke(layer);
+    if (hasVisibleExtractedStroke(stroke)) {
+      out.push({
+        id: layer.id,
+        name: layer.name ?? "",
+        contents: layer.text?.text ?? "",
+        left: layer.left ?? null,
+        top: layer.top ?? null,
+        right: layer.right ?? null,
+        bottom: layer.bottom ?? null,
+        strokeColor: stroke.strokeColor,
+        strokeWidthPx: stroke.strokeWidthPx,
+      });
+    }
+  }
+  if (Array.isArray(layer?.children)) {
+    for (const child of layer.children) collectReuseStrokeHintsFromAgPsd(child, out, effectiveVisible);
+  }
+  return out;
+}
+
+function boundsDistance(a, b) {
+  const keys = ["left", "top", "right", "bottom"];
+  let total = 0;
+  for (const key of keys) {
+    const av = finiteNumber(a?.[key]);
+    const bv = finiteNumber(b?.[key]);
+    if (av === null || bv === null) return Number.POSITIVE_INFINITY;
+    total += Math.abs(av - bv);
+  }
+  return total;
+}
+
+function findReuseStrokeHintForPhotoshopItem(item, hints, usedHints) {
+  const itemId = finiteNumber(item?.id);
+  if (itemId !== null) {
+    const byId = hints.find((hint) => !usedHints.has(hint) && finiteNumber(hint.id) === itemId);
+    if (byId) return byId;
+  }
+
+  const text = normalizePsText(item?.contents);
+  const name = normalizeTextLayerName(item?.name);
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const hint of hints) {
+    if (usedHints.has(hint)) continue;
+    const hintText = normalizePsText(hint.contents);
+    const hintName = normalizeTextLayerName(hint.name);
+    if (text && hintText && hintText !== text) continue;
+    if (name && hintName && hintName !== name) continue;
+    const score = boundsDistance(item, hint);
+    if (score < bestScore) {
+      best = hint;
+      bestScore = score;
+    }
+  }
+  return bestScore <= 8 ? best : null;
+}
+
+export async function mergeReuseStrokeHintsFromAgPsd(page, path = page?.path) {
+  const items = Array.isArray(page?.reusePsTextItems) ? page.reusePsTextItems : null;
+  if (!items || items.length === 0 || !path) return page;
+  const needsStroke = items.some((item) => {
+    const stroke = strokeFromPhotoshopItem(item);
+    return !hasVisibleExtractedStroke(stroke) || stroke.strokeColor === "black";
+  });
+  if (!needsStroke) return page;
+  try {
+    const bytes = await readFileBytes(path);
+    await waitForNextFrame();
+    const psd = readPsd(bytes, {
+      skipLayerImageData: true,
+      skipLinkedFilesData: true,
+      skipThumbnail: true,
+      useImageData: false,
+    });
+    const hints = [];
+    if (Array.isArray(psd.children)) {
+      for (const child of psd.children) collectReuseStrokeHintsFromAgPsd(child, hints, true);
+    }
+    if (!hints.length) return page;
+    const usedHints = new Set();
+    for (const item of items) {
+      const hint = findReuseStrokeHintForPhotoshopItem(item, hints, usedHints);
+      const current = strokeFromPhotoshopItem(item);
+      if (!hint) {
+        continue;
+      }
+      const currentHasStroke = hasVisibleExtractedStroke(current);
+      const shouldApply = !currentHasStroke
+        || current.strokeColor === hint.strokeColor
+        || (current.strokeColor === "black" && hint.strokeColor === "white");
+      if (!shouldApply) {
+        continue;
+      }
+      usedHints.add(hint);
+      item.strokeColor = hint.strokeColor;
+      item.strokeWidthPx = hint.strokeWidthPx;
+    }
+  } catch (error) {
+    console.warn("[reuse] stroke effect fallback read failed:", path, error);
+  }
+  return page;
+}
+
 function effectiveFontSize(rawFontSize, transform) {
   if (!Number.isFinite(rawFontSize) || rawFontSize <= 0) return rawFontSize ?? null;
   if (!Array.isArray(transform) || transform.length < 4) return rawFontSize;
@@ -1555,7 +1751,7 @@ export async function loadPsdForReuse(path) {
     const json = await invoke("read_psd_text_layers", { psdPath: path });
     const psData = JSON.parse(json);
     const page = await buildReusePageFromPsData(path, psData);
-    if (page) return page;
+    if (page) return await mergeReuseStrokeHintsFromAgPsd(page, path);
     console.warn("[reuse] Photoshop read returned incomplete data, falling back to ag-psd", psData);
   } catch (e) {
     console.warn("[reuse] Photoshop text read failed, falling back to ag-psd:", e);

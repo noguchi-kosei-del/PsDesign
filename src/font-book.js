@@ -10,6 +10,11 @@ const DEFAULT_SAMPLE_TEXT = "永字八法 あいうえお ABC 123";
 const FOLDER_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
 const FILE_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>';
 
+const BROWSER_SEARCH_MAX_DEPTH = 4;
+const BROWSER_SEARCH_MAX_RESULTS = 100;
+const BROWSER_SEARCH_MAX_DIRS = 260;
+const BROWSER_SEARCH_DEBOUNCE_MS = 180;
+
 const state = {
   dir: null,
   sourceMode: "gdrive",
@@ -31,6 +36,10 @@ const state = {
   selectedBookFolderName: "",
   browserPath: "",
   browserItems: [],
+  browserQuery: "",
+  browserSearchItems: [],
+  browserSearchLoading: false,
+  browserSearchToken: 0,
   selectModalOpen: false,
   navigatorLoading: false,
   loadedBookCount: 0,
@@ -42,6 +51,33 @@ let expandedEntryId = null;
 let sampleObserver = null;
 let shotImageObserver = null;
 let initialLoadStarted = false;
+let browserSearchTimer = null;
+
+function fontBookDebug(stage, detail = {}) {
+  try {
+    if (localStorage.getItem("opus_debug_font_book") !== "1") return;
+    const entry = {
+      at: new Date().toISOString(),
+      stage,
+      detail,
+    };
+    window.__fontBookDebugLogs = Array.isArray(window.__fontBookDebugLogs)
+      ? window.__fontBookDebugLogs
+      : [];
+    window.__fontBookDebugLogs.push(entry);
+    console.info("[font-book-debug]", stage, detail);
+  } catch (_) {
+    // Debug logging must never break the font book UI.
+  }
+}
+
+function compactBrowserItem(item) {
+  return {
+    name: item?.name ?? "",
+    path: item?.path ?? "",
+    kind: item?.isFile ? "json" : item?.isDirectory ? "folder" : "unknown",
+  };
+}
 
 const $ = (id) => document.getElementById(id);
 
@@ -156,6 +192,69 @@ function pathName(path) {
   return String(path || "").replace(/\\/g, "/").split("/").filter(Boolean).pop() || "";
 }
 
+function isFontBookJsonItem(item) {
+  return !!item?.isFile && /^fontbook\.json$/i.test(item.name || pathName(item.path));
+}
+
+function browserItemFromEntry(entry, fallbackParent) {
+  return {
+    name: String(entry?.name || pathName(entry?.path)),
+    path: dirPath(entry, fallbackParent),
+    isDirectory: !!entry?.isDirectory,
+    isFile: !!entry?.isFile,
+  };
+}
+
+function browserItemMatchesQuery(item, query) {
+  const text = normalizeFontSearchText(`${item?.name ?? ""} ${item?.path ?? ""}`);
+  return text.includes(query);
+}
+
+async function searchFontBookBrowserDescendants(rootPath, query, token) {
+  const results = [];
+  const seen = new Set();
+  let visitedDirs = 0;
+
+  async function visit(dir, depth) {
+    if (
+      token !== state.browserSearchToken
+      || results.length >= BROWSER_SEARCH_MAX_RESULTS
+      || visitedDirs >= BROWSER_SEARCH_MAX_DIRS
+      || depth > BROWSER_SEARCH_MAX_DEPTH
+    ) {
+      return;
+    }
+    visitedDirs += 1;
+    let entries = [];
+    try {
+      entries = await listDirectoryItems(dir);
+    } catch (e) {
+      fontBookDebug("browser-recursive-search-list-error", {
+        dir,
+        depth,
+        error: e?.message ?? String(e),
+      });
+      return;
+    }
+
+    for (const entry of entries) {
+      if (token !== state.browserSearchToken || results.length >= BROWSER_SEARCH_MAX_RESULTS) return;
+      const item = browserItemFromEntry(entry, dir);
+      const selectable = item.isDirectory || isFontBookJsonItem(item);
+      if (selectable && browserItemMatchesQuery(item, query) && !seen.has(item.path)) {
+        seen.add(item.path);
+        results.push(item);
+      }
+      if (item.isDirectory && depth < BROWSER_SEARCH_MAX_DEPTH) {
+        await visit(item.path, depth + 1);
+      }
+    }
+  }
+
+  await visit(rootPath, 0);
+  return { results, visitedDirs };
+}
+
 function bookDisplayFolderName(jsonPath) {
   const dir = parentDir(jsonPath);
   if (!dir) return "";
@@ -197,29 +296,51 @@ async function fontBookJsonPathInFolder(path) {
 
 async function loadFontBookBrowserFolder(path = FONT_BOOK_ROOT_PATH) {
   const dir = cleanPath(path || FONT_BOOK_ROOT_PATH);
+  fontBookDebug("browser-folder-load-start", {
+    requestedPath: path,
+    dir,
+  });
   state.navigatorLoading = true;
   state.browserPath = dir;
+  state.browserQuery = "";
+  state.browserSearchItems = [];
+  state.browserSearchLoading = false;
+  state.browserSearchToken += 1;
+  if (browserSearchTimer) {
+    clearTimeout(browserSearchTimer);
+    browserSearchTimer = null;
+  }
   renderFontBookSelectModal();
   try {
     const entries = await listDirectoryItems(dir);
     state.browserItems = entries
-      .filter((entry) => entry?.isDirectory || (entry?.isFile && /^fontbook\.json$/i.test(entry.name || "")))
-      .map((entry) => ({
-        name: String(entry.name || pathName(entry.path)),
-        path: dirPath(entry, dir),
-        isDirectory: !!entry.isDirectory,
-        isFile: !!entry.isFile,
-      }))
+      .map((entry) => browserItemFromEntry(entry, dir))
+      .filter((item) => item.isDirectory || isFontBookJsonItem(item))
       .sort((a, b) => {
         if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
         return a.name.localeCompare(b.name, "ja");
       });
+    fontBookDebug("browser-folder-load-success", {
+      dir,
+      total: state.browserItems.length,
+      items: state.browserItems.slice(0, 10).map(compactBrowserItem),
+    });
   } catch (e) {
     state.browserItems = [];
+    fontBookDebug("browser-folder-load-error", {
+      dir,
+      error: e?.message ?? String(e),
+    });
     toast(`フォルダを読み込めませんでした: ${e}`, { kind: "error" });
   } finally {
     state.navigatorLoading = false;
     renderFontBookSelectModal();
+    fontBookDebug("browser-folder-load-finish", {
+      dir,
+      query: state.browserQuery,
+      total: state.browserItems.length,
+      navigatorLoading: state.navigatorLoading,
+    });
   }
 }
 
@@ -359,6 +480,39 @@ async function loadFontBookFromJsonChoice(choice) {
   }
 }
 
+export function getFontBookProjectState() {
+  if (!state.selectedJsonPath) return null;
+  const projectState = {
+    selectedJsonPath: state.selectedJsonPath,
+    selectedBookFolderName: state.selectedBookFolderName || bookDisplayFolderName(state.selectedJsonPath),
+    dir: state.dir || parentDir(state.selectedJsonPath),
+  };
+  fontBookDebug("project-state-export", projectState);
+  return projectState;
+}
+
+export async function restoreFontBookProjectState(saved) {
+  const selectedJsonPath = cleanPath(saved?.selectedJsonPath || saved?.jsonPath || "");
+  fontBookDebug("project-state-restore-start", {
+    saved,
+    selectedJsonPath,
+  });
+  if (!selectedJsonPath) return false;
+  state.selectedJsonPath = selectedJsonPath;
+  state.selectedBookFolderName = saved?.selectedBookFolderName || bookDisplayFolderName(selectedJsonPath);
+  const restored = await loadFontBookFromJsonChoice({
+    label: "fontbook.json",
+    path: selectedJsonPath,
+    entryCount: 0,
+  });
+  fontBookDebug("project-state-restore-finish", {
+    selectedJsonPath,
+    restored,
+    entryCount: state.entries.length,
+  });
+  return restored;
+}
+
 function ensureFontBookSelectModal() {
   let modal = $("font-book-select-modal");
   if (modal) return modal;
@@ -386,6 +540,133 @@ function closeFontBookSelectModal() {
   setTimeout(() => {
     if (!state.selectModalOpen) modal.hidden = true;
   }, 140);
+}
+
+function filteredFontBookBrowserItems() {
+  const query = normalizeFontSearchText(state.browserQuery);
+  if (!query) {
+    fontBookDebug("browser-filter", {
+      queryRaw: state.browserQuery,
+      query,
+      total: state.browserItems.length,
+      matched: state.browserItems.length,
+      sample: state.browserItems.slice(0, 8).map(compactBrowserItem),
+    });
+    return state.browserItems;
+  }
+  const filtered = state.browserItems.filter((item) => browserItemMatchesQuery(item, query));
+  const seen = new Set(filtered.map((item) => item.path));
+  for (const item of state.browserSearchItems) {
+    if (seen.has(item.path) || !browserItemMatchesQuery(item, query)) continue;
+    seen.add(item.path);
+    filtered.push(item);
+  }
+  fontBookDebug("browser-filter", {
+    queryRaw: state.browserQuery,
+    query,
+    total: state.browserItems.length,
+    recursiveTotal: state.browserSearchItems.length,
+    recursiveLoading: state.browserSearchLoading,
+    matched: filtered.length,
+    sample: filtered.slice(0, 8).map(compactBrowserItem),
+  });
+  return filtered;
+}
+
+function fontBookBrowserListHtml() {
+  const browserItems = filteredFontBookBrowserItems();
+  const emptyMessage = state.browserItems.length === 0
+    ? "フォルダまたはfontbook.jsonがありません"
+    : "一致する項目がありません";
+  if (state.navigatorLoading) {
+    return `<div class="font-book-select-empty">読み込み中...</div>`;
+  }
+  if (state.browserSearchLoading && browserItems.length === 0) {
+    return `<div class="font-book-select-empty">検索中...</div>`;
+  }
+  if (browserItems.length === 0) {
+    return `<div class="font-book-select-empty">${emptyMessage}</div>`;
+  }
+  return browserItems.map((item) => `
+    <button class="font-book-browser-item ${item.isFile ? "json" : "folder"} ${item.path === state.selectedJsonPath ? "active" : ""}" type="button" data-path="${escapeHtml(item.path)}" data-kind="${item.isFile ? "json" : "folder"}" title="${escapeHtml(item.name)}">
+      <span class="font-book-browser-icon" aria-hidden="true">${item.isFile ? FILE_ICON_SVG : FOLDER_ICON_SVG}</span>
+      <span class="font-book-browser-name">${escapeHtml(item.name)}</span>
+    </button>
+  `).join("");
+}
+
+function renderFontBookBrowserList() {
+  const list = $("font-book-select-modal")?.querySelector(".font-book-browser-list");
+  if (!list) {
+    fontBookDebug("browser-list-render-missing", {
+      query: state.browserQuery,
+      modalExists: !!$("font-book-select-modal"),
+    });
+    return;
+  }
+  list.innerHTML = fontBookBrowserListHtml();
+  fontBookDebug("browser-list-render", {
+    query: state.browserQuery,
+    itemCount: list.querySelectorAll(".font-book-browser-item").length,
+    emptyText: list.querySelector(".font-book-select-empty")?.textContent?.trim() ?? "",
+  });
+}
+
+function scheduleFontBookBrowserSearch() {
+  if (browserSearchTimer) {
+    clearTimeout(browserSearchTimer);
+    browserSearchTimer = null;
+  }
+  const query = normalizeFontSearchText(state.browserQuery);
+  state.browserSearchToken += 1;
+  const token = state.browserSearchToken;
+  if (!query) {
+    state.browserSearchItems = [];
+    state.browserSearchLoading = false;
+    renderFontBookBrowserList();
+    return;
+  }
+
+  state.browserSearchItems = [];
+  state.browserSearchLoading = true;
+  renderFontBookBrowserList();
+  browserSearchTimer = setTimeout(async () => {
+    const rootPath = state.browserPath || FONT_BOOK_ROOT_PATH;
+    fontBookDebug("browser-recursive-search-start", {
+      queryRaw: state.browserQuery,
+      query,
+      rootPath,
+      token,
+    });
+    try {
+      const { results, visitedDirs } = await searchFontBookBrowserDescendants(rootPath, query, token);
+      if (token !== state.browserSearchToken) {
+        fontBookDebug("browser-recursive-search-discard", { token, activeToken: state.browserSearchToken });
+        return;
+      }
+      state.browserSearchItems = results;
+      fontBookDebug("browser-recursive-search-finish", {
+        query,
+        rootPath,
+        visitedDirs,
+        matched: results.length,
+        sample: results.slice(0, 8).map(compactBrowserItem),
+      });
+    } catch (e) {
+      if (token === state.browserSearchToken) {
+        fontBookDebug("browser-recursive-search-error", {
+          query,
+          rootPath,
+          error: e?.message ?? String(e),
+        });
+      }
+    } finally {
+      if (token === state.browserSearchToken) {
+        state.browserSearchLoading = false;
+        renderFontBookBrowserList();
+      }
+    }
+  }, BROWSER_SEARCH_DEBOUNCE_MS);
 }
 
 function renderFontBookSelectModal() {
@@ -419,19 +700,49 @@ function renderFontBookSelectModal() {
         </button>
         <div class="font-book-browser-path" title="${escapeHtml(currentPath)}">${escapeHtml(currentPath.replace(FONT_BOOK_ROOT_PATH, "TOP"))}</div>
       </div>
+      <div class="font-book-browser-search-row">
+        <input class="font-book-browser-search" type="search" data-browser-search="1" placeholder="検索..." autocomplete="off" value="${escapeHtml(state.browserQuery)}" />
+      </div>
       <div class="font-book-browser-list">
-        ${state.navigatorLoading ? `<div class="font-book-select-empty">読み込み中...</div>` : state.browserItems.length === 0 ? `<div class="font-book-select-empty">フォルダまたはfontbook.jsonがありません</div>` : state.browserItems.map((item) => `
-          <button class="font-book-browser-item ${item.isFile ? "json" : "folder"} ${item.path === state.selectedJsonPath ? "active" : ""}" type="button" data-path="${escapeHtml(item.path)}" data-kind="${item.isFile ? "json" : "folder"}" title="${escapeHtml(item.name)}">
-            <span class="font-book-browser-icon" aria-hidden="true">${item.isFile ? FILE_ICON_SVG : FOLDER_ICON_SVG}</span>
-            <span class="font-book-browser-name">${escapeHtml(item.name)}</span>
-          </button>
-        `).join("")}
+        ${fontBookBrowserListHtml()}
       </div>
     </div>`;
   bindFontBookSelectModalEvents(modal);
 }
 
 function bindFontBookSelectModalEvents(modal) {
+  modal.oninput = (e) => {
+    const input = e.target?.closest?.("[data-browser-search]");
+    if (!input) return;
+    fontBookDebug("browser-search-input", {
+      value: input.value,
+      inputType: e.inputType,
+      isComposing: !!e.isComposing,
+      activeElementIsInput: document.activeElement === input,
+    });
+    state.browserQuery = input.value;
+    scheduleFontBookBrowserSearch();
+  };
+  modal.oncompositionend = (e) => {
+    const input = e.target?.closest?.("[data-browser-search]");
+    if (!input) return;
+    fontBookDebug("browser-search-compositionend", {
+      value: input.value,
+      activeElementIsInput: document.activeElement === input,
+    });
+    state.browserQuery = input.value;
+    scheduleFontBookBrowserSearch();
+  };
+  modal.onkeydown = (e) => {
+    if (!e.target?.closest?.("[data-browser-search]")) return;
+    fontBookDebug("browser-search-keydown", {
+      key: e.key,
+      code: e.code,
+      value: e.target?.value ?? "",
+      defaultPrevented: e.defaultPrevented,
+    });
+    if (e.key !== "Escape") e.stopPropagation();
+  };
   modal.onclick = async (e) => {
     const target = e.target;
     if (target?.dataset?.close) {
