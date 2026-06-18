@@ -1258,7 +1258,7 @@ pub fn generate_apply_script(
         (__psd.pageWidth && isFinite(__psd.pageWidth)) ? __psd.pageWidth : 0,
         (__psd.pageHeight && isFinite(__psd.pageHeight)) ? __psd.pageHeight : 0,
         (__psd.hideLayerIds && __psd.hideLayerIds.length) ? __psd.hideLayerIds : [],
-        __payload.reuseHideOriginalText === true
+        __psd.hideOriginalText === true
       );
       __saveOk++;
     } catch (eFile) {
@@ -1656,8 +1656,8 @@ pub fn generate_apply_script(
             page_height,
             // 写植再利用: 保存時に非表示化する元テキストレイヤー id 群（末尾引数）。
             hide_layer_ids_js,
-            // 写植再利用: true のとき元からあるテキストレイヤーを全て非表示にする。
-            if payload.reuse_hide_original_text {
+            // 写植再利用: この PSD の元テキストを全て非表示にするか（per-PSD）。
+            if psd.hide_original_text {
                 "true"
             } else {
                 "false"

@@ -1577,16 +1577,16 @@ export function exportEdits() {
     rubyFontPostScriptName,
     rubyPhotoshopOffsetEm,
     rubyPhotoshopBiasPx,
-    // 写植再利用モード: 保存時に「元から PSD にあるテキストレイヤーを全て非表示」にする。
-    // 抽出テキストは newLayers として新規作成されるため、元テキストは隠して置き換える。
-    // id を持たない PSD でも確実に隠せるよう、id 指定ではなく「全テキスト非表示」方式。
-    reuseHideOriginalText: $appMode.get() === "reuse",
     edits: Array.from(byPsd.entries()).map(([psdPath, { layers, newLayers }]) => ({
       psdPath,
       layers,
       newLayers,
       // 写植再利用: 保存時に非表示化する元テキストレイヤー id 群。通常モードは空配列。
       hideLayerIds: state.reuseInfo.get(psdPath)?.hideLayerIds ?? [],
+      // 写植再利用: この PSD の元テキストを全て非表示にするか（per-PSD）。旧来の appMode 全体
+      // フラグ（reuseHideOriginalText）を廃止し、reuseInfo を持つ PSD だけ true にする。通常
+      // モードの PSD は reuseInfo を持たない → false → 元テキストを隠さない（誤爆防止）。
+      hideOriginalText: state.reuseInfo.get(psdPath)?.hideOriginalText === true,
     })),
   };
 }
@@ -2016,6 +2016,9 @@ export function setReuseInfo(psdPath, info) {
     hideLayerIds: Array.isArray(info?.hideLayerIds) ? [...info.hideLayerIds] : [],
     referenceCanvas: info?.referenceCanvas ?? null,
     referenceImagePath: typeof info?.referenceImagePath === "string" ? info.referenceImagePath : null,
+    // 【写植再利用】この PSD の元テキストを保存時に非表示にするか（per-PSD）。
+    // リサイクル読込した PSD だけ true。exportEdits が per-PSD payload に流す。
+    hideOriginalText: info?.hideOriginalText === true,
   });
 }
 export function getReuseInfo(psdPath) {

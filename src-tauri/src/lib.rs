@@ -264,6 +264,12 @@ pub struct PsdEdits {
     // 二重表示を防ぐ。通常モードでは空配列。
     #[serde(rename = "hideLayerIds", default)]
     pub hide_layer_ids: Vec<i64>,
+    // 写植再利用: この PSD で「元からあるテキストレイヤー」を全て非表示にするか。
+    // 旧来は EditPayload 全体フラグ (reuseHideOriginalText / appMode 駆動) だったが、
+    // 通常 PSD のテキストを誤って隠さないよう per-PSD プロパティへ移した。リサイクル
+    // 読込した PSD だけ true（reuseInfo 駆動）。通常モードの PSD は false で隠さない。
+    #[serde(rename = "hideOriginalText", default)]
+    pub hide_original_text: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -314,10 +320,8 @@ pub struct EditPayload {
         default = "default_ruby_photoshop_bias_px"
     )]
     pub ruby_photoshop_bias_px: f64,
-    // 【写植再利用】true のとき、保存時に各 PSD の「元からあるテキストレイヤー」を全て
-    // 非表示にする（抽出テキストは newLayers として新規作成済み）。
-    #[serde(rename = "reuseHideOriginalText", default)]
-    pub reuse_hide_original_text: bool,
+    // 【写植再利用】元テキスト非表示は EditPayload 全体フラグを廃止し、
+    // PsdEdits.hide_original_text（per-PSD）へ移行した（通常 PSD 誤爆防止）。
 }
 
 fn default_ruby_leading_pct() -> f64 {

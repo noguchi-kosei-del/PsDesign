@@ -653,6 +653,8 @@ export async function loadPsdFilesForReuse(files, {
         hideLayerIds: page.reuseTextLayerIds || [],
         referenceCanvas: page.reuseReferenceCanvas || null,
         referenceImagePath: page.reuseReferenceImagePath || null,
+        // 写植再利用した PSD は保存時に元テキストを非表示にする（per-PSD フラグ）。
+        hideOriginalText: true,
       });
       if (page.reuseReferenceCanvas) {
         referenceItems.push({ canvas: page.reuseReferenceCanvas, path: page.path });
