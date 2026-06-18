@@ -497,29 +497,28 @@ function applyReuseDraftsToPage(page, drafts, alignTargets) {
   return count;
 }
 
-// 旧 API 互換のオーケストレータ。挙動は従来どおり（解析→即反映）。
-// ステップ2以降で呼び出し側を collect / apply の 2 段に分離していく足場。
-async function extractTextLayersToNewLayers(
-  page,
-  alignTargets,
-  fontSizeMode = "reproduce",
-  unifyFont = null,
-  unifySize = null,
-  sourcePages = null,
-  pageNumber = 1,
-  punctuationSpaceReplacementEnabled = getDefault("punctuationSpaceReplacementEnabled"),
-) {
+// fontSizeMode / unifyFont / unifySize から collect 用の設定オブジェクトを 1 度だけ作る。
+// 「写植見本を再現」= reproduce（unify=false）/「フォント・サイズを指定」= select（unify=true）。
+function buildReuseCollectConfig(fontSizeMode, unifyFont, unifySize, punctuationSpaceReplacementEnabled) {
   const unify = fontSizeMode === "select";
   const defaultFont = unify ? (unifyFont || getDefault("fontPostScriptName") || null) : null;
   const sizeRaw = unify ? Number(unifySize ?? getDefault("textSize")) : NaN;
   const defaultSizePt = unify && Number.isFinite(sizeRaw) && sizeRaw > 0 ? sizeRaw : null;
-  const drafts = await collectReuseDraftsForPage(
-    page,
-    { unify, defaultFont, defaultSizePt, punctuationSpaceReplacementEnabled },
-    sourcePages,
-    pageNumber,
-  );
-  return applyReuseDraftsToPage(page, drafts, alignTargets);
+  return { unify, defaultFont, defaultSizePt, punctuationSpaceReplacementEnabled };
+}
+
+// 【写植再利用 / commit 境界】collect 済みの全ページ drafts を通常 newLayers へ一括反映する。
+// collect（解析）と apply（state 反映）を分離する commit フェーズで、リサイクル固有の抽出結果を
+// ここで初めて通常写植 state へ流し込む唯一の出口。draftsByPage: [{ page, drafts }]。
+// 挙動は旧「ページごとに即 apply」と等価（最終 state / 履歴 / tempId 順は同じ。反映タイミングが
+// ループ末尾に寄るだけ＝読込中の見た目以外は不変）。
+function commitReuseSessionToTypesetting(draftsByPage, alignTargets) {
+  let total = 0;
+  for (const entry of (Array.isArray(draftsByPage) ? draftsByPage : [])) {
+    if (!entry || !entry.page || !Array.isArray(entry.drafts)) continue;
+    total += applyReuseDraftsToPage(entry.page, entry.drafts, alignTargets);
+  }
+  return total;
 }
 
 // options:
@@ -589,6 +588,12 @@ export async function loadPsdFilesForReuse(files, {
   const reuseTextSourcePages = [];
   // フォントロード後に中心を合わせるための配置補正ターゲット群。
   const alignTargets = [];
+  // 【commit 境界】ページループでは collect（draft 生成）だけ行い、ここに溜める。
+  // ループ後に commitReuseSessionToTypesetting で通常 newLayers へ一括反映する。
+  const reuseDraftsByPage = [];
+  const reuseCollectConfig = buildReuseCollectConfig(
+    fontSizeMode, unifyFont, unifySize, punctuationSpaceReplacementEnabled,
+  );
 
   // 【一括読み取り】まず 1 回の Photoshop セッションで全 PSD を読み取る。これにより
   // 1 枚ごとに Photoshop を起動し直して前面化する挙動を避け、最初に総ページ数も把握できる。
@@ -635,16 +640,14 @@ export async function loadPsdFilesForReuse(files, {
       if (!page) page = await loadPsdForReuse(path);
       addPage(page);
       if (extract) {
-        await extractTextLayersToNewLayers(
+        // collect のみ（state は変更しない）。reuseTextSourcePages は collect が追記する。
+        const drafts = await collectReuseDraftsForPage(
           page,
-          alignTargets,
-          fontSizeMode,
-          unifyFont,
-          unifySize,
+          reuseCollectConfig,
           reuseTextSourcePages,
           i + 1,
-          punctuationSpaceReplacementEnabled,
         );
+        reuseDraftsByPage.push({ page, drafts });
       }
       setReuseInfo(page.path, {
         hideLayerIds: page.reuseTextLayerIds || [],
@@ -674,6 +677,14 @@ export async function loadPsdFilesForReuse(files, {
   }
   if (progressFlowSteps) {
     completeProgressFlowStep(extractFlow, { detail: "テキスト抽出 完了" });
+  }
+
+  // 【commit 境界】collect 済みの全ページ drafts を通常 newLayers へ一括反映する。
+  // ここで初めてリサイクル抽出結果が通常写植 state に入る。反映後に再描画してレイヤーを表示。
+  if (extract && reuseDraftsByPage.length > 0) {
+    commitReuseSessionToTypesetting(reuseDraftsByPage, alignTargets);
+    renderAllSpreads();
+    rebuildLayerList();
   }
 
   // 見本ペインに元テキスト入りの合成画像を流し込む。
