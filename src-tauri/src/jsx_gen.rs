@@ -165,16 +165,25 @@ function strokeFromFrameFx(fx) {
   var enabled = descriptorBool(fx, "enabled");
   var present = descriptorBool(fx, "present");
   if (enabled === false || present === false) return null;
+  // 【提案A/B】enabled な境界線効果(frameFX)が存在する時点で「フチあり」と確定する。
+  // 色が読めない / 純白・純黒に分類できない場合も null(=none) へ落とさず "present"
+  // （色未分類だがフチは存在）を返し、リサイクル側で白フチとして再現する。これで
+  // 背景白率ヒューリスティックへの取りこぼし（白吹き出し内の偽陰性）を防ぐ。
+  // 白/黒の判定閾値も >240/<15 から >=235/<=20 へ緩め、紙白やわずかに色味のある
+  // 白フチも拾う。通常読み込み経路は normalizeExtractedStrokeColor が "present" を
+  // "none" に丸めるため影響しない。
+  var size = descriptorNumberAny(fx, "size", "Sz  ");
+  var strokeWidthPx = (typeof size === "number" && isFinite(size) && size > 0) ? size : 20;
   var colorDesc = null;
   try {
     var colorKey = stringIDToTypeID("color");
     if (fx.hasKey(colorKey)) colorDesc = fx.getObjectValue(colorKey);
   } catch (e) {}
-  if (!colorDesc) return null;
+  if (!colorDesc) return { strokeColor: "present", strokeWidthPx: strokeWidthPx };
   var r = descriptorNumberAny(colorDesc, "red", "Rd  ");
   var g = descriptorNumberAny(colorDesc, "green", "Grn ");
   var b = descriptorNumberAny(colorDesc, "blue", "Bl  ");
-  if (r === null || g === null || b === null) return null;
+  if (r === null || g === null || b === null) return { strokeColor: "present", strokeWidthPx: strokeWidthPx };
   if (r <= 1 && g <= 1 && b <= 1 && (r > 0 || g > 0 || b > 0)) {
     r *= 255;
     g *= 255;
@@ -183,12 +192,10 @@ function strokeFromFrameFx(fx) {
   r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
   g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
   b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
-  var strokeColor = "none";
-  if (r > 240 && g > 240 && b > 240) strokeColor = "white";
-  else if (r < 15 && g < 15 && b < 15) strokeColor = "black";
-  if (strokeColor === "none") return null;
-  var size = descriptorNumberAny(fx, "size", "Sz  ");
-  return { strokeColor: strokeColor, strokeWidthPx: (typeof size === "number" && isFinite(size) && size > 0) ? size : 20 };
+  var strokeColor = "present";
+  if (r >= 235 && g >= 235 && b >= 235) strokeColor = "white";
+  else if (r <= 20 && g <= 20 && b <= 20) strokeColor = "black";
+  return { strokeColor: strokeColor, strokeWidthPx: strokeWidthPx };
 }
 function strokeFromLayerEffects(L) {
   try {
@@ -215,6 +222,30 @@ function strokeFromLayerEffects(L) {
     }
   } catch (e) {}
   return { strokeColor: "none", strokeWidthPx: 20 };
+}
+// テキストレイヤー自身＋親グループ(LayerSet)を遡って境界線効果(frameFX)を探す。
+// OPUS は「白フチ＋ルビ」のレイヤーを保存するとき、テキストレイヤーではなく
+// 専用サブグループへ境界線効果を当てる（jsx_gen.rs の applyStrokeEffect(__subGroupNL)）。
+// そのため再リサイクル時にテキストレイヤー単体の layerEffects を読むだけでは白フチが
+// 取りこぼされ、背景白率ヒューリスティックに落ちてしまう。手動写植でグループに境界線を
+// 付けているケースも同様に拾えるよう、自身に効果が無ければ祖先グループへ遡る。
+function strokeFromLayerEffectsWithAncestors(L) {
+  var own = strokeFromLayerEffects(L);
+  if (own && own.strokeColor !== "none") return own;
+  try {
+    var p = L.parent;
+    var guard = 0;
+    while (p && guard < 12) {
+      var isSet = false;
+      try { isSet = (p.typename === "LayerSet"); } catch (eT) { isSet = false; }
+      if (!isSet) break;
+      var g = strokeFromLayerEffects(p);
+      if (g && g.strokeColor !== "none") return g;
+      p = p.parent;
+      guard++;
+    }
+  } catch (e) {}
+  return own;
 }
 function fillColorNameFromTextItem(ti) {
   try {
@@ -336,7 +367,7 @@ try {
       if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
       var layerId = layerIdOf(L);
       var transform = textTransformForLayer(L);
-      var stroke = strokeFromLayerEffects(L);
+      var stroke = strokeFromLayerEffectsWithAncestors(L);
       if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
       items.push(
         '{"idx":' + jsonNum(i)
@@ -454,16 +485,25 @@ function strokeFromFrameFx(fx) {
   var enabled = descriptorBool(fx, "enabled");
   var present = descriptorBool(fx, "present");
   if (enabled === false || present === false) return null;
+  // 【提案A/B】enabled な境界線効果(frameFX)が存在する時点で「フチあり」と確定する。
+  // 色が読めない / 純白・純黒に分類できない場合も null(=none) へ落とさず "present"
+  // （色未分類だがフチは存在）を返し、リサイクル側で白フチとして再現する。これで
+  // 背景白率ヒューリスティックへの取りこぼし（白吹き出し内の偽陰性）を防ぐ。
+  // 白/黒の判定閾値も >240/<15 から >=235/<=20 へ緩め、紙白やわずかに色味のある
+  // 白フチも拾う。通常読み込み経路は normalizeExtractedStrokeColor が "present" を
+  // "none" に丸めるため影響しない。
+  var size = descriptorNumberAny(fx, "size", "Sz  ");
+  var strokeWidthPx = (typeof size === "number" && isFinite(size) && size > 0) ? size : 20;
   var colorDesc = null;
   try {
     var colorKey = stringIDToTypeID("color");
     if (fx.hasKey(colorKey)) colorDesc = fx.getObjectValue(colorKey);
   } catch (e) {}
-  if (!colorDesc) return null;
+  if (!colorDesc) return { strokeColor: "present", strokeWidthPx: strokeWidthPx };
   var r = descriptorNumberAny(colorDesc, "red", "Rd  ");
   var g = descriptorNumberAny(colorDesc, "green", "Grn ");
   var b = descriptorNumberAny(colorDesc, "blue", "Bl  ");
-  if (r === null || g === null || b === null) return null;
+  if (r === null || g === null || b === null) return { strokeColor: "present", strokeWidthPx: strokeWidthPx };
   if (r <= 1 && g <= 1 && b <= 1 && (r > 0 || g > 0 || b > 0)) {
     r *= 255;
     g *= 255;
@@ -472,12 +512,10 @@ function strokeFromFrameFx(fx) {
   r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
   g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
   b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
-  var strokeColor = "none";
-  if (r > 240 && g > 240 && b > 240) strokeColor = "white";
-  else if (r < 15 && g < 15 && b < 15) strokeColor = "black";
-  if (strokeColor === "none") return null;
-  var size = descriptorNumberAny(fx, "size", "Sz  ");
-  return { strokeColor: strokeColor, strokeWidthPx: (typeof size === "number" && isFinite(size) && size > 0) ? size : 20 };
+  var strokeColor = "present";
+  if (r >= 235 && g >= 235 && b >= 235) strokeColor = "white";
+  else if (r <= 20 && g <= 20 && b <= 20) strokeColor = "black";
+  return { strokeColor: strokeColor, strokeWidthPx: strokeWidthPx };
 }
 function strokeFromLayerEffects(L) {
   try {
@@ -504,6 +542,30 @@ function strokeFromLayerEffects(L) {
     }
   } catch (e) {}
   return { strokeColor: "none", strokeWidthPx: 20 };
+}
+// テキストレイヤー自身＋親グループ(LayerSet)を遡って境界線効果(frameFX)を探す。
+// OPUS は「白フチ＋ルビ」のレイヤーを保存するとき、テキストレイヤーではなく
+// 専用サブグループへ境界線効果を当てる（jsx_gen.rs の applyStrokeEffect(__subGroupNL)）。
+// そのため再リサイクル時にテキストレイヤー単体の layerEffects を読むだけでは白フチが
+// 取りこぼされ、背景白率ヒューリスティックに落ちてしまう。手動写植でグループに境界線を
+// 付けているケースも同様に拾えるよう、自身に効果が無ければ祖先グループへ遡る。
+function strokeFromLayerEffectsWithAncestors(L) {
+  var own = strokeFromLayerEffects(L);
+  if (own && own.strokeColor !== "none") return own;
+  try {
+    var p = L.parent;
+    var guard = 0;
+    while (p && guard < 12) {
+      var isSet = false;
+      try { isSet = (p.typename === "LayerSet"); } catch (eT) { isSet = false; }
+      if (!isSet) break;
+      var g = strokeFromLayerEffects(p);
+      if (g && g.strokeColor !== "none") return g;
+      p = p.parent;
+      guard++;
+    }
+  } catch (e) {}
+  return own;
 }
 function layerIdOf(L) {
   try {
@@ -640,7 +702,7 @@ function processOnePsd(psdPath, refImg, bgImg) {
       if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
       var layerId = layerIdOf(L);
       var transform = textTransformForLayer(L);
-      var stroke = strokeFromLayerEffects(L);
+      var stroke = strokeFromLayerEffectsWithAncestors(L);
       if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
       items.push(
         '{"idx":' + jsonNum(i)
@@ -790,16 +852,25 @@ function strokeFromFrameFx(fx) {
   var enabled = descriptorBool(fx, "enabled");
   var present = descriptorBool(fx, "present");
   if (enabled === false || present === false) return null;
+  // 【提案A/B】enabled な境界線効果(frameFX)が存在する時点で「フチあり」と確定する。
+  // 色が読めない / 純白・純黒に分類できない場合も null(=none) へ落とさず "present"
+  // （色未分類だがフチは存在）を返し、リサイクル側で白フチとして再現する。これで
+  // 背景白率ヒューリスティックへの取りこぼし（白吹き出し内の偽陰性）を防ぐ。
+  // 白/黒の判定閾値も >240/<15 から >=235/<=20 へ緩め、紙白やわずかに色味のある
+  // 白フチも拾う。通常読み込み経路は normalizeExtractedStrokeColor が "present" を
+  // "none" に丸めるため影響しない。
+  var size = descriptorNumberAny(fx, "size", "Sz  ");
+  var strokeWidthPx = (typeof size === "number" && isFinite(size) && size > 0) ? size : 20;
   var colorDesc = null;
   try {
     var colorKey = stringIDToTypeID("color");
     if (fx.hasKey(colorKey)) colorDesc = fx.getObjectValue(colorKey);
   } catch (e) {}
-  if (!colorDesc) return null;
+  if (!colorDesc) return { strokeColor: "present", strokeWidthPx: strokeWidthPx };
   var r = descriptorNumberAny(colorDesc, "red", "Rd  ");
   var g = descriptorNumberAny(colorDesc, "green", "Grn ");
   var b = descriptorNumberAny(colorDesc, "blue", "Bl  ");
-  if (r === null || g === null || b === null) return null;
+  if (r === null || g === null || b === null) return { strokeColor: "present", strokeWidthPx: strokeWidthPx };
   if (r <= 1 && g <= 1 && b <= 1 && (r > 0 || g > 0 || b > 0)) {
     r *= 255;
     g *= 255;
@@ -808,12 +879,10 @@ function strokeFromFrameFx(fx) {
   r = Math.max(0, Math.min(255, Math.round(Number(r) || 0)));
   g = Math.max(0, Math.min(255, Math.round(Number(g) || 0)));
   b = Math.max(0, Math.min(255, Math.round(Number(b) || 0)));
-  var strokeColor = "none";
-  if (r > 240 && g > 240 && b > 240) strokeColor = "white";
-  else if (r < 15 && g < 15 && b < 15) strokeColor = "black";
-  if (strokeColor === "none") return null;
-  var size = descriptorNumberAny(fx, "size", "Sz  ");
-  return { strokeColor: strokeColor, strokeWidthPx: (typeof size === "number" && isFinite(size) && size > 0) ? size : 20 };
+  var strokeColor = "present";
+  if (r >= 235 && g >= 235 && b >= 235) strokeColor = "white";
+  else if (r <= 20 && g <= 20 && b <= 20) strokeColor = "black";
+  return { strokeColor: strokeColor, strokeWidthPx: strokeWidthPx };
 }
 function strokeFromLayerEffects(L) {
   try {
@@ -840,6 +909,30 @@ function strokeFromLayerEffects(L) {
     }
   } catch (e) {}
   return { strokeColor: "none", strokeWidthPx: 20 };
+}
+// テキストレイヤー自身＋親グループ(LayerSet)を遡って境界線効果(frameFX)を探す。
+// OPUS は「白フチ＋ルビ」のレイヤーを保存するとき、テキストレイヤーではなく
+// 専用サブグループへ境界線効果を当てる（jsx_gen.rs の applyStrokeEffect(__subGroupNL)）。
+// そのため再リサイクル時にテキストレイヤー単体の layerEffects を読むだけでは白フチが
+// 取りこぼされ、背景白率ヒューリスティックに落ちてしまう。手動写植でグループに境界線を
+// 付けているケースも同様に拾えるよう、自身に効果が無ければ祖先グループへ遡る。
+function strokeFromLayerEffectsWithAncestors(L) {
+  var own = strokeFromLayerEffects(L);
+  if (own && own.strokeColor !== "none") return own;
+  try {
+    var p = L.parent;
+    var guard = 0;
+    while (p && guard < 12) {
+      var isSet = false;
+      try { isSet = (p.typename === "LayerSet"); } catch (eT) { isSet = false; }
+      if (!isSet) break;
+      var g = strokeFromLayerEffects(p);
+      if (g && g.strokeColor !== "none") return g;
+      p = p.parent;
+      guard++;
+    }
+  } catch (e) {}
+  return own;
 }
 
 function fillColorNameFromTextItem(ti) {
@@ -938,7 +1031,7 @@ try {
       if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
       // contents が空（取得失敗）ならレイヤー名で補完（PS はテキストレイヤーを内容で自動命名する）。
       if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
-      var stroke = strokeFromLayerEffects(L);
+      var stroke = strokeFromLayerEffectsWithAncestors(L);
       items.push(
         '{"idx":' + jsonNum(i)
         + ',"name":' + jsonStr(L.name)

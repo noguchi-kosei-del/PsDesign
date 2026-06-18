@@ -3190,6 +3190,51 @@ function resetTextPreviewTransform(box) {
   }
 }
 
+// 縦書き単列で「列の中央に置くべき」細グリフ（記号・小書き仮名・ダッシュ類等）の判定。
+// 保存側 jsx_gen.rs isVerticalSingleColumnCenterRiskCharCode と同一集合に揃える。
+// これらを右端揃えにすると、字面が列幅より細いため列の右へ大きくずれる。
+function isVerticalCenterRiskCharCode(c) {
+  if (c === 0x0021 || c === 0x003F || c === 0xFF01 || c === 0xFF1F) return true;
+  if (c === 0x003A || c === 0x003B || c === 0xFF1A || c === 0xFF1B ||
+      c === 0x30FB || c === 0x2025 || c === 0x2026) return true;
+  if (c === 0x0028 || c === 0x0029 || c === 0x005B || c === 0x005D ||
+      c === 0x007B || c === 0x007D || c === 0xFF08 || c === 0xFF09 ||
+      c === 0x300C || c === 0x300D || c === 0x300E || c === 0x300F ||
+      c === 0x3010 || c === 0x3011 || c === 0x3014 || c === 0x3015 ||
+      c === 0x3016 || c === 0x3017 || c === 0x3018 || c === 0x3019 ||
+      c === 0x301A || c === 0x301B || c === 0x301D || c === 0x301F) return true;
+  if (c === 0x2010 || c === 0x2011 || c === 0x2012 || c === 0x2013 ||
+      c === 0x2014 || c === 0x2015 || c === 0x2212 || c === 0x2500 ||
+      c === 0x2501 || c === 0x30FC || c === 0x301C || c === 0xFF0D ||
+      c === 0xFF5E || c === 0x007E) return true;
+  if ((c >= 0x2190 && c <= 0x2193) ||
+      (c >= 0x25A0 && c <= 0x25EF) ||
+      (c >= 0x2600 && c <= 0x26FF)) return true;
+  if (c === 0x3041 || c === 0x3043 || c === 0x3045 || c === 0x3047 ||
+      c === 0x3049 || c === 0x3063 || c === 0x3083 || c === 0x3085 ||
+      c === 0x3087 || c === 0x308E || c === 0x30A1 || c === 0x30A3 ||
+      c === 0x30A5 || c === 0x30A7 || c === 0x30A9 || c === 0x30C3 ||
+      c === 0x30E3 || c === 0x30E5 || c === 0x30E7 || c === 0x30EE ||
+      c === 0x30F5 || c === 0x30F6) return true;
+  return false;
+}
+
+// 縦書きで右端（列の下/句読点側）に寄せる約物（、。等）。これらは右端揃えのまま。
+// 保存側 jsx_gen.rs isVerticalRightEdgePunctuationCharCode と同一集合。
+function isVerticalRightEdgePunctuationCharCode(c) {
+  return c === 0x002C || c === 0x002E || c === 0x3001 || c === 0x3002 ||
+    c === 0xFF0C || c === 0xFF0E || c === 0xFF64 || c === 0xFF61;
+}
+
+function allCharsMatch(s, predicate) {
+  const text = String(s ?? "").replace(/\r\n?/g, "\n");
+  if (text.length === 0 || text.indexOf("\n") >= 0) return false;
+  for (let i = 0; i < text.length; i++) {
+    if (!predicate(text.charCodeAt(i))) return false;
+  }
+  return true;
+}
+
 function scheduleVerticalSingleLineAnchor(ctx) {
   if (typeof requestAnimationFrame !== "function") return;
   if (ctx._verticalSingleLineAnchorScheduled) return;
@@ -3204,10 +3249,19 @@ function scheduleVerticalSingleLineAnchor(ctx) {
       const inner = primaryTextPreviewInner(box);
       if (!inner) continue;
       resetTextPreviewTransform(box);
-      if (countLines(inner.textContent ?? "") !== 1) continue;
+      const lineText = inner.textContent ?? "";
+      if (countLines(lineText) !== 1) continue;
       const contentRect = measureInnerContentRect(inner);
       const boxRect = box.getBoundingClientRect();
       if (!contentRect || !boxRect || boxRect.width <= 0 || boxRect.height <= 0) continue;
+      // 【fix】「！」「…」「ー」など細い中央寄せグリフ（保存側 isVerticalSingleColumnCenterRiskCharCode
+      // と同集合）や、字面が列幅の 82% 未満に細い非・右端約物は、右端揃えにすると列の右へ大きく
+      // ずれる。保存側 jsx_gen.rs の _shouldCenterSingleColumn と挙動を揃え、これらは右端揃え
+      // transform を当てず列中央のままにする（、。などの右端約物は従来どおり右端揃え）。
+      const isRightEdgePunct = allCharsMatch(lineText, isVerticalRightEdgePunctuationCharCode);
+      const isCenterRisk = allCharsMatch(lineText, isVerticalCenterRiskCharCode);
+      const isNarrow = contentRect.width < boxRect.width * 0.82;
+      if (isCenterRisk || (!isRightEdgePunct && isNarrow)) continue;
       setTextPreviewTransform(box, boxRect.right - contentRect.right);
     }
   });

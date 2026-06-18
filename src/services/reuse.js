@@ -93,11 +93,27 @@ function computeAutoStyleFromMetrics(metrics, baseFont) {
 }
 
 function normalizeReuseStrokeColor(value) {
-  return value === "white" || value === "black" ? value : "none";
+  if (value === "white" || value === "black") return value;
+  // 【提案A】Photoshop 読み取りで「境界線効果はあるが色を純白/純黒に分類できなかった」
+  // 場合は jsx_gen.rs の strokeFromFrameFx が "present" を返す。漫画写植のフチは白が
+  // 大多数なので白フチとして再現し、背景白率ヒューリスティックへ落とさない。
+  if (value === "present") return "white";
+  return "none";
 }
 
 function hasReuseStroke(color, width) {
   return (color === "white" || color === "black") && Number.isFinite(width) && width > 0;
+}
+
+// 塗り色と同じ色のフチは視覚的に無意味（白文字に白フチ / 黒文字に黒フチ）。
+// 無効化された境界線効果の誤読・周辺解析の誤判定・祖先グループ効果の継承などで付いた
+// 冗長なフチを除去する。リサイクル配置でのみ適用し、通常編集には影響しない。
+function suppressRedundantStroke(strokeColor, fillColor) {
+  if ((fillColor === "white" && strokeColor === "white")
+    || (fillColor === "black" && strokeColor === "black")) {
+    return "none";
+  }
+  return strokeColor;
 }
 
 function resolveReuseStrokeFromSourceOrMetrics(sourceColor, sourceWidthPx, metrics, baseFont) {
@@ -231,6 +247,17 @@ function normalizeReusePunctuationSpace(text, enabled) {
   return s.replace(/、/g, " ");
 }
 
+// 先頭・末尾の空行（空白のみの行を含む）を除去する。
+// Photoshop の textItem.contents は段落末尾の改行などで先頭/末尾に空行を含むことがある。
+// 新規レイヤーの枠サイズは contents の行数から推定するため、空行があると厚み方向の bbox が
+// 1 行ぶん膨らみ、元レイヤーの bounds（描画ピクセル基準で空行を含まない）中心との中心合わせや
+// 再現配置で、1 行目／最終行に空行ができてテキストがずれる。中間の空行は意図的な改行として残す。
+function trimReuseBlankLines(text) {
+  return String(text ?? "")
+    .replace(/^(?:[ \t　]*\n)+/, "")
+    .replace(/(?:\n[ \t　]*)+$/, "");
+}
+
 function appendReuseTextSourceBlock(sourcePages, pageNumber, text) {
   if (!Array.isArray(sourcePages)) return null;
   const normalized = String(text ?? "").replace(/\r\n?/g, "\n").trim();
@@ -285,11 +312,18 @@ async function extractTextLayersToNewLayers(
     for (let i = 0; i < psItems.length; i++) {
       const it = psItems[i];
       if (!it) continue;
+      // PSD 上で非表示にされたテキストレイヤーはリサイクル対象から除外する。
+      // Photoshop 一括/単体読み取りは可視・非表示を問わず全テキストレイヤーを返し
+      // （jsx_gen.rs の walk / collectTextLayers は visible でフィルタせず "visible" を出力）、
+      // ここで弾かないと「ユーザーが隠したレイヤー」まで可視の新規レイヤーとして
+      // 再生成され、見本に無いテキストが出現して重なる。ag-psd フォールバック経路
+      // （reuseTextLayers / collectTextLayers）は既に非表示を除外済みなので、それと挙動を揃える。
+      if (it.visible === false) continue;
       // Photoshop の contents は改行が \r。アプリ内は \n に正規化。
-      const contents = normalizeReusePunctuationSpace(
+      const contents = trimReuseBlankLines(normalizeReusePunctuationSpace(
         String(it.contents ?? "").replace(/\r\n?/g, "\n"),
         punctuationSpaceReplacementEnabled,
-      );
+      ));
       if (!contents) continue;
       const direction = it.direction === "vertical" ? "vertical" : "horizontal";
       const hasBounds = [it.left, it.top, it.right, it.bottom].every((v) => Number.isFinite(v))
@@ -326,6 +360,7 @@ async function extractTextLayersToNewLayers(
       });
       const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: sizePt });
       const useSourceBounds = !unify && hasBounds;
+      const reuseFillColor = normalizeReuseFillColor(it.fillColor);
       const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
       const created = addNewLayer({
         psdPath: page.path,
@@ -335,9 +370,10 @@ async function extractTextLayersToNewLayers(
         fontPostScriptName: layerFont,
         sizePt: layerSize,
         direction,
-        strokeColor: sourceOrAutoStroke.strokeColor,
+        // 塗り色と同色のフチ（白文字に白フチ等）は冗長なので除去する。
+        strokeColor: suppressRedundantStroke(sourceOrAutoStroke.strokeColor, reuseFillColor),
         strokeWidthPx: sourceOrAutoStroke.strokeWidthPx,
-        fillColor: normalizeReuseFillColor(it.fillColor),
+        fillColor: reuseFillColor,
         leadingPct: 125,
         autoFontSwitched: unify ? auto.autoFontSwitched : false,
         autoFontSwitchBucket: unify ? auto.autoFontSwitchBucket : -1,
@@ -394,10 +430,10 @@ async function extractTextLayersToNewLayers(
       sourceFont: tl.font || null,
     });
     const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: boundsSizePt });
-    const contents = normalizeReusePunctuationSpace(
+    const contents = trimReuseBlankLines(normalizeReusePunctuationSpace(
       String(tl.text ?? "").replace(/\r\n?/g, "\n"),
       punctuationSpaceReplacementEnabled,
-    );
+    ));
     if (!contents) continue;
     const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
     const created = addNewLayer({
@@ -408,7 +444,8 @@ async function extractTextLayersToNewLayers(
       fontPostScriptName: layerFont,
       sizePt: layerSize,
       direction: tl.direction === "vertical" ? "vertical" : "horizontal",
-      strokeColor: tl.strokeColor ?? "none",
+      // 塗り色と同色のフチ（白文字に白フチ等）は冗長なので除去する。
+      strokeColor: suppressRedundantStroke(tl.strokeColor ?? "none", normalizeReuseFillColor(tl.fillColor)),
       strokeWidthPx: Number.isFinite(tl.strokeWidthPx) ? tl.strokeWidthPx : 20,
       fillColor: normalizeReuseFillColor(tl.fillColor),
       leadingPct: 125,

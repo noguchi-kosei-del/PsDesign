@@ -985,8 +985,10 @@ function readStrokeColor(fx) {
     return "none";
   }
   [r, g, b] = normalizeRgbChannels(r, g, b);
-  if (r > 240 && g > 240 && b > 240) return "white";
-  if (r < 15 && g < 15 && b < 15) return "black";
+  // 【提案B】純白/純黒の判定閾値を >240/<15 から >=235/<=20 に緩め、紙白や
+  // わずかに色味のある白フチも拾えるようにする（リサイクルの白フチ復元の取りこぼし対策）。
+  if (r >= 235 && g >= 235 && b >= 235) return "white";
+  if (r <= 20 && g <= 20 && b <= 20) return "black";
   // 白/黒 に分類できない色は保存時に壊さないよう "none" ではなく一旦読むが、
   // UI トグルは白/黒/なししかないので "none" フォールバックが安全。
   return "none";
@@ -1048,11 +1050,19 @@ function hasVisibleExtractedStroke(stroke) {
     && stroke.strokeWidthPx > 0;
 }
 
-function collectReuseStrokeHintsFromAgPsd(layer, out = [], parentVisible = true) {
+function collectReuseStrokeHintsFromAgPsd(layer, out = [], parentVisible = true, parentStroke = null) {
   const effectiveVisible = parentVisible && !isLayerHidden(layer);
+  const own = extractStroke(layer);
+  const ownVisible = hasVisibleExtractedStroke(own);
+  // 子テキストへ継承する境界線：自身に効果があれば自身、無ければ祖先からの継承を引き継ぐ。
+  // OPUS は「白フチ＋ルビ」をサブグループへ境界線適用するため、テキストレイヤー単体の
+  // effects には frameFX が無く、グループ側に乗っている。親グループの効果を子テキストへ
+  // 降ろすことで、Photoshop 読み取りが取りこぼした層でもヒントから白フチを復元できる。
+  const strokeForChildren = ownVisible ? own : parentStroke;
   if (effectiveVisible && typeof layer?.id === "number") {
-    const stroke = extractStroke(layer);
-    if (hasVisibleExtractedStroke(stroke)) {
+    // テキストレイヤーの hint は「自身の効果」優先、無ければ祖先グループの効果を継承。
+    const effective = ownVisible ? own : (layer.text ? parentStroke : null);
+    if (effective && hasVisibleExtractedStroke(effective)) {
       out.push({
         id: layer.id,
         name: layer.name ?? "",
@@ -1061,13 +1071,13 @@ function collectReuseStrokeHintsFromAgPsd(layer, out = [], parentVisible = true)
         top: layer.top ?? null,
         right: layer.right ?? null,
         bottom: layer.bottom ?? null,
-        strokeColor: stroke.strokeColor,
-        strokeWidthPx: stroke.strokeWidthPx,
+        strokeColor: effective.strokeColor,
+        strokeWidthPx: effective.strokeWidthPx,
       });
     }
   }
   if (Array.isArray(layer?.children)) {
-    for (const child of layer.children) collectReuseStrokeHintsFromAgPsd(child, out, effectiveVisible);
+    for (const child of layer.children) collectReuseStrokeHintsFromAgPsd(child, out, effectiveVisible, strokeForChildren);
   }
   return out;
 }

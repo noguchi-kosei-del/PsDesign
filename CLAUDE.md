@@ -1,5 +1,41 @@
 # PsDesign
 
+## 2026-06-18 変更メモ: v2.6.2 リリース（リサイクルの非表示レイヤー除外 / 白フチ復元の堅牢化 / 白文字の白フチ抑止 / 空行による配置ずれ / 細グリフの右ずれ）
+
+v2.6.2 では、リサイクル写植で報告された 5 件の不具合をまとめて修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.2` に更新済み。
+
+### A. 非表示レイヤーがリサイクルされ重なる問題
+
+- [src/services/reuse.js](src/services/reuse.js): Photoshop 主経路のテキスト抽出ループに `if (it.visible === false) continue;` を追加し、PSD 上で非表示にしたテキストレイヤーをリサイクル対象から除外した。
+- Photoshop 一括/単体読み取り（[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) の `walk` / `collectTextLayers`）は可視・非表示を問わず全テキストレイヤーを返し `"visible"` を出力していたが、フロント側で弾いていなかったため、ユーザーが隠したレイヤーまで可視の新規レイヤーとして再生成され、見本に無いテキストが出現して重なっていた。ag-psd フォールバック経路（`collectTextLayers`）は元々非表示を除外済みで、これと挙動を揃えた。
+
+### B. 白フチが付いたり付かなかったりする問題
+
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): `strokeFromFrameFx`（3 読み取り経路）を 3 状態化。enabled な境界線効果(frameFX)が存在するのに色を純白/純黒に分類できない場合、`null`(=none) ではなく `"present"`（色未分類だがフチは存在）を返すようにした。あわせて白/黒の判定閾値を `>240/<15` から `>=235/<=20` へ緩めた。
+- [src/services/reuse.js](src/services/reuse.js): `normalizeReuseStrokeColor` で `"present"` を `"white"` にマップ（漫画写植のフチは白が大多数）。これにより背景白率ヒューリスティックへの取りこぼし（白吹き出し内の偽陰性）を解消した。通常読み込み経路は `normalizeExtractedStrokeColor` が `"present"` を `"none"` に丸めるため無影響。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs): `strokeFromLayerEffectsWithAncestors` を新設し、テキストレイヤー自身に効果が無ければ親グループ(LayerSet)を遡って境界線効果を探すようにした。OPUS は「白フチ＋ルビ」のレイヤーをサブグループへ境界線適用するため、テキストレイヤー単体の layerEffects には frameFX が無く、再リサイクル時に白フチを取りこぼしていた。リサイクル 3 読み取り経路をこの関数に切り替えた。
+- [src/psd-loader.js](src/psd-loader.js): `readStrokeColor` の白/黒判定閾値も `>=235/<=20` に緩和。`collectReuseStrokeHintsFromAgPsd` も親グループの境界線を子テキストへ継承させ、Photoshop 読み取りが万一失敗した層でも ag-psd ヒントから白フチを復元できるようにした（リサイクル専用関数のため通常読み込みには無影響）。
+
+### C. 白文字に白フチが付く問題
+
+- [src/services/reuse.js](src/services/reuse.js): `suppressRedundantStroke` を追加し、塗り色と同色のフチ（白文字に白フチ / 黒文字に黒フチ）を `"none"` に除去した。無効化された境界線の誤読・周辺解析の誤判定・祖先グループ効果の継承などで付いた冗長なフチを抑止する。リサイクル配置の 2 経路（Photoshop / ag-psd）に適用し、通常編集には無影響。
+
+### D. テキストの先頭/最終行に空行ができて配置がずれる問題
+
+- [src/services/reuse.js](src/services/reuse.js): `trimReuseBlankLines` を追加し、リサイクルの contents（Photoshop / ag-psd の両経路）から先頭・末尾の空行（空白のみの行含む）を除去した。中間の空行は意図的な改行として保持する。
+- Photoshop の `textItem.contents` は段落末尾の改行などで先頭/末尾に空行を含むことがあり、新規レイヤーの厚み方向 bbox が 1 行ぶん膨らんで、元レイヤーの bounds（描画ピクセル基準で空行を含まない）中心との中心合わせ・再現配置がずれていた。原稿テキスト側（`appendReuseTextSourceBlock` で既に `.trim()` 済み）と contents が一致し、`syncPlacedFromTxt` の不要な再リフローも防げる。
+
+### E. 「！」「…」等の細グリフが右へ大きくずれる問題
+
+- [src/canvas-tools.js](src/canvas-tools.js): `scheduleVerticalSingleLineAnchor` を保存側 jsx_gen.rs の `_shouldCenterSingleColumn` と同じ判定に揃えた。保存側と同一の文字集合 `isVerticalCenterRiskCharCode` / `isVerticalRightEdgePunctuationCharCode` を移植し、縦書き 1 行が中央寄せ対象（「！」「…」「ー」等）または字面が列幅 82% 未満に細い非・右端約物の場合は、右端揃え transform を当てず列中央のままにする。
+- 旧実装は単一列縦書きテキストの実描画右端を枠右端に揃えていたため、字面が細く列の中央に寄ったグリフが列の右へ約半列ぶんずれていた。保存側は v2.6.1 で中央寄せ済みだったが、フロントの表示補正だけが右端揃えのままで食い違っていた。「、」「。」などの右端約物と列幅いっぱいの全角字は従来どおり右端揃え。
+
+### 検証
+
+- `npm run check` 成功（`check:encoding` / `check:security` / `lint` / `build`）。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。
+- リリースはタグ `v2.6.2` push により `.github/workflows/release.yml` で Windows ビルド、署名、`latest.json` 生成、GitHub Release 作成を実行する。
+
 ## 2026-06-18 変更メモ: v2.6.1 リリース（リサイクル白フチ / 全角記号の保存位置補正 / フォント帳検索 / プロジェクト見本PDF復元）
 
 v2.6.1 では、リサイクル PSD の白フチ復元、単文字・全角記号テキストの PSD 保存位置ずれ対策、フォント帳の作品選択検索、OPUS プロジェクトから開いたときの写植見本 PDF 復元を中心に更新した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.1` に更新済み。
