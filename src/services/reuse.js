@@ -289,35 +289,32 @@ function reuseTextSourceName(files) {
   return "recycle_text.txt";
 }
 
-async function extractTextLayersToNewLayers(
+// 【写植再利用 / draft 生成（純粋）】page から「新規レイヤー化すべき下書き(draft)」配列を作る。
+// ここでは state を一切変更しない（addNewLayer / updateNewLayer を呼ばない）。各 draft は
+//   create         : addNewLayer に渡す引数
+//   updates        : 作成後に updateNewLayer する静的フィールド（rect 非依存）/ null
+//   centerFromRect : { cx, cy } のとき、反映側で layerRectForNew(page, created) から x/y を中心合わせ
+//   alignTarget    : { cx, cy, font } のとき、反映側で alignTargets へ push
+// sourcePages は原稿テキスト構築用のアキュムレータ（draft データ）で、ここで追記する。
+// 挙動は旧 extractTextLayersToNewLayers と同一（layerRectForNew は created 依存のため反映側に残す）。
+async function collectReuseDraftsForPage(
   page,
-  alignTargets,
-  fontSizeMode = "reproduce",
-  unifyFont = null,
-  unifySize = null,
-  sourcePages = null,
-  pageNumber = 1,
-  punctuationSpaceReplacementEnabled = getDefault("punctuationSpaceReplacementEnabled"),
+  { unify, defaultFont, defaultSizePt, punctuationSpaceReplacementEnabled },
+  sourcePages,
+  pageNumber,
 ) {
-  const unify = fontSizeMode === "select";
-  const defaultFont = unify ? (unifyFont || getDefault("fontPostScriptName") || null) : null;
-  const sizeRaw = unify ? Number(unifySize ?? getDefault("textSize")) : NaN;
-  const defaultSizePt = unify && Number.isFinite(sizeRaw) && sizeRaw > 0 ? sizeRaw : null;
+  const drafts = [];
   const psItems = Array.isArray(page?.reusePsTextItems) ? page.reusePsTextItems : null;
   if (psItems && psItems.length > 0) {
     // 周辺解析（テキスト非表示の背景画像で白率 / ウニを計測）。
     // 「写植見本を再現」でも、元 PSD からフチ情報が取れない場合は白フチ自動付与を復帰させる。
     const metricsList = await analyzeReuseRegions(page.reuseBgImagePath, psItems, page.dpi);
-    let count = 0;
     for (let i = 0; i < psItems.length; i++) {
       const it = psItems[i];
       if (!it) continue;
       // PSD 上で非表示にされたテキストレイヤーはリサイクル対象から除外する。
-      // Photoshop 一括/単体読み取りは可視・非表示を問わず全テキストレイヤーを返し
-      // （jsx_gen.rs の walk / collectTextLayers は visible でフィルタせず "visible" を出力）、
-      // ここで弾かないと「ユーザーが隠したレイヤー」まで可視の新規レイヤーとして
-      // 再生成され、見本に無いテキストが出現して重なる。ag-psd フォールバック経路
-      // （reuseTextLayers / collectTextLayers）は既に非表示を除外済みなので、それと挙動を揃える。
+      // Photoshop 一括/単体読み取りは可視・非表示を問わず全テキストレイヤーを返すため
+      // ここで弾かないと、ユーザーが隠したレイヤーまで可視の新規レイヤーとして再生成される。
       if (it.visible === false) continue;
       // Photoshop の contents は改行が \r。アプリ内は \n に正規化。
       const contents = trimReuseBlankLines(normalizeReusePunctuationSpace(
@@ -328,10 +325,7 @@ async function extractTextLayersToNewLayers(
       const direction = it.direction === "vertical" ? "vertical" : "horizontal";
       const hasBounds = [it.left, it.top, it.right, it.bottom].every((v) => Number.isFinite(v))
         && it.right > it.left && it.bottom > it.top;
-      // サイズ: Photoshop が読んだ textItem.size を元サイズとして採用する。
-      // Photoshop 経路の bounds は描画済み bbox なので、縦書き・複数行・句読点ツメでは
-      // 厚み軸が実 fontSize より小さく出やすい。ここで bounds 逆算を優先すると
-      // 「写植見本を再現」時に文字が縮むため、sizePt が取れない場合だけフォールバックに使う。
+      // サイズ: Photoshop が読んだ textItem.size を元サイズとして採用。bounds 逆算は取れない時のみ。
       const nominalPt = Number(it.sizePt);
       let sizePt = Number.isFinite(nominalPt) && nominalPt > 0 ? nominalPt : null;
       if (!sizePt && hasBounds) {
@@ -362,7 +356,7 @@ async function extractTextLayersToNewLayers(
       const useSourceBounds = !unify && hasBounds;
       const reuseFillColor = normalizeReuseFillColor(it.fillColor);
       const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
-      const created = addNewLayer({
+      const create = {
         psdPath: page.path,
         x: Number.isFinite(it.left) ? it.left : 0,
         y: Number.isFinite(it.top) ? it.top : 0,
@@ -378,18 +372,17 @@ async function extractTextLayersToNewLayers(
         autoFontSwitched: unify ? auto.autoFontSwitched : false,
         autoFontSwitchBucket: unify ? auto.autoFontSwitchBucket : -1,
         sourceTxtRef,
-      });
+      };
+      let updates = null;
+      let centerFromRect = null;
+      let alignTarget = null;
       // 元レイヤーの実 bbox 中心に新規枠の中心を合わせる（auto-place と同じ中心固定方式）。
-      // OPUS の新規レイヤー枠は文字数推定ベースなので、top-left 配置だと縦書きアンカー差や
-      // 枠サイズ推定差で位置がずれる。中心を合わせれば推定枠が多少違っても見た目が一致する。
-      // ここは初期推定（フォント未ロードで誤差あり）。最終的にはフォントロード後に
-      // alignReuseLayersToSourceCenters で実描画中心を測って厳密に合わせる。
-      if (created && hasBounds) {
+      // reuseSrcCx/Cy = 元レイヤー中心（保存時に実 bounds 中心をここへ合わせ位置を厳密再現）。
+      // reuseTightThick = 枠の厚み方向を実テキスト幅に詰める（左余白を作らない）。
+      if (hasBounds) {
         const cx = (it.left + it.right) / 2;
         const cy = (it.top + it.bottom) / 2;
-        // reuseSrcCx/Cy = 元レイヤーの中心。保存時に「実 bounds 中心」をここへ合わせ、元の位置を厳密再現。
-        // reuseTightThick = 枠の厚み方向を実テキスト幅に詰める（左余白を作らない）。
-        const updates = { reuseSrcCx: cx, reuseSrcCy: cy, reuseTightThick: true };
+        updates = { reuseSrcCx: cx, reuseSrcCy: cy, reuseTightThick: true };
         if (useSourceBounds) {
           Object.assign(updates, {
             x: it.left,
@@ -402,23 +395,18 @@ async function extractTextLayersToNewLayers(
             reuseSourceSizePt: layerSize,
           });
         } else {
-          const rect = layerRectForNew(page, created);
-          updates.x = cx - rect.width / 2;
-          updates.y = cy - rect.height / 2;
-        }
-        updateNewLayer(created.tempId, updates);
-        if (!useSourceBounds && Array.isArray(alignTargets)) {
-          alignTargets.push({ psdPath: page.path, tempId: created.tempId, cx, cy, font: layerFont || null });
+          // 反映側で layerRectForNew(page, created) を使い中心合わせ + フォントロード後の厳密補正対象。
+          centerFromRect = { cx, cy };
+          alignTarget = { cx, cy, font: layerFont || null };
         }
       }
-      count += 1;
+      drafts.push({ create, updates, centerFromRect, alignTarget });
     }
-    return count;
+    return drafts;
   }
 
   // フォールバック: ag-psd 抽出データ。
   const layers = Array.isArray(page?.reuseTextLayers) ? page.reuseTextLayers : [];
-  let count = 0;
   for (const tl of layers) {
     if (!tl) continue;
     const boundsSizePt = getExistingLayerEffectiveSizePt(page, tl, null);
@@ -436,7 +424,7 @@ async function extractTextLayersToNewLayers(
     ));
     if (!contents) continue;
     const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
-    const created = addNewLayer({
+    const create = {
       psdPath: page.path,
       x: Number.isFinite(tl.left) ? tl.left : 0,
       y: Number.isFinite(tl.top) ? tl.top : 0,
@@ -454,22 +442,22 @@ async function extractTextLayersToNewLayers(
       trackingMille: Number.isFinite(tl.trackingMille) ? tl.trackingMille : 0,
       kerningMille: Number.isFinite(tl.kerningMille) ? tl.kerningMille : 0,
       sourceTxtRef,
-    });
+    };
     const updates = {};
     // per-char フォントは「再現」モードのみ反映（「統一」モードは単一フォントに揃える）。
-    if (created && !unify && tl.charFonts && Object.keys(tl.charFonts).length > 0) {
+    if (!unify && tl.charFonts && Object.keys(tl.charFonts).length > 0) {
       updates.charFonts = { ...tl.charFonts };
     }
+    let centerFromRect = null;
+    let alignTarget = null;
     // 元レイヤーの実 bbox 中心に合わせて再配置（Photoshop 経路と同じ中心固定）。
     const hasBounds = [tl.left, tl.top, tl.right, tl.bottom].every((v) => Number.isFinite(v))
       && tl.right > tl.left && tl.bottom > tl.top;
-    if (created && hasBounds) {
+    if (hasBounds) {
       const cx = (tl.left + tl.right) / 2;
       const cy = (tl.top + tl.bottom) / 2;
-      // 保存時に実 bounds 中心を元中心へ合わせるため、元中心を保持する。
       updates.reuseSrcCx = cx;
       updates.reuseSrcCy = cy;
-      // 枠の厚み方向を実テキスト幅に詰める（左余白を作らない）。
       updates.reuseTightThick = true;
       if (!unify) {
         updates.x = tl.left;
@@ -481,20 +469,74 @@ async function extractTextLayersToNewLayers(
         updates.reuseSourceContents = contents;
         updates.reuseSourceSizePt = layerSize;
       } else {
-        const rect = layerRectForNew(page, created);
-        updates.x = cx - rect.width / 2;
-        updates.y = cy - rect.height / 2;
-      }
-      if (unify && Array.isArray(alignTargets)) {
-        alignTargets.push({ psdPath: page.path, tempId: created.tempId, cx, cy, font: layerFont || null });
+        centerFromRect = { cx, cy };
+        alignTarget = { cx, cy, font: layerFont || null };
       }
     }
-    if (created && Object.keys(updates).length > 0) {
+    drafts.push({
+      create,
+      updates: Object.keys(updates).length > 0 ? updates : null,
+      centerFromRect,
+      alignTarget,
+    });
+  }
+  return drafts;
+}
+
+// 【写植再利用 / draft 反映】collectReuseDraftsForPage が返した drafts を実際の state へ反映する。
+// addNewLayer / updateNewLayer / alignTargets への push はここだけで行う（commit 境界の前段）。
+// layerRectForNew は created 依存のため、centerFromRect の x/y はここで解決する。
+function applyReuseDraftsToPage(page, drafts, alignTargets) {
+  let count = 0;
+  for (const d of drafts) {
+    const created = addNewLayer(d.create);
+    let updates = d.updates ? { ...d.updates } : null;
+    if (created && d.centerFromRect) {
+      const rect = layerRectForNew(page, created);
+      updates = updates || {};
+      updates.x = d.centerFromRect.cx - rect.width / 2;
+      updates.y = d.centerFromRect.cy - rect.height / 2;
+    }
+    if (created && updates && Object.keys(updates).length > 0) {
       updateNewLayer(created.tempId, updates);
+    }
+    if (created && d.alignTarget && Array.isArray(alignTargets)) {
+      alignTargets.push({
+        psdPath: page.path,
+        tempId: created.tempId,
+        cx: d.alignTarget.cx,
+        cy: d.alignTarget.cy,
+        font: d.alignTarget.font,
+      });
     }
     count += 1;
   }
   return count;
+}
+
+// 旧 API 互換のオーケストレータ。挙動は従来どおり（解析→即反映）。
+// ステップ2以降で呼び出し側を collect / apply の 2 段に分離していく足場。
+async function extractTextLayersToNewLayers(
+  page,
+  alignTargets,
+  fontSizeMode = "reproduce",
+  unifyFont = null,
+  unifySize = null,
+  sourcePages = null,
+  pageNumber = 1,
+  punctuationSpaceReplacementEnabled = getDefault("punctuationSpaceReplacementEnabled"),
+) {
+  const unify = fontSizeMode === "select";
+  const defaultFont = unify ? (unifyFont || getDefault("fontPostScriptName") || null) : null;
+  const sizeRaw = unify ? Number(unifySize ?? getDefault("textSize")) : NaN;
+  const defaultSizePt = unify && Number.isFinite(sizeRaw) && sizeRaw > 0 ? sizeRaw : null;
+  const drafts = await collectReuseDraftsForPage(
+    page,
+    { unify, defaultFont, defaultSizePt, punctuationSpaceReplacementEnabled },
+    sourcePages,
+    pageNumber,
+  );
+  return applyReuseDraftsToPage(page, drafts, alignTargets);
 }
 
 // options:
