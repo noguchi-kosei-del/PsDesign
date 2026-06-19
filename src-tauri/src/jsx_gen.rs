@@ -5022,6 +5022,11 @@ function reapplyManualTextSpacingForPayload(doc, layerIdIndex, edits, newLayers)
 // 早すぎる補正（再フロー前の bbox を中心合わせ）が太字/per-char で下方向にずれる問題を解消する。
 function applyNewLayerPositionAnchor(layerRef, nl, doc) {
   try {
+    // 【bounds 強制再評価】Photoshop は text layer 作成・per-char 編集（フォント/サイズ/太字）直後の
+    // bounds 計算を遅延することがあり、特定フォントで「まだ落ち着いていない bbox」を掴むと、
+    // 中心合わせが狂って保存位置が下にぶれる（再保存で“たまに”変わる非決定性の正体）。
+    // translate(0,0) を呼ぶと PS は bounds を再計算する（ルビ配置 3633/3685 と同じ既知手法）。
+    try { layerRef.translate(new UnitValue(0, "px"), new UnitValue(0, "px")); } catch (eReeval) {}
     var _b = layerRef.bounds;
     var _actualLeft  = _b[0].as("px");
     var _actualTop   = _b[1].as("px");
