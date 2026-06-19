@@ -700,6 +700,15 @@ function processOnePsd(psdPath, refImg, bgImg) {
       try { b = L.bounds; } catch (e) {}
       var left = 0, top = 0, right = 0, bottom = 0;
       if (b && b.length >= 4) { left = asPx(b[0]); top = asPx(b[1]); right = asPx(b[2]); bottom = asPx(b[3]); }
+      // 元レイヤーの textItem.position（テキスト原点 / 基準位置, px）。保存側で bounds 中心合わせを
+      // せず、この位置を直接設定して厳密再現するために使う（太字で bounds が落ち着かず下にぶれる問題回避）。
+      var posX = null, posY = null;
+      if (ti) {
+        try {
+          var p = ti.position;
+          if (p && p.length >= 2) { posX = asPx(p[0]); posY = asPx(p[1]); }
+        } catch (e) {}
+      }
       var layerId = layerIdOf(L);
       var transform = textTransformForLayer(L);
       var stroke = strokeFromLayerEffectsWithAncestors(L);
@@ -713,6 +722,7 @@ function processOnePsd(psdPath, refImg, bgImg) {
         + ',"sizePt":' + jsonNum(sizePt)
         + ',"left":' + jsonNum(left) + ',"top":' + jsonNum(top)
         + ',"right":' + jsonNum(right) + ',"bottom":' + jsonNum(bottom)
+        + ',"posX":' + jsonNullableNum(posX) + ',"posY":' + jsonNullableNum(posY)
         + ',"transform":' + jsonNumArray(transform)
         + ',"direction":' + jsonStr(dir)
         + ',"fillColor":' + jsonStr(fillColor)
@@ -1203,6 +1213,8 @@ pub fn generate_apply_script(
     __copy(raw, "reuseSrcCy", out);
     __copy(raw, "uiAnchorCx", out);
     __copy(raw, "uiAnchorCy", out);
+    __copy(raw, "reuseSrcPosX", out);
+    __copy(raw, "reuseSrcPosY", out);
     return out;
   }
   function __mapLayers(list, fn) {
@@ -1474,6 +1486,12 @@ pub fn generate_apply_script(
             }
             if let Some(cy) = nl.ui_anchor_cy {
                 out.push_str(&format!(", uiAnchorCy: {}", cy));
+            }
+            if let Some(px) = nl.reuse_src_pos_x {
+                out.push_str(&format!(", reuseSrcPosX: {}", px));
+            }
+            if let Some(py) = nl.reuse_src_pos_y {
+                out.push_str(&format!(", reuseSrcPosY: {}", py));
             }
             out.push_str(&format!(", contents: {}", js_string(&nl.contents)));
             if let Some(ref f) = nl.font_post_script_name {
@@ -3461,6 +3479,9 @@ var NAKAGURO_FIRST_LINE_PARENT_MARK_OFFSET_EM = 0.84;
 var NORMAL_FIRST_LINE_RUBY_GAP_EM = 0.08;
 var LATER_LINE_RUBY_PARENT_OFFSET_EM = 0.72;
 var NORMAL_RUBY_PARENT_NUDGE_EM = 0.08;
+// 中黒(・)ルビを通常ルビ位置からさらに親文字側へ寄せる量（親 em 単位）。プレビュー CSS の
+// --ruby-nakaguro-closer-em と同値に保つ。
+var NAKAGURO_EXTRA_TO_PARENT_EM = 0.1;
 
 function lineIndexForCharIndex(contents, idx) {
   var fullText = String(contents || "");
@@ -3704,13 +3725,17 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
     var hasUiAbs = (typeof uiAbsX === "number" && typeof uiAbsY === "number"
                     && isFinite(uiAbsX) && isFinite(uiAbsY));
     var isParentMarkRuby = isSpecialParentMarkRubyText(rubyText);
+    // 【中黒(・)ルビ】ユーザー要望: ・ は通常ルビと同じ位置に出す。位置計算では parent-mark 扱い
+    // せず通常ルビ経路（行内中心 + 親寄せ nudge / 1 行目は親の右隣）を通す。
+    // 濁点(゛)など他の parent-mark は従来どおり親から離して配置する。
+    var positionAsParentMark = isParentMarkRuby && !isNakaguroRubyText(rubyText);
     var parentLineIndex = lineIndexForCharIndex(contents, fromCh);
-    var isFirstLineNormalRuby = !isParentMarkRuby && parentLineIndex === 0;
+    var isFirstLineNormalRuby = !positionAsParentMark && parentLineIndex === 0;
     var parentMarkOffsetEm = isNakaguroRubyText(rubyText) ? NAKAGURO_PARENT_MARK_OFFSET_EM : PARENT_MARK_OFFSET_EM;
     if (isNakaguroRubyText(rubyText) && parentLineIndex === 0) {
       parentMarkOffsetEm = NAKAGURO_FIRST_LINE_PARENT_MARK_OFFSET_EM;
     }
-    if (isParentMarkRuby || parentLineIndex > 0 || isFirstLineNormalRuby) {
+    if (positionAsParentMark || parentLineIndex > 0 || isFirstLineNormalRuby) {
       // Parent marks, later-line rubies, and first-line normal rubies are
       // positioned from the parent range. UI-measured offsets include
       // ruby-line placement and can drift from Photoshop's adjusted geometry.
@@ -3776,7 +3801,7 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
       if (parentDirection === "vertical") {
         // 縦書き: ルビは親 char range の **右** に配置。
         var rangeMidV = (rangeBounds.top + rangeBounds.bottom) / 2;
-        if (isParentMarkRuby) {
+        if (positionAsParentMark) {
           var parentMarkCenterX = (rangeBounds.left + rangeBounds.right) / 2 + parentEmPxForLayer(parentLayer, doc) * parentMarkOffsetEm;
           targetLeft = parentMarkCenterX - rubyWidth / 2;
         } else if (parentLineIndex > 0) {
@@ -3790,7 +3815,7 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
         // 横書き: 2 行目以降は前行との中間、1 行目は親の右側に配置。
         var rangeMidH = (rangeBounds.left + rangeBounds.right) / 2;
         targetLeft = rangeMidH - rubyWidth / 2;
-        if (isParentMarkRuby) {
+        if (positionAsParentMark) {
           var parentMarkCenterXH = rangeMidH + parentEmPxForLayer(parentLayer, doc) * parentMarkOffsetEm;
           targetLeft = parentMarkCenterXH - rubyWidth / 2;
           targetTop = (rangeBounds.top + rangeBounds.bottom) / 2 - rubyHeight / 2;
@@ -3805,12 +3830,21 @@ function createRubyLayer(parentLayer, contents, fromCh, toCh, parentSubText, rub
         }
       }
     }
-    if (!isParentMarkRuby && !isFirstLineNormalRuby) {
+    if (!positionAsParentMark && !isFirstLineNormalRuby) {
       var normalRubyParentNudgePx = parentEmPxForLayer(parentLayer, doc) * NORMAL_RUBY_PARENT_NUDGE_EM;
       if (parentDirection === "vertical") {
         targetLeft -= normalRubyParentNudgePx;
       } else {
         targetTop += normalRubyParentNudgePx;
+      }
+    }
+    // 【中黒(・)】通常ルビ位置からさらに少しだけ親文字側へ寄せる（1 行目含め全行に適用）。
+    if (isNakaguroRubyText(rubyText)) {
+      var nakaguroCloserPx = parentEmPxForLayer(parentLayer, doc) * NAKAGURO_EXTRA_TO_PARENT_EM;
+      if (parentDirection === "vertical") {
+        targetLeft -= nakaguroCloserPx;
+      } else {
+        targetTop += nakaguroCloserPx;
       }
     }
     var dx = targetLeft - actualLeft;
@@ -5022,6 +5056,22 @@ function reapplyManualTextSpacingForPayload(doc, layerIdIndex, edits, newLayers)
 // 早すぎる補正（再フロー前の bbox を中心合わせ）が太字/per-char で下方向にずれる問題を解消する。
 function applyNewLayerPositionAnchor(layerRef, nl, doc) {
   try {
+    // 【リサイクル・基準位置の直接再現】未ドラッグのリサイクルレイヤー（uiAnchor 無し ＝ UI で動かして
+    // いない）で、元レイヤーの textItem.position (reuseSrcPosX/Y) が取れている場合は、bounds を一切読まず
+    // 元の基準位置をそのまま設定する。これにより「太字フォントで bounds が落ち着かず中心合わせが下に
+    // ぶれる」問題を根本的に回避し、元レイヤー位置を厳密再現する。ドラッグ済み（uiAnchor あり）は従来の
+    // 中心合わせ（下記）で UI 位置を反映する。
+    var _hasUiAnchor = (typeof nl.uiAnchorCx === "number") && (typeof nl.uiAnchorCy === "number");
+    if (!_hasUiAnchor
+        && typeof nl.reuseSrcPosX === "number" && isFinite(nl.reuseSrcPosX)
+        && typeof nl.reuseSrcPosY === "number" && isFinite(nl.reuseSrcPosY)) {
+      try {
+        layerRef.textItem.position = [new UnitValue(nl.reuseSrcPosX, "px"), new UnitValue(nl.reuseSrcPosY, "px")];
+        return;
+      } catch (ePos) {
+        // 失敗時は下のフォールバック（reuseSrcCx/Cy 中心合わせ）へ続行。
+      }
+    }
     // 【bounds 強制再評価】Photoshop は text layer 作成・per-char 編集（フォント/サイズ/太字）直後の
     // bounds 計算を遅延することがあり、特定フォントで「まだ落ち着いていない bbox」を掴むと、
     // 中心合わせが狂って保存位置が下にぶれる（再保存で“たまに”変わる非決定性の正体）。

@@ -1793,8 +1793,29 @@ export function setNewLayerUiAnchors(psdPath, anchors) {
     if (l.psdPath !== psdPath) continue;
     const a = byId.get(l.tempId);
     if (!a) continue;
+    // cx/cy が null のときは uiAnchor をクリア → 保存側 jsx は reuseSrcCx/Cy（Photoshop が
+    // 読んだ元レイヤー中心）へフォールバックし、同エンジン・同フォントで厳密に元位置を再現する。
+    if (a.cx == null || a.cy == null) {
+      delete l.uiAnchorCx;
+      delete l.uiAnchorCy;
+      continue;
+    }
     if (Number.isFinite(a.cx)) l.uiAnchorCx = a.cx;
     if (Number.isFinite(a.cy)) l.uiAnchorCy = a.cy;
+  }
+}
+
+// 【リサイクル】抽出・配置直後の「配置位置」を記録する。後でドラッグ移動されたか検出するため
+// （未移動なら Photoshop の元中心 reuseSrcCx/Cy をそのまま使い、移動済みなら UI 実測中心を使う）。
+// 計測扱いなので履歴に積まない。既に値があるレイヤー（プロジェクト復元由来）は上書きしない。
+export function markReuseLayerOrigins() {
+  for (const l of state.newLayers) {
+    if (l.reuseTightThick !== true) continue;
+    if (Number.isFinite(l.reuseOrigX) && Number.isFinite(l.reuseOrigY)) continue;
+    if (Number.isFinite(l.x) && Number.isFinite(l.y)) {
+      l.reuseOrigX = l.x;
+      l.reuseOrigY = l.y;
+    }
   }
 }
 

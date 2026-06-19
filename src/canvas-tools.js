@@ -2939,9 +2939,19 @@ function computeNewLayerUiGlyphCenter(page, nl) {
   return { cx, cy };
 }
 
-// 保存直前に呼ぶ。全ページのリサイクルレイヤー (reuseTightThick) について現在の UI グリフ中心を
-// 算出し、uiAnchorCx/Cy として保存する。これにより「UI で調整した位置」が保存へ反映される
-// （保存側 jsx_gen は uiAnchorCx/Cy に実描画 bbox 中心を合わせる）。通常レイヤーは対象外。
+// 保存直前に呼ぶ。全ページのリサイクルレイヤー (reuseTightThick) の保存アンカーを確定する。
+//
+// 【方針】リサイクルは「元と同じ原稿の再写植（同フォント）」なので、未移動なら Photoshop が読んだ
+// 元レイヤー中心 (reuseSrcCx/Cy) をそのまま使うのが最も正確（同エンジン・同フォントの実描画 bbox
+// 中心同士を合わせる＝フォント ascender/descender 非対称の影響を受けず厳密一致）。一方で UI 実測の
+// グリフ中心 (computeNewLayerUiGlyphCenter) は JS の measureText 推定値で、太いフォント等では
+// Photoshop 実中心と僅かにズレるため、未移動レイヤーに当てると保存位置が動いてしまう。
+//
+// 従って:
+//   - 未移動 (nl.x/y ≈ reuseOrigX/Y) かつ reuseSrcCx/Cy あり → uiAnchor をクリアして
+//     reuseSrcCx/Cy（Photoshop 元中心）にフォールバックさせる＝元位置を厳密再現。
+//   - ドラッグで移動済み → UI 実測中心を uiAnchor に入れて調整位置を反映（推定値だが意図的移動なので可）。
+//   - reuseOrigX/Y 不明（旧データ等）→ 従来どおり UI 実測中心。
 // 注: リサイクルはページ分割しないため split offset は考慮不要（page 座標 = source 座標）。
 export function measureNewLayerUiAnchorsForSave() {
   const pages = getPages();
@@ -2950,6 +2960,15 @@ export function measureNewLayerUiAnchorsForSave() {
     const anchors = [];
     for (const nl of getNewLayersForPsd(page.path)) {
       if (nl.reuseTightThick !== true) continue;
+      const hasSrcCenter = Number.isFinite(nl.reuseSrcCx) && Number.isFinite(nl.reuseSrcCy);
+      const hasOrigin = Number.isFinite(nl.reuseOrigX) && Number.isFinite(nl.reuseOrigY);
+      const moved = hasOrigin
+        && (Math.abs((nl.x ?? 0) - nl.reuseOrigX) > 0.5 || Math.abs((nl.y ?? 0) - nl.reuseOrigY) > 0.5);
+      if (hasSrcCenter && hasOrigin && !moved) {
+        // 未移動: Photoshop 元中心を使う（uiAnchor クリア）。
+        anchors.push({ tempId: nl.tempId, cx: null, cy: null });
+        continue;
+      }
       const c = computeNewLayerUiGlyphCenter(page, nl);
       if (c) anchors.push({ tempId: nl.tempId, cx: c.cx, cy: c.cy });
     }

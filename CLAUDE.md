@@ -1,5 +1,34 @@
 # PsDesign
 
+## 2026-06-19 変更メモ: v2.6.4 リリース（リサイクル保存位置の太字下ズレ根治 / 中黒「・」ルビの植字位置調整）
+
+v2.6.4 では、リサイクル写植で報告された 2 件を修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.4` に更新済み。
+
+### A. リサイクル保存時、太字フォントが下にズレる問題の根治（基準位置の直接再現）
+
+- 症状: リサイクルで写植したテキストを「まったく修正せず」に再度 PSD 保存すると、一部（太字傾向）のフォントで位置が下へずれた PSD が生成されることがあった。
+- 真因: 新規レイヤーの位置補正 [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyNewLayerPositionAnchor` は「再生成テキストの実 bounds 中心」を元中心 (`reuseSrcCx/Cy`) へ合わせる中心基準だが、Photoshop は太字/per-char 編集直後の `bounds` 計算が落ち着かず、`translate(0,0)` を挟んでも特定フォントで未確定 bbox を掴み、中心が高めに出て `_fixDy` が過大 → 下方向に寄っていた。フロントの uiAnchor 中心は align 時に `reuseSrcCx/Cy` と同値化されるため、アンカー値を変えても効かなかった。
+- 修正: **bounds に依存しない「元レイヤーの textItem.position（基準位置）」を抽出時に読み、未ドラッグのリサイクルレイヤーは保存時にこの位置を直接設定**する方式に変更（bounds 中心合わせを完全に回避＝太字でも下ズレしない）。
+  - [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) 一括読み取り（`READ_TEXT_BATCH_BODY`）: 各テキストレイヤーの `textItem.position` を `posX/posY`(px) として出力。
+  - [src/services/reuse.js](src/services/reuse.js): `it.posX/posY` を `reuseSrcPosX/Y` として保存（Photoshop 主経路のみ。ag-psd フォールバックは従来の中心合わせ）。
+  - [src/state.js](src/state.js): 配置確定後の位置を `reuseOrigX/Y` に記録（`markReuseLayerOrigins`）。`setNewLayerUiAnchors` を「cx/cy が null ならクリア」対応にし、未移動判定で `uiAnchorCx/Cy` をクリアして保存側のフォールバックゲートとする。
+  - [src/canvas-tools.js](src/canvas-tools.js) `measureNewLayerUiAnchorsForSave`: 未移動（`nl.x/y ≈ reuseOrigX/Y`）のリサイクルレイヤーは uiAnchor をクリア、ドラッグ済みは従来どおり UI 実測中心を使う。
+  - [src-tauri/src/lib.rs](src-tauri/src/lib.rs) `NewLayer` に `reuse_src_pos_x/y`（serde `reuseSrcPosX/Y`）追加。[src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) は payload 2 経路（一時 JSON `__newLayer` / Rust リテラル emit）の両方で伝達。
+  - `applyNewLayerPositionAnchor`: **uiAnchor 無し（未ドラッグ）かつ `reuseSrcPosX/Y` あり → bounds を読まず `layerRef.textItem.position` を元位置に直接設定して return**。ドラッグ済み（uiAnchor あり）は従来の中心合わせ。
+- 注意: 反映には Rust 再ビルドと、**新仕様で再抽出（リサイクルを再実行）した PSD** が必要（`posX/posY` は抽出時に読むため）。
+
+### B. 中黒「・」ルビの植字（PSD 保存）位置を通常ルビ寄りに調整
+
+- 中黒（・）ルビが専用オフセット（`NAKAGURO_PARENT_MARK_OFFSET_EM` 0.72〜0.84em）で通常ルビ（実効 0.6em 前後）より親文字から離れて生成されていた。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `createRubyLayer`: `positionAsParentMark = parent-mark かつ 中黒でない` を新設し、**中黒は parent-mark 扱いをやめて通常ルビと同じ位置経路**で配置。さらに `NAKAGURO_EXTRA_TO_PARENT_EM`(0.1em) ぶん親側へ寄せる。濁点（゛）など他の特殊ルビは従来どおり。
+- **UI（プレビュー / CSS）は元の中黒位置のまま据え置き**（ユーザー要望により調整対象は植字＝保存側のみ）。styles.css は最終的に無変更。
+
+### 検証
+
+- `npm run check` 成功（`check:encoding` / `check:security` / `lint` / `build`）。
+- `cargo check --manifest-path src-tauri/Cargo.toml` 成功。
+- 実機（リサイクル保存の太字下ズレ解消 / 中黒位置）はユーザー確認済み。
+
 ## 2026-06-18 変更メモ: v2.6.3 リリース（リロード警告ダイアログ / 句読点→スペースのチェックボックス化 / Ctrl+Z 複数手戻り修正 / 途中見開きPSDのページ流し込みずれ修正）
 
 v2.6.3 では、誤操作によるリロード（=リセット）防止の警告ダイアログ、写植用ファイル選択の句読点置換 UI 改善に加え、v2.6.2 リリース後の作業ブランチに溜まっていた 2 件の不具合修正（履歴 transient リーク / 途中見開きPSDのページ対応）をまとめてリリースした。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.3` に更新済み。

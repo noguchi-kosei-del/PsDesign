@@ -27,6 +27,7 @@ import {
   setTxtDirty,
   setTxtFilePath,
   setTxtSource,
+  markReuseLayerOrigins,
 } from "../state.js";
 import { hideProgress, showProgress, toast, updateProgress } from "../ui-feedback.js";
 import { completeProgressFlowStep, updateProgressFlow, withProgressFlow } from "../progress-flow.js";
@@ -388,6 +389,12 @@ async function collectReuseDraftsForPage(
         const cx = (it.left + it.right) / 2;
         const cy = (it.top + it.bottom) / 2;
         updates = { reuseSrcCx: cx, reuseSrcCy: cy, reuseTightThick: true };
+        // 元レイヤーの textItem.position（基準位置）。未ドラッグ保存時に bounds 中心合わせを使わず
+        // これを直接設定して厳密再現する（太字で bounds が落ち着かず下にぶれる問題の根治）。
+        if (Number.isFinite(it.posX) && Number.isFinite(it.posY)) {
+          updates.reuseSrcPosX = it.posX;
+          updates.reuseSrcPosY = it.posY;
+        }
         // 反映側で layerRectForNew(page, created) を使い中心合わせ + フォントロード後の厳密補正対象。
         centerFromRect = { cx, cy };
         alignTarget = { cx, cy, font: layerFont || null };
@@ -731,6 +738,9 @@ export async function loadPsdFilesForReuse(files, {
     } catch (e) {
       console.warn("[reuse] center align failed:", e);
     }
+    // 配置・中心補正が確定した時点の位置を「元の配置位置」として記録する。
+    // 保存時にこの位置から動いていなければ Photoshop 元中心 (reuseSrcCx/Cy) で厳密再現する。
+    markReuseLayerOrigins();
   }
   if (progressFlowSteps) {
     completeProgressFlowStep(placeFlow, { detail: "配置調整 完了" });

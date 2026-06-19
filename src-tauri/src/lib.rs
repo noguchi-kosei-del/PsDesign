@@ -244,6 +244,14 @@ pub struct NewLayer {
     pub ui_anchor_cx: Option<f64>,
     #[serde(rename = "uiAnchorCy", default)]
     pub ui_anchor_cy: Option<f64>,
+    // 【リサイクル・基準位置の直接再現】抽出時に Photoshop から読んだ元レイヤーの
+    // textItem.position（テキスト原点 / 基準ベースライン, PSD px）。未ドラッグのリサイクル
+    // レイヤーは保存時にこの位置をそのまま設定し、bounds 中心合わせ（太字で bounds が
+    // 落ち着かず下にぶれる問題の原因）を回避して元位置を厳密再現する。
+    #[serde(rename = "reuseSrcPosX", default)]
+    pub reuse_src_pos_x: Option<f64>,
+    #[serde(rename = "reuseSrcPosY", default)]
+    pub reuse_src_pos_y: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
