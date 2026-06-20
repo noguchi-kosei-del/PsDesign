@@ -1017,6 +1017,11 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
     app.emit("ai_install:start", target.to_string_lossy().to_string())
         .ok();
 
+    // 共有 OCR エンジンの置き場（取引先名入り）はソースに直書きせず、外部参照 enc から
+    // 実行時解決して .ps1 へ渡す（content.ocrRoot）。未解決（未シール/G:未接続）は渡さず、
+    // .ps1 側は共有復元をスキップしてオンライン取得へフォールバックする。
+    let shared_ocr_root = crate::addresses::addr("content.ocrRoot");
+
     let mut cmd = Command::new("powershell.exe");
     cmd.arg("-NoProfile")
         .arg("-ExecutionPolicy")
@@ -1024,7 +1029,11 @@ pub async fn install_ai_models(app: AppHandle) -> Result<(), String> {
         .arg("-File")
         .arg(&script)
         .arg("-RuntimeDir")
-        .arg(&target)
+        .arg(&target);
+    if !shared_ocr_root.is_empty() {
+        cmd.arg("-SharedOcrRoot").arg(&shared_ocr_root);
+    }
+    cmd
         // Python サブプロセスのstdout buffering / cp932 / Pipe to stdout was broken
         // 対策。PowerShell から呼ばれる pip / python -c が安定する。
         .env("PYTHONUNBUFFERED", "1")

@@ -8,6 +8,7 @@
 
 import { setCurrentPageIndex, setPdfPageIndex } from "./state.js";
 import { notifyDialog } from "./ui-feedback.js";
+import { getBusinessAddress } from "./addresses.js";
 
 const $ = (id) => document.getElementById(id);
 
@@ -42,8 +43,15 @@ function jumpToProofreadPage(pageNumber) {
   setPdfPageIndex(pageIndex);
 }
 
-const PROOFREAD_BASE_PATH =
-  "G:\\共有ドライブ\\CLLENN\\編集部フォルダ\\編集企画部\\写植・校正用テキストログ";
+// 校正 JSON の読み込み先ベースパスは外部参照 enc から実行時取得（直書きしない）。
+// MojiQ の TXT_FOLDER_BASE_PATH と同じ中立キー content.textLogBase。
+let PROOFREAD_BASE_PATH = "";
+async function ensureProofreadBasePath() {
+  if (!PROOFREAD_BASE_PATH) {
+    PROOFREAD_BASE_PATH = await getBusinessAddress("content.textLogBase");
+  }
+  return PROOFREAD_BASE_PATH;
+}
 
 // カテゴリ番号に対応する色（Comic-Bridge と同じ 10 色パレット）
 const CATEGORY_COLORS = [
@@ -97,11 +105,12 @@ function decodeBytes(bytes) {
 // アプリ内フォルダブラウザを開く。
 async function openBrowser() {
   viewMode = "browser";
-  browserCurrentPath = PROOFREAD_BASE_PATH;
+  const base = await ensureProofreadBasePath();
+  browserCurrentPath = base;
   browserNavStack = [];
   browserForwardStack = [];
   renderPanel();
-  await loadBrowserFolder(PROOFREAD_BASE_PATH);
+  await loadBrowserFolder(base);
 }
 
 // 指定パスを表示するだけ。スタック管理は呼出側で行う方針（呼び出し元によって

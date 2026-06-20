@@ -2,9 +2,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { getFonts } from "./state.js";
 import { ensureFontLoaded } from "./font-loader.js";
 import { toast } from "./ui-feedback.js";
+import { getBusinessAddress } from "./addresses.js";
 
 const STORAGE_SAMPLE = "opus_font_book_sample_text";
-const FONT_BOOK_ROOT_PATH = "G:/共有ドライブ/CLLENN/編集部フォルダ/編集企画部/写植・校正用テキストログ";
+// フォント帳のルート（中立キー content.textLogBase）。実パスはソース直書きせず外部参照 enc から
+// 実行時取得する。使用前に ensureFontBookRoot() を await（または起動時 prime）すること。
+let FONT_BOOK_ROOT_PATH = "";
+async function ensureFontBookRoot() {
+  if (!FONT_BOOK_ROOT_PATH) {
+    // 校正テキストログと同じ共有ドライブ。font-book は元実装でスラッシュ区切りを使うため正規化。
+    const base = await getBusinessAddress("content.textLogBase");
+    FONT_BOOK_ROOT_PATH = base ? base.replace(/\\/g, "/") : "";
+  }
+  return FONT_BOOK_ROOT_PATH;
+}
 const FONT_BOOK_DIR_NAME = "フォント帳";
 const DEFAULT_SAMPLE_TEXT = "永字八法 あいうえお ABC 123";
 const FOLDER_ICON_SVG = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>';
@@ -294,7 +305,8 @@ async function fontBookJsonPathInFolder(path) {
   return "";
 }
 
-async function loadFontBookBrowserFolder(path = FONT_BOOK_ROOT_PATH) {
+async function loadFontBookBrowserFolder(path) {
+  await ensureFontBookRoot();
   const dir = cleanPath(path || FONT_BOOK_ROOT_PATH);
   fontBookDebug("browser-folder-load-start", {
     requestedPath: path,
@@ -347,6 +359,7 @@ async function loadFontBookBrowserFolder(path = FONT_BOOK_ROOT_PATH) {
 async function loadRootFolders() {
   state.navigatorLoading = true;
   if (state.selectModalOpen) renderFontBookSelectModal();
+  await ensureFontBookRoot();
   try {
     const dirs = await listDirectories(FONT_BOOK_ROOT_PATH);
     state.rootFolders = dirs.map((entry) => ({
@@ -1233,6 +1246,8 @@ function loadInitialFontBook() {
 export function initFontBookPanel() {
   if (initialized) return;
   initialized = true;
+  // ルート（外部参照 enc）を起動時に先読みしておく（描画時の表示・比較で参照されるため）。
+  ensureFontBookRoot().catch(() => {});
   try {
     const sample = localStorage.getItem(STORAGE_SAMPLE);
     if (sample) state.sampleText = sample;

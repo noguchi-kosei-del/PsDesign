@@ -1,6 +1,6 @@
 [package]
 name = "opus"
-version = "2.6.5"
+version = "2.6.6"
 description = "PSD spread editor with Photoshop apply-back, text extraction, and auto-placement"
 edition = "2021"
 rust-version = "1.77"
@@ -28,6 +28,9 @@ pdfium-render = "0.8"
 dirs = "5"
 base64 = "0.22"
 getrandom = "0.2"
+# 参照アドレス割符復号（COMIC-Bridge と共用の addresses.enc を AES-256-GCM で復号）
+aes-gcm = "0.10"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

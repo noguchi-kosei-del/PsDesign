@@ -1,7 +1,8 @@
 // セキュリティ回帰チェック（Phase 2 最終仕様 + Phase 3-lite）。
 //
 // DevTools での実動作確認を置き換えるものではなく、危険な実装へ「先祖返り」した時に
-// ビルド前段で気づくための静的チェック。セキュリティ修正手順.md の 21 項目に対応する。
+// ビルド前段で気づくための静的チェック。セキュリティ修正手順.md の 21 項目 ＋
+// 固有アドレス外部参照化の回帰ガード（#22 直書き禁止 / #23 アクセサ配線）に対応する。
 //
 //   npm run check:security
 //
@@ -24,6 +25,13 @@ function read(rel) {
 const pathAccess = read("src-tauri/src/path_access.rs");
 const libRs = read("src-tauri/src/lib.rs");
 const filePicker = read("src/file-picker.js");
+// 固有アドレス外部参照化の回帰ガード対象（社内パスを直書きしていないか）。
+const addressesRs = read("src-tauri/src/addresses.rs");
+const proofreadJs = read("src/proofread.js");
+const stylePaletteJs = read("src/style-palette.js");
+const fontBookJs = read("src/font-book.js");
+const addressesJs = read("src/addresses.js");
+const installAiPs1 = read("src-tauri/scripts/install-ai-models.ps1");
 
 // browse_directory_entries / browse_path_info の関数本体を切り出す（構造判定用）。
 function fnBody(src, name) {
@@ -186,6 +194,21 @@ const checks = [
     "browse_path_info returns candidate token instead of real path",
     /token:\s*String/.test(browsePathInfoStruct) &&
       !/\bpath:\s*String/.test(browsePathInfoStruct),
+  ],
+  // 22: 固有アドレス（社内共有ドライブの実パス）をソースに直書きしない。
+  //     実パスは COMIC-Bridge 共用 addresses.enc（割符）から実行時復号して参照する。
+  [
+    "no hardcoded CLLENN/social-drive path in source (固有アドレスは addresses.enc 外部参照)",
+    ![pathAccess, addressesRs, proofreadJs, stylePaletteJs, fontBookJs, addressesJs, installAiPs1].some(
+      (src) => /CLLENN/.test(src) || /共有ドライブ[\\/]/.test(src)
+    ),
+  ],
+  // 23: 外部参照アクセサ（addr / getBusinessAddress）が実装・配線されている。
+  [
+    "external address accessor (addr / getBusinessAddress) is wired",
+    /pub fn addr\(/.test(addressesRs) &&
+      /crate::addresses::addr\(/.test(pathAccess) &&
+      /export async function getBusinessAddress\(/.test(addressesJs),
   ],
 ];
 

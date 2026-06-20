@@ -1,5 +1,30 @@
 # PsDesign
 
+## 2026-06-21 変更メモ: v2.6.6 リリース（固有アドレスの外部参照化 — CB 共用 addresses.enc / 割符 — セキュリティ強化横展開）
+
+社内共有ドライブの実パス（取引先/部署名入り）を **ソース・exe から平文除去** し、COMIC-Bridge と共用の暗号化アドレス帳 `addresses.enc`（割符 AES-256-GCM）を **実行時復号** して参照する方式へ移行（ProGen/Tachimi/MojiQ/KENBAN と同方針の横展開）。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.6` に更新済み。`npm run check`（`check:encoding` 76 files / `check:security` **23**（#22 直書き禁止 / #23 アクセサ配線を追加）/ `lint` / `build`）＋ `cargo check` 緑。**実機確認済み**（OCRインストール時に `content.ocrRoot` が enc から解決され `Shared OCR source: G:\…\OCR` 表示／校正パネル・スタイルパレット・フォント帳の共有ドライブ参照を確認）。OCR/PDF読み取りの新キー（`content.ocrRoot` / `content.pdfReadRoot`）はユーザーが CB master へ追加・再シール済み（実復号で確認）。リリースはタグ `v2.6.6` push により CI（署名・`latest.json`・GitHub Release）。
+
+### 仕組み（他4アプリと同一）
+- **割符復号**: [src-tauri/src/crypto.rs](src-tauri/src/crypto.rs)（CB から移植・復号専用）＋ [src-tauri/src/addresses.rs](src-tauri/src/addresses.rs)（新設）。参照アドレスフォルダの `addresses.enc` ＋ `address-seal.key`（割符B）を、exe 内蔵 `APP_SECRET`（割符A・CB と完全一致）と合わせ `K=SHA256(A‖B)` で AES-256-GCM 復号。中立キーを `addresses::addr(key)` で引く（`OnceLock<HashMap>` キャッシュ）。
+- **内蔵シード**: `addresses.rs` の `SEED_B64` に参照アドレス帳の場所だけを Base64 内蔵。解決順＝環境変数 `OPUS_ADDRESS_REF` → ローカルポインタ `%LOCALAPPDATA%\OPUS\address-ref-location.json`（任意・上書き用）→ 内蔵シード（既定）。**未解決（G:未接続・未シール）は空文字＝従来の「G:未接続＝no-op」と同じ安全側挙動。**
+  - ⚠️ Base64 は符号化であって暗号化ではない（内蔵シード＝アドレス帳の場所は復元可能）。最深部の実アドレスのみ enc 暗号化で保護する二段構え。
+- `src-tauri/Cargo.toml` に `aes-gcm` / `sha2` を追加（`base64` は既存）。
+
+### 配線（UI/JS → Rust の流れに沿う）
+- **Rust 公開コマンド** [src-tauri/src/lib.rs](src-tauri/src/lib.rs) `get_business_address(key)`: フロントへ業務フォルダ実パスを返す。**ホワイトリスト**（`content.jsonFolder` / `content.textLogBase` / `content.textLogFolder` / `content.ocrRoot` / `content.pdfReadRoot`）以外は空文字（秘匿キー＝updater/pubkey/org 等は出さない）。`generate_handler!` に登録。
+- **バックエンドのシード** [src-tauri/src/path_access.rs](src-tauri/src/path_access.rs) `business_folder_seeds()`: 直書き 4 パス → `crate::addresses::addr(key)` ループ（空はスキップ）。キー＝`content.textLogBase`（校正JSON）/ `content.jsonFolder`（スタイルパレットJSON）/ `content.ocrRoot`（OCR）/ `content.pdfReadRoot`（PDF読み取り）。
+- **フロント共通ヘルパー** [src/addresses.js](src/addresses.js)（新設）`getBusinessAddress(key)`: `get_business_address` を invoke しキー単位でキャッシュ。
+- **JS 直書き撤去（const → let + ensure）**:
+  - [src/proofread.js](src/proofread.js) `PROOFREAD_BASE_PATH` → `ensureProofreadBasePath()`（`content.textLogBase`）を `openBrowser()` で await。
+  - [src/style-palette.js](src/style-palette.js) `STYLE_PALETTE_ROOT_PATH` / `_LABEL_TEMPLATE_PATH` → `ensureStylePaletteRoots()`（`content.jsonFolder`）を `scanTemplates()` / `openBrowser()` で await。
+  - [src/font-book.js](src/font-book.js) `FONT_BOOK_ROOT_PATH` → `ensureFontBookRoot()`（`content.textLogBase`・元実装の `/` 区切りへ正規化）を `loadFontBookBrowserFolder()` / `loadRootFolders()` で await ＋ `initFontBookPanel()` で先読み prime。
+- **回帰ガード** [scripts/check-security-regression.mjs](scripts/check-security-regression.mjs): #22 = `CLLENN`/`共有ドライブ\` を path_access.rs・addresses.rs・proofread/style-palette/font-book/addresses.js に直書きしない、#23 = `addr`/`getBusinessAddress` が配線されている。
+
+### キー対応（復号した CB master の中立キー）
+- 写植・校正用テキストログ = `content.textLogBase`（既存）/ JSONフォルダ = `content.jsonFolder`（既存）。**この 2 つは CB enc に既存のため即解決（CB 変更不要）。**
+- ⚠️ **OCR（`ソニーからのデータ受領\…\OCR`）= `content.ocrRoot` / PDF読み取り（`CLLENN\…\編集企画_AT業務推進\…\PDF読み取り`）= `content.pdfReadRoot` は CB enc に未登録。** ユーザーがアドレス編集ソフトで CB master へ 2 キー追加 → 再シールするまで空文字解決＝**OCR / PDF読み取りフォルダは許可リストに自動シードされない**（再シール後に復帰）。OPUS の updater は GitHub CI のため `updater.localDir` は不使用。
+- **install-ai-models.ps1 も対応済み**: [src-tauri/scripts/install-ai-models.ps1](src-tauri/scripts/install-ai-models.ps1) の `$SharedOcrRoot` 既定リテラル（`ソニー…OCR`）を撤去し `$env:OPUS_OCR_ROOT` 既定へ変更（取引先名を完全除去）。アプリ起動時は [src-tauri/src/ocr.rs](src-tauri/src/ocr.rs) `install_ai_models` が `crate::addresses::addr("content.ocrRoot")` を解決し、非空なら `-SharedOcrRoot` 引数で渡す。未解決/手動実行で空のときは `Restore-SharedOcr*` が `IsNullOrWhiteSpace` で早期スキップ → 従来どおりオンライン取得へフォールバック（`Test-Path ""` の Stop 例外も回避）。`check:security` #22 のスキャン対象に `.ps1` を追加（再直書きの回帰防止）。
+
 ## 2026-06-20 変更メモ: v2.6.5 リリース（リサイクル写植の行間消失 / 縦位置ズレ 根治 ＋ フチ付きリンク群/フォルダのグループ再現）
 
 リサイクル写植（既存 PSD のテキストを抽出して再写植）の「実物再現」を 3 点強化した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.5` に更新済み。コード内コメントの `v2.6.5 / v2.6.6 / v2.6.7` は本作業の反復マーカー。検証は `npm run check`（`check:encoding` 73 files / `check:security` 21 / `lint` / `build`）＋ `cargo check` 緑。実機で A（行間）/ B（位置）/ C（グループ再現）をユーザー確認済み。

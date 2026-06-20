@@ -1,4 +1,6 @@
+mod addresses;
 mod alignment;
+mod crypto;
 mod fonts;
 mod jsx_gen;
 mod kenban;
@@ -1796,6 +1798,21 @@ async fn desktop_dir() -> Result<String, String> {
     }
 }
 
+/// フロントへ業務フォルダの実パスを渡す（固有アドレスはソース直書きせず外部参照 enc から実行時解決）。
+/// 公開してよい業務フォルダのキーのみ許可（秘匿キー＝updater/pubkey/org 等は返さない）。
+/// 未解決（G:未接続・未シール等）は空文字を返す＝従来の「G:未接続」と同じ安全側挙動。
+#[tauri::command]
+fn get_business_address(key: String) -> String {
+    match key.as_str() {
+        "content.jsonFolder"
+        | "content.textLogBase"
+        | "content.textLogFolder"
+        | "content.ocrRoot"
+        | "content.pdfReadRoot" => addresses::addr(&key),
+        _ => String::new(),
+    }
+}
+
 fn dialog_file_path_to_string(path: tauri_plugin_dialog::FilePath) -> Result<String, String> {
     path.into_path()
         .map(|p| p.to_string_lossy().to_string())
@@ -2456,6 +2473,7 @@ pub fn run() {
             list_drives,
             home_dir,
             desktop_dir,
+            get_business_address,
             get_system_memory_status,
             get_photoshop_scratch_free_space,
             ocr::check_ai_models,

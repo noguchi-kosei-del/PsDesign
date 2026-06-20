@@ -33,13 +33,22 @@ import {
   getLastInplaceSelection,
   refreshAllOverlays,
 } from "./canvas-tools.js";
+import { getBusinessAddress } from "./addresses.js";
 
-// 校正パネルと同じ共有ドライブベース。stylepallet オリジナルの ROOT_PATH を踏襲。
-const STYLE_PALETTE_ROOT_PATH =
-  "G:\\共有ドライブ\\CLLENN\\編集部フォルダ\\編集企画部\\編集企画_C班(AT業務推進)\\DTP制作部\\JSONフォルダ";
-// レーベル別テンプレ。直下の全 .json ファイルを取り込む。
-const STYLE_PALETTE_LABEL_TEMPLATE_PATH =
-  STYLE_PALETTE_ROOT_PATH + "\\_レーベルテンプレ";
+// 校正パネルと同じ共有ドライブベース（中立キー content.jsonFolder）。実パスはソース直書きせず、
+// 外部参照 enc から実行時取得する。使用前に必ず ensureStylePaletteRoots() を await すること。
+let STYLE_PALETTE_ROOT_PATH = "";
+// レーベル別テンプレ。直下の全 .json ファイルを取り込む（ROOT 直下の \_レーベルテンプレ\）。
+let STYLE_PALETTE_LABEL_TEMPLATE_PATH = "";
+async function ensureStylePaletteRoots() {
+  if (!STYLE_PALETTE_ROOT_PATH) {
+    STYLE_PALETTE_ROOT_PATH = await getBusinessAddress("content.jsonFolder");
+    STYLE_PALETTE_LABEL_TEMPLATE_PATH = STYLE_PALETTE_ROOT_PATH
+      ? STYLE_PALETTE_ROOT_PATH + "\\_レーベルテンプレ"
+      : "";
+  }
+  return STYLE_PALETTE_ROOT_PATH;
+}
 
 // 旧バージョンの localStorage 残骸を一掃するために key 文字列だけ保持。
 // 新仕様では永続化なし（起動時は必ず「デフォルト」）。
@@ -437,10 +446,12 @@ function loadDefaults() {
 // どちらの取得失敗もデフォルトプリセットの動作を阻害しない（warn のみ）。
 async function scanTemplates() {
   const collator = new Intl.Collator("ja", { numeric: true, sensitivity: "base" });
+  await ensureStylePaletteRoots();
 
   // メインフォルダ: ファイル名に「テンプレ」を含む JSON のみ採用
   let mainEntries = [];
   try {
+    if (!STYLE_PALETTE_ROOT_PATH) throw new Error("参照アドレス未解決(JSONフォルダ)");
     const entries = await invoke("list_directory_entries", { path: STYLE_PALETTE_ROOT_PATH });
     mainEntries = (entries || [])
       .filter((e) => e && e.isFile && /テンプレ.*\.json$/i.test(e.name))
@@ -572,6 +583,7 @@ function showLoadError(message) {
 async function openBrowser() {
   const modal = $("style-palette-browser-modal");
   if (!modal) return;
+  await ensureStylePaletteRoots();
   // 直前の場所があればそこから開く、無ければルート。
   const startPath = lastBrowserJsonDir || STYLE_PALETTE_ROOT_PATH;
   browserCurrentPath = startPath;

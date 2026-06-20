@@ -214,19 +214,25 @@ pub fn business_folder_seeds() -> Vec<PathBuf> {
     if let Some(home) = dirs::home_dir() {
         out.push(home.join("Desktop").join("Script_Output"));
     }
-    // 共有ドライブの業務サブフォルダ（校正 JSON / スタイルパレット JSON / OCR）。
-    out.push(PathBuf::from(
-        r"G:\共有ドライブ\CLLENN\編集部フォルダ\編集企画部\写植・校正用テキストログ",
-    ));
-    out.push(PathBuf::from(
-        r"G:\共有ドライブ\CLLENN\編集部フォルダ\編集企画部\編集企画_C班(AT業務推進)\DTP制作部\JSONフォルダ",
-    ));
-    out.push(PathBuf::from(
-        r"G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\OCR",
-    ));
-    out.push(PathBuf::from(
-        r"G:\共有ドライブ\CLLENN\編集部フォルダ\編集企画部\編集企画_AT業務推進\DTP制作部\PDF読み取り",
-    ));
+    // 共有ドライブの業務サブフォルダ（校正 JSON / スタイルパレット JSON / OCR / PDF読み取り）。
+    // 実パスはソースに直書きせず、COMIC-Bridge 共用の addresses.enc（割符 AES-256-GCM）を
+    // 実行時復号して解決する（crate::addresses）。未解決（G:未接続・未シール等）は空文字＝
+    // register 時にスキップされるため安全側。
+    //   content.textLogBase   = 写植・校正用テキストログ（校正 JSON）
+    //   content.jsonFolder    = JSONフォルダ（スタイルパレット JSON）
+    //   content.ocrRoot       = OCR（※CB master へ要追加・再シール。未登録時は空＝未シード）
+    //   content.pdfReadRoot   = PDF読み取り（※CB master へ要追加・再シール。同上）
+    for key in [
+        "content.textLogBase",
+        "content.jsonFolder",
+        "content.ocrRoot",
+        "content.pdfReadRoot",
+    ] {
+        let p = crate::addresses::addr(key);
+        if !p.is_empty() {
+            out.push(PathBuf::from(p));
+        }
+    }
     out
 }
 

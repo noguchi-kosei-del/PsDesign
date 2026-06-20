@@ -12,11 +12,16 @@
 #     pwsh install-ai-models.ps1 -RuntimeDir "C:\Users\<user>\AppData\Local\PsDesign\ai-runtime"
 #
 # Re-run is idempotent: existing runtime is reused unless -Force is passed.
+#
+# 共有 OCR エンジンの置き場（社内共有ドライブ・取引先名入り）はソースに直書きしない。
+# アプリ起動時は ocr.rs が外部参照 enc（CB 共用 addresses.enc / content.ocrRoot）から解決した値を
+# -SharedOcrRoot で渡す。手動実行時は環境変数 OPUS_OCR_ROOT で指定できる。
+# 未指定（空）なら共有復元はスキップし、従来どおりオンライン取得へフォールバックする。
 
 param(
     [switch]$Force,
     [string]$RuntimeDir,
-    [string]$SharedOcrRoot = "G:\共有ドライブ\ソニーからのデータ受領\編集企画_AT業務推進\DTP制作部\OCR"
+    [string]$SharedOcrRoot = $env:OPUS_OCR_ROOT
 )
 
 $ErrorActionPreference = "Stop"
@@ -48,7 +53,11 @@ function Write-Step($message) {
 }
 
 Write-Step "Target runtime directory: $RuntimeDir"
-Write-Step "Shared OCR source: $SharedOcrRoot"
+if ([string]::IsNullOrWhiteSpace($SharedOcrRoot)) {
+    Write-Step "Shared OCR source: (未指定 — オンライン取得にフォールバック)"
+} else {
+    Write-Step "Shared OCR source: $SharedOcrRoot"
+}
 
 function Copy-DirectoryFromShared {
     param(
@@ -82,7 +91,8 @@ function Copy-FileFromShared {
 }
 
 function Restore-SharedOcrPackages {
-    if (-not (Test-Path $SharedOcrRoot)) {
+    # 未指定(空)は Test-Path "" が Stop で例外になるため先に弾く＝共有復元をスキップ。
+    if ([string]::IsNullOrWhiteSpace($SharedOcrRoot) -or -not (Test-Path $SharedOcrRoot)) {
         Write-Host "Shared OCR source not found; package install will use pip sources." -ForegroundColor Yellow
         return
     }
@@ -104,7 +114,8 @@ function Restore-SharedOcrPackages {
 }
 
 function Restore-SharedOcrModelCache {
-    if (-not (Test-Path $SharedOcrRoot)) {
+    # 未指定(空)は Test-Path "" が Stop で例外になるため先に弾く＝オンライン取得へフォールバック。
+    if ([string]::IsNullOrWhiteSpace($SharedOcrRoot) -or -not (Test-Path $SharedOcrRoot)) {
         Write-Host "Shared OCR source not found; model cache will use online download if needed." -ForegroundColor Yellow
         return $false
     }
