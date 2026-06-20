@@ -38,6 +38,8 @@ import {
   loadPsdForReuse,
   buildReusePageFromPsData,
   mergeReuseStrokeHintsFromAgPsd,
+  mergeReuseLeadingFromAgPsd,
+  mergeReuseBoundsFromAgPsd,
 } from "../psd-loader.js";
 import { refreshMemoryStatus } from "../memory-mode.js";
 import { buildReferenceDocFromCanvases } from "../pdf-loader.js";
@@ -213,15 +215,29 @@ async function analyzeReuseRegions(bgImagePath, psItems, dpi) {
 // 1 ページぶんの元テキストレイヤーを「新規レイヤー」として同座標に配置する。
 // Photoshop が読んだ実テキスト (reusePsTextItems) があればそれを優先（実内容/フォント/
 // サイズ/座標が正確）。無ければ ag-psd 抽出 (reuseTextLayers) にフォールバック。
-// 植字後、通常写植と同じ周辺解析で「白フチ自動付与」「中丸ゴシック自動切替」を反映する。
+// 【実物再現】周辺解析による「白フチ自動付与」「中丸ゴシック自動切替」は行わず、元 PSD の
+// 実フォント・実フチ（境界線効果）をそのまま再現する。
 // fontSizeMode:
-//   "reproduce" (既定) … 元レイヤーのフォント・サイズを再現する。
-//   "select"          … 指定フォント・サイズをベースにしつつ、周辺解析の中丸判定と
-//                       PSD/OCR 相当の検出サイズ・色・白フチを優先して反映する。
+//   "reproduce" (既定) … 元レイヤーのフォント・サイズ・フチをそのまま再現する。
+//   "select"          … フォント・サイズは指定値を使う（フチは元レイヤーの実フチを再現）。
 function roundReuseReproduceSizePt(sizePt) {
   const n = Number(sizePt);
   if (!Number.isFinite(n) || n <= 0) return null;
   return Math.round(n * 10 + 1e-8) / 10;
+}
+
+// transform 行列 [xx,xy,yx,yy,tx,ty] から回転角（度）を逆算する。回転 θ で xx=s·cosθ / xy=s·sinθ
+// となるため angle = atan2(xy, xx)。長体/平体は textItem 側で別管理のため行列はほぼ回転のみ。
+// 微小な数値誤差は 0 に丸める（保存側は rotation !== 0 のときだけ layer.rotate を呼ぶ）。
+function rotationFromTransform(transform) {
+  if (!Array.isArray(transform) || transform.length < 2) return 0;
+  const xx = Number(transform[0]);
+  const xy = Number(transform[1]);
+  if (!Number.isFinite(xx) || !Number.isFinite(xy)) return 0;
+  let deg = (Math.atan2(xy, xx) * 180) / Math.PI;
+  if (!Number.isFinite(deg)) return 0;
+  deg = Math.round(deg * 100) / 100;
+  return Math.abs(deg) < 0.01 ? 0 : deg;
 }
 
 function resolveReuseFont({ unify, defaultFont, autoFont, autoFontSwitched, sourceFont }) {
@@ -307,9 +323,8 @@ async function collectReuseDraftsForPage(
   const drafts = [];
   const psItems = Array.isArray(page?.reusePsTextItems) ? page.reusePsTextItems : null;
   if (psItems && psItems.length > 0) {
-    // 周辺解析（テキスト非表示の背景画像で白率 / ウニを計測）。
-    // 「写植見本を再現」でも、元 PSD からフチ情報が取れない場合は白フチ自動付与を復帰させる。
-    const metricsList = await analyzeReuseRegions(page.reuseBgImagePath, psItems, page.dpi);
+    // 【リサイクル＝実物再現】周辺解析による「自動白フチ付与」「中丸ゴシック自動切替」は行わない。
+    // 元 PSD の実フォント・実フチ（境界線効果 frameFX）をそのまま再現する。
     for (let i = 0; i < psItems.length; i++) {
       const it = psItems[i];
       if (!it) continue;
@@ -337,23 +352,39 @@ async function collectReuseDraftsForPage(
         );
         if (Number.isFinite(boundsSize) && boundsSize > 0) sizePt = boundsSize;
       }
-      const sourceOrAutoStroke = resolveReuseStrokeFromSourceOrMetrics(
-        it.strokeColor,
-        it.strokeWidthPx,
-        metricsList ? metricsList[i] : null,
-        it.font || null,
-      );
-      const auto = unify
-        ? computeAutoStyleFromMetrics(metricsList ? metricsList[i] : null, it.font || null)
-        : sourceOrAutoStroke;
-      const layerFont = resolveReuseFont({
-        unify,
-        defaultFont,
-        autoFont: unify ? auto.fontPostScriptName : auto.autoFontPostScriptName,
-        autoFontSwitched: unify ? auto.autoFontSwitched : false,
-        sourceFont: it.font || null,
-      });
+      // フォント: 自動中丸ゴシック切替は使わない。「写植見本を再現」は元レイヤーのフォント、
+      // 「フォント・サイズを指定」は指定フォントをそのまま使う。
+      const layerFont = unify ? (defaultFont || it.font || null) : (it.font || defaultFont || null);
       const layerSize = resolveReuseSize({ unify, defaultSizePt, detectedSizePt: sizePt });
+      // フチ: 元レイヤーの境界線効果(frameFX)をそのまま再現する。"present"（境界線は存在するが
+      // 色未分類）は white として再現。元にフチが無ければ none（周辺解析からの自動白フチは付けない）。
+      const reproStrokeColor = normalizeReuseStrokeColor(it.strokeColor);
+      const reproStrokeWidthPx = Number.isFinite(it.strokeWidthPx) ? it.strokeWidthPx : 20;
+      // グループ単位（フチ付きリンク群/フォルダ）の再現。同 groupKey の新規レイヤーを保存側で
+      // text サブグループへまとめ、グループにフチを当てる。個別フチ(reproStrokeColor)は READ 側で
+      // none に抑止済み。groupKey が無ければ従来どおり個別レイヤー。
+      const reproGroupKey = (typeof it.groupKey === "string" && it.groupKey) ? it.groupKey : null;
+      const reproGroupStrokeColor = reproGroupKey ? normalizeReuseStrokeColor(it.groupStrokeColor) : "none";
+      const reproGroupStrokeWidth = Number.isFinite(it.groupStrokeWidth) ? it.groupStrokeWidth : 20;
+      // 字間の実物再現。レイヤー全体のトラッキング（ti.tracking）は trackingMille として、
+      // 範囲ごとの逸脱と個別カーニング/サイズ/フォント/太字は per-char マップとして渡し、保存側で再適用する。
+      const reproTrackingMille = Number.isFinite(it.trackingMille) ? it.trackingMille : 0;
+      const reproCharTrackings = (it.charTrackings && typeof it.charTrackings === "object") ? it.charTrackings : {};
+      const reproCharKernings = (it.charKernings && typeof it.charKernings === "object") ? it.charKernings : {};
+      const reproCharSizes = (it.charSizes && typeof it.charSizes === "object") ? it.charSizes : {};
+      const reproCharFonts = (it.charFonts && typeof it.charFonts === "object") ? it.charFonts : {};
+      const reproCharBolds = (it.charBolds && typeof it.charBolds === "object") ? it.charBolds : {};
+      const reproLineLeadings = (it.lineLeadings && typeof it.lineLeadings === "object") ? it.lineLeadings : {};
+      // 行送り（行間）。元レイヤーの自動行送り % をそのまま使う（取れなければ 125 既定）。
+      const reproLeadingPct = Number.isFinite(it.leadingPct) && it.leadingPct > 0 ? it.leadingPct : 125;
+      // 長体 / 平体。
+      const reproHScale = Number.isFinite(it.horizontalScale) && it.horizontalScale > 0 ? it.horizontalScale : 100;
+      const reproVScale = Number.isFinite(it.verticalScale) && it.verticalScale > 0 ? it.verticalScale : 100;
+      // 合成太字 / 斜体。
+      const reproBold = it.syntheticBold === true;
+      const reproItalic = it.syntheticItalic === true;
+      // 角度。transform 行列 [xx,xy,yx,yy,tx,ty] から回転角を逆算（度）。
+      const reproRotation = rotationFromTransform(it.transform);
       const reuseFillColor = normalizeReuseFillColor(it.fillColor);
       const sourceTxtRef = appendReuseTextSourceBlock(sourcePages, pageNumber, contents);
       const create = {
@@ -365,12 +396,27 @@ async function collectReuseDraftsForPage(
         sizePt: layerSize,
         direction,
         // 塗り色と同色のフチ（白文字に白フチ等）は冗長なので除去する。
-        strokeColor: suppressRedundantStroke(sourceOrAutoStroke.strokeColor, reuseFillColor),
-        strokeWidthPx: sourceOrAutoStroke.strokeWidthPx,
+        strokeColor: suppressRedundantStroke(reproStrokeColor, reuseFillColor),
+        strokeWidthPx: reproStrokeWidthPx,
         fillColor: reuseFillColor,
-        leadingPct: 125,
-        autoFontSwitched: unify ? auto.autoFontSwitched : false,
-        autoFontSwitchBucket: unify ? auto.autoFontSwitchBucket : -1,
+        rotation: reproRotation,
+        leadingPct: reproLeadingPct,
+        horizontalScale: reproHScale,
+        verticalScale: reproVScale,
+        syntheticBold: reproBold,
+        syntheticItalic: reproItalic,
+        trackingMille: reproTrackingMille,
+        charTrackings: reproCharTrackings,
+        charKernings: reproCharKernings,
+        charSizes: reproCharSizes,
+        charFonts: reproCharFonts,
+        charBolds: reproCharBolds,
+        lineLeadings: reproLineLeadings,
+        autoFontSwitched: false,
+        autoFontSwitchBucket: -1,
+        groupKey: reproGroupKey,
+        groupStrokeColor: reproGroupStrokeColor,
+        groupStrokeWidth: reproGroupStrokeWidth,
         sourceTxtRef,
       };
       let updates = null;
@@ -386,8 +432,16 @@ async function collectReuseDraftsForPage(
       // reuseSrcCx/Cy = 元レイヤー中心（保存時に実 bbox 中心をここへ合わせ位置を厳密再現）。
       // reuseTightThick = 枠の厚み方向を実テキスト幅に詰める（tight 枠が実テキストを抱く）。
       if (hasBounds) {
-        const cx = (it.left + it.right) / 2;
-        const cy = (it.top + it.bottom) / 2;
+        // ag-psd の実 bounds（rendered）があればそれを優先。無ければ Photoshop AM の字面ボックス。
+        // jsx の位置補正は layerRef.bounds(rendered) を見るため、揃える相手も rendered が正しい。
+        const agOk = Number.isFinite(it.agLeft) && Number.isFinite(it.agTop)
+          && Number.isFinite(it.agRight) && Number.isFinite(it.agBottom);
+        const bL = agOk ? it.agLeft : it.left;
+        const bT = agOk ? it.agTop : it.top;
+        const bR = agOk ? it.agRight : it.right;
+        const bB = agOk ? it.agBottom : it.bottom;
+        const cx = (bL + bR) / 2;
+        const cy = (bT + bB) / 2;
         updates = { reuseSrcCx: cx, reuseSrcCy: cy, reuseTightThick: true };
         // 元レイヤーの textItem.position（基準位置）。未ドラッグ保存時に bounds 中心合わせを使わず
         // これを直接設定して厳密再現する（太字で bounds が落ち着かず下にぶれる問題の根治）。
@@ -395,6 +449,11 @@ async function collectReuseDraftsForPage(
           updates.reuseSrcPosX = it.posX;
           updates.reuseSrcPosY = it.posY;
         }
+        // 元 bounds 右端 / 上端 / 左端（rendered）。保存時にアンカー辺合わせで厳密再現するために使う。
+        // 縦書き=右上アンカー（reuseSrcRight + reuseSrcTop）、横書き=左上アンカー（reuseSrcLeft + reuseSrcTop）。
+        if (Number.isFinite(bR)) updates.reuseSrcRight = bR;
+        if (Number.isFinite(bT)) updates.reuseSrcTop = bT;
+        if (Number.isFinite(bL)) updates.reuseSrcLeft = bL;
         // 反映側で layerRectForNew(page, created) を使い中心合わせ + フォントロード後の厳密補正対象。
         centerFromRect = { cx, cy };
         alignTarget = { cx, cy, font: layerFont || null };
@@ -641,7 +700,12 @@ export async function loadPsdFilesForReuse(files, {
       const r = batchPages ? batchPages[i] : null;
       if (r && r.ok) {
         page = await buildReusePageFromPsData(path, r);
-        if (page) page = await mergeReuseStrokeHintsFromAgPsd(page, path);
+        if (page) {
+          page = await mergeReuseStrokeHintsFromAgPsd(page, path);
+          page = await mergeReuseLeadingFromAgPsd(page, path);
+          // ag-psd の実 bounds（rendered）を各 item に貼り、位置補正の基準を字面ボックスから rendered へ。
+          page = await mergeReuseBoundsFromAgPsd(page, path);
+        }
       }
       // バッチ未取得 / 不完全なページは個別読み取りにフォールバック。
       if (!page) page = await loadPsdForReuse(path);

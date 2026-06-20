@@ -1,6 +1,6 @@
 [package]
 name = "opus"
-version = "2.6.4"
+version = "2.6.5"
 description = "PSD spread editor with Photoshop apply-back, text extraction, and auto-placement"
 edition = "2021"
 rust-version = "1.77"

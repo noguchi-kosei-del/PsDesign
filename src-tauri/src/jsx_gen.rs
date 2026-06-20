@@ -611,6 +611,256 @@ function textTransformForLayer(L) {
   }
 }
 
+// 整数マップ {"0":12,"1":-30} を JSON 文字列化（字間 per-char マップ用）。
+function jsonIntMap(map) {
+  var out = '{', first = true;
+  for (var k in map) {
+    if (!map.hasOwnProperty(k)) continue;
+    if (!first) out += ',';
+    out += '"' + k + '":' + jsonNum(map[k]);
+    first = false;
+  }
+  return out + '}';
+}
+function jsonStrMap(map) {
+  var out = '{', first = true;
+  for (var k in map) {
+    if (!map.hasOwnProperty(k)) continue;
+    if (!first) out += ',';
+    out += '"' + k + '":' + jsonStr(map[k]);
+    first = false;
+  }
+  return out + '}';
+}
+function jsonBoolMap(map) {
+  var out = '{', first = true;
+  for (var k in map) {
+    if (!map.hasOwnProperty(k)) continue;
+    if (!first) out += ',';
+    out += '"' + k + '":' + jsonBool(map[k]);
+    first = false;
+  }
+  return out + '}';
+}
+
+// 【リサイクル実物再現】元テキストレイヤーの textKey から文字単位/段落単位の差分を読む。
+// レイヤー全体値（base*）と異なる範囲だけを per-char / per-line の deviation として記録する
+// （レイヤー全体は trackingMille/sizePt/font/leadingPct で別途適用 → 同値の二重書き込みを避ける）。
+//   charTrackings = textStyleRange[].textStyle.tracking（1/1000em）
+//   charSizes     = textStyleRange[].textStyle.size（pt）
+//   charFonts     = textStyleRange[].textStyle.fontPostScriptName
+//   charBolds     = textStyleRange[].textStyle.syntheticBold
+//   charKernings  = kerningRange[].kerning（個別カーニング, 1/1000em。from を起点キーに）
+//   lineLeadings  = paragraphStyleRange[].paragraphStyle.autoLeadingPercentage（% を行 index キーに）
+function readSpacingForLayer(L, layerTracking, baseSizePt, baseFont, baseBold, baseLeadingPct, contents) {
+  // layerLeadingPct = paragraphStyle.autoLeadingPercentage 由来のレイヤー全体行送り（%）。
+  //   DOM の ti.autoLeadingAmount はジャスティフィケーション変更を反映しないため、こちらを正とする。
+  var out = { charTrackings: {}, charKernings: {}, charSizes: {}, charFonts: {}, charBolds: {}, lineLeadings: {}, layerLeadingPct: null, amText: null,
+              diagTsLdng: null, diagTsAuto: null, diagPsAlp: null, diagPsHas: false,
+              diagPsrCount: 0, diagPsrDump: "" };
+  var baseTrack = (typeof layerTracking === "number" && isFinite(layerTracking)) ? Math.round(layerTracking) : 0;
+  var baseSize = (typeof baseSizePt === "number" && isFinite(baseSizePt) && baseSizePt > 0) ? baseSizePt : null;
+  var baseFontPs = (typeof baseFont === "string" && baseFont.length > 0) ? baseFont : null;
+  var baseBoldV = (baseBold === true);
+  var text = (typeof contents === "string") ? contents : "";
+  // 行送り判定用: 先頭 textStyleRange の leading(pt) / autoLeading(bool)。
+  var firstAutoLeading = null, firstLeadingPt = null;
+  try {
+    var layerId = layerIdOf(L);
+    if (!layerId) return out;
+    var ref = new ActionReference();
+    ref.putIdentifier(charIDToTypeID("Lyr "), layerId);
+    var desc = executeActionGet(ref);
+    var textKey = stringIDToTypeID("textKey");
+    if (!desc.hasKey(textKey)) return out;
+    var tk = desc.getObjectValue(textKey);
+    // テキスト本文はレイヤー自体(textKey)から取得する（レイヤー名は編集で陳腐化し齟齬が出るため
+    // 本文に使わない）。textContents → "Txt " の順で読む（参考プラグイン comicpot 準拠）。
+    var __tcKey = stringIDToTypeID("textContents");
+    if (tk.hasKey(__tcKey)) { try { out.amText = tk.getString(__tcKey); } catch (eTc1) {} }
+    if (out.amText === null) { try { out.amText = tk.getString(charIDToTypeID("Txt ")); } catch (eTc2) {} }
+    if ((!text || text.length === 0) && typeof out.amText === "string") text = out.amText;
+    var fromKey = stringIDToTypeID("from");
+    var toKey = stringIDToTypeID("to");
+    var tsrKey = stringIDToTypeID("textStyleRange");
+    if (tk.hasKey(tsrKey)) {
+      var ranges = tk.getList(tsrKey);
+      // 参考プラグインに合わせ stringID / charID 両方のキーを用意（charID が確実な属性がある）。
+      var styleKeyS = stringIDToTypeID("textStyle");
+      var styleKeyC = charIDToTypeID("TxtS");
+      var trackKeyS = stringIDToTypeID("tracking");
+      var trackKeyC = charIDToTypeID("Trck");
+      var sizeKeyS = stringIDToTypeID("size");
+      var sizeKeyC = charIDToTypeID("Sz  ");
+      var fontKey = stringIDToTypeID("fontPostScriptName");
+      var boldKey = stringIDToTypeID("syntheticBold");
+      for (var r = 0; r < ranges.count; r++) {
+        var rd = ranges.getObjectValue(r);
+        var from = rd.getInteger(fromKey);
+        var to = rd.getInteger(toKey);
+        var st = null;
+        if (rd.hasKey(styleKeyS)) st = rd.getObjectValue(styleKeyS);
+        else if (rd.hasKey(styleKeyC)) st = rd.getObjectValue(styleKeyC);
+        if (st === null) continue;
+        // 先頭範囲の leading / autoLeading を保持（参考プラグインの行間読取方式）。
+        if (firstAutoLeading === null) {
+          var alKey = stringIDToTypeID("autoLeading");
+          if (st.hasKey(alKey)) { try { firstAutoLeading = st.getBoolean(alKey); } catch (eAlb) {} }
+          var ldngKey = charIDToTypeID("Ldng");
+          if (st.hasKey(ldngKey)) {
+            try { firstLeadingPt = st.getUnitDoubleValue(ldngKey); } catch (eLd1) {}
+            if (firstLeadingPt === null) { try { firstLeadingPt = st.getDouble(ldngKey); } catch (eLd2) {} }
+          }
+        }
+        // tracking（整数 / 単位double 両対応、stringID/charID 両対応）。全体値と異なる範囲のみ per-char 化。
+        var trackKey = st.hasKey(trackKeyS) ? trackKeyS : (st.hasKey(trackKeyC) ? trackKeyC : null);
+        if (trackKey !== null) {
+          var tr = null;
+          try { tr = st.getInteger(trackKey); } catch (eTrI) {}
+          if (tr === null) { try { tr = Math.round(st.getDouble(trackKey)); } catch (eTrD) {} }
+          if (tr !== null && tr !== baseTrack) { for (var c1 = from; c1 < to; c1++) out.charTrackings[String(c1)] = tr; }
+        }
+        // size（pt, 単位double、stringID/charID 両対応）。
+        var sizeKey = st.hasKey(sizeKeyS) ? sizeKeyS : (st.hasKey(sizeKeyC) ? sizeKeyC : null);
+        if (sizeKey !== null) {
+          var sz = null;
+          try { sz = st.getUnitDoubleValue(sizeKey); } catch (eSzU) {}
+          if (sz === null) { try { sz = st.getDouble(sizeKey); } catch (eSzD) {} }
+          if (sz !== null && isFinite(sz) && sz > 0) {
+            var szR = Math.round(sz * 10) / 10;
+            if (baseSize === null || Math.abs(szR - baseSize) > 0.05) {
+              for (var c2 = from; c2 < to; c2++) out.charSizes[String(c2)] = szR;
+            }
+          }
+        }
+        // font（PostScript 名）。
+        if (st.hasKey(fontKey)) {
+          var fps = null;
+          try { fps = st.getString(fontKey); } catch (eFps) {}
+          if (fps !== null && fps.length > 0 && fps !== baseFontPs) {
+            for (var c3 = from; c3 < to; c3++) out.charFonts[String(c3)] = fps;
+          }
+        }
+        // 合成太字。
+        if (st.hasKey(boldKey)) {
+          var bd = null;
+          try { bd = st.getBoolean(boldKey); } catch (eBd) {}
+          if (bd !== null && bd !== baseBoldV) {
+            for (var c4 = from; c4 < to; c4++) out.charBolds[String(c4)] = bd;
+          }
+        }
+      }
+    }
+    var krKey = stringIDToTypeID("kerningRange");
+    if (tk.hasKey(krKey)) {
+      var kr = tk.getList(krKey);
+      var kFromS = stringIDToTypeID("from");
+      var kFromC = charIDToTypeID("From");
+      var kKernS = stringIDToTypeID("kerning");
+      var kKernC = charIDToTypeID("Krng");
+      for (var k = 0; k < kr.count; k++) {
+        var kd = kr.getObjectValue(k);
+        var kfrom = null, kval = null;
+        try { if (kd.hasKey(kFromS)) kfrom = kd.getInteger(kFromS); } catch (eKf1) {}
+        if (kfrom === null) { try { if (kd.hasKey(kFromC)) kfrom = kd.getInteger(kFromC); } catch (eKf2) {} }
+        try { if (kd.hasKey(kKernS)) kval = kd.getInteger(kKernS); } catch (eKv1) {}
+        if (kval === null) { try { if (kd.hasKey(kKernC)) kval = kd.getInteger(kKernC); } catch (eKv2) {} }
+        if (kfrom !== null && kval !== null && kval !== 0) out.charKernings[String(kfrom)] = kval;
+      }
+    }
+    // 行送り（行間）= paragraphStyleRange[].paragraphStyle.autoLeadingPercentage。
+    // 参考プラグイン準拠: from は charID "From"、autoLeadingPercentage は putDouble（倍率 1.25 等）。
+    // 先頭段落の値をレイヤー全体 (layerLeadingPct) とし、それと異なる段落だけ per-line override に記録。
+    var psrKey = stringIDToTypeID("paragraphStyleRange");
+    if (tk.hasKey(psrKey)) {
+      var pranges = tk.getList(psrKey);
+      var pStyleKey = stringIDToTypeID("paragraphStyle");
+      var alpKey = stringIDToTypeID("autoLeadingPercentage");
+      var pFromC = charIDToTypeID("From");
+      var paraLeads = [];
+      var pToC = charIDToTypeID("T   ");
+      var pToS = stringIDToTypeID("to");
+      out.diagPsrCount = pranges.count;
+      for (var pr = 0; pr < pranges.count; pr++) {
+        var pd = pranges.getObjectValue(pr);
+        var pfrom = null;
+        try { if (pd.hasKey(pFromC)) pfrom = pd.getInteger(pFromC); } catch (eP1) {}
+        if (pfrom === null) { try { if (pd.hasKey(fromKey)) pfrom = pd.getInteger(fromKey); } catch (eP2) {} }
+        if (pfrom === null) pfrom = 0;
+        // 【診断】各 paragraphStyleRange エントリの from/to / paragraphStyle有無 / autoLeadingPercentage
+        // の有無と生値を記録（AM が段落値をどう返すかの切り分け用）。
+        var __pto = null;
+        try { if (pd.hasKey(pToC)) __pto = pd.getInteger(pToC); } catch (ePt1) {}
+        if (__pto === null) { try { if (pd.hasKey(pToS)) __pto = pd.getInteger(pToS); } catch (ePt2) {} }
+        var __hasPst = pd.hasKey(pStyleKey);
+        var __pstForDiag = __hasPst ? pd.getObjectValue(pStyleKey) : null;
+        var __hasAlpD = (__pstForDiag !== null) && __pstForDiag.hasKey(alpKey);
+        var __alpRaw = null;
+        if (__hasAlpD) {
+          try { __alpRaw = __pstForDiag.getDouble(alpKey); } catch (eAr1) {}
+          if (__alpRaw === null) { try { __alpRaw = __pstForDiag.getUnitDoubleValue(alpKey); } catch (eAr2) {} }
+          if (__alpRaw === null) { try { __alpRaw = __pstForDiag.getInteger(alpKey); } catch (eAr3) {} }
+        }
+        out.diagPsrDump += "[" + pr + " f=" + pfrom + " t=" + (__pto === null ? "?" : __pto)
+          + " pst=" + (__hasPst ? "Y" : "N") + " alp=" + (__hasAlpD ? String(__alpRaw) : "-") + "]";
+        if (!pd.hasKey(pStyleKey)) continue;
+        var pst = pd.getObjectValue(pStyleKey);
+        out.diagPsHas = true;
+        if (!pst.hasKey(alpKey)) continue;
+        var alp = null;
+        try { alp = pst.getDouble(alpKey); } catch (eAlpD) {}
+        if (alp === null) { try { alp = pst.getUnitDoubleValue(alpKey); } catch (eAlpU) {} }
+        if (alp === null) { try { alp = pst.getInteger(alpKey); } catch (eAlpI) {} }
+        if (alp === null || !isFinite(alp) || alp <= 0) continue;
+        if (out.diagPsAlp === null) out.diagPsAlp = alp;
+        // 倍率(1.25) / パーセント(125) どちらの格納も吸収して % に正規化。
+        var pct = (alp > 10) ? Math.round(alp) : Math.round(alp * 100);
+        paraLeads.push({ from: pfrom, pct: pct });
+      }
+      out.diagTsLdng = firstLeadingPt;
+      out.diagTsAuto = firstAutoLeading;
+      // レイヤー全体の行送り(%)を確定する（参考プラグインの読取方式）:
+      //   ① 自動行送り(autoLeading=true) かつ autoLeadingPercentage あり → その % を採用
+      //   ② 固定行送り(autoLeading=false) かつ leading/size 取得可 → (leading/size)×100
+      //   ③ どちらかが取れる方を採用
+      var paraAlp = (paraLeads.length > 0) ? paraLeads[0].pct : null;
+      var ratioPct = null;
+      if (firstLeadingPt !== null && isFinite(firstLeadingPt) && firstLeadingPt > 0 &&
+          baseSize !== null && baseSize > 0) {
+        ratioPct = Math.round((firstLeadingPt / baseSize) * 100);
+      }
+      // 【v2.6.5 fix】元データの写植レイヤーは autoLeading=true でも textStyle.leading に
+      // 固定行送り(例:180)を持ち、Photoshop はそれを描画に使う（autoLeadingPercentage の
+      // 125% は使われない＝実測 bounds とも一致）。よって明示 leading(Ldng) があれば最優先で
+      // 採用し、autoLeadingPercentage は明示 leading が取れない場合のみのフォールバックにする。
+      if (ratioPct !== null) {
+        out.layerLeadingPct = ratioPct;
+      } else if (paraAlp !== null && paraAlp > 0) {
+        out.layerLeadingPct = paraAlp;
+      }
+      // 全体値と異なる段落を per-line override に記録。
+      // 【v2.6.5 fix】pl=0 から走査する。Photoshop の AM が返す paragraphStyleRange は
+      // autoLeadingPercentage を明示的に持つ段落だけを返すことがあり（既定=base と同じ段落は省略）、
+      // その場合 paraLeads は「上書きされた段落のみ」になる。旧実装は paraLeads[0] を base とみなし
+      // pl=1 から走査したため、唯一の上書き段落（paraLeads[0]）を base 扱いで握り潰し override が
+      // 失われていた（例: 4段落中「お兄ちゃん的存在の」だけ 150% が消える）。base は ratioPct
+      // (=Ldng/size) で確定済みなので、全段落を layerLeadingPct と比較して差分のみ記録する。
+      if (out.layerLeadingPct !== null) {
+        for (var pl = 0; pl < paraLeads.length; pl++) {
+          if (paraLeads[pl].pct === out.layerLeadingPct) continue;
+          var lineIdx = 0;
+          for (var ci = 0; ci < paraLeads[pl].from && ci < text.length; ci++) {
+            var chc = text.charCodeAt(ci);
+            if (chc === 10 || chc === 13) lineIdx++;
+          }
+          out.lineLeadings[String(lineIdx)] = paraLeads[pl].pct;
+        }
+      }
+    }
+  } catch (e) {}
+  return out;
+}
+
 function fillColorNameFromTextItem(ti) {
   try {
     var c = ti.color;
@@ -646,6 +896,56 @@ function asPx(uv) {
   try { return uv.as("px"); } catch (e) {
     try { return Number(uv); } catch (e2) { return 0; }
   }
+}
+
+// テキストレイヤーが属する「グループ単位（リンク群 or フォルダ）」とグループ境界線を検出する。
+// 戻り値: { key: string|null, strokeColor: "white"|"black"|"present"|"none", strokeWidthPx: number }
+// 優先順:
+//   (1) 祖先フォルダ(LayerSet)に境界線効果 → そのフォルダ単位（key="set:"+id, stroke=フォルダのフチ）
+//   (2) リンク群（鎖アイコン）で自レイヤーに境界線 → リンク単位（key="link:"+最小id, stroke=自フチ）
+// どちらも「フチがある時だけ」グループ化対象。保存側は同 key の新規レイヤーを text サブグループへ
+// まとめてグループ境界線を 1 回だけ当てる（個別フチは抑止）。
+function groupUnitForLayer(L) {
+  var none = { key: null, strokeColor: "none", strokeWidthPx: 0 };
+  // (1) 祖先フォルダにフチ
+  try {
+    var p = L.parent;
+    var guard = 0;
+    while (p && guard < 12) {
+      var isSet = false;
+      try { isSet = (p.typename === "LayerSet"); } catch (eT) { isSet = false; }
+      if (!isSet) break;
+      var gs = strokeFromLayerEffects(p);
+      if (gs && gs.strokeColor !== "none") {
+        return { key: "set:" + layerIdOf(p), strokeColor: gs.strokeColor, strokeWidthPx: gs.strokeWidthPx };
+      }
+      p = p.parent;
+      guard++;
+    }
+  } catch (e1) {}
+  // (2) リンク群で自レイヤーにフチ
+  try {
+    var ownS = strokeFromLayerEffects(L);
+    if (ownS && ownS.strokeColor !== "none") {
+      var linked = null;
+      try { linked = L.linkedLayers; } catch (eL) { linked = null; }
+      if (linked && linked.length > 0) {
+        var ids = [layerIdOf(L)];
+        for (var li = 0; li < linked.length; li++) {
+          var ll = linked[li];
+          var isT = false;
+          try { isT = (ll.kind == LayerKind.TEXT); } catch (eK) { isT = false; }
+          if (isT) ids.push(layerIdOf(ll));
+        }
+        if (ids.length >= 2) {
+          var mn = ids[0];
+          for (var mi = 1; mi < ids.length; mi++) { if (ids[mi] < mn) mn = ids[mi]; }
+          return { key: "link:" + mn, strokeColor: ownS.strokeColor, strokeWidthPx: ownS.strokeWidthPx };
+        }
+      }
+    }
+  } catch (e2) {}
+  return none;
 }
 
 // 1 PSD を処理して per-page JSON オブジェクト文字列を返す。
@@ -688,12 +988,29 @@ function processOnePsd(psdPath, refImg, bgImg) {
     var dir = "horizontal";
     var fillColor = "default";
     var visible = true;
+    var trackingMille = 0;
+    // レイヤー全体属性（DOM が最も確実）。リサイクルで実物再現するため読む。
+    var leadingPct = 0, hScale = 100, vScale = 100, fauxBold = false, fauxItalic = false;
+    var domAutoLeadAmt = 0, domLeadPt = 0, domUseAuto = null;
     try { visible = L.visible; } catch (e) {}
     if (ti) {
       try { contents = ti.contents; } catch (e) {}
       try { font = ti.font; } catch (e) {}
       try { sizePt = (ti.size && ti.size.as) ? ti.size.as("pt") : Number(ti.size); } catch (e) {}
       try { dir = (ti.direction == Direction.VERTICAL) ? "vertical" : "horizontal"; } catch (e) {}
+      // 文字パネルのトラッキング（レイヤー全体, 1/1000em）。DOM プロパティが最も確実。
+      try { var __tk = ti.tracking; if (typeof __tk === "number" && isFinite(__tk)) trackingMille = Math.round(__tk); } catch (e) {}
+      // 行送り（自動行送り %）。文字パネルの行間に相当。
+      try { var __al = ti.autoLeadingAmount; if (typeof __al === "number" && isFinite(__al) && __al > 0) { domAutoLeadAmt = Math.round(__al); leadingPct = domAutoLeadAmt; } } catch (e) {}
+      // DOM の実行間（pt）。auto/固定どちらでも実際の行間を反映するので比率 leading/size が使える。
+      try { var __ld = ti.leading; if (__ld && __ld.as) __ld = __ld.as("pt"); __ld = Number(__ld); if (isFinite(__ld) && __ld > 0) domLeadPt = __ld; } catch (e) {}
+      try { domUseAuto = ti.useAutoLeading; } catch (e) {}
+      // 長体 / 平体（水平 / 垂直比率 %）。
+      try { var __hs = ti.horizontalScale; if (typeof __hs === "number" && isFinite(__hs) && __hs > 0) hScale = Math.round(__hs); } catch (e) {}
+      try { var __vs = ti.verticalScale; if (typeof __vs === "number" && isFinite(__vs) && __vs > 0) vScale = Math.round(__vs); } catch (e) {}
+      // 合成太字 / 斜体。
+      try { fauxBold = (ti.fauxBold === true); } catch (e) {}
+      try { fauxItalic = (ti.fauxItalic === true); } catch (e) {}
       fillColor = fillColorNameFromTextItem(ti);
     }
       var b = null;
@@ -712,7 +1029,41 @@ function processOnePsd(psdPath, refImg, bgImg) {
       var layerId = layerIdOf(L);
       var transform = textTransformForLayer(L);
       var stroke = strokeFromLayerEffectsWithAncestors(L);
-      if (!contents || contents.length === 0) { try { contents = L.name; } catch (e) {} }
+      // グループ単位（フチ付きリンク群/フォルダ）。あれば個別フチは抑止し、フチはグループ側へ。
+      var grpUnit = groupUnitForLayer(L);
+      var spacing = readSpacingForLayer(L, trackingMille, sizePt, font, fauxBold, leadingPct, contents);
+      // 行送りの確定（優先順）:
+      //   ① textKey 由来 (paragraphStyle.autoLeadingPercentage / textStyle leading比) = ジャスティ値
+      //   ② DOM 実行間 leading(pt) / size(pt) × 100（auto/固定どちらでも実際の行間を反映）
+      //   ③ DOM autoLeadingAmount
+      var domRatioPct = (domLeadPt > 0 && sizePt > 0) ? Math.round((domLeadPt / sizePt) * 100) : 0;
+      if (typeof spacing.layerLeadingPct === "number" && spacing.layerLeadingPct > 0) {
+        leadingPct = spacing.layerLeadingPct;
+      } else if (domRatioPct > 0) {
+        leadingPct = domRatioPct;
+      } else if (domAutoLeadAmt > 0) {
+        leadingPct = domAutoLeadAmt;
+      }
+      // 【診断】行送りがどのソースから来たかを出力（UI/植字で行間が出ない切り分け用）。
+      var __leadDiag = '{"final":' + jsonNum(leadingPct)
+        + ',"domAuto":' + jsonNum(domAutoLeadAmt)
+        + ',"domLeadPt":' + jsonNum(domLeadPt)
+        + ',"domRatio":' + jsonNum(domRatioPct)
+        + ',"domUseAuto":' + (domUseAuto === true ? 'true' : (domUseAuto === false ? 'false' : 'null'))
+        + ',"tsLdng":' + jsonNullableNum(spacing.diagTsLdng)
+        + ',"tsAuto":' + (spacing.diagTsAuto === true ? 'true' : (spacing.diagTsAuto === false ? 'false' : 'null'))
+        + ',"psHas":' + jsonBool(spacing.diagPsHas)
+        + ',"psAlp":' + jsonNullableNum(spacing.diagPsAlp)
+        + ',"layerLeadingPct":' + jsonNullableNum(spacing.layerLeadingPct)
+        + ',"psrCount":' + jsonNum(spacing.diagPsrCount)
+        + ',"psrDump":' + jsonStr(spacing.diagPsrDump)
+        + ',"lineLeadings":' + jsonIntMap(spacing.lineLeadings)
+        + '}';
+      // 本文は DOM ti.contents を優先し、空なら textKey 由来の実テキスト(amText)を使う。
+      // レイヤー名(L.name)は本文が陳腐化しているケースがあるため使わない。
+      if ((!contents || contents.length === 0) && typeof spacing.amText === "string" && spacing.amText.length > 0) {
+        contents = spacing.amText;
+      }
       items.push(
         '{"idx":' + jsonNum(i)
         + ',"id":' + jsonNum(layerId)
@@ -726,8 +1077,24 @@ function processOnePsd(psdPath, refImg, bgImg) {
         + ',"transform":' + jsonNumArray(transform)
         + ',"direction":' + jsonStr(dir)
         + ',"fillColor":' + jsonStr(fillColor)
-        + ',"strokeColor":' + jsonStr(stroke.strokeColor)
+        + ',"strokeColor":' + jsonStr(grpUnit.key !== null ? "none" : stroke.strokeColor)
         + ',"strokeWidthPx":' + jsonNum(stroke.strokeWidthPx)
+        + ',"groupKey":' + (grpUnit.key === null ? 'null' : jsonStr(grpUnit.key))
+        + ',"groupStrokeColor":' + jsonStr(grpUnit.strokeColor)
+        + ',"groupStrokeWidth":' + jsonNum(grpUnit.strokeWidthPx)
+        + ',"trackingMille":' + jsonNum(trackingMille)
+        + ',"leadingPct":' + jsonNum(leadingPct)
+        + ',"leadDiag":' + __leadDiag
+        + ',"horizontalScale":' + jsonNum(hScale)
+        + ',"verticalScale":' + jsonNum(vScale)
+        + ',"syntheticBold":' + jsonBool(fauxBold)
+        + ',"syntheticItalic":' + jsonBool(fauxItalic)
+        + ',"charTrackings":' + jsonIntMap(spacing.charTrackings)
+        + ',"charKernings":' + jsonIntMap(spacing.charKernings)
+        + ',"charSizes":' + jsonIntMap(spacing.charSizes)
+        + ',"charFonts":' + jsonStrMap(spacing.charFonts)
+        + ',"charBolds":' + jsonBoolMap(spacing.charBolds)
+        + ',"lineLeadings":' + jsonIntMap(spacing.lineLeadings)
         + ',"visible":' + jsonBool(visible)
       + '}'
     );
@@ -1215,6 +1582,12 @@ pub fn generate_apply_script(
     __copy(raw, "uiAnchorCy", out);
     __copy(raw, "reuseSrcPosX", out);
     __copy(raw, "reuseSrcPosY", out);
+    __copy(raw, "reuseSrcRight", out);
+    __copy(raw, "reuseSrcTop", out);
+    __copy(raw, "reuseSrcLeft", out);
+    __copy(raw, "groupKey", out);
+    __copy(raw, "groupStrokeColor", out);
+    __copy(raw, "groupStrokeWidth", out);
     return out;
   }
   function __mapLayers(list, fn) {
@@ -1492,6 +1865,24 @@ pub fn generate_apply_script(
             }
             if let Some(py) = nl.reuse_src_pos_y {
                 out.push_str(&format!(", reuseSrcPosY: {}", py));
+            }
+            if let Some(rr) = nl.reuse_src_right {
+                out.push_str(&format!(", reuseSrcRight: {}", rr));
+            }
+            if let Some(rt) = nl.reuse_src_top {
+                out.push_str(&format!(", reuseSrcTop: {}", rt));
+            }
+            if let Some(rl) = nl.reuse_src_left {
+                out.push_str(&format!(", reuseSrcLeft: {}", rl));
+            }
+            if let Some(ref gk) = nl.group_key {
+                out.push_str(&format!(", groupKey: {}", js_string(gk)));
+            }
+            if let Some(ref gc) = nl.group_stroke_color {
+                out.push_str(&format!(", groupStrokeColor: {}", js_string(gc)));
+            }
+            if let Some(gw) = nl.group_stroke_width {
+                out.push_str(&format!(", groupStrokeWidth: {}", gw));
             }
             out.push_str(&format!(", contents: {}", js_string(&nl.contents)));
             if let Some(ref f) = nl.font_post_script_name {
@@ -5066,7 +5457,50 @@ function applyNewLayerPositionAnchor(layerRef, nl, doc) {
         && typeof nl.reuseSrcPosX === "number" && isFinite(nl.reuseSrcPosX)
         && typeof nl.reuseSrcPosY === "number" && isFinite(nl.reuseSrcPosY)) {
       try {
+        // まず元アンカー位置に置いて再生成テキストの出発点を作る。
         layerRef.textItem.position = [new UnitValue(nl.reuseSrcPosX, "px"), new UnitValue(nl.reuseSrcPosY, "px")];
+        // 【v2.6.5 fix】名前≠内容のルビ系小レイヤー（例「りく（陸）」content「りく」/「まさ」等）は、
+        // アンカー(textItem.position)と glyph の関係が独特で、position 直接設定だけだと縦書きで
+        // 1 文字ぶん下（top）・横方向（左右）にズレる（実測: アンカー tx は一致するのに bounds.left が
+        // +58px 等）。そこで再生成テキストの「実 bounds 辺」を元 bounds の辺へ揃えて厳密再現する:
+        //   縦書き = 右上アンカー → bounds.right を元 right(reuseSrcRight) へ、bounds.top を元 top(nl.y) へ
+        //   横書き = 左上アンカー → bounds.left を元 left(nl.x) へ、bounds.top を元 top(nl.y) へ
+        // top / 縦書き right / 横書き left はいずれも安定辺（v2.6.4 で問題化したのは bottom/中心）なので
+        // 太字でも過補正せず、正しく置けたレイヤーは d≈0 で無補正＝下ズレ根治を維持する。
+        if (typeof nl.y === "number" && isFinite(nl.y) && typeof nl.x === "number" && isFinite(nl.x)) {
+          try { layerRef.translate(new UnitValue(0, "px"), new UnitValue(0, "px")); } catch (eRe2) {}
+          var _bp = layerRef.bounds;
+          var _curLeft = _bp[0].as("px");
+          var _curTop = _bp[1].as("px");
+          var _curRight = _bp[2].as("px");
+          // 【v2.6.7 fix】reuseSrcTop/Left/Right は ag-psd の実 bounds（rendered）由来。layerRef.bounds も
+          // rendered なので、辺どうしを直接揃えれば dT/dL=0 で厳密一致する。reuseSrc* が無いとき（ag-psd
+          // マッチ失敗）のみ中心逆算値 nl.y / nl.x にフォールバック。
+          var _dyTop = (typeof nl.reuseSrcTop === "number" && isFinite(nl.reuseSrcTop))
+            ? (nl.reuseSrcTop - _curTop)
+            : (nl.y - _curTop);
+          var _dx = 0;
+          if (nl.direction === "vertical") {
+            // 縦書き = 右上アンカー → 右端を reuseSrcRight へ。
+            if (typeof nl.reuseSrcRight === "number" && isFinite(nl.reuseSrcRight)) {
+              _dx = nl.reuseSrcRight - _curRight;
+            } else if (typeof nl.reuseSrcLeft === "number" && isFinite(nl.reuseSrcLeft)) {
+              _dx = nl.reuseSrcLeft - _curLeft;
+            } else {
+              _dx = nl.x - _curLeft;
+            }
+          } else {
+            // 横書き = 左上アンカー → 左端を reuseSrcLeft へ。
+            if (typeof nl.reuseSrcLeft === "number" && isFinite(nl.reuseSrcLeft)) {
+              _dx = nl.reuseSrcLeft - _curLeft;
+            } else {
+              _dx = nl.x - _curLeft;
+            }
+          }
+          if (Math.abs(_dx) > 0.5 || Math.abs(_dyTop) > 0.5) {
+            layerRef.translate(new UnitValue(_dx, "px"), new UnitValue(_dyTop, "px"));
+          }
+        }
         return;
       } catch (ePos) {
         // 失敗時は下のフォールバック（reuseSrcCx/Cy 中心合わせ）へ続行。
@@ -5437,6 +5871,10 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
       // 2 段階方式（LayerSet.artLayers.add() が PS バージョンで不安定な
       // ケースを避ける。座標は document 絶対なので group 内でも位置不変）。
       var __textGroup = createNewTextGroupAtTop(doc);
+      // 【グループ再現】フチ付きリンク群/フォルダ由来の新規レイヤーを groupKey で束ねる bucket。
+      // 全レイヤー処理後に bucket ごとに text サブグループを作成し、グループ境界線を 1 回当てる。
+      var __linkGroupBuckets = {};
+      var __linkGroupOrder = [];
       for (var j = 0; j < newLayers.length; j++) {
         var nl = newLayers[j];
         var layerRef = doc.artLayers.add();
@@ -5460,6 +5898,20 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             if (__halfNL !== nti.contents) nti.contents = __halfNL;
           } catch (eHalfNL) {}
         }
+        // 【リサイクル実物再現 / 重要】autoKerning=MANUAL を「ここで先に」当てる。
+        // DOM の autoKerning 代入は textStyleRange / paragraphStyle を flatten するため、
+        // 行送り(autoLeadingAmount) / 長体平体 / per-char サイズ・フォント・太字をこの後に適用すれば
+        // flatten で消えない。Phase B (applyDefaultTextSettingsToPhaseBLayers) は既に MANUAL の
+        // ため再 flatten せず、ここで適用した属性がそのまま保存される。
+        // （参考プラグインの鉄則「autoLeadingAmount は textKey 書き戻し後に適用」と同じ意図）
+        try { nti.autoKerning = AutoKernType.MANUAL; } catch (eAkEarlyNL) {}
+        // 【v2.6.5 fix】antiAliasMethod=SHARP もここで先に当てる。Phase B
+        // (applyDefaultTextSettingsToPhaseBLayers) が後から SHARP に変えると bounds が
+        // わずかに変わり、その前に走る位置補正 (applyNewLayerPositionAnchor) が
+        // 「最終とは違う bounds」で辺合わせするため、保存後に数px の残差が出る。
+        // 補正前に最終 antiAlias へ揃えることで、補正が最終 bounds を読んで残差を消す
+        // （Phase B は既に SHARP のため再変更しない）。
+        try { nti.antiAliasMethod = AntiAlias.SHARP; } catch (eAaEarlyNL) {}
         if (typeof nl.font === "string" && nl.font.length > 0) {
           // 【v2.x】Photoshop が認識する PS 名に解決してから当てる。中丸ゴシック等の
           // -WIN-RKSJ-H サフィックス付きで Photoshop が登録している CJK フォントに対応。
@@ -5665,6 +6117,41 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
             try { __rubyLayersNL[__lkI].link(layerRef); } catch (eLinkR) {}
           }
         }
+        // 【グループ再現】フチ付きリンク群/フォルダ由来（groupKey あり）はここで text グループ内へ入れて
+        // bucket 登録し、サブグループ化とグループ境界線は全レイヤー処理後に一括で行う（個別フチは付けない）。
+        var __grpKeyNL = (typeof nl.groupKey === "string" && nl.groupKey) ? nl.groupKey : null;
+        var __grpStrokeColNL = (nl.groupStrokeColor === "white" || nl.groupStrokeColor === "black") ? nl.groupStrokeColor : "none";
+        var __grpStrokeSzNL = (typeof nl.groupStrokeWidth === "number" && nl.groupStrokeWidth > 0) ? nl.groupStrokeWidth : 20;
+        if (__grpKeyNL && __grpStrokeColNL !== "none") {
+          if (!__linkGroupBuckets[__grpKeyNL]) {
+            __linkGroupBuckets[__grpKeyNL] = {
+              members: [], rubies: [],
+              strokeColor: __grpStrokeColNL, strokeWidth: __grpStrokeSzNL,
+              name: (typeof layerRef.name === "string" && layerRef.name.length > 0) ? layerRef.name : "text"
+            };
+            __linkGroupOrder.push(__grpKeyNL);
+          }
+          __linkGroupBuckets[__grpKeyNL].members.push(layerRef);
+          for (var __lgR = 0; __lgR < __rubyLayersNL.length; __lgR++) {
+            __linkGroupBuckets[__grpKeyNL].rubies.push(__rubyLayersNL[__lgR]);
+          }
+          // とりあえず text グループ内へ（loop 後にサブグループへ移す）。ルビは親の直前へ。
+          if (__textGroup) {
+            try { layerRef.move(__textGroup, ElementPlacement.PLACEATBEGINNING); } catch (eLgMv) {}
+            if (__hasRubiesNL) {
+              for (var __lgTg = __rubyLayersNL.length - 1; __lgTg >= 0; __lgTg--) {
+                try { __rubyLayersNL[__lgTg].move(layerRef, ElementPlacement.PLACEBEFORE); } catch (eLgTg) {}
+              }
+            }
+          }
+          try { layerRef.visible = true; } catch (eLgVis) {}
+          if (__hasRubiesNL) {
+            for (var __lgVr = 0; __lgVr < __rubyLayersNL.length; __lgVr++) {
+              try { __rubyLayersNL[__lgVr].visible = true; } catch (eLgVr) {}
+            }
+          }
+          continue;
+        }
         var __subGroupNL = null;
         if (__hasStrokeNL && __hasRubiesNL) {
           try {
@@ -5726,6 +6213,35 @@ function applyToPsd(psdPath, edits, newLayers, savePath, dashTrackingMille, tild
         }
         // 念のため可視化（一部 PS で move 後に visible=false になるケースを補正）
         try { layerRef.visible = true; } catch (eVisNL) {}
+      }
+      // 【グループ再現】bucket ごとに text サブグループを作成し、メンバー(+ルビ)を入れて
+      // グループ境界線を 1 回だけ当てる。元 PSD の「フォルダ/フチ付きリンク群」を再現。
+      for (var __bgi = 0; __bgi < __linkGroupOrder.length; __bgi++) {
+        var __bk = __linkGroupBuckets[__linkGroupOrder[__bgi]];
+        if (!__bk || __bk.members.length === 0) continue;
+        try {
+          var __lgSub = null;
+          if (__textGroup) {
+            try { __lgSub = __textGroup.layerSets.add(); } catch (eLgSubTg) { __lgSub = doc.layerSets.add(); }
+          } else {
+            __lgSub = doc.layerSets.add();
+          }
+          try { __lgSub.name = __bk.name; } catch (eLgName) {}
+          // ルビを先に（上に）、続いてメンバーをサブグループへ移動。
+          for (var __bri = __bk.rubies.length - 1; __bri >= 0; __bri--) {
+            try { __bk.rubies[__bri].move(__lgSub, ElementPlacement.PLACEATBEGINNING); } catch (eBr) {}
+          }
+          for (var __bmi = 0; __bmi < __bk.members.length; __bmi++) {
+            try { __bk.members[__bmi].move(__lgSub, ElementPlacement.PLACEATEND); } catch (eBm) {}
+          }
+          if (__textGroup) { try { __lgSub.move(__textGroup, ElementPlacement.PLACEATBEGINNING); } catch (eLgMv2) {} }
+          try { __lgSub.visible = true; } catch (eLgVis2) {}
+          try { applyStrokeEffect(__lgSub, { color: __bk.strokeColor, size: __bk.strokeWidth }); } catch (eLgStroke) {
+            addWarning("グループ境界線の適用に失敗: " + eLgStroke);
+          }
+        } catch (eLgCreate) {
+          addWarning("リンク群/フォルダグループの再現に失敗: " + eLgCreate);
+        }
       }
       // 全レイヤー処理後、新規作成したグループ自身を可視に揃える（既存
       // フォルダは触らない方針なので、ここで触るのは createNewTextGroupAtTop

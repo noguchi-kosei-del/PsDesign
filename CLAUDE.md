@@ -1,5 +1,43 @@
 # PsDesign
 
+## 2026-06-20 変更メモ: v2.6.5 リリース（リサイクル写植の行間消失 / 縦位置ズレ 根治 ＋ フチ付きリンク群/フォルダのグループ再現）
+
+リサイクル写植（既存 PSD のテキストを抽出して再写植）の「実物再現」を 3 点強化した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.5` に更新済み。コード内コメントの `v2.6.5 / v2.6.6 / v2.6.7` は本作業の反復マーカー。検証は `npm run check`（`check:encoding` 73 files / `check:security` 21 / `lint` / `build`）＋ `cargo check` 緑。実機で A（行間）/ B（位置）/ C（グループ再現）をユーザー確認済み。
+
+### A. per-line 行間（ジャスティフィケーション 150% 等）が消える問題の根治
+
+- **真因**: リサイクルは抽出時に ag-psd から per-line 行間（例 お兄ちゃん層の `lineLeadings={"2":150}`）を正しく読めていた（merge 成功・診断ファイルで確認）が、リサイクルが原稿テキストへ段落を追記 → `setTxtSource` → `onTxtSourceChange` 発火 → [src/auto-place.js](src/auto-place.js) `syncPlacedFromTxt` が「行間はルビ注記からしか作られない」前提で `rubyLineLeadingsForText(next, mergedRubies)` を採用し、ルビの無い層の `{"2":150}` を空マップ `{}` で**上書き破壊**していた。
+- **修正** ([src/auto-place.js](src/auto-place.js) `syncPlacedFromTxt`): ルビ由来行間を**レイヤー既存行間の上に重ねる**マージへ変更（`const rubyLineLeadings = rubyLineLeadingsForText(next, mergedRubies); const nextLineLeadings = { ...(layer.lineLeadings ?? {}), ...rubyLineLeadings };`）。ルビ行はルビ値で更新、それ以外の行（リサイクル/手動 per-line 行間）は保持される。
+- **行間 hint マッチャの寛容化** ([src/psd-loader.js](src/psd-loader.js) `findLeadingHintForItem` を新設し `mergeReuseLeadingFromAgPsd` で使用）: 共有の `findReuseStrokeHintForPhotoshopItem` は bounds 距離 ≤8px を必須にするが、Photoshop の textItem.bounds と ag-psd の rendered bounds は縦書き自動行送り層で数十pxずれ、固定 8px gate で per-line 行間差分層を取りこぼしていた。hints は「per-line 行間差分を持つ層のみ」で通常少数かつ内容一意なので、**id 一致 → 内容（+名前）一意なら bounds 不問 → 複数候補時のみ bounds 最近傍**に変更（stroke 用マッチャは無変更で regression なし）。
+
+### B. リサイクル保存時の縦位置ズレ（全レイヤーが数px〜十数px上下する）の根治 ― ag-psd rendered bounds 基準化
+
+- **真因**: 位置補正の基準に Photoshop の **textItem.bounds（字面ボックス／typographic）** を使っていた（読み取りの `it.top/left/right`）。しかし保存側 jsx は `layerRef.bounds`（**rendered pixel bounds**）を見て辺を揃えるため、両者がフォント／レイヤーによって数px〜22pxずれ、結果テキストが縦にずれていた（幅・高さは一致＝純粋な平行移動）。
+- **修正**: [src/psd-loader.js](src/psd-loader.js) に `collectReuseAgBoundsFromAgPsd` / `mergeReuseBoundsFromAgPsd` を新設。全テキストレイヤーの **ag-psd 実 bounds（left/top/right/bottom = rendered）** を各 item に `agLeft/agTop/agRight/agBottom` として貼る（id 一致中心の `findLeadingHintForItem` で対応付け）。バッチ経路（[src/services/reuse.js](src/services/reuse.js)）と単体フォールバック（`loadPsdForReuse`）の両方で `mergeReuseLeadingFromAgPsd` の直後に呼ぶ。
+- [src/services/reuse.js](src/services/reuse.js) `collectReuseDrafts`: `it.agTop/agLeft/agRight` があればそれを優先して `reuseSrcTop/reuseSrcLeft/reuseSrcRight` と中心 `reuseSrcCx/Cy` に採用（無ければ AM bounds にフォールバック）。
+- [src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyNewLayerPositionAnchor`: `layerRef.bounds`（rendered）の辺を **縦書き=右上アンカー（bounds.right → reuseSrcRight, bounds.top → reuseSrcTop）／横書き=左上アンカー（bounds.left → reuseSrcLeft, bounds.top → reuseSrcTop）** へ直接揃える。reuseSrc* が無いときのみ中心逆算値 `nl.y / nl.x` にフォールバック（旧来のハイブリッド閾値方式は ag-psd 由来が信頼できるため撤去）。
+- [src-tauri/src/lib.rs](src-tauri/src/lib.rs) `NewLayer` に `reuse_src_top`（`reuseSrcTop`）/ `reuse_src_left`（`reuseSrcLeft`）を追加。jsx_gen は payload 2 経路（リテラル emit / 一時 JSON `__copy`）の両方で伝達。
+
+### C. フチ付きリンク群 / フォルダのグループ再現（新機能）
+
+元 PSD で **(a) Photoshop のレイヤーリンク（鎖アイコン）で繋がれたテキスト＋境界線**、または **(b) フォルダ(LayerSet)にまとめられグループに境界線が付与**されているテキスト群を検出したら、出力でも **text グループ内のサブグループ**にまとめ、**グループに境界線を 1 回だけ**当てて再現する（ルビ＋フチのサブグループ化と同じ方式）。**フチがある時だけ**グループ化し、フチ無しのリンク群/グループは従来どおり各テキストを個別レイヤーとして展開する。
+
+- **読み取り** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `groupUnitForLayer`、`READ_TEXT_BATCH_BODY` の `processOnePsd` で使用): 各テキストレイヤーについて (1) 祖先フォルダに `strokeFromLayerEffects` のフチ → `key="set:"+layerIdOf(フォルダ)`、(2) `L.linkedLayers` にテキストレイヤーがあり自レイヤーにフチ → `key="link:"+リンク群テキストの最小 id`。`out.groupKey` / `out.groupStrokeColor` / `out.groupStrokeWidth` を item JSON に出力し、**グループ化対象の個別 `strokeColor` は `none` に抑止**（フチはグループ側へ）。
+- **受け渡し**: item → [src/psd-loader.js](src/psd-loader.js) `buildReusePageFromPsData`（`reusePsTextItems = psData.textLayers` でそのまま透過）→ [src/services/reuse.js](src/services/reuse.js) `collectReuseDrafts`（`reproGroupKey/reproGroupStrokeColor/reproGroupStrokeWidth` を create に載せる）→ [src/state.js](src/state.js) `addNewLayer`（`groupKey/groupStrokeColor/groupStrokeWidth` を destructure + layer に保持）→ `exportEdits`（`...rest` で payload へ透過）→ [src-tauri/src/lib.rs](src-tauri/src/lib.rs) `NewLayer`（`group_key/group_stroke_color/group_stroke_width`）→ jsx emit（リテラル emit / `__copy` 両経路）。
+- **保存** ([src-tauri/src/jsx_gen.rs](src-tauri/src/jsx_gen.rs) `applyToPsd` 新規レイヤーループ): ループ前に `__linkGroupBuckets` / `__linkGroupOrder` を宣言。各レイヤーは位置・行間・per-char・ルビの全処理（`applyNewLayerPositionAnchor` 等、すべて grouping 分岐より前）を終えた後、`groupKey` があれば bucket（members + rubies + groupStroke）へ登録して text グループ内へ仮配置し `continue`（個別フチ/サブグループ化はスキップ）。**ループ後**に bucket ごとに `__textGroup.layerSets.add()` で **text のサブグループ**を作成 → メンバー（+ルビ）を移動 → `applyStrokeEffect(サブグループ, グループフチ)` を 1 回適用。Phase B（kerning/antialias）登録は `layerRef` 生成直後（grouping 分岐より前）なのでグループ化レイヤーも漏れない。
+
+### 検証・確認事項
+
+- `npm run check`（`check:encoding` 73 files / `check:security` 21 / `lint` / `build`）成功、`cargo check` 成功。
+- A〜C はリサイクル抽出時に読むため **Rust 再ビルド＋リサイクル再実行**で反映。`tauri dev --no-dev-server` はフロント変更に `dist` 再ビルド（`npm run build`）が必要、Rust 変更に `tauri dev` 完全再起動が必要。
+- 実機（結婚_002/003）で A（お兄ちゃん層の幅 493 復帰）/ B（多くの層で dT/dL=0）を確認済み。C（リンク群/フォルダ＋フチのサブグループ再現）もユーザー実機確認済み。
+
+### 既知のスコープ / 注意
+
+- グループ検出（`groupUnitForLayer`）は**バッチ読取**（`read_psd_text_layers_batch` → `READ_TEXT_BATCH_BODY`／リサイクル主経路）にのみ実装。単体読取フォールバック（`loadPsdForReuse` → `read_psd_text_layers`）はグループ検出未対応（ただし B の ag-psd bounds マージは追加済み）。
+- リサイクル抽出で ag-psd を **3 回読む**（stroke / leading / bounds の各 merge）。性能影響あり、将来 1 回に統合の余地。
+- 一時診断コード（`[reuse leadDiag]` console.log / `__leadingMergeDiag` / `opus_leaddiag_*.txt` ファイル出力）は**除去済み**。`jsx_gen.rs` の `leadDiag`（item JSON の AM 読取診断フィールド）と `diagPsrCount/diagPsrDump` は本作業前から存在するため据え置き。
+
 ## 2026-06-19 変更メモ: v2.6.4 リリース（リサイクル保存位置の太字下ズレ根治 / 中黒「・」ルビの植字位置調整）
 
 v2.6.4 では、リサイクル写植で報告された 2 件を修正した。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.4` に更新済み。

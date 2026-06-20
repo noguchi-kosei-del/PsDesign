@@ -1169,6 +1169,210 @@ export async function mergeReuseStrokeHintsFromAgPsd(page, path = page?.path) {
   return page;
 }
 
+// ag-psd の paragraphStyleRuns から「段落ごとの行間（autoLeadingPercentage）」を読み、
+// base と異なる段落を per-line override (lineLeadings) として収集する。
+// Photoshop の Action Manager (read_psd_text_layers の JSX) は paragraphStyleRange の
+// autoLeadingPercentage を環境により返さないことがあり、4段落中1段落だけ 150% といった
+// per-paragraph 行間が取りこぼされる（例:「お兄ちゃん的存在の」だけ行間が消える）。
+// ag-psd は engineData から確実に読めるため、per-paragraph 行間はこちらを正とする。
+function collectReuseLeadingHintsFromAgPsd(layer, out = [], parentVisible = true) {
+  const effectiveVisible = parentVisible && !isLayerHidden(layer);
+  if (effectiveVisible && typeof layer?.id === "number" && layer.text) {
+    const t = layer.text;
+    const text = typeof t.text === "string" ? t.text : "";
+    const runs = Array.isArray(t.paragraphStyleRuns) ? t.paragraphStyleRuns : [];
+    // 各段落の開始 offset と pct（autoLeading が数値＝倍率のときのみ）を算出。
+    const paraPcts = [];
+    let offset = 0;
+    for (const run of runs) {
+      const len = Number(run?.length) || 0;
+      const al = run?.style?.autoLeading;
+      let pct = null;
+      if (typeof al === "number" && Number.isFinite(al) && al > 0) {
+        pct = al > 10 ? Math.round(al) : Math.round(al * 100);
+      }
+      paraPcts.push({ offset, pct });
+      offset += len;
+    }
+    // base pct = 段落 pct の最頻値。無ければ base 文字スタイルの leading/fontSize 比。
+    let basePct = null;
+    const counts = new Map();
+    for (const p of paraPcts) {
+      if (p.pct === null) continue;
+      counts.set(p.pct, (counts.get(p.pct) || 0) + 1);
+    }
+    if (counts.size > 0) {
+      let bestN = -1;
+      for (const [pct, n] of counts) {
+        if (n > bestN) { bestN = n; basePct = pct; }
+      }
+    }
+    if (basePct === null) {
+      const fs = Number(t.style?.fontSize);
+      const ld = Number(t.style?.leading);
+      if (Number.isFinite(fs) && fs > 0 && Number.isFinite(ld) && ld > 0) {
+        basePct = Math.round((ld / fs) * 100);
+      }
+    }
+    // base と異なる段落を per-line override に記録（行 index = 段落開始までの改行数）。
+    const lineLeadings = {};
+    if (basePct !== null) {
+      for (const p of paraPcts) {
+        if (p.pct === null || p.pct === basePct) continue;
+        let lineIdx = 0;
+        for (let i = 0; i < p.offset && i < text.length; i++) {
+          const c = text.charCodeAt(i);
+          if (c === 10 || c === 13) lineIdx++;
+        }
+        lineLeadings[String(lineIdx)] = p.pct;
+      }
+    }
+    // per-paragraph の差分がある層だけ hint 化（差分なし＝既存の読取結果を尊重し触らない）。
+    if (Object.keys(lineLeadings).length > 0) {
+      out.push({
+        id: layer.id,
+        name: layer.name ?? "",
+        contents: text,
+        left: layer.left ?? null,
+        top: layer.top ?? null,
+        right: layer.right ?? null,
+        bottom: layer.bottom ?? null,
+        leadingPct: basePct,
+        lineLeadings,
+      });
+    }
+  }
+  if (Array.isArray(layer?.children)) {
+    for (const child of layer.children) collectReuseLeadingHintsFromAgPsd(child, out, effectiveVisible);
+  }
+  return out;
+}
+
+// 行間 hint 専用マッチャ。stroke 用 findReuseStrokeHintForPhotoshopItem は bounds 距離 <=8px を
+// 必須にするが、Photoshop の textItem bounds と ag-psd の rendered bounds は数十px ずれることが
+// あり（特に縦書き・自動行送り層）、固定 8px gate では お兄ちゃん層のような per-line 行間差分層を
+// 取りこぼす。hints は「per-line 行間差分を持つ層のみ」で通常少数かつ内容一意なので、
+// 内容（+名前）一致を最優先し、内容が一意なら bounds 不問で採用。複数候補時だけ bounds 最近傍。
+function findLeadingHintForItem(item, hints, usedHints) {
+  const itemId = finiteNumber(item?.id);
+  if (itemId !== null) {
+    const byId = hints.find((hint) => !usedHints.has(hint) && finiteNumber(hint.id) === itemId);
+    if (byId) return byId;
+  }
+  const text = normalizePsText(item?.contents);
+  const name = normalizeTextLayerName(item?.name);
+  const cands = hints.filter((hint) => {
+    if (usedHints.has(hint)) return false;
+    const ht = normalizePsText(hint.contents);
+    const hn = normalizeTextLayerName(hint.name);
+    if (text && ht && ht !== text) return false;
+    if (name && hn && hn !== name) return false;
+    return true;
+  });
+  if (cands.length === 0) return null;
+  if (cands.length === 1) return cands[0]; // 内容一意 → bounds gate を外して採用
+  let best = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+  for (const hint of cands) {
+    const s = boundsDistance(item, hint);
+    if (s < bestScore) { best = hint; bestScore = s; }
+  }
+  return best;
+}
+
+export async function mergeReuseLeadingFromAgPsd(page, path = page?.path) {
+  const items = Array.isArray(page?.reusePsTextItems) ? page.reusePsTextItems : null;
+  if (!items || items.length === 0 || !path) return page;
+  try {
+    const bytes = await readFileBytes(path);
+    await waitForNextFrame();
+    const psd = readPsd(bytes, {
+      skipLayerImageData: true,
+      skipLinkedFilesData: true,
+      skipThumbnail: true,
+      useImageData: false,
+    });
+    const hints = [];
+    if (Array.isArray(psd.children)) {
+      for (const child of psd.children) collectReuseLeadingHintsFromAgPsd(child, hints, true);
+    }
+    if (!hints.length) return page;
+    const usedHints = new Set();
+    for (const item of items) {
+      // 行間専用の寛容マッチャ（内容一致優先・bounds gate 緩和）。
+      const hint = findLeadingHintForItem(item, hints, usedHints);
+      if (!hint) continue;
+      usedHints.add(hint);
+      // per-paragraph 行間は ag-psd を正として上書き。
+      item.lineLeadings = { ...hint.lineLeadings };
+      if (typeof hint.leadingPct === "number" && hint.leadingPct > 0) {
+        item.leadingPct = hint.leadingPct;
+      }
+    }
+  } catch (error) {
+    console.warn("[reuse] leading fallback read failed:", path, error);
+  }
+  return page;
+}
+
+// 全テキストレイヤーの ag-psd 実 bounds（rendered pixel bounds = left/top/right/bottom）を収集する。
+// Photoshop の AM 読み取りが返す it.left/top/right は textItem.bounds（字面ボックス／typographic）で、
+// フォントやレイヤーによって ag-psd の rendered bounds と数px〜20px ずれる。保存側 jsx は
+// layerRef.bounds（rendered）を見て位置補正するため、揃える相手も rendered bounds（＝ag-psd）が正しい。
+function collectReuseAgBoundsFromAgPsd(layer, out = [], parentVisible = true) {
+  const effectiveVisible = parentVisible && !isLayerHidden(layer);
+  if (effectiveVisible && typeof layer?.id === "number" && layer.text
+      && Number.isFinite(layer.left) && Number.isFinite(layer.top)
+      && Number.isFinite(layer.right) && Number.isFinite(layer.bottom)) {
+    out.push({
+      id: layer.id,
+      name: layer.name ?? "",
+      contents: typeof layer.text.text === "string" ? layer.text.text : "",
+      left: layer.left, top: layer.top, right: layer.right, bottom: layer.bottom,
+    });
+  }
+  if (Array.isArray(layer?.children)) {
+    for (const child of layer.children) collectReuseAgBoundsFromAgPsd(child, out, effectiveVisible);
+  }
+  return out;
+}
+
+// 各 reusePsTextItem に ag-psd の実 bounds を item.agLeft/agTop/agRight/agBottom として貼る。
+// collectReuseDrafts はこれを reuseSrcTop/reuseSrcRight/reuseSrcLeft に使い、Photoshop AM の
+// 字面ボックス由来のズレを排除して位置を厳密再現する。
+export async function mergeReuseBoundsFromAgPsd(page, path = page?.path) {
+  const items = Array.isArray(page?.reusePsTextItems) ? page.reusePsTextItems : null;
+  if (!items || items.length === 0 || !path) return page;
+  try {
+    const bytes = await readFileBytes(path);
+    await waitForNextFrame();
+    const psd = readPsd(bytes, {
+      skipLayerImageData: true,
+      skipLinkedFilesData: true,
+      skipThumbnail: true,
+      useImageData: false,
+    });
+    const hints = [];
+    if (Array.isArray(psd.children)) {
+      for (const child of psd.children) collectReuseAgBoundsFromAgPsd(child, hints, true);
+    }
+    if (!hints.length) return page;
+    const usedHints = new Set();
+    for (const item of items) {
+      const hint = findLeadingHintForItem(item, hints, usedHints);
+      if (!hint) continue;
+      usedHints.add(hint);
+      item.agLeft = hint.left;
+      item.agTop = hint.top;
+      item.agRight = hint.right;
+      item.agBottom = hint.bottom;
+    }
+  } catch (error) {
+    console.warn("[reuse] ag-bounds read failed:", path, error);
+  }
+  return page;
+}
+
 function effectiveFontSize(rawFontSize, transform) {
   if (!Number.isFinite(rawFontSize) || rawFontSize <= 0) return rawFontSize ?? null;
   if (!Array.isArray(transform) || transform.length < 4) return rawFontSize;
@@ -1764,7 +1968,12 @@ export async function loadPsdForReuse(path) {
     const json = await invoke("read_psd_text_layers", { psdPath: path });
     const psData = JSON.parse(json);
     const page = await buildReusePageFromPsData(path, psData);
-    if (page) return await mergeReuseStrokeHintsFromAgPsd(page, path);
+    if (page) {
+      await mergeReuseStrokeHintsFromAgPsd(page, path);
+      await mergeReuseLeadingFromAgPsd(page, path);
+      // バッチ経路と同じく ag-psd の実 bounds で位置補正の基準を rendered へ揃える。
+      return await mergeReuseBoundsFromAgPsd(page, path);
+    }
     console.warn("[reuse] Photoshop read returned incomplete data, falling back to ag-psd", psData);
   } catch (e) {
     console.warn("[reuse] Photoshop text read failed, falling back to ag-psd:", e);

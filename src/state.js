@@ -1701,9 +1701,17 @@ export function addNewLayer({
   autoFontSwitchBucket,
   lineLeadings,
   charRubies,
+  charTrackings,
+  charKernings,
+  charSizes,
+  charFonts,
+  charBolds,
   lowExtractTextMatch,
   extractMatchScore,
   reuseTightThick,
+  groupKey,
+  groupStrokeColor,
+  groupStrokeWidth,
 }) {
   const tempId = `new-${state.nextTempId++}`;
   const layer = {
@@ -1733,18 +1741,21 @@ export function addNewLayer({
     lineLeadings: lineLeadings && typeof lineLeadings === "object" ? { ...lineLeadings } : {},
     // 【v1.16.0】文字ごとのサイズ / フォントオーバーライド。
     // キーは contents 文字列の絶対 index（textarea selectionStart と同じ）。
-    // UI プレビューのみ反映、Photoshop には書き戻されない（layer 全体の sizePt/font が使われる）。
-    charSizes: {},
-    charFonts: {},
+    // 通常は per-char 編集で設定するが、リサイクルは抽出時に元レイヤーの値を読んでここで初期化する。
+    charSizes: charSizes && typeof charSizes === "object" ? { ...charSizes } : {},
+    charFonts: charFonts && typeof charFonts === "object" ? { ...charFonts } : {},
     charHorizontalScales: {},
     charVerticalScales: {},
-    charTrackings: {},
-    charKernings: {},
+    // 通常は per-char 編集 (setCharSpacingRange) で設定するが、リサイクルは抽出時に元レイヤーの
+    // 字間（トラッキング/カーニング）を読んでここで初期化し、保存側で厳密再現する。
+    charTrackings: charTrackings && typeof charTrackings === "object" ? { ...charTrackings } : {},
+    charKernings: charKernings && typeof charKernings === "object" ? { ...charKernings } : {},
     charTateChuYokos: {},
     charFillColors: {},
     // 【v1.22.0】文字ごとの合成太字オーバーライド。{[charIndex]: boolean}。
     // 値あり → layer の syntheticBold より優先。値なし → layer 値にフォールバック。
-    charBolds: {},
+    // リサイクルは抽出時に元レイヤーの per-char 太字を読んでここで初期化する。
+    charBolds: charBolds && typeof charBolds === "object" ? { ...charBolds } : {},
     charItalics: {},
     // 【v1.26.0 ルビ】文字ごとのルビ。スキーマは他の per-char とは異なり「start index を
     // キーに range 全体を 1 件で保持」: { "<start>": {end, text, type:"mono"|"group", scale:50} }。
@@ -1766,6 +1777,11 @@ export function addNewLayer({
     lowExtractTextMatch: lowExtractTextMatch === true,
     extractMatchScore: Number.isFinite(extractMatchScore) ? extractMatchScore : null,
     reuseTightThick: reuseTightThick === true,
+    // 【リンク群/フォルダ グループ再現】フチ付きリンク群/フォルダ由来のレイヤーは同 groupKey を持つ。
+    // 保存側 jsx_gen が同 key の新規レイヤーを text サブグループへまとめ、グループにフチを当てる。
+    groupKey: (typeof groupKey === "string" && groupKey) ? groupKey : null,
+    groupStrokeColor: (groupStrokeColor === "white" || groupStrokeColor === "black") ? groupStrokeColor : "none",
+    groupStrokeWidth: Number.isFinite(groupStrokeWidth) ? groupStrokeWidth : 20,
     // 【v1.28.0 移植 (PsDesign-main v1.25.0)】自動配置時の元 sizePt。
     // 位置調整 mode2 / mode3 でサイズ補正を idempotent にするために保存する。
     // layer.sizePt が後から更新されても、補正は sizePtBasis × sizeCorrectionFactor で再計算。

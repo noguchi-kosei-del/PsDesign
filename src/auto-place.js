@@ -2282,7 +2282,13 @@ function syncPlacedFromTxt() {
       for (const [k, v] of Object.entries(layer.charRubies ?? {})) {
         if (!(k in mergedRubies)) mergedRubies[k] = v;
       }
-      const nextLineLeadings = rubyLineLeadingsForText(next, mergedRubies);
+      // 【リサイクル/手動 per-line 行間の保護】rubyLineLeadingsForText は「ルビ注記からしか」
+      // 行間を作れない。これをそのまま採用すると、リサイクルで元 PSD から再現した per-line 行間
+      // （例 お兄ちゃん層の {"2":150}）や、ユーザーが in-place 編集で付けた手動行間が、ルビの
+      // 無いレイヤーで空マップに潰される。よってルビ由来行間をレイヤー既存行間の「上に重ねる」
+      // （ruby 行は ruby 値で上書き・それ以外の行は既存値を保持）。
+      const rubyLineLeadings = rubyLineLeadingsForText(next, mergedRubies);
+      const nextLineLeadings = { ...(layer.lineLeadings ?? {}), ...rubyLineLeadings };
       const rubiesChanged = JSON.stringify(layer.charRubies ?? {}) !== JSON.stringify(mergedRubies);
       const leadingsChanged = JSON.stringify(layer.lineLeadings ?? {}) !== JSON.stringify(nextLineLeadings);
 

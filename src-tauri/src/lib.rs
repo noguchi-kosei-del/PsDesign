@@ -252,6 +252,23 @@ pub struct NewLayer {
     pub reuse_src_pos_x: Option<f64>,
     #[serde(rename = "reuseSrcPosY", default)]
     pub reuse_src_pos_y: Option<f64>,
+    // 元レイヤーの実 bounds 右端（PSD px）。縦書きのアンカー辺合わせに使う（x=元 left, y=元 top）。
+    #[serde(rename = "reuseSrcRight", default)]
+    pub reuse_src_right: Option<f64>,
+    // 元レイヤーの実 bounds 上端（PSD px）。top のアンカー辺合わせに使う（reuseSrcRight と対称）。
+    #[serde(rename = "reuseSrcTop", default)]
+    pub reuse_src_top: Option<f64>,
+    // 元レイヤーの実 bounds 左端（PSD px）。横書きの左上アンカー辺合わせに使う。
+    #[serde(rename = "reuseSrcLeft", default)]
+    pub reuse_src_left: Option<f64>,
+    // 【リンク群/フォルダ グループ再現】同 key の新規レイヤーを text サブグループへまとめる。
+    #[serde(rename = "groupKey", default)]
+    pub group_key: Option<String>,
+    // グループに当てる境界線色（"white"|"black"|"none"）と太さ（PSD px）。
+    #[serde(rename = "groupStrokeColor", default)]
+    pub group_stroke_color: Option<String>,
+    #[serde(rename = "groupStrokeWidth", default)]
+    pub group_stroke_width: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
