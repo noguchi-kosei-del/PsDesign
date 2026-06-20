@@ -1,5 +1,15 @@
 # PsDesign
 
+## 2026-06-21 変更メモ: v2.6.8 リリース（ドライブ式の最初の配信＝**vG**／2段階移行の第2段）
+
+v2.6.7（vMig）でドライブ式へ切替えたフリート向けの**最初のドライブ配信版**。機能変更は無く（vMig と同じドライブ式コード）、**版を上げて `App_installer\OPUS\` に配置**し、ドライブ自動更新が通ることを検証する位置づけ。`package.json`/`package-lock.json`/`Cargo.toml`/`Cargo.lock`/`tauri.conf.json` は `2.6.8`。
+
+### リリース方式（脱git・ドライブ式）
+- **GitHub タグは打たない**（CI 非使用）。ローカルで `npm run tauri build` → **インストーラ(NSIS `OPUS_2.6.8_x64-setup.exe`)のみ Authenticode 署名**（cert `7F18…419D`・本体exeは未署名＝EDR配慮）→ **新 OPUS 鍵で `.sig` 再生成**（`opus-updater.key`・鍵ID `9699489B12EF2315`）→ `verify-minisign.mjs` で検証 → `App_installer\OPUS\` に exe+`.sig` を配置（過去版は残す）。
+- 移行済みフリート（v2.6.7+）は起動時に `updater_local.rs` が `App_installer\OPUS\` を見て v2.6.8 を minisign 検証→適用。
+- 署名順序の厳守: ①ビルド → ②Authenticode署名（exe書換）→ ③`.sig`再生成（署名後exeに対し）→ ④minisign検証 → ⑤配置。
+- ソースは git ブランチへコミット（履歴）。配信は App_installer のみ（GitHub Release は作らない）。`更新用フォルダ\OPUS\` に自己完結ドキュメント＋src を整備（他アプリと同形式）。
+
 ## 2026-06-21 変更メモ: v2.6.7 リリース（自動更新をドライブ式へ移行＝脱git・**vMig**／2段階移行の第1段）
 
 自動更新を GitHub 方式から **ドライブ式（脱git・`App_installer\OPUS\` を minisign 検証して適用）** へ移行（ProGen/Tachimi/MojiQ/KENBAN/COMIC-Bridge と同型）。**本版 v2.6.7 は vMig（移行版）**＝現フリート（GitHub更新で稼働中）に **GitHub CI で配信**し、インストール後は**ドライブを見るコードへ切替**わる。次版 **v2.6.8 を vG**（ドライブ式の最初の配信）とする。`package.json`/`package-lock.json`/`Cargo.toml`/`Cargo.lock`/`tauri.conf.json` は `2.6.7`。`npm run check`＋`cargo check` 緑。
