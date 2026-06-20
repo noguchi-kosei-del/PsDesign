@@ -1,16 +1,13 @@
-// 起動時に Tauri Updater で新バージョンを確認し、
+// 起動時にドライブ式アップデータ（脱git）で新バージョンを確認し、
 // 見つかれば中央モーダルダイアログ (#update-modal) を表示する。
-// idle → downloading → success → relaunch、または idle → error の状態遷移。
+// idle → applying → (アプリ終了→インストーラ→再起動)、または idle → error の状態遷移。
+//
+// 更新先 `App_installer\OPUS\` は Rust 側 updater_local.rs が外部参照 enc（updater.localDir）から
+// 実行時解決し、setup.exe を minisign 検証してから適用する（GitHub 非接続）。
 
-import { check } from "@tauri-apps/plugin-updater";
-import { getVersion } from "@tauri-apps/api/app";
-import { relaunch } from "@tauri-apps/plugin-process";
+import { invoke } from "@tauri-apps/api/core";
 
 const STARTUP_DELAY_MS = 1500;
-const RELAUNCH_DELAY_MS = 1500;
-const RESET_MAJOR = 1;
-const RESET_MINOR = 4;
-const LEGACY_MINOR_FLOOR = 30;
 
 const ICONS = {
   download: `<svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -41,30 +38,7 @@ let laterBtn = null;
 let nowBtn = null;
 
 let dismissed = false;
-let cachedUpdate = null;
-
-function parseSemver(version) {
-  const m = /^(\d+)\.(\d+)\.(\d+)(?:[-+].*)?$/.exec(String(version || "").trim());
-  if (!m) return null;
-  return {
-    major: Number(m[1]),
-    minor: Number(m[2]),
-    patch: Number(m[3]),
-  };
-}
-
-function isLegacyUpdateFromBeforeVersionReset(currentVersion, updateVersion) {
-  const current = parseSemver(currentVersion);
-  const next = parseSemver(updateVersion);
-  if (!current || !next) return false;
-  return (
-    current.major === RESET_MAJOR &&
-    next.major === RESET_MAJOR &&
-    current.minor >= RESET_MINOR &&
-    current.minor < LEGACY_MINOR_FLOOR &&
-    next.minor >= LEGACY_MINOR_FLOOR
-  );
-}
+let cachedUpdate = null; // Rust の LocalUpdateInfo { version, file_name, setup_path } | null
 
 function ensureRefs() {
   if (modalEl) return true;
@@ -150,27 +124,16 @@ function renderError(err) {
 async function runUpdate() {
   renderDownloading();
   try {
-    const update = cachedUpdate ?? (await check());
+    const update = cachedUpdate ?? (await invoke("check_local_update"));
     if (!update) {
       hideModal();
       return;
     }
-    const currentVersion = await getVersion();
-    if (isLegacyUpdateFromBeforeVersionReset(currentVersion, update.version)) {
-      cachedUpdate = null;
-      hideModal();
-      return;
-    }
-    await update.downloadAndInstall();
+    // ドライブ式: apply_local_update が App_installer\OPUS\ の setup.exe を minisign 再検証 →
+    // ローカル temp へコピー → /S /UPDATE で起動し、アプリを終了する（NSIS フックが再起動）。
+    // 通常はこの invoke の解決前にアプリが終了する。検証失敗時は reject → catch で renderError。
+    await invoke("apply_local_update", { setupPath: update.setup_path });
     renderSuccess();
-    setTimeout(async () => {
-      try {
-        await relaunch();
-      } catch (err) {
-        console.error("[updater] relaunch failed:", err);
-        renderError(err);
-      }
-    }, RELAUNCH_DELAY_MS);
   } catch (err) {
     console.error("[updater] update failed:", err);
     renderError(err);
@@ -200,21 +163,14 @@ export function bindAutoUpdater() {
   setTimeout(async () => {
     if (dismissed) return;
     try {
-      const update = await check();
+      // ドライブ式: App_installer\OPUS\ を見て、現行より高い版を minisign 検証して返す（無ければ null）。
+      const update = await invoke("check_local_update");
       if (!update) return;
-      const currentVersion = await getVersion();
-      if (isLegacyUpdateFromBeforeVersionReset(currentVersion, update.version)) {
-        console.info("[updater] skip legacy update from before version reset:", {
-          currentVersion,
-          updateVersion: update.version,
-        });
-        return;
-      }
       cachedUpdate = update;
       renderIdle(update.version);
       showModal();
     } catch (err) {
-      // ネット切れ・エンドポイント未設定など。サイレントで握りつぶす。
+      // G:未接続・参照アドレス未解決・署名不一致など。サイレントで握りつぶす。
       console.warn("[updater] check failed:", err);
     }
   }, STARTUP_DELAY_MS);

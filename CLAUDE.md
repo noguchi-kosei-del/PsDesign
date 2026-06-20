@@ -1,5 +1,17 @@
 # PsDesign
 
+## 2026-06-21 変更メモ: v2.6.7 リリース（自動更新をドライブ式へ移行＝脱git・**vMig**／2段階移行の第1段）
+
+自動更新を GitHub 方式から **ドライブ式（脱git・`App_installer\OPUS\` を minisign 検証して適用）** へ移行（ProGen/Tachimi/MojiQ/KENBAN/COMIC-Bridge と同型）。**本版 v2.6.7 は vMig（移行版）**＝現フリート（GitHub更新で稼働中）に **GitHub CI で配信**し、インストール後は**ドライブを見るコードへ切替**わる。次版 **v2.6.8 を vG**（ドライブ式の最初の配信）とする。`package.json`/`package-lock.json`/`Cargo.toml`/`Cargo.lock`/`tauri.conf.json` は `2.6.7`。`npm run check`＋`cargo check` 緑。
+
+### 仕組み
+- **新 minisign 署名鍵を生成**（OPUS はローカル鍵が無かったため新規）。`_署名鍵\OPUS\opus-updater.key`(+`.pub`/`README_KEY.txt` にPW・G:非同梱)。**鍵ID `9699489B12EF2315`**。以後ドライブ配信物はこの鍵で署名し、`updater_local.rs` の `UPDATER_PUBKEY`(=この pubkey)で検証する。
+- **[src-tauri/src/updater_local.rs](src-tauri/src/updater_local.rs)（新設・KENBAN から移植）**: 起動時 `App_installer\OPUS\` の `OPUS_<ver>_x64-setup.exe`＋`.sig` を minisign 検証→現行より高い版を temp へコピー→再検証→`/S /UPDATE` で起動しアプリ終了（NSIS フックが再起動）。**更新先は外部参照 enc の `updater.localDir`＋`OPUS` サブdir から実行時解決**（GitHub 非接続）。`Cargo.toml` に `minisign-verify` 追加、`lib.rs` に `mod updater_local;`＋`check_local_update`/`apply_local_update` 登録。
+- **[src/auto-updater.js](src/auto-updater.js)**: GitHub `check()`/`downloadAndInstall`/`relaunch`（plugin-updater/process）を撤去し、`invoke("check_local_update")`/`invoke("apply_local_update",{setupPath})` へ。旧バージョンリセット用の死にコード（parseSemver/isLegacy/RESET_*）も除去。
+- **tauri.conf の updater 設定（GitHub endpoint/pubkey `4472C9A5`）は据え置き**＝vMig を GitHub CI でビルド・配信するため（現フリートはこの GitHub 更新で v2.6.7 を取得）。**ランタイム検証は updater_local の新鍵**で行うため、ビルド時に updater 署名鍵がローカルに無い旨の警告が出ても無害（実害なし）。
+- **EDR配慮**: 本体exeは未署名、ドライブ配信時はインストーラのみ Authenticode 署名＋`.sig` 再生成（KENBAN と同方針）。
+- 移行注意: 現フリートが v2.6.7 を入れるまでは GitHub 更新のまま。v2.6.7 適用後にドライブ参照へ切替。**vG=v2.6.8 をドライブ配信**すれば移行済み端末が取得する。
+
 ## 2026-06-21 変更メモ: v2.6.6 リリース（固有アドレスの外部参照化 — CB 共用 addresses.enc / 割符 — セキュリティ強化横展開）
 
 社内共有ドライブの実パス（取引先/部署名入り）を **ソース・exe から平文除去** し、COMIC-Bridge と共用の暗号化アドレス帳 `addresses.enc`（割符 AES-256-GCM）を **実行時復号** して参照する方式へ移行（ProGen/Tachimi/MojiQ/KENBAN と同方針の横展開）。`package.json` / `package-lock.json` / `src-tauri/Cargo.toml` / `src-tauri/Cargo.lock` / `src-tauri/tauri.conf.json` は `2.6.6` に更新済み。`npm run check`（`check:encoding` 76 files / `check:security` **23**（#22 直書き禁止 / #23 アクセサ配線を追加）/ `lint` / `build`）＋ `cargo check` 緑。**実機確認済み**（OCRインストール時に `content.ocrRoot` が enc から解決され `Shared OCR source: G:\…\OCR` 表示／校正パネル・スタイルパレット・フォント帳の共有ドライブ参照を確認）。OCR/PDF読み取りの新キー（`content.ocrRoot` / `content.pdfReadRoot`）はユーザーが CB master へ追加・再シール済み（実復号で確認）。リリースはタグ `v2.6.6` push により CI（署名・`latest.json`・GitHub Release）。

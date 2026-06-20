@@ -1,6 +1,6 @@
 [package]
 name = "opus"
-version = "2.6.6"
+version = "2.6.7"
 description = "PSD spread editor with Photoshop apply-back, text extraction, and auto-placement"
 edition = "2021"
 rust-version = "1.77"
@@ -31,6 +31,8 @@ getrandom = "0.2"
 # 参照アドレス割符復号（COMIC-Bridge と共用の addresses.enc を AES-256-GCM で復号）
 aes-gcm = "0.10"
 sha2 = "0.10"
+# ドライブ式自動更新（App_installer\OPUS\ の setup.exe を minisign 検証）
+minisign-verify = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.52"

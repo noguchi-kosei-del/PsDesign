@@ -9,6 +9,7 @@ mod path_access;
 mod photoshop;
 mod psd_repair;
 mod tachimi;
+mod updater_local;
 
 use image::codecs::jpeg::JpegEncoder;
 use path_access::{ensure_allowed, ensure_allowed_for_write, AllowedPaths};
@@ -2487,7 +2488,9 @@ pub fn run() {
             kenban::detect_kenban_exe,
             kenban::launch_kenban_psd_pdf,
             tachimi::detect_tachimi_exe,
-            tachimi::launch_tachimi_with_files
+            tachimi::launch_tachimi_with_files,
+            updater_local::check_local_update,
+            updater_local::apply_local_update
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
